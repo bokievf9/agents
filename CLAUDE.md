@@ -76,6 +76,19 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 - LLM здесь только разметка полей (Haiku/fast, `tryJson`) и черновик ответа про цену (Sonnet/smart). Оценка лида
   считается правилами (`text.ts: scoreLead`), поэтому одинакова с LLM и без него.
 
+## apps/polly: Polly, учитель языков (этап 1)
+Личный агент владельца (бриф `../docs/brief-polly.md`). Отдельный бот (`POLLY_BOT_TOKEN`, не `TELEGRAM_BOT_TOKEN` лидов),
+только `OWNER_TELEGRAM_ID`. Поэтому очереди одобрений нет: всё уходит только в чат владельца. Подробно: `apps/polly/README.md`.
+- `teacher.ts`: движок (команды, кнопки, урок, повторение, тоны, тест уровня, `/talk`, `tick()` раз в минуту для
+  напоминаний и воскресного отчёта по часовому поясу профиля). Состояние занятия в SQLite (`kv.session`), переживает рестарт.
+  Кнопки урока несут номер шага, старые нажатия игнорируются.
+- `fsrs.ts`: своя реализация FSRS-4.5 (без внешней библиотеки). `content.ts` + `content/zh/*.yaml`: словарь (318 слов по 9
+  темам) и 14 уроков, данные в файлах, проверка при старте. `store.ts`: профиль, карточки, повторения, активность.
+- LLM только в `/talk` (Sonnet/smart через `tryComplete`); без ключа «LLM off» и всё остальное работает.
+- Голос (Whisper, edge-tts), испанский, турецкий, связь с Dono: этапы 2 и 3. Голосовые пока лежат в `voice_queue`.
+- Запуск: `pnpm --filter polly dev` (`apps/polly/.env.local`). Docker: `apps/polly/Dockerfile`, сервис `polly` в
+  `compose.yaml` (без портов, `read_only`, данные `/opt/fir-agents/data/polly`), образ `agents-polly` в CI.
+
 ## Данные и секреты
 `.env*` и `data/` не коммитятся (в `data/` контакты клиентов). Секреты: `.env.local` (dev), `/opt/fir-agents/.env`
 (сервер, 600). Секреты с `$` в `.env` брать в одинарные кавычки (compose раскрывает `$`).
@@ -98,7 +111,7 @@ LLM в компании ходит не напрямую в Anthropic, а чер
   `deploy/deploy.sh`: forced command, stdin = GHCR user и токен, `docker compose pull && up -d --remove-orphans`.
   Образцы: `../dono/deploy/`. Компоуз на VPS обновляется только повторным запуском bootstrap (изменение compose.yaml
   само не доезжает, образы обновляет deploy.sh).
-- CI (`.github/workflows/ci.yml`): проверки на каждый push и PR, образ в GHCR (`agents-lead-intake`) только с `main`,
+- CI (`.github/workflows/ci.yml`): проверки на каждый push и PR, образы в GHCR (`agents-lead-intake`, `agents-polly`) только с `main`,
   деплой-job только при переменной репо `DEPLOY_ENABLED=true`; секреты `AGENTS_SSH_KEY`, `VPS_HOST`,
   `VPS_KNOWN_HOSTS` в Environment `production` (ограничен веткой main). Пока `DEPLOY_ENABLED` не выставлен, деплоя нет.
 - Не пушить без решения владельца: репо на GitHub ещё не создан.
