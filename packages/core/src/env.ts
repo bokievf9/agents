@@ -26,7 +26,20 @@ export interface BaseConfig {
   dataDir: string;
   /** Approvals in a row without edits before a kind moves from level 0 to level 1. */
   trustThreshold: number;
-  anthropicApiKey: string | undefined;
+  llm: LlmEnv;
+}
+
+/**
+ * LLM settings. Gateway mode (OmniRoute, Anthropic-compatible POST /v1/messages): LLM_BASE_URL + LLM_API_KEY,
+ * models default to "auto". Direct mode: ANTHROPIC_API_KEY (Claude model ids). Neither key: "LLM off".
+ */
+export interface LlmEnv {
+  baseUrl: string | undefined;
+  apiKey: string | undefined;
+  modelFast: string | undefined;
+  modelSmart: string | undefined;
+  timeoutMs: number;
+  maxRetries: number;
 }
 
 export function loadBaseConfig(env: NodeJS.ProcessEnv = process.env): BaseConfig {
@@ -40,6 +53,13 @@ export function loadBaseConfig(env: NodeJS.ProcessEnv = process.env): BaseConfig
     tz,
     dataDir: resolve(optional(env, 'DATA_DIR') ?? './data'),
     trustThreshold: intEnv(env, 'TRUST_THRESHOLD', 20),
-    anthropicApiKey: optional(env, 'ANTHROPIC_API_KEY'),
+    llm: {
+      baseUrl: optional(env, 'LLM_BASE_URL'),
+      apiKey: optional(env, 'LLM_API_KEY') ?? optional(env, 'ANTHROPIC_API_KEY'),
+      modelFast: optional(env, 'LLM_MODEL_FAST'),
+      modelSmart: optional(env, 'LLM_MODEL_SMART'),
+      timeoutMs: intEnv(env, 'LLM_TIMEOUT_MS', 30_000),
+      maxRetries: intEnv(env, 'LLM_MAX_RETRIES', 2),
+    },
   };
 }

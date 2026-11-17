@@ -1,0 +1,38 @@
+# Runs on the server as a dedicated user in /opt/fir-agents. The installed copy is root-owned
+# (docker group access is root-equivalent): never take compose.yaml from the CI client.
+# Not deployed yet: there is no server. __AGENTS_UID__/__AGENTS_GID__ are filled in by the bootstrap script.
+name: fir-agents
+services:
+  lead-intake:
+    image: ghcr.io/bokievf9/agents-lead-intake:latest
+    restart: unless-stopped
+    user: "__AGENTS_UID__:__AGENTS_GID__"
+    env_file: .env
+    environment:
+      DATA_DIR: /app/data
+      WEBHOOK_PORT: "8787"
+    volumes:
+      - /opt/fir-agents/data/lead-intake:/app/data
+    # The only published port: the form webhook, loopback only; nginx proxies to it later.
+    ports:
+      - "127.0.0.1:8787:8787"
+    networks: [agents-net]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+# LLM gateway (OmniRoute) joins this network as a separate container; LLM_BASE_URL points at it,
+# e.g. http://omniroute:20128 (see CLAUDE.md). Not part of this compose file.
+networks:
+  agents-net:
+    driver: bridge
