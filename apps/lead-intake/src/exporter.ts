@@ -9,6 +9,7 @@ export function exportLeads(file: string, leads: Lead[]): void {
     JSON.stringify({
       id: l.id,
       source: l.source,
+      origin: l.origin,
       createdAt: new Date(l.createdAt).toISOString(),
       name: l.name,
       contact: l.contact,

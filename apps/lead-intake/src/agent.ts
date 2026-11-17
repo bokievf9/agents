@@ -28,6 +28,7 @@ export interface WebLead {
   estimate: string;
   locale: Lang;
   slot: string;
+  source?: string;
 }
 
 type AgentConfig = Pick<Config, 'ownerId' | 'tz' | 'slotHours' | 'rateLimit' | 'rateWindowMs' | 'leadsFile' | 'replyLevel'>;
@@ -208,6 +209,7 @@ export class LeadAgent {
       niche: guessNiche(text),
       deadline: guessDeadline(text),
       budget: clip(w.budget, 40),
+      origin: w.source ?? '',
       ...(Number.isNaN(slot) ? {} : { chosenSlot: slot, slots: [slot] }),
     });
     lead = store.update(lead.id, { temperature: scoreLead(lead, { estimate: Boolean(w.estimate) }) });
@@ -228,6 +230,7 @@ export class LeadAgent {
       `Ниша: ${lead.niche || 'не выяснена'}`,
       `Задача: ${lead.task || 'не выяснена'}`,
       `Срок: ${lead.deadline || 'не выяснен'}`,
+      ...(lead.origin ? [`Метка источника: ${lead.origin}`] : []),
       ...(lead.budget ? [`Бюджет: ${lead.budget}`] : []),
       `Звонок: ${slot}`,
       ...(lead.source === 'web' ? ['Клиент не писал боту: связаться вручную по контакту.'] : []),

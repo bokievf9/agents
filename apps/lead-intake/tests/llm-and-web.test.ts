@@ -68,6 +68,23 @@ describe('POST /lead', () => {
     }
   });
 
+  it('accepts an optional source tag and puts it on the card and in the export', async () => {
+    const { server, url, messenger, leadsFile } = await start();
+    try {
+      expect((await post(url, 'secret-token', { ...body, source: 'Bad Tag!' })).status).toBe(400);
+      expect((await post(url, 'secret-token', { ...body, source: 'x'.repeat(41) })).status).toBe(400);
+      expect((await post(url, 'secret-token', { ...body, source: 'instagram_bio' })).status).toBe(200);
+      expect(messenger.to(OWNER)[0]).toContain('Метка источника: instagram_bio');
+      const line = JSON.parse((await import('node:fs')).readFileSync(leadsFile, 'utf8').trim()) as { origin: string };
+      expect(line.origin).toBe('instagram_bio');
+      // without the field the lead still works and has no tag
+      expect((await post(url, 'secret-token', body)).status).toBe(200);
+      expect(messenger.to(OWNER)[1]).not.toContain('Метка источника');
+    } finally {
+      server.close();
+    }
+  });
+
   it('rejects oversized bodies', async () => {
     const { server, url } = await start();
     try {

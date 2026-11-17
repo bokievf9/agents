@@ -14,6 +14,8 @@ export interface Lead {
   task: string;
   deadline: string;
   budget: string;
+  /** Where the website form was filled (the site's `source` field), empty for Telegram. */
+  origin: string;
   temperature: Temperature;
   state: 'asking' | 'card_sent';
   askField: Field | null;
@@ -38,6 +40,7 @@ CREATE TABLE IF NOT EXISTS leads (
   task TEXT NOT NULL DEFAULT '',
   deadline TEXT NOT NULL DEFAULT '',
   budget TEXT NOT NULL DEFAULT '',
+  origin TEXT NOT NULL DEFAULT '',
   temperature TEXT NOT NULL DEFAULT 'cold',
   state TEXT NOT NULL,
   ask_field TEXT,
@@ -63,7 +66,7 @@ CREATE INDEX IF NOT EXISTS messages_lead ON messages (lead_id);
 
 interface Row {
   id: number; source: string; chat_id: number | null; name: string; contact: string; niche: string; task: string;
-  deadline: string; budget: string; temperature: string; state: string; ask_field: string | null; questions: number;
+  deadline: string; budget: string; origin: string; temperature: string; state: string; ask_field: string | null; questions: number;
   lang: string; slots: string; chosen_slot: number | null; price_asked: number; price_approved: number;
   created_at: number; updated_at: number;
 }
@@ -78,6 +81,7 @@ const toLead = (r: Row): Lead => ({
   task: r.task,
   deadline: r.deadline,
   budget: r.budget,
+  origin: r.origin,
   temperature: r.temperature as Temperature,
   state: r.state as Lead['state'],
   askField: r.ask_field as Field | null,
@@ -100,6 +104,10 @@ const COLUMN: Record<string, string> = {
 export class LeadStore {
   constructor(private readonly db: Db, private readonly now: () => number = Date.now) {
     migrate(db, SCHEMA);
+    // Databases created before `origin` existed.
+    if (!(db.prepare('PRAGMA table_info(leads)').all() as { name: string }[]).some((c) => c.name === 'origin')) {
+      migrate(db, "ALTER TABLE leads ADD COLUMN origin TEXT NOT NULL DEFAULT ''");
+    }
   }
 
   create(input: { source: Lead['source']; chatId: number | null; name: string; contact: string; lang: Lang; state: Lead['state'] }): Lead {

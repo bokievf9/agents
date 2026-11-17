@@ -15,6 +15,7 @@ export const webLeadSchema = z.object({
   locale: z.enum(['ru', 'en']).default('ru'),
   page: z.string().trim().max(600).optional().default(''),
   slot: z.string().trim().max(40).optional().default(''),
+  source: z.string().trim().regex(/^[a-z0-9_-]{1,40}$/).optional().default(''),
   website: z.string().max(200).optional().default(''),
 });
 
