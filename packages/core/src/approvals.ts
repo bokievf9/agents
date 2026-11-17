@@ -1,0 +1,276 @@
+import type { Db } from './db.js';
+import { migrate } from './db.js';
+import { errMsg, log } from './log.js';
+import type { Messenger } from './messenger.js';
+
+/** What an agent proposes. `text` is what the owner can edit (a reply to a client, a post, a price). */
+export interface Payload {
+  text?: string;
+  [key: string]: unknown;
+}
+
+export interface KindSpec {
+  /** 0: the agent only proposes, the owner presses a button. 1: the agent acts and reports. */
+  initialLevel: 0 | 1;
+  /** Money, contracts, prices: never promoted to level 1 by the counter, only by the owner's own decision. */
+  locked?: boolean;
+  /** Runs only after "approve" (or at level 1). Throwing marks the approval failed. */
+  execute(payload: Payload, approvalId: number): Promise<void>;
+}
+
+export type Action = 'approve' | 'edit' | 'reject';
+type Status = 'pending' | 'editing' | 'executed' | 'rejected' | 'failed';
+
+export interface ApprovalRow {
+  id: number;
+  kind: string;
+  payload: Payload;
+  summary: string;
+  status: Status;
+  edited: boolean;
+}
+
+export interface Decision {
+  id: number;
+  approvalId: number | null;
+  kind: string;
+  decision: 'approve' | 'edit' | 'reject' | 'auto';
+  at: number;
+}
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS approvals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  status TEXT NOT NULL,
+  edited INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  decided_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS trust (
+  kind TEXT PRIMARY KEY,
+  level INTEGER NOT NULL,
+  streak INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  approval_id INTEGER,
+  kind TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+`;
+
+interface ApprovalDbRow {
+  id: number;
+  kind: string;
+  payload: string;
+  summary: string;
+  status: Status;
+  edited: number;
+}
+
+/**
+ * The approval queue: an agent proposes, the owner gets a message with buttons, and the action runs
+ * only after "approve". Per kind it counts approvals in a row without edits; after `threshold` the
+ * kind moves from level 0 to level 1 (unless locked). Every decision goes to the journal.
+ * Decision records hold kinds and ids only, never message texts.
+ */
+export class ApprovalQueue {
+  private readonly kinds = new Map<string, KindSpec>();
+  private editing: number | null = null;
+
+  constructor(
+    private readonly db: Db,
+    private readonly messenger: Messenger,
+    private readonly ownerId: number,
+    private readonly threshold = 20,
+    private readonly now: () => number = Date.now,
+  ) {
+    migrate(db, SCHEMA);
+  }
+
+  register(kind: string, spec: KindSpec): void {
+    this.kinds.set(kind, spec);
+    this.db.prepare('INSERT OR IGNORE INTO trust (kind, level, streak) VALUES (?, ?, 0)').run(kind, spec.initialLevel);
+  }
+
+  private spec(kind: string): KindSpec {
+    const s = this.kinds.get(kind);
+    if (!s) throw new Error(`Unknown approval kind "${kind}"`);
+    return s;
+  }
+
+  level(kind: string): 0 | 1 {
+    const row = this.db.prepare('SELECT level FROM trust WHERE kind = ?').get(kind) as { level: number } | undefined;
+    return row?.level === 1 ? 1 : 0;
+  }
+
+  streak(kind: string): number {
+    const row = this.db.prepare('SELECT streak FROM trust WHERE kind = ?').get(kind) as { streak: number } | undefined;
+    return row?.streak ?? 0;
+  }
+
+  /** Owner's own decision to move a kind (the only way to unlock a locked one). */
+  setLevel(kind: string, level: 0 | 1): void {
+    this.spec(kind);
+    this.db.prepare('UPDATE trust SET level = ?, streak = 0 WHERE kind = ?').run(level, kind);
+  }
+
+  trustTable(): { kind: string; level: number; streak: number; locked: boolean }[] {
+    return [...this.kinds.entries()].map(([kind, s]) => ({
+      kind,
+      level: this.level(kind),
+      streak: this.streak(kind),
+      locked: Boolean(s.locked),
+    }));
+  }
+
+  /**
+   * Level 0: stores the proposal and asks the owner. Level 1: runs it now and journals "auto".
+   * `summary` is what the owner reads above the buttons (can hold client text: it only goes to the owner).
+   */
+  async propose(kind: string, payload: Payload, summary: string): Promise<{ id: number; auto: boolean }> {
+    const spec = this.spec(kind);
+    if (this.level(kind) === 1) {
+      const id = this.insert(kind, payload, summary, 'pending');
+      await this.run(id, spec, payload);
+      this.journal(id, kind, 'auto');
+      return { id, auto: true };
+    }
+    const id = this.insert(kind, payload, summary, 'pending');
+    await this.ask(id);
+    return { id, auto: false };
+  }
+
+  get(id: number): ApprovalRow | undefined {
+    const r = this.db.prepare('SELECT * FROM approvals WHERE id = ?').get(id) as ApprovalDbRow | undefined;
+    return r ? { id: r.id, kind: r.kind, payload: JSON.parse(r.payload) as Payload, summary: r.summary, status: r.status, edited: r.edited === 1 } : undefined;
+  }
+
+  pending(): ApprovalRow[] {
+    const ids = this.db.prepare("SELECT id FROM approvals WHERE status IN ('pending','editing') ORDER BY id").all() as { id: number }[];
+    return ids.map((r) => this.get(r.id)!);
+  }
+
+  journalRows(limit = 50): Decision[] {
+    const rows = this.db.prepare('SELECT * FROM decisions ORDER BY id DESC LIMIT ?').all(limit) as {
+      id: number; approval_id: number | null; kind: string; decision: Decision['decision']; at: number;
+    }[];
+    return rows.map((r) => ({ id: r.id, approvalId: r.approval_id, kind: r.kind, decision: r.decision, at: r.at }));
+  }
+
+  /** A button press. Returns a short answer for the callback toast. Only the owner may decide. */
+  async handle(action: Action, id: number, fromId: number): Promise<string> {
+    if (fromId !== this.ownerId) return 'Нет доступа';
+    const row = this.get(id);
+    if (!row) return 'Не найдено';
+    if (row.status !== 'pending' && !(row.status === 'editing' && action !== 'edit')) return 'Уже обработано';
+    const spec = this.spec(row.kind);
+
+    if (action === 'reject') {
+      this.setStatus(id, 'rejected');
+      this.bump(row.kind, 'reset');
+      this.journal(id, row.kind, 'reject');
+      if (this.editing === id) this.editing = null;
+      return 'Отклонено';
+    }
+    if (action === 'edit') {
+      this.setStatus(id, 'editing');
+      this.editing = id;
+      await this.messenger.send(this.ownerId, `Пришлите новый текст для предложения #${id} одним сообщением.`);
+      return 'Жду правку';
+    }
+    // approve
+    if (this.editing === id) this.editing = null;
+    const ok = await this.run(id, spec, row.payload);
+    if (!ok) {
+      await this.messenger.send(this.ownerId, `Предложение #${id} (${row.kind}) не выполнено, подробности в логе.`);
+      return 'Ошибка выполнения';
+    }
+    this.journal(id, row.kind, 'approve');
+    // An approval of a text the owner already edited is not a clean one.
+    if (row.edited) this.bump(row.kind, 'reset');
+    else await this.bumpClean(row.kind);
+    return 'Одобрено';
+  }
+
+  /** True while the next owner message is a correction for a proposal (the bot must route it here). */
+  get awaitingEdit(): boolean {
+    return this.editing !== null;
+  }
+
+  /** The owner's next message after "править": replaces the text, resets the streak, asks again. */
+  async submitEdit(fromId: number, text: string): Promise<boolean> {
+    if (fromId !== this.ownerId || this.editing === null) return false;
+    const id = this.editing;
+    const row = this.get(id);
+    this.editing = null;
+    if (!row) return false;
+    const payload: Payload = { ...row.payload, text };
+    this.db.prepare("UPDATE approvals SET payload = ?, edited = 1, status = 'pending' WHERE id = ?").run(JSON.stringify(payload), id);
+    this.bump(row.kind, 'reset');
+    this.journal(id, row.kind, 'edit');
+    await this.ask(id);
+    return true;
+  }
+
+  private insert(kind: string, payload: Payload, summary: string, status: Status): number {
+    const r = this.db
+      .prepare('INSERT INTO approvals (kind, payload, summary, status, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(kind, JSON.stringify(payload), summary, status, this.now());
+    return Number(r.lastInsertRowid);
+  }
+
+  private setStatus(id: number, status: Status): void {
+    this.db.prepare('UPDATE approvals SET status = ?, decided_at = ? WHERE id = ?').run(status, this.now(), id);
+  }
+
+  private async ask(id: number): Promise<void> {
+    const row = this.get(id)!;
+    const body = typeof row.payload.text === 'string' ? `\n\nПредлагаю отправить:\n${row.payload.text}` : '';
+    const level = this.level(row.kind);
+    await this.messenger.send(
+      this.ownerId,
+      `#${id} ${row.kind} (уровень ${level}, подряд ${this.streak(row.kind)})\n${row.summary}${body}`,
+      [[
+        { text: 'Одобрить', data: `ap:${id}:a` },
+        { text: 'Править', data: `ap:${id}:e` },
+        { text: 'Отклонить', data: `ap:${id}:r` },
+      ]],
+    );
+  }
+
+  private async run(id: number, spec: KindSpec, payload: Payload): Promise<boolean> {
+    try {
+      await spec.execute(payload, id);
+      this.setStatus(id, 'executed');
+      return true;
+    } catch (e) {
+      this.setStatus(id, 'failed');
+      log('error', 'approval execute failed', { approvalId: id, err: errMsg(e) });
+      return false;
+    }
+  }
+
+  private journal(approvalId: number | null, kind: string, decision: Decision['decision']): void {
+    this.db.prepare('INSERT INTO decisions (approval_id, kind, decision, at) VALUES (?, ?, ?, ?)').run(approvalId, kind, decision, this.now());
+    log('info', 'decision', { approvalId, kind, decision });
+  }
+
+  private bump(kind: string, mode: 'reset'): void {
+    if (mode === 'reset') this.db.prepare('UPDATE trust SET streak = 0 WHERE kind = ?').run(kind);
+  }
+
+  private async bumpClean(kind: string): Promise<void> {
+    this.db.prepare('UPDATE trust SET streak = streak + 1 WHERE kind = ?').run(kind);
+    const spec = this.spec(kind);
+    if (this.level(kind) === 0 && !spec.locked && this.streak(kind) >= this.threshold) {
+      this.db.prepare('UPDATE trust SET level = 1 WHERE kind = ?').run(kind);
+      log('info', 'trust level raised', { kind, level: 1 });
+      await this.messenger.send(this.ownerId, `Тип «${kind}»: ${this.threshold} одобрений подряд без правок, перехожу на уровень 1 (делаю сам, отчитываюсь). Вернуть: /level ${kind} 0`);
+    }
+  }
+}

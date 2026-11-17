@@ -1,0 +1,7 @@
+packages:
+  - packages/*
+  - apps/*
+injectWorkspacePackages: true
+allowBuilds:
+  esbuild: true
+  better-sqlite3: true
