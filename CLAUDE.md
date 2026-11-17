@@ -83,9 +83,22 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 ## Docker и деплой (сервера пока нет)
 - `apps/lead-intake/Dockerfile` собирается из корня репо (`-f apps/lead-intake/Dockerfile .`): не root, `tini`,
   `pnpm deploy --prod`. На Mac Docker нет, образ локально не собирали, его соберёт CI.
-- `compose.yaml`: `read_only`, `cap_drop ALL`, `no-new-privileges`, 512 МБ, 0.5 CPU, `pids_limit`, логи json-file
-  10 МБ x 5, единственный порт `127.0.0.1:8787` (webhook, за nginx позже). Плейсхолдеры `__AGENTS_UID__/__AGENTS_GID__`.
+- `compose.yaml` (ставится в `/opt/fir-agents` скриптом bootstrap, root-owned, из CI не принимается):
+  - `lead-intake`: `read_only`, `cap_drop ALL`, `no-new-privileges`, 512 МБ, 0.5 CPU, `pids_limit`, логи json-file
+    10 МБ x 5, единственный порт `127.0.0.1:8787` (webhook, за nginx позже), `LLM_BASE_URL=http://omniroute:20128`.
+  - `omniroute`: образ `diegosouzapw/omniroute`, только `agents-net`, портов наружу нет, `REQUIRE_API_KEY=true`,
+    данные `/opt/fir-agents/data/omniroute`, лимит 1.5 ГБ. Секреты шлюза в `/opt/fir-agents/omniroute.env`
+    (`.env` агента шлюзу не отдаём); `LLM_API_KEY` в `.env` агента = ключ, выпущенный в OmniRoute. Образ и имена
+    его переменных (`PORT`, `DATA_DIR`, секреты) сверить с документацией OmniRoute при первом запуске; `:latest`
+    закрепить на версию. Без `read_only`, пока не проверено, что образ так работает.
+  - Плейсхолдеры `__AGENTS_UID__/__AGENTS_GID__` подставляет bootstrap.
+- `deploy/bootstrap-vps.sh` (один раз, root на VPS: `sudo bash bootstrap-vps.sh "<ssh-ed25519 публичный ключ>"`):
+  пользователь `agents`, дом `/opt/fir-agents`, данные `agents`-owned, всё решающее (compose, `bin/deploy.sh`,
+  `authorized_keys`) root-owned. Ключ деплоя с `command="/opt/fir-agents/bin/deploy.sh",restrict`.
+  `deploy/deploy.sh`: forced command, stdin = GHCR user и токен, `docker compose pull && up -d --remove-orphans`.
+  Образцы: `../dono/deploy/`. Компоуз на VPS обновляется только повторным запуском bootstrap (изменение compose.yaml
+  само не доезжает, образы обновляет deploy.sh).
 - CI (`.github/workflows/ci.yml`): проверки на каждый push и PR, образ в GHCR (`agents-lead-intake`) только с `main`,
-  деплой-job только при переменной репо `DEPLOY_ENABLED=true`. Скрипты `bootstrap` и `deploy.sh` по образцу
-  `../dono/deploy/` ещё не написаны (нет сервера). Пока `DEPLOY_ENABLED` не выставлен, push в `main` деплой не запускает.
+  деплой-job только при переменной репо `DEPLOY_ENABLED=true`; секреты `AGENTS_SSH_KEY`, `VPS_HOST`,
+  `VPS_KNOWN_HOSTS` в Environment `production` (ограничен веткой main). Пока `DEPLOY_ENABLED` не выставлен, деплоя нет.
 - Не пушить без решения владельца: репо на GitHub ещё не создан.

@@ -54,8 +54,9 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy-lead-intake:
-    # Enabled once a server is bootstrapped (deploy script and forced-command key, as in Dono):
-    # set repository variable DEPLOY_ENABLED=true.
+    # Enabled once the VPS is bootstrapped (deploy/bootstrap-vps.sh, forced-command key, as in Dono):
+    # set repository variable DEPLOY_ENABLED=true. Secrets AGENTS_SSH_KEY, VPS_HOST, VPS_KNOWN_HOSTS
+    # live in the `production` Environment, not in repo secrets.
     if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
     needs: image-lead-intake
     runs-on: ubuntu-latest

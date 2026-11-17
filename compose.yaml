@@ -1,6 +1,6 @@
 # Runs on the server as a dedicated user in /opt/fir-agents. The installed copy is root-owned
 # (docker group access is root-equivalent): never take compose.yaml from the CI client.
-# Not deployed yet: there is no server. __AGENTS_UID__/__AGENTS_GID__ are filled in by the bootstrap script.
+# Installed by deploy/bootstrap-vps.sh into /opt/fir-agents. Not deployed yet: there is no server. __AGENTS_UID__/__AGENTS_GID__ are filled in by the bootstrap script.
 name: fir-agents
 services:
   lead-intake:
@@ -11,6 +11,7 @@ services:
     environment:
       DATA_DIR: /app/data
       WEBHOOK_PORT: "8787"
+      LLM_BASE_URL: http://omniroute:20128
     volumes:
       - /opt/fir-agents/data/lead-intake:/app/data
     # The only published port: the form webhook, loopback only; nginx proxies to it later.
@@ -31,8 +32,38 @@ services:
       options:
         max-size: 10m
         max-file: "5"
-# LLM gateway (OmniRoute) joins this network as a separate container; LLM_BASE_URL points at it,
-# e.g. http://omniroute:20128 (see CLAUDE.md). Not part of this compose file.
+  # LLM gateway: internal network only, no published ports. Secrets (JWT_SECRET, API_KEY_SECRET, provider keys)
+  # live in /opt/fir-agents/omniroute.env; lead-intake authenticates with LLM_API_KEY from .env.
+  # Not read_only: the image is not verified for it yet (tighten after the first run on the server).
+  omniroute:
+    image: diegosouzapw/omniroute:latest
+    restart: unless-stopped
+    user: "__AGENTS_UID__:__AGENTS_GID__"
+    env_file:
+      - path: omniroute.env
+        required: false
+    environment:
+      REQUIRE_API_KEY: "true"
+      DATA_DIR: /app/data
+      PORT: "20128"
+    volumes:
+      - /opt/fir-agents/data/omniroute:/app/data
+    expose:
+      - "20128"
+    networks: [agents-net]
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1.5g
+    cpus: 1.0
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
 networks:
   agents-net:
     driver: bridge
