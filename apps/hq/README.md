@@ -89,6 +89,41 @@
 (`seo_proposal`, уровень 0). Кнопка `pb:<id>` («Опубликовано») обрабатывается в `src/index.ts` и пишет `published_at`.
 Все источники необязательны: без ключа источник выключен.
 
+## Производство (`src/heads/production.ts`)
+Голова `production-head`, исполнители `packages/workers/project-manager`, `reviewer`, `deployer` (таблицы `pm_*` и `dp_targets`).
+Бот `PRODUCTION_BOT_TOKEN` необязателен (тишина без него), отчёты в тему `production`. Лимит: `PRODUCTION_BUDGET_USD`.
+- **Как продажа становится проектом.** `/project <клиент>: <что делаем>` (Директор: команда или обычная фраза) либо сигнал Продаж
+  «КП одобрено/оплачено» (`ProductionHead.createProjectTask({client, what, product?, source: 'sales'})`, задача отдела с
+  `meta.action = project`). Проектный менеджер создаёт проект и этапы по типу работы (сайт, бот, приложение, автоматизация):
+  бриф, прототип, сдача, оплата с целевыми датами. Короткое ТЗ (LLM пишет текст, шаблон на случай отказа; цену и срок модель
+  не называет, остаются `[цена]` и `[срок]`) уходит на одобрение владельцу, уровень 0 и `locked`.
+- **Как идут builder-задачи.** Одобрено ТЗ: проект становится `active`, этапы «Прототип» и «Сдача» превращаются в задачи
+  (`blocked` + тег `builder`, `meta.kind = work`), мост создаёт GitHub issues для Claude Code. Закрытый issue возвращает задачу
+  голове с `meta.result`. Ссылка на ветку или PR: создаётся задача «Ревью: ...» (`meta.kind = review`, `labelHint = review`,
+  чек-лист: безопасность, тесты, секреты, миграции, модель Opus), этап ждёт её закрытия. Нет ссылки: ревью не запрашивается, этап
+  закрывается с пометкой. Закрыт этап «Сдача»: задача «Деплой: ...» (чек-лист: CI, окружение, DNS, TLS, health, откат) и задача
+  отделу `support` «добавить <url> в мониторинг». Цель деплоя: `/target <проект> ours|client <путь или хост> [url]`
+  (пароли и токены не принимаются). Последний закрытый этап закрывает проект и напоминает про `/lesson` и акт.
+- Просрочки: рутина `production-overdue` 10:30 считает открытые этапы активных проектов за датой; строка идёт в утреннюю сводку.
+- Статус клиенту: `/pstatus <проект>`, текст по фактам этапов без цен, уровень 1: приходит владельцу, отправляет он сам.
+  Этап вручную (бриф, оплата): `/mdone <проект> brief|prototype|delivery|payment`.
+- Команды работают через Директора: `/project`, `/pstatus`, `/target`, `/mdone`, а свободная фраза разбирается в интент
+  `production_command` (команда проверяется по списку зарегистрированных).
+
+## Бэк-офис (`src/heads/backoffice.ts`)
+Голова `backoffice-head`, исполнители `packages/workers/documents` и `knowledge` (таблицы `bo_documents`, `kb_lessons`). Бот
+`BACKOFFICE_BOT_TOKEN` необязателен, лимит `BACKOFFICE_BUDGET_USD`. Финансы остаются в Сопровождении.
+- `/doc <договор|оферта|политика|акт> <клиент>`: шаблон из `packages/workers/documents/templates/*.md` заполняется данными проекта
+  (`pm_projects`, этапы) и клиента, без LLM. Что неизвестно, остаётся `[заполнить: ...]`, цена и срок остаются `[цена]` и
+  `[срок]`. Документ идёт на одобрение (`bo_document`, уровень 0, `locked`), версии в `bo_documents`. Утвердить текст с
+  неснятыми метками нельзя: владелец правит текст кнопкой «Править». Утверждённый текст приходит владельцу, клиенту отправляет он.
+  Шаблоны юридически не проверены, перед боевым использованием их смотрит юрист.
+- База знаний: файлы в репозитории `knowledge/` (`playbooks/`, `lessons/`). `/lesson <проект>: <урок>` пишет в `kb_lessons`;
+  рутина `backoffice-lessons-weekly` (воскресенье 19:00) превращает неотправленные уроки в builder-задачу «Обновить
+  knowledge/lessons», строитель коммитит их. `/kb <запрос>` ищет по урокам и заголовкам плейбуков (`KNOWLEDGE_DIR`, в образе
+  `/app/knowledge`).
+- Строка утренней сводки: документы, ждущие решения.
+
 ## Мост к строителям (`src/bridge.ts`)
 Задача `blocked` с тегом `builder` без `meta.issue` (Директор по «нужен строитель», голова маркетинга для SEO-правок и клипов)
 становится issue в `GITHUB_REPO` (по умолчанию `bokievf9/agents`) с меткой `builder`. Заголовок: название задачи. Тело: отдел,
@@ -123,7 +158,7 @@ id задачи HQ, контекст (описание, последние ко�
 необязательные `MARKETING_BOT_TOKEN`, `SALES_BOT_TOKEN`, `LEAD_WEBHOOK_TOKEN`, `WEBHOOK_PORT`, `BATCH_SIZE`, `SLOT_HOURS`,
 `REPLY_LEVEL`, `SALES_BUDGET_USD`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
 id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`; сопровождение: `SUPPORT_BOT_TOKEN`, `MONITOR_URLS`, `MONITOR_DOCKER`, `OMNIROUTE_HEALTH_URL`,
-`FIXED_COSTS_USD_MONTH`, `SUPPORT_BUDGET_USD`; мост: `GITHUB_TOKEN`, `GITHUB_REPO`, `BUILDER_POLL_MINUTES`.
+`FIXED_COSTS_USD_MONTH`, `SUPPORT_BUDGET_USD`; производство и бэк-офис: `PRODUCTION_BOT_TOKEN`, `BACKOFFICE_BOT_TOKEN`, `PRODUCTION_BUDGET_USD`, `BACKOFFICE_BUDGET_USD`, `KNOWLEDGE_DIR`; мост: `GITHUB_TOKEN`, `GITHUB_REPO`, `BUILDER_POLL_MINUTES`.
 необязательные `YOUTUBE_API_KEY`, `YOUTUBE_CHANNEL_ID`, `TRENDS_REGIONS` (по умолчанию `KZ,UZ,RU`), `GSC_SERVICE_ACCOUNT_JSON`, `GSC_SITE_URL`, `SITE_URL` (по умолчанию `https://firtech.pro`), `MARKETING_BOT_TOKEN`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
 id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`.
 

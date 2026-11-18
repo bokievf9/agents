@@ -18,19 +18,25 @@ COPY packages/workers/trend-scout/package.json packages/workers/trend-scout/
 COPY packages/workers/publisher/package.json packages/workers/publisher/
 COPY packages/workers/seo/package.json packages/workers/seo/
 COPY packages/workers/analyst/package.json packages/workers/analyst/
+COPY packages/workers/project-manager/package.json packages/workers/project-manager/
+COPY packages/workers/reviewer/package.json packages/workers/reviewer/
+COPY packages/workers/deployer/package.json packages/workers/deployer/
+COPY packages/workers/documents/package.json packages/workers/documents/
+COPY packages/workers/knowledge/package.json packages/workers/knowledge/
 COPY apps/hq/package.json apps/hq/
 RUN pnpm install --frozen-lockfile
 COPY packages/core packages/core
 COPY packages/hq packages/hq
 COPY packages/workers packages/workers
 COPY apps/hq apps/hq
+COPY knowledge knowledge
 RUN pnpm --filter "hq..." build \
     && pnpm --filter hq --prod deploy /out \
     && node -e "new (require('/out/node_modules/better-sqlite3'))(':memory:').exec('select 1')"
 
 FROM node:22-bookworm-slim
 LABEL app=hq
-ENV NODE_ENV=production HOME=/tmp
+ENV NODE_ENV=production HOME=/tmp KNOWLEDGE_DIR=/app/knowledge
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -38,6 +44,7 @@ COPY --from=build /out/node_modules ./node_modules
 COPY --from=build /out/dist ./dist
 COPY --from=build /out/package.json ./
 COPY --from=build /app/apps/hq/instructions ./instructions
+COPY --from=build /app/knowledge ./knowledge
 USER node
 ENTRYPOINT ["tini", "--"]
 CMD ["node", "dist/index.js"]

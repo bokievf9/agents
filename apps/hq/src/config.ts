@@ -35,6 +35,14 @@ export interface Config extends BaseConfig {
   replyLevel: 0 | 1;
   /** Monthly limit of the Sales department in USD (0: none). Used only when the head is first created. */
   salesBudgetUsd: number;
+  /** Production and Back Office bot tokens: without them the heads are silent in the group. */
+  productionBotToken: string | undefined;
+  backofficeBotToken: string | undefined;
+  /** Monthly limits of the two departments in USD (0: none). Used only when the head is first created. */
+  productionBudgetUsd: number;
+  backofficeBudgetUsd: number;
+  /** Folder of the repo `knowledge/` (playbook titles for `/kb`); without it `/kb` searches lessons only. */
+  knowledgeDir: string | undefined;
   /** Optional Marketing sources; each is off without its key. */
   youtubeApiKey: string | undefined;
   youtubeChannelId: string | undefined;
@@ -96,6 +104,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     slotHours: [hours[0]!, hours[1]!],
     replyLevel: num(env, 'REPLY_LEVEL', 1, 0, 1) === 0 ? 0 : 1,
     salesBudgetUsd: num(env, 'SALES_BUDGET_USD', 0, 0, 100_000),
+    productionBotToken: optional(env, 'PRODUCTION_BOT_TOKEN'),
+    backofficeBotToken: optional(env, 'BACKOFFICE_BOT_TOKEN'),
+    productionBudgetUsd: num(env, 'PRODUCTION_BUDGET_USD', 0, 0, 100_000),
+    backofficeBudgetUsd: num(env, 'BACKOFFICE_BUDGET_USD', 0, 0, 100_000),
+    knowledgeDir: optional(env, 'KNOWLEDGE_DIR'),
     youtubeApiKey: optional(env, 'YOUTUBE_API_KEY'),
     youtubeChannelId: optional(env, 'YOUTUBE_CHANNEL_ID'),
     trendsRegions: (optional(env, 'TRENDS_REGIONS') ?? 'KZ,UZ,RU').split(',').map((r) => r.trim().toUpperCase()).filter((r) => /^[A-Z]{2}$/.test(r)),
