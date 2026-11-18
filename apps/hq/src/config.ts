@@ -35,6 +35,10 @@ export interface Config extends BaseConfig {
   replyLevel: 0 | 1;
   /** Monthly limit of the Sales department in USD (0: none). Used only when the head is first created. */
   salesBudgetUsd: number;
+  /** Reward for a referral after the referred client pays; prepayment share (%) and validity (days) of a КП. */
+  referralReward: string;
+  prepaymentPercent: number;
+  kpValidDays: number;
   /** Optional Marketing sources; each is off without its key. */
   youtubeApiKey: string | undefined;
   youtubeChannelId: string | undefined;
@@ -96,6 +100,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     slotHours: [hours[0]!, hours[1]!],
     replyLevel: num(env, 'REPLY_LEVEL', 1, 0, 1) === 0 ? 0 : 1,
     salesBudgetUsd: num(env, 'SALES_BUDGET_USD', 0, 0, 100_000),
+    referralReward: optional(env, 'REFERRAL_REWARD') ?? 'месяц сопровождения бесплатно',
+    prepaymentPercent: Math.round(num(env, 'PREPAYMENT_PERCENT', 50, 1, 100)),
+    kpValidDays: Math.round(num(env, 'KP_VALID_DAYS', 14, 1, 90)),
     youtubeApiKey: optional(env, 'YOUTUBE_API_KEY'),
     youtubeChannelId: optional(env, 'YOUTUBE_CHANNEL_ID'),
     trendsRegions: (optional(env, 'TRENDS_REGIONS') ?? 'KZ,UZ,RU').split(',').map((r) => r.trim().toUpperCase()).filter((r) => /^[A-Z]{2}$/.test(r)),

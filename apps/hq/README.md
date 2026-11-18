@@ -78,6 +78,21 @@
   первого запуска нового `hq`; контейнеры старых сервисов `docker compose up -d --remove-orphans` уберёт сам. Telegram-диалог
   с клиентами (публичный бот) не переехал: заявки приходят только с формы сайта. `SALES_BOT_TOKEN` теперь токен бота отдела
   (раньше `TELEGRAM_BOT_TOKEN` у lead-intake, `PROSPECTOR_BOT_TOKEN` у Разведчика), `LEAD_WEBHOOK_TOKEN` и порт те же.
+### Пресейл и рекомендации (`packages/workers/presales`, `packages/workers/referral`)
+- **КП.** `/kp <номер лида>` или `/kp <описание клиента и задачи>` (Директор передаёт команду голове как есть) создаёт задачу
+  `action: kp`. Пресейл по карточке лида (`li_leads`) определяет направление (`source` = id направления, иначе `service`, иначе
+  слова в тексте), модель пишет только формулировки (контекст, проблема, решение, 5-8 пунктов состава) с метками [цена] и [срок],
+  а шаблоны `templates/*.md` подставляют цены и сроки из таблицы `src/offers.ts` (копия `directions.ts` сайта, править вручную).
+  Цена, срок или длинное тире от модели отправляют текст в запасную формулировку. Три документа (КП, смета, черновик договора с
+  пустыми полями) лежат в `ps_documents` как `draft` и приходят ОДНИМ одобрением `presales_pack` (`locked`, уровень 0).
+  Кнопка «Скопировать документы» (`pc:<id>:c`) присылает тексты сообщениями до 4096 знаков (документов в мессенджере нет),
+  «Утвердить» переводит их в `approved`, клиенту отправляет владелец сам. Предоплата `PREPAYMENT_PERCENT` (50), КП действует
+  `KP_VALID_DAYS` (14) дней, сопровождение $25 в месяц, оплата Kaspi, Payme, Click, карты, USDT.
+- **Рекомендации.** `/referral <клиент> -> <новый лид>` или лид с `source=ref:<клиент>` (вебхук принимает `ref:` и до 35 знаков
+  `a-z0-9_-`) пишет строку в `rf_referrals` (статусы proposed, paid, rewarded). `/paid <id>` отмечает оплату реферала и кладёт
+  одобрение `referral_reward` (`locked`, награда `REFERRAL_REWARD`, по умолчанию месяц сопровождения бесплатно); «Утвердить»
+  означает, что владелец применил награду сам, статус `rewarded`. Без оплаты награды нет. Рутина `sales-referral-reminders`
+  09:30: реферал ждёт оплату 3 дня, затем напоминание раз в 7 дней в отчёте (утренняя сводка). `/referrals`: статистика.
 ### Остальные исполнители отдела (этап 1, текст, без платных API)
 | Исполнитель | Рутина | Что делает | Документ |
 |---|---|---|---|
@@ -126,6 +141,8 @@ id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING
 `FIXED_COSTS_USD_MONTH`, `SUPPORT_BUDGET_USD`; мост: `GITHUB_TOKEN`, `GITHUB_REPO`, `BUILDER_POLL_MINUTES`.
 необязательные `YOUTUBE_API_KEY`, `YOUTUBE_CHANNEL_ID`, `TRENDS_REGIONS` (по умолчанию `KZ,UZ,RU`), `GSC_SERVICE_ACCOUNT_JSON`, `GSC_SITE_URL`, `SITE_URL` (по умолчанию `https://firtech.pro`), `MARKETING_BOT_TOKEN`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
 id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`.
+
+Пресейл и рекомендации: `REFERRAL_REWARD`, `PREPAYMENT_PERCENT`, `KP_VALID_DAYS`.
 
 ## Как добавить отдел
 1. Исполнители: `packages/workers/<имя>` (контракт в `packages/hq/README.md`).
