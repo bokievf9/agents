@@ -36,6 +36,21 @@
 `packages/workers/content-maker`. Правка карточки по частям (сценарий, Instagram, TikTok, Shorts) работает через
 `ApprovalEditor` головы. Отклонённый материал закрывает задачу; переделку владелец заказывает новой задачей.
 
+## Сопровождение (`src/heads/support.ts`)
+Голова `support-head`, исполнители `packages/workers/monitoring` и `packages/workers/finance`. Бот `SUPPORT_BOT_TOKEN`
+необязателен (тишина без него; проверки и алерты работают). Отчёты идут в тему `support` из `HQ_TOPICS`.
+- Мониторинг каждые 5 минут идёт от собственного крона головы, а не от рутины: рутина создавала бы 288 задач в сутки.
+  События дня (тревога, «снова в норме») собираются в одну задачу «Дежурство ДД.ММ», она закрывается на следующий день
+  строкой аптайма. Тревога после двух неудач подряд, один раз; «снова в норме» один раз; в тихие часы тревога ждёт
+  сводки (путь Директора). Проверки: `MONITOR_URLS` (по умолчанию health firtech.pro, 200 и ok), срок TLS (меньше
+  14 дней), OmniRoute (`OMNIROUTE_HEALTH_URL`), диск `DATA_DIR` (больше 85%), контейнеры только при `MONITOR_DOCKER=true`.
+- `MONITOR_DOCKER`: нужен том `/var/run/docker.sock` (в `compose.yaml` закомментирован). Доступ к сокету Docker равен root
+  на сервере, а `:ro` не ограничивает API: оставляйте выключенным, пока нет реальной нужды.
+- Рутины (создаются при первом старте): `support-daily` 07:50 (строка финансов и аптайма в утреннюю сводку) и
+  `support-weekly` воскресенье 20:00 (расходы за месяц на данный момент, прогноз). Расходы берутся из `costs` с реальным
+  usage модели; цены за 1M токенов в таблице `prices` (`hq.setPrice`), бесплатные модели шлюза стоят 0. Постоянные расходы
+  (`FIXED_COSTS_USD_MONTH`) делятся на дни месяца. Лимит отдела: `SUPPORT_BUDGET_USD`.
+
 ## Инструкции агентов
 `instructions/director.md` и `instructions/marketing-head.md` (русский) загружаются в таблицу `agents` один раз при первом
 старте (`ensureAgent`). Дальше правда в базе: меняются через Директора (кнопка) или `hq import`. Чек-лист проверки
@@ -44,7 +59,8 @@
 ## Переменные
 См. `.env.example`: `HQ_BOT_TOKEN`, `OWNER_TELEGRAM_ID`, `TZ`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_FAST/SMART`;
 необязательные `MARKETING_BOT_TOKEN`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
-id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`.
+id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`; сопровождение: `SUPPORT_BOT_TOKEN`, `MONITOR_URLS`, `MONITOR_DOCKER`, `OMNIROUTE_HEALTH_URL`,
+`FIXED_COSTS_USD_MONTH`, `SUPPORT_BUDGET_USD`.
 
 ## Как добавить отдел
 1. Исполнители: `packages/workers/<имя>` (контракт в `packages/hq/README.md`).

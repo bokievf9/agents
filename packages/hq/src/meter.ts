@@ -1,25 +1,36 @@
-import type { LlmClient, LlmRequest } from '@fir/core';
+import type { LlmClient, LlmRequest, LlmResult } from '@fir/core';
 import type { Hq } from './hq.js';
 
-/** The core client returns text only, so tokens are estimated: about 4 characters per token. */
+/** Fallback for providers that report no usage: about 4 characters per token. */
 export const estimateTokens = (s: string): number => Math.ceil(s.length / 4);
 
 /**
- * Wraps an LlmClient so every call is written to `costs` for the agent and task. A department over its
- * monthly limit gets an error instead of a call (callers fall back or the task is blocked).
+ * Wraps an LlmClient so every call is written to `costs` for the agent and task. The provider's real usage (tokens and
+ * the model that answered) is used when the client reports it; otherwise tokens are estimated and the model is the tier.
+ * A department over its monthly limit gets an error instead of a call (callers fall back or the task is blocked).
  */
 export function meterLlm(llm: LlmClient, hq: Hq, ctx: { agentId: string; taskId?: number | null }): LlmClient {
+  const run = async (req: LlmRequest): Promise<LlmResult> => {
+    const agent = hq.agent(ctx.agentId);
+    if (agent && hq.overBudget(agent.dept)) throw new Error(`Лимит расходов отдела ${agent.dept} исчерпан`);
+    const res: LlmResult = llm.completeDetailed ? await llm.completeDetailed(req) : { text: await llm.complete(req) };
+    const u = res.usage;
+    hq.recordCost({
+      taskId: ctx.taskId ?? null,
+      agentId: ctx.agentId,
+      model: u?.model || req.tier,
+      inputTokens: u ? u.inputTokens : estimateTokens(req.system + req.messages.map((m) => m.content).join('')),
+      outputTokens: u ? u.outputTokens : estimateTokens(res.text),
+    });
+    return res;
+  };
   return {
     get enabled() {
       return llm.enabled;
     },
-    async complete(req: LlmRequest): Promise<string> {
-      const agent = hq.agent(ctx.agentId);
-      if (agent && hq.overBudget(agent.dept)) throw new Error(`Лимит расходов отдела ${agent.dept} исчерпан`);
-      const out = await llm.complete(req);
-      const input = estimateTokens(req.system + req.messages.map((m) => m.content).join(''));
-      hq.recordCost({ taskId: ctx.taskId ?? null, agentId: ctx.agentId, model: req.tier, inputTokens: input, outputTokens: estimateTokens(out) });
-      return out;
+    async complete(req) {
+      return (await run(req)).text;
     },
+    completeDetailed: run,
   };
 }

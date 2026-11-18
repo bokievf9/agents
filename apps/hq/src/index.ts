@@ -7,6 +7,11 @@ import { loadConfig } from './config.js';
 import { Director } from './director.js';
 import { HEAD_ID, MARKETING, MarketingHead } from './heads/marketing.js';
 import { seedOrg } from './org.js';
+import { SUPPORT, SUPPORT_HEAD_ID, SupportHead, seedSupport } from './heads/support.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { FinanceWorker } from '@fir/worker-finance';
+import { MonitoringWorker } from '@fir/worker-monitoring';
 import { Reporter, type TopicSender } from './reporter.js';
 
 const cfg = loadConfig();
@@ -15,6 +20,7 @@ const hq = new Hq(db);
 // The timezone of the departments is a setting; the first start takes it from TZ.
 if (!db.prepare("SELECT 1 FROM settings WHERE key = 'tz'").get()) hq.setSetting('tz', cfg.tz);
 seedOrg(hq, cfg);
+seedSupport(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'utf8').trim());
 
 const bot = createBot(cfg.botToken);
 const messenger = grammyMessenger(bot);
@@ -29,6 +35,7 @@ const topicSender = (api: Api): TopicSender => async (chatId, threadId, text) =>
 };
 senders.set('general', topicSender(bot.api));
 if (cfg.marketingBotToken) senders.set(MARKETING, topicSender(new Api(cfg.marketingBotToken)));
+if (cfg.supportBotToken) senders.set(SUPPORT, topicSender(new Api(cfg.supportBotToken)));
 const reporter = new Reporter(cfg.groupId, cfg.topics, senders);
 
 const director = new Director({ hq, llm, messenger, queue, ownerId: cfg.ownerId, reporter });
@@ -36,6 +43,9 @@ const marketing = new MarketingHead({
   hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, clipsPerWeek: cfg.clipsPerWeek, carouselsPerWeek: cfg.carouselsPerWeek,
 });
 director.editors.set('content_item', marketing);
+const support = new SupportHead({
+  hq, llm, reporter, monitor: new MonitoringWorker(cfg.monitor), finance: new FinanceWorker({ fixedCosts: cfg.fixedCostsUsdMonth }),
+});
 
 // Only the owner in a private chat; everyone else is ignored silently.
 bot.use(async (ctx, next) => {
@@ -79,10 +89,12 @@ bot.on('message:text', (ctx) => {
 // Heartbeat: the heads work only when woken (a task, a message or a routine).
 const heartbeats = new HeartbeatWorker(hq, async (agent) => {
   if (agent.id === HEAD_ID) await marketing.onHeartbeat();
+  if (agent.id === SUPPORT_HEAD_ID) await support.onHeartbeat();
 });
 heartbeats.start();
 const routineJobs = startRoutines(hq);
 director.start();
+support.start();
 // Wake every head once at start: tasks that waited while the process was down.
 for (const dept of hq.departments()) {
   const head = hq.headOf(dept);
@@ -92,13 +104,14 @@ for (const dept of hq.departments()) {
 const stop = () => {
   heartbeats.stop();
   director.stop();
+  support.stop();
   routineJobs.forEach((j) => j.stop());
   void bot.stop().finally(() => process.exit(0));
 };
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
 
-log('info', 'hq starting', { tz: hq.tz, departments: hq.departments(), group: cfg.groupId !== undefined, marketingBot: Boolean(cfg.marketingBotToken) });
+log('info', 'hq starting', { tz: hq.tz, departments: hq.departments(), group: cfg.groupId !== undefined, marketingBot: Boolean(cfg.marketingBotToken), supportBot: Boolean(cfg.supportBotToken) });
 startPolling(bot).catch((e) => {
   log('error', 'bot stopped', { err: errMsg(e) });
   process.exit(1);

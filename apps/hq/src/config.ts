@@ -1,5 +1,7 @@
 import { Cron } from 'croner';
 import { loadBaseConfig, optional, required, type BaseConfig } from '@fir/core';
+import { loadMonitorConfig, type MonitorConfig } from '@fir/worker-monitoring';
+import { parseFixedCosts } from '@fir/worker-finance';
 import { z } from 'zod';
 
 export interface Config extends BaseConfig {
@@ -14,6 +16,12 @@ export interface Config extends BaseConfig {
   carouselsPerWeek: number;
   /** Monthly limit of the Marketing department in USD (0: none). Used only when the head is first created. */
   marketingBudgetUsd: number;
+  /** Support bot token. Without it the Support head is silent in the group (checks and alerts still work). */
+  supportBotToken: string | undefined;
+  /** Support: what the monitoring checks, fixed monthly costs by item, department limit (0: none). */
+  monitor: MonitorConfig;
+  fixedCostsUsdMonth: Record<string, number>;
+  supportBudgetUsd: number;
 }
 
 function num(env: NodeJS.ProcessEnv, key: string, def: number, min: number, max: number): number {
@@ -51,6 +59,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     clipsPerWeek: Math.round(num(env, 'CLIPS_PER_WEEK', 7, 1, 7)),
     carouselsPerWeek: num(env, 'CAROUSELS_PER_WEEK', 0.5, 0, 1),
     marketingBudgetUsd: num(env, 'MARKETING_BUDGET_USD', 0, 0, 100_000),
+    supportBotToken: optional(env, 'SUPPORT_BOT_TOKEN'),
+    monitor: loadMonitorConfig(env, base.dataDir),
+    fixedCostsUsdMonth: parseFixedCosts(optional(env, 'FIXED_COSTS_USD_MONTH')),
+    supportBudgetUsd: num(env, 'SUPPORT_BUDGET_USD', 0, 0, 100_000),
   };
 }
 

@@ -73,8 +73,20 @@ export interface CostInput {
   usd?: number;
 }
 
-/** USD per million tokens, by model name prefix. Gateway aliases ("auto", free providers) cost 0. */
+/** USD per million tokens, by model name prefix (the longest matching prefix wins). Gateway aliases and free models cost 0. */
 export type PriceTable = Record<string, { in: number; out: number }>;
+
+/**
+ * Known Anthropic list prices, USD per 1M tokens, written into the `prices` table once (never overwritten, the owner
+ * edits them with `setPrice`). Check them against the current price list: a wrong row only skews the report.
+ * Gateway aliases ("auto") and free provider models stay at 0.
+ */
+export const DEFAULT_PRICES: PriceTable = {
+  'claude-haiku': { in: 1, out: 5 },
+  'claude-sonnet': { in: 3, out: 15 },
+  'claude-opus': { in: 5, out: 25 },
+  auto: { in: 0, out: 0 },
+};
 
 export interface TaskFilter {
   dept?: string;
@@ -99,7 +111,24 @@ export class Hq {
   constructor(readonly db: Db, opts: { now?: () => number; prices?: PriceTable } = {}) {
     db.exec(SCHEMA);
     this.now = opts.now ?? Date.now;
-    this.prices = opts.prices ?? {};
+    const seed = db.prepare('INSERT OR IGNORE INTO prices (prefix, in_usd, out_usd) VALUES (?, ?, ?)');
+    for (const [prefix, p] of Object.entries(DEFAULT_PRICES)) seed.run(prefix, p.in, p.out);
+    this.prices = opts.prices ?? this.loadPrices();
+  }
+
+  /** The price table from the `prices` table. */
+  loadPrices(): PriceTable {
+    const rows = this.db.prepare('SELECT prefix, in_usd, out_usd FROM prices').all() as { prefix: string; in_usd: number; out_usd: number }[];
+    return Object.fromEntries(rows.map((r) => [r.prefix, { in: r.in_usd, out: r.out_usd }] as const));
+  }
+
+  /** Sets USD per 1M tokens for a model name prefix (saved in the `prices` table and applied at once). */
+  setPrice(prefix: string, inUsd: number, outUsd: number): void {
+    if (!prefix || !(inUsd >= 0) || !(outUsd >= 0)) throw new Error('Bad price');
+    this.db
+      .prepare('INSERT INTO prices (prefix, in_usd, out_usd) VALUES (?, ?, ?) ON CONFLICT(prefix) DO UPDATE SET in_usd = excluded.in_usd, out_usd = excluded.out_usd')
+      .run(prefix, inUsd, outUsd);
+    this.prices = this.loadPrices();
   }
 
   // ---- agents ----
@@ -533,7 +562,9 @@ export class Hq {
   recordCost(c: CostInput): { usd: number; blocked: boolean } {
     const agent = this.agent(c.agentId);
     if (!agent) throw new Error(`Unknown agent ${c.agentId}`);
-    const price = Object.entries(this.prices).find(([prefix]) => c.model.startsWith(prefix))?.[1];
+    const price = Object.entries(this.prices)
+      .filter(([prefix]) => c.model.startsWith(prefix))
+      .sort((a, b) => b[0].length - a[0].length)[0]?.[1];
     const usd = c.usd ?? (price ? (c.inputTokens * price.in + c.outputTokens * price.out) / 1_000_000 : 0);
     this.db
       .prepare('INSERT INTO costs (task_id, agent_id, dept, model, input_tokens, output_tokens, usd, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')

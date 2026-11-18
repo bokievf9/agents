@@ -75,6 +75,10 @@ services:
       TZ: Asia/Tashkent
     volumes:
       - /opt/fir-agents/data/hq:/app/data
+      # Docker check of the Support head (MONITOR_DOCKER=true). OFF: the docker socket is root-equivalent on the host,
+      # and ":ro" does not limit the API. Enable only knowing that; the container user also needs the docker group
+      # (group_add), which the hardening above does not give it.
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
     networks: [agents-net]
     read_only: true
     tmpfs:

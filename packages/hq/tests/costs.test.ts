@@ -1,6 +1,6 @@
 import { MockLlm } from '@fir/core';
 import { describe, expect, it } from 'vitest';
-import { exportOrg, importOrg, meterLlm } from '../src/index.js';
+import { Hq, exportOrg, importOrg, meterLlm } from '../src/index.js';
 import { setup } from './helpers.js';
 
 describe('costs and budget', () => {
@@ -44,6 +44,31 @@ describe('costs and budget', () => {
     expect(await llm.complete({ tier: 'sonnet', system: 'abcd', messages: [{ role: 'user', content: 'abcdabcd' }] })).toBe('abcdefgh');
     expect(hq.costSummary(0)[0]).toMatchObject({ inputTokens: 3, outputTokens: 2 });
     expect(llm.enabled).toBe(true);
+  });
+});
+
+describe('real usage and prices', () => {
+  it('meterLlm uses the usage the client reports: tokens and the model that answered, priced from the table', async () => {
+    const { hq } = setup();
+    const t = hq.createTask({ title: 'A', dept: 'marketing', creator: 'owner' });
+    const llm = meterLlm(new MockLlm(() => 'x', { inputTokens: 2_000_000, outputTokens: 100_000, model: 'claude-sonnet-5-5' }), hq, { agentId: 'content-maker', taskId: t.id });
+    await llm.complete({ tier: 'sonnet', system: 's', messages: [{ role: 'user', content: 'u' }] });
+    const row = hq.db.prepare('SELECT model, input_tokens i, output_tokens o, usd FROM costs').get() as { model: string; i: number; o: number; usd: number };
+    expect(row).toMatchObject({ model: 'claude-sonnet-5-5', i: 2_000_000, o: 100_000 });
+    expect(row.usd).toBeCloseTo(7.5); // 2 * 3 + 0.1 * 15
+    expect(llm.completeDetailed).toBeDefined();
+  });
+
+  it('a free gateway model costs 0 and an unknown one too; the longest prefix wins; setPrice persists', () => {
+    const { hq, db } = setup();
+    const rec = (model: string) => hq.recordCost({ agentId: 'content-maker', model, inputTokens: 1_000_000, outputTokens: 0 }).usd;
+    expect(rec('auto')).toBe(0);
+    expect(rec('glm-4.6')).toBe(0);
+    expect(rec('claude-haiku-5-5')).toBeCloseTo(1);
+    hq.setPrice('claude-haiku-5', 0.5, 2.5);
+    expect(rec('claude-haiku-5-5')).toBeCloseTo(0.5);
+    expect(new Hq(db).prices['claude-haiku-5']).toEqual({ in: 0.5, out: 2.5 });
+    expect(() => hq.setPrice('x', -1, 0)).toThrow();
   });
 });
 

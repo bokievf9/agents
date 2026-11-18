@@ -20,17 +20,50 @@ export interface LlmRequest {
   maxTokens?: number;
 }
 
+/** Tokens the provider reported for one call, and the model that really answered (a gateway alias resolves to a real one). */
+export interface LlmUsage {
+  inputTokens: number;
+  outputTokens: number;
+  model: string;
+}
+
+/** A reply with the provider's own usage. `usage` is absent when the provider did not report it. */
+export interface LlmResult {
+  text: string;
+  usage?: LlmUsage;
+}
+
 /** The only door to a language model. Agents depend on this, never on the SDK. */
 export interface LlmClient {
   /** False when there is no key: callers must fall back to templates and heuristics. */
   readonly enabled: boolean;
+  /** Text only: what every caller uses. */
   complete(req: LlmRequest): Promise<string>;
+  /** Same call with real usage, for cost accounting. Optional: clients without it are metered by estimate. */
+  completeDetailed?(req: LlmRequest): Promise<LlmResult>;
+}
+
+/** Usage from an Anthropic-format response (`usage.input_tokens`, `usage.output_tokens`, `model`). Null when missing. */
+export function parseUsage(res: unknown, fallbackModel = ''): LlmUsage | null {
+  if (typeof res !== 'object' || res === null) return null;
+  const r = res as { usage?: unknown; model?: unknown };
+  if (typeof r.usage !== 'object' || r.usage === null) return null;
+  const u = r.usage as Record<string, unknown>;
+  const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : 0);
+  // Cache reads and writes are billed input too; count them so the total is not understated.
+  const input = n(u.input_tokens) + n(u.cache_creation_input_tokens) + n(u.cache_read_input_tokens);
+  const output = n(u.output_tokens);
+  if (input === 0 && output === 0) return null;
+  return { inputTokens: input, outputTokens: output, model: typeof r.model === 'string' && r.model ? r.model : fallbackModel };
 }
 
 /** Honest "LLM off" mode: no key, no calls. `complete` throws so nobody mistakes it for an answer. */
 export class OffLlm implements LlmClient {
   readonly enabled = false;
   complete(): Promise<string> {
+    return Promise.reject(new Error('LLM off'));
+  }
+  completeDetailed(): Promise<LlmResult> {
     return Promise.reject(new Error('LLM off'));
   }
 }
@@ -59,6 +92,10 @@ export class AnthropicLlm implements LlmClient {
   }
 
   async complete(req: LlmRequest): Promise<string> {
+    return (await this.completeDetailed(req)).text;
+  }
+
+  async completeDetailed(req: LlmRequest): Promise<LlmResult> {
     const params = {
       model: this.models[req.tier],
       max_tokens: req.maxTokens ?? 1024,
@@ -80,7 +117,9 @@ export class AnthropicLlm implements LlmClient {
       res = await this.client.messages.create({ ...params, output_config: { effort: 'low' } });
     }
     if (res.stop_reason === 'refusal') throw new Error('LLM refused');
-    return res.content.map((b) => (b.type === 'text' ? b.text : '')).join('').trim();
+    const text = res.content.map((b) => (b.type === 'text' ? b.text : '')).join('').trim();
+    const usage = parseUsage(res, params.model);
+    return usage ? { text, usage } : { text };
   }
 }
 
@@ -143,11 +182,25 @@ export async function tryJson<S extends z.ZodType>(llm: LlmClient, req: LlmReque
   return null;
 }
 
-/** Test double: scripted replies, records requests. */
+/**
+ * Test double: scripted replies, records requests. With `usage` it also reports usage through `completeDetailed`
+ * (the way the real client does); without it, the client looks like one that reports nothing.
+ */
 export class MockLlm implements LlmClient {
   readonly enabled = true;
   readonly calls: LlmRequest[] = [];
-  constructor(private readonly handler: (req: LlmRequest, n: number) => string | Promise<string>) {}
+  readonly completeDetailed?: (req: LlmRequest) => Promise<LlmResult>;
+  constructor(
+    private readonly handler: (req: LlmRequest, n: number) => string | Promise<string>,
+    usage?: LlmUsage | ((req: LlmRequest, text: string) => LlmUsage),
+  ) {
+    if (usage) {
+      this.completeDetailed = async (req) => {
+        const text = await this.complete(req);
+        return { text, usage: typeof usage === 'function' ? usage(req, text) : usage };
+      };
+    }
+  }
   async complete(req: LlmRequest): Promise<string> {
     this.calls.push(req);
     return this.handler(req, this.calls.length);

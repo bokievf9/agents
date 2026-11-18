@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { createLlm, MockLlm, OffLlm, tryComplete, tryJson } from '../src/index.js';
+import { createServer } from 'node:http';
+import { createLlm, MockLlm, OffLlm, parseUsage, tryComplete, tryJson } from '../src/index.js';
 
 const noKey = { baseUrl: undefined, apiKey: undefined, modelFast: undefined, modelSmart: undefined, timeoutMs: 1000, maxRetries: 0 };
 
@@ -32,5 +33,47 @@ describe('llm', () => {
   it('tryJson gives null when the model keeps failing or is off', async () => {
     expect(await tryJson(new MockLlm(() => 'nope'), req, schema, 2)).toBeNull();
     expect(await tryJson(createLlm(noKey), req, schema)).toBeNull();
+  });
+});
+
+describe('usage', () => {
+  const req = { tier: 'haiku' as const, system: 's', messages: [{ role: 'user' as const, content: 'x' }] };
+
+  it('parses Anthropic-format usage and the model that answered', () => {
+    expect(parseUsage({ model: 'glm-4.6', usage: { input_tokens: 120, output_tokens: 30 } }, 'auto')).toEqual({ inputTokens: 120, outputTokens: 30, model: 'glm-4.6' });
+    expect(parseUsage({ usage: { input_tokens: 5, output_tokens: 1, cache_read_input_tokens: 95 } }, 'auto')).toEqual({ inputTokens: 100, outputTokens: 1, model: 'auto' });
+  });
+
+  it('gives null when the provider reports nothing usable', () => {
+    expect(parseUsage({ model: 'x' })).toBeNull();
+    expect(parseUsage({ usage: { input_tokens: 'a' } })).toBeNull();
+    expect(parseUsage({ usage: { input_tokens: 0, output_tokens: 0 } })).toBeNull();
+    expect(parseUsage(null)).toBeNull();
+  });
+
+  it('the gateway client returns text and usage; complete stays text-only', async () => {
+    const server = createServer((_req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({
+        id: 'm1', type: 'message', role: 'assistant', model: 'kimi-k2', stop_reason: 'end_turn', stop_sequence: null,
+        content: [{ type: 'text', text: ' hi ' }], usage: { input_tokens: 42, output_tokens: 7 },
+      }));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const port = (server.address() as { port: number }).port;
+      const llm = createLlm({ ...noKey, baseUrl: `http://127.0.0.1:${port}`, apiKey: 'k' });
+      expect(await llm.complete(req)).toBe('hi');
+      expect(await llm.completeDetailed!(req)).toEqual({ text: 'hi', usage: { inputTokens: 42, outputTokens: 7, model: 'kimi-k2' } });
+    } finally {
+      server.close();
+    }
+  });
+
+  it('MockLlm reports usage only when given', async () => {
+    expect(new MockLlm(() => 'a').completeDetailed).toBeUndefined();
+    const m = new MockLlm(() => 'a', { inputTokens: 1, outputTokens: 2, model: 'x' });
+    expect(await m.completeDetailed!(req)).toEqual({ text: 'a', usage: { inputTokens: 1, outputTokens: 2, model: 'x' } });
+    expect(m.calls).toHaveLength(1);
   });
 });
