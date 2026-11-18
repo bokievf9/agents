@@ -1,19 +1,51 @@
 import { errMsg, log, zonedParts, type ApprovalQueue, type LlmClient, type Messenger, type Payload } from '@fir/core';
 import { generateItem, type Prompts } from './generate.js';
-import { PLATFORM_LABEL, splitPlatforms, type ItemType, type Platform } from './format.js';
+import { PLATFORM_LABEL, editableParts, partLabel, replacePart, splitPlatforms, titleOf, type ItemType, type PartId, type Platform } from './format.js';
 import { ContentStore } from './store.js';
 import { ALL_TOPICS, freeTopic, pickTopics, type Topic } from './topics.js';
 
 export const KIND = 'content_item';
 const DAY = 86_400_000;
 
-/** Pack layout: type and day offset from Monday (Tue clip, Wed carousel, Thu clip, Sat clip). */
-export const PACK_PLAN: { type: ItemType; day: number }[] = [
-  { type: 'clip', day: 1 },
-  { type: 'carousel', day: 2 },
-  { type: 'clip', day: 3 },
-  { type: 'clip', day: 5 },
-];
+export interface Cadence {
+  /** Clip scripts a week, 1-7 (one per day, Monday first). */
+  clipsPerWeek: number;
+  /** 0-1 carousels a week; 0.5 = one every other week. */
+  carouselsPerWeek: number;
+}
+export const DEFAULT_CADENCE: Cadence = { clipsPerWeek: 7, carouselsPerWeek: 0.5 };
+
+/** ISO 8601 week number of a YYYY-MM-DD date. */
+export function isoWeek(date: string): number {
+  const d = new Date(`${date}T00:00:00Z`);
+  const dow = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dow); // the Thursday of this week decides the year
+  const yearStart = Date.UTC(d.getUTCFullYear(), 0, 1);
+  return Math.ceil(((d.getTime() - yearStart) / DAY + 1) / 7);
+}
+
+/**
+ * Carousel rule: week w gets one when floor(w * r) > floor((w - 1) * r), r = carouselsPerWeek. For r = 0.5 that
+ * is every even ISO week (one every other week), r = 1 every week, r = 0 never. No stored counter is needed.
+ * (Around the 52/53-week year end the gap can stretch to three weeks.)
+ */
+export function hasCarousel(week: number, r: number): boolean {
+  return Math.floor(week * r + 1e-9) > Math.floor((week - 1) * r + 1e-9);
+}
+
+/**
+ * Pack layout: `clips` clips spread over Mon-Sun (7 clips: one every day), plus a carousel on a day without a
+ * clip when there is one (Wednesday first), otherwise on Wednesday next to a clip. Sorted by day.
+ */
+export function buildPackPlan(weekStart: string, c: Cadence = DEFAULT_CADENCE): { type: ItemType; day: number }[] {
+  const n = Math.min(7, Math.max(1, Math.round(c.clipsPerWeek)));
+  const plan: { type: ItemType; day: number }[] = Array.from({ length: n }, (_, i) => ({ type: 'clip' as const, day: Math.floor((i * 7) / n) }));
+  if (hasCarousel(isoWeek(weekStart), c.carouselsPerWeek)) {
+    const free = [2, 3, 1, 4, 5, 0, 6].find((d) => !plan.some((p) => p.day === d));
+    plan.push({ type: 'carousel', day: free ?? 2 });
+  }
+  return plan.sort((x, y) => x.day - y.day || (x.type === 'clip' ? -1 : 1));
+}
 
 const TYPE_RU: Record<ItemType, string> = { clip: 'клип', carousel: 'карусель' };
 const PLATFORMS: Record<ItemType, Platform[]> = { clip: ['instagram', 'tiktok', 'shorts'], carousel: ['instagram'] };
@@ -24,7 +56,7 @@ export interface HeadDeps {
   llm: LlmClient;
   queue: ApprovalQueue;
   prompts: Prompts;
-  cfg: { ownerId: number; tz: string };
+  cfg: { ownerId: number; tz: string; clipsPerWeek?: number; carouselsPerWeek?: number };
   now?: () => number;
   rng?: () => number;
 }
@@ -74,19 +106,21 @@ export class ContentHead {
     if (!force && this.d.store.packExists(week)) return;
     this.busy = true;
     try {
-      const topics = pickTopics(this.d.store.history(), PACK_PLAN.length, this.now(), this.rng);
+      const plan = buildPackPlan(week, { clipsPerWeek: this.d.cfg.clipsPerWeek ?? DEFAULT_CADENCE.clipsPerWeek, carouselsPerWeek: this.d.cfg.carouselsPerWeek ?? DEFAULT_CADENCE.carouselsPerWeek });
+      const topics = pickTopics(this.d.store.history(), plan.length, this.now(), this.rng);
       const packId = this.d.store.createPack(week);
-      await this.say(`Пакет на неделю с ${ddmm(week)}: ${PACK_PLAN.length} материала, ниже по одному. Одобрите, поправьте или отклоните каждый.`);
+      const carousels = plan.filter((p) => p.type === 'carousel').length;
+      await this.say(`Пакет на неделю с ${ddmm(week)}: материалов ${plan.length} (клипов ${plan.length - carousels}${carousels ? `, каруселей ${carousels}` : ''}), ниже по одному. Одобрите, поправьте или отклоните каждый.`);
       let ok = 0;
-      for (const [i, plan] of PACK_PLAN.entries()) {
+      for (const [i, p] of plan.entries()) {
         const topic = topics[i]!;
         const itemId = this.d.store.insertItem({
-          packId, seq: i + 1, total: PACK_PLAN.length, type: plan.type, topicKey: topic.key, topicText: topic.text, plannedDate: addDays(week, plan.day),
+          packId, seq: i + 1, total: plan.length, type: p.type, topicKey: topic.key, topicText: topic.text, plannedDate: addDays(week, p.day),
         });
         this.d.store.recordTopic(topic.key);
         if (await this.produce(itemId, topic, '')) ok++;
       }
-      if (ok < PACK_PLAN.length) await this.say(`Из ${PACK_PLAN.length} материалов получилось ${ok}. Остальное можно сделать через /topic.`);
+      if (ok < plan.length) await this.say(`Из ${plan.length} материалов получилось ${ok}. Остальное можно сделать через /topic.`);
     } finally {
       this.busy = false;
     }
@@ -151,6 +185,7 @@ export class ContentHead {
    * regenerated once with it; a rejected second version is final.
    */
   async afterDecision(approvalId: number, action: 'approve' | 'edit' | 'reject'): Promise<void> {
+    if (this.d.store.getKv('await_edit')?.startsWith(`${approvalId}:`)) this.d.store.setKv('await_edit', null);
     if (action !== 'reject') return;
     const item = this.d.store.itemByApproval(approvalId);
     if (!item || item.status === 'rejected' || this.d.queue.get(approvalId)?.status !== 'rejected') return;
@@ -160,8 +195,54 @@ export class ContentHead {
     await this.say(`Что не так в материале #${item.id}? Напишите комментарий одним сообщением, я сделаю вторую версию. /skip отменяет.`);
   }
 
-  /** A plain owner message: the comment on a rejected item, if one is awaited. Returns true when consumed. */
+  /**
+   * "Править" pressed: asks which part to edit (script or slides, then each platform). The bot glue calls this
+   * instead of the queue's own whole-text edit. Returns the toast for the callback.
+   */
+  async onEditPressed(approvalId: number): Promise<string> {
+    const item = this.d.store.itemByApproval(approvalId);
+    const status = this.d.queue.get(approvalId)?.status;
+    if (!item || (status !== 'pending' && status !== 'editing')) return 'Уже обработано';
+    const row = editableParts(item.type).map((p) => ({ text: partLabel(item.type, p), data: `ce:${approvalId}:${p}` }));
+    await this.d.messenger.send(this.d.cfg.ownerId, `Что править в материале #${item.id}? Выберите часть, следующее сообщение заменит только её.`, [row]);
+    return 'Что править?';
+  }
+
+  /** A part button pressed: the next owner message replaces that part only. */
+  async onPartPicked(approvalId: number, part: string): Promise<string> {
+    const item = this.d.store.itemByApproval(approvalId);
+    const status = this.d.queue.get(approvalId)?.status;
+    if (!item || (status !== 'pending' && status !== 'editing')) return 'Уже обработано';
+    const id = editableParts(item.type).find((p) => p === part);
+    if (!id) return 'Нет такой части';
+    this.d.store.setKv('await_edit', `${approvalId}:${id}`);
+    await this.say(`Пришлите новый текст для части «${partLabel(item.type, id)}» (материал #${item.id}) одним сообщением. /skip отменяет.`);
+    return `Жду: ${partLabel(item.type, id)}`;
+  }
+
+  private async applyPartEdit(pending: string, text: string): Promise<void> {
+    const [aid, part] = pending.split(':') as [string, PartId];
+    const approvalId = Number(aid);
+    const item = this.d.store.itemByApproval(approvalId);
+    const row = this.d.queue.get(approvalId);
+    if (!item || !row || (row.status !== 'pending' && row.status !== 'editing')) return void (await this.say('Этот материал уже обработан, правка не применена.'));
+    const next = replacePart(typeof row.payload.text === 'string' ? row.payload.text : item.text, part, text);
+    if (!next) {
+      this.d.store.setKv('await_edit', pending);
+      return void (await this.say('Часть не изменена: текст пустой или такой части нет. Пришлите текст ещё раз или /skip.'));
+    }
+    this.d.store.setText(item.id, next, titleOf(next));
+    await this.d.queue.applyEdit(approvalId, next);
+  }
+
+  /** A plain owner message: a part edit or the comment on a rejected item, if one is awaited. Returns true when consumed. */
   async onText(text: string): Promise<boolean> {
+    const edit = this.d.store.getKv('await_edit');
+    if (edit) {
+      this.d.store.setKv('await_edit', null);
+      await this.applyPartEdit(edit, text);
+      return true;
+    }
     const id = Number(this.d.store.getKv('await_comment'));
     if (!id) return false;
     const old = this.d.store.item(id);
@@ -181,7 +262,7 @@ export class ContentHead {
     switch (name) {
       case 'start':
       case 'help':
-        return this.say('Контент-мейкер Fir Tech.\n/pack: пакет недели сейчас\n/topic <тема>: один материал (карусель: /topic карусель <тема>)\n/queue: одобрено и ждёт выхода\n/stats: счётчики\n/skip: отменить ожидание комментария');
+        return this.say('Контент-мейкер Fir Tech.\n/pack: пакет недели сейчас\n/topic <тема>: один материал (карусель: /topic карусель <тема>)\n/queue: одобрено и ждёт выхода\n/stats: счётчики\n/skip: отменить ожидание правки или комментария');
       case 'pack':
         return this.generatePack(true);
       case 'topic':
@@ -192,7 +273,8 @@ export class ContentHead {
         return this.say(this.statsText());
       case 'skip':
         this.d.store.setKv('await_comment', null);
-        return this.say('Ок, без второй версии.');
+        this.d.store.setKv('await_edit', null);
+        return this.say('Ок, ничего не жду.');
       default:
         return;
     }

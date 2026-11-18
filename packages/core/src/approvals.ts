@@ -206,9 +206,17 @@ export class ApprovalQueue {
   async submitEdit(fromId: number, text: string): Promise<boolean> {
     if (fromId !== this.ownerId || this.editing === null) return false;
     const id = this.editing;
-    const row = this.get(id);
     this.editing = null;
-    if (!row) return false;
+    return this.applyEdit(id, text);
+  }
+
+  /**
+   * Replaces the proposal's text with an edited one (a pending proposal; the agent builds the new text itself,
+   * e.g. one platform part swapped), resets the streak, journals "edit" and asks again.
+   */
+  async applyEdit(id: number, text: string): Promise<boolean> {
+    const row = this.get(id);
+    if (!row || (row.status !== 'pending' && row.status !== 'editing')) return false;
     const payload: Payload = { ...row.payload, text };
     this.db.prepare("UPDATE approvals SET payload = ?, edited = 1, status = 'pending' WHERE id = ?").run(JSON.stringify(payload), id);
     this.bump(row.kind, 'reset');

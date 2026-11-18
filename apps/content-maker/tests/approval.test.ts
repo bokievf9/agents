@@ -18,18 +18,65 @@ describe('approval state machine', () => {
     expect(head.queueText()).toContain('клип, Instagram + TikTok + Shorts');
   });
 
-  it('edit replaces the text, then approve stores the edited text', async () => {
+  it('edit asks which part, then replaces only that part and keeps the other captions', async () => {
     const { head, decide, queue, store, messenger } = setup();
     await head.onCommand('topic', 'тема');
     const aid = queue.pending()[0]!.id;
-    await decide('edit', aid);
-    await queue.submitEdit(OWNER, 'Клип, 25 с: правка\nCTA: firtech.pro');
+    const before = queue.get(aid)!.payload.text as string;
+    expect(await head.onEditPressed(aid)).toBe('Что править?');
+    const buttons = messenger.last()!.buttons![0]!;
+    expect(buttons.map((b) => b.text)).toEqual(['Сценарий', 'Instagram', 'TikTok', 'Shorts']);
+    expect(await head.onPartPicked(aid, 'tiktok')).toContain('TikTok');
+    expect(messenger.last()!.text).toContain('«TikTok»');
+    // No markers in the owner's text: still fine.
+    expect(await head.onText('Новая подпись для тикток\n#новый')).toBe(true);
+    const after = queue.get(aid)!.payload.text as string;
+    expect(after).toContain('== TikTok ==\nНовая подпись для тикток\n#новый');
+    expect(after).toContain('== Instagram ==\nig подпись');
+    expect(after).toContain('== Shorts ==');
+    expect(after.split('== TikTok ==')[0]).toBe(before.split('== TikTok ==')[0]);
+    expect(messenger.last()!.buttons).toBeDefined(); // asked again with the new text
     await decide('approve', aid);
     const rows = store.readyRows();
     expect(rows).toHaveLength(3);
-    expect(rows[0]!.text).toContain('правка');
+    expect(rows[1]!.text).toContain('Новая подпись для тикток');
+    expect(rows[0]!.text).toContain('ig подпись');
     expect(store.counts().edited).toBe(1);
-    expect(messenger.sent.some((m) => m.text.includes('Пришлите новый текст'))).toBe(true);
+  });
+
+  it('script edit replaces the body, markers in the owner text are dropped, empty text is refused', async () => {
+    const { head, queue, messenger } = setup();
+    await head.onCommand('topic', 'тема');
+    const aid = queue.pending()[0]!.id;
+    await head.onPartPicked(aid, 'script');
+    await head.onText('   ');
+    expect(messenger.last()!.text).toContain('Часть не изменена');
+    await head.onText('Клип, 25 с: правка\n== Instagram ==\nCTA: firtech.pro');
+    const text = queue.get(aid)!.payload.text as string;
+    expect(text.startsWith('Клип, 25 с: правка\nCTA: firtech.pro')).toBe(true);
+    expect(text.match(/== Instagram ==/g)).toHaveLength(1);
+    expect(text).toContain('ig подпись');
+  });
+
+  it('carousel offers Слайды and Instagram only; unknown part is refused', async () => {
+    const { head, queue, messenger } = setup();
+    await head.onCommand('topic', 'карусель про цены');
+    const aid = queue.pending()[0]!.id;
+    await head.onEditPressed(aid);
+    expect(messenger.last()!.buttons![0]!.map((b) => b.text)).toEqual(['Слайды', 'Instagram']);
+    expect(await head.onPartPicked(aid, 'tiktok')).toBe('Нет такой части');
+  });
+
+  it('approving or /skip clears a pending part edit', async () => {
+    const { head, decide, queue } = setup();
+    await head.onCommand('topic', 'тема');
+    const aid = queue.pending()[0]!.id;
+    await head.onPartPicked(aid, 'instagram');
+    await head.onCommand('skip');
+    expect(await head.onText('текст')).toBe(false);
+    await head.onPartPicked(aid, 'instagram');
+    await decide('approve', aid);
+    expect(await head.onText('текст')).toBe(false);
   });
 
   it('reject asks for a comment, regenerates once with it, and a second reject is final', async () => {

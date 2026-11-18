@@ -130,6 +130,10 @@ export class ContentStore {
     this.db.prepare("UPDATE items SET status = 'proposed', text = ?, title = ?, approval_id = ? WHERE id = ?").run(text, title, approvalId, id);
   }
 
+  setText(id: number, text: string, title: string): void {
+    this.db.prepare('UPDATE items SET text = ?, title = ? WHERE id = ?').run(text, title, id);
+  }
+
   setStatus(id: number, status: ItemStatus, comment?: string): void {
     this.db.prepare('UPDATE items SET status = ?, comment = COALESCE(?, comment) WHERE id = ?').run(status, comment ?? null, id);
   }

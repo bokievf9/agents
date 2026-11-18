@@ -8,12 +8,12 @@ const DAY = 86_400_000;
 describe('topic rotation', () => {
   it('has 8 directions and a pool of topics', () => {
     expect(DIRECTIONS).toHaveLength(8);
-    expect(ALL_TOPICS.length).toBe(32);
+    expect(ALL_TOPICS.length).toBe(48);
   });
 
   it('uses different directions inside one pack', () => {
-    const t = pickTopics(new Map(), 4, NOW, () => 0.3);
-    expect(new Set(t.map((x) => x.directionId)).size).toBe(4);
+    const t = pickTopics(new Map(), 8, NOW, () => 0.3);
+    expect(new Set(t.map((x) => x.directionId)).size).toBe(8);
   });
 
   it('never repeats a topic within 6 weeks over a simulated run', () => {
@@ -22,8 +22,9 @@ describe('topic rotation', () => {
     const seen: { key: string; at: number }[] = [];
     let seed = 3;
     const rng = () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296);
-    for (let week = 0; week < 8; week++) {
-      for (const t of pickTopics(history, 4, now, rng)) {
+    for (let week = 0; week < 14; week++) {
+      // 7 clips a week, plus a carousel every other week
+      for (const t of pickTopics(history, week % 2 === 0 ? 8 : 7, now, rng)) {
         const prev = seen.filter((s) => s.key === t.key).at(-1);
         if (prev) expect(now - prev.at).toBeGreaterThanOrEqual(REPEAT_WINDOW_DAYS * DAY);
         history.set(t.key, now);
@@ -42,6 +43,6 @@ describe('topic rotation', () => {
   it('records topics of a pack in the SQLite history', async () => {
     const { head, store } = setup();
     await head.generatePack(true);
-    expect(store.history().size).toBe(4);
+    expect(store.history().size).toBe(8);
   });
 });

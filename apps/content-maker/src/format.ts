@@ -50,7 +50,7 @@ function renderCaptions(c: Captions): string {
   return out.join('\n');
 }
 
-/** The text the owner reads and edits. Platform captions sit under "== Platform ==" markers (see splitPlatforms). */
+/** The text the owner reads and edits. Platform captions sit under "== Platform ==" markers (display only; edits go through replacePart). */
 export function renderClip(c: Clip | z.input<typeof clipSchema>): string {
   const parsed = c as Clip;
   const scenes = parsed.scenes.map((s, i) => `${i + 1}. Голос: ${s.voice}\n   Субтитр: ${s.subtitle}`).join('\n');
@@ -88,6 +88,39 @@ export function splitPlatforms(text: string): { body: string; sections: Partial<
     sections[BY_LABEL[m[1]!]!] = text.slice(m.index + m[0].length, end).trim();
   });
   return { body: text.slice(0, marks[0]!.index).trim(), sections };
+}
+
+/** Parts of an item the owner can edit one at a time: the script (clip) or slides (carousel), then each platform. */
+export type PartId = 'script' | Platform;
+
+export function editableParts(type: ItemType): PartId[] {
+  return type === 'clip' ? ['script', 'instagram', 'tiktok', 'shorts'] : ['script', 'instagram'];
+}
+
+export function partLabel(type: ItemType, part: PartId): string {
+  return part === 'script' ? (type === 'clip' ? 'Сценарий' : 'Слайды') : PLATFORM_LABEL[part];
+}
+
+const PLATFORM_ORDER: Platform[] = ['instagram', 'tiktok', 'shorts'];
+
+/**
+ * Swaps one part of the text (the body above the markers, or one platform's section) and rebuilds the
+ * markers itself, so the owner never has to keep them intact. Marker lines inside the new text are dropped.
+ * Returns null when the platform section does not exist in the text or the new part is empty.
+ */
+export function replacePart(text: string, part: PartId, replacement: string): string | null {
+  const clean = replacement.replace(/^== (Instagram|TikTok|Shorts) ==[ \t]*\n?/gm, '').trim();
+  if (!clean) return null;
+  const { body, sections } = splitPlatforms(text);
+  if (part === 'script') return joinParts(clean, sections);
+  if (!(part in sections)) return null;
+  return joinParts(body, { ...sections, [part]: clean });
+}
+
+function joinParts(body: string, sections: Partial<Record<Platform, string>>): string {
+  const out = [body];
+  for (const p of PLATFORM_ORDER) if (sections[p] !== undefined) out.push(`== ${PLATFORM_LABEL[p]} ==\n${sections[p]}`);
+  return out.join('\n\n');
 }
 
 /** First line of the body without the type prefix: the item's short title. */

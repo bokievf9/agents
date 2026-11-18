@@ -5,6 +5,8 @@ export const ANGLES = {
   price: 'сколько стоит и что входит (цена только из справки)',
   before_after: 'было, стало: пример сценария, обязательно с подписью «Пример сценария», без цифр результата',
   demo: 'показ в работе на примерных данных, с подписью «Демо на примерных данных»',
+  client_mistake: 'ошибка клиента: типичная ошибка владельца бизнеса в этой рутине и как её закрывает агент, без цифр результата',
+  fact: 'цифра дня: один факт из справки (цена, срок или что входит) как главная мысль ролика, без выдуманной статистики',
 } as const;
 export type AngleId = keyof typeof ANGLES;
 
@@ -16,6 +18,11 @@ export interface Topic {
 }
 
 export const REPEAT_WINDOW_DAYS = 42; // six weeks
+/**
+ * Pool size: 8 directions x 6 angles = 48 topics. A pack is 7 clips plus a carousel every other week, so on
+ * average 7.5 topics a week: 48 / 7.5 = 6.4 weeks before the first topic comes back, which covers the six-week
+ * window (6 weeks use 45 topics). Raising CLIPS_PER_WEEK or CAROUSELS_PER_WEEK needs more angles or directions.
+ */
 const DAY = 86_400_000;
 
 export const ALL_TOPICS: Topic[] = DIRECTIONS.flatMap((d) =>
