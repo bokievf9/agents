@@ -1,0 +1,28 @@
+{
+  "name": "@fir/clips",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Faceless vertical clips (Remotion). Mac-only dev tool, not part of the Docker image.",
+  "scripts": {
+    "render": "tsx src/cli.ts",
+    "preview": "remotion studio src/remotion/index.ts",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.534",
+    "@remotion/cli": "4.0.534",
+    "@remotion/google-fonts": "4.0.534",
+    "@remotion/renderer": "4.0.534",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "remotion": "4.0.534",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0"
+  }
+}
