@@ -110,6 +110,7 @@ LLM в компании ходит не напрямую в Anthropic, а чер
     его переменных (`PORT`, `DATA_DIR`, секреты) сверить с документацией OmniRoute при первом запуске; `:latest`
     закрепить на версию. Без `read_only`, пока не проверено, что образ так работает.
   - Плейсхолдеры `__AGENTS_UID__/__AGENTS_GID__` подставляет bootstrap.
+  - `TZ` задаётся в compose по сервисам (polly `Asia/Kuala_Lumpur`, lead-intake `Asia/Tashkent`) и перекрывает `TZ` из общего `/opt/fir-agents/.env`.
 - `deploy/bootstrap-vps.sh` (один раз, root на VPS: `sudo bash bootstrap-vps.sh "<ssh-ed25519 публичный ключ>"`):
   пользователь `agents`, дом `/opt/fir-agents`, данные `agents`-owned, всё решающее (compose, `bin/deploy.sh`,
   `authorized_keys`) root-owned. Ключ деплоя с `command="/opt/fir-agents/bin/deploy.sh",restrict`.

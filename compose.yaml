@@ -12,6 +12,7 @@ services:
       DATA_DIR: /app/data
       WEBHOOK_PORT: "8787"
       LLM_BASE_URL: http://omniroute:20128
+      TZ: Asia/Tashkent
     volumes:
       - /opt/fir-agents/data/lead-intake:/app/data
     # The only published port: the form webhook, loopback only; nginx proxies to it later.
@@ -42,6 +43,7 @@ services:
     environment:
       DATA_DIR: /app/data
       LLM_BASE_URL: http://omniroute:20128
+      TZ: Asia/Kuala_Lumpur
     volumes:
       - /opt/fir-agents/data/polly:/app/data
     networks: [agents-net]
