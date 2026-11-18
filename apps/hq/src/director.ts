@@ -38,6 +38,8 @@ const intentSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('sales_reply'), id: z.coerce.number().int().positive(), text: z.string().max(2000).optional() }),
   z.object({ type: z.literal('builder'), title: z.string().min(1).max(200), body: z.string().max(2000).optional() }),
+  z.object({ type: z.literal('production_command'), command: z.string().min(1).max(30), arg: z.string().max(1500).default('') }),
+  z.object({ type: z.literal('backoffice_command'), command: z.string().min(1).max(30), arg: z.string().max(1500).default('') }),
   z.object({ type: z.literal('unknown'), question: z.string().max(300).optional() }),
 ]);
 type Intent = z.output<typeof intentSchema>;
@@ -80,6 +82,10 @@ export class Director {
   onSupportCommand: ((name: string, args: string) => Promise<string>) | null = null;
   /** Set by the builder bridge: a builder task was just created, make its issue now instead of at the next poll. */
   onBuilderTask: (() => Promise<unknown>) | null = null;
+  /** Commands of the Production and Back Office heads (`/project`, `/doc`...): name -> handler returning the reply. */
+  readonly commands = new Map<string, { dept: 'production' | 'backoffice'; run: (arg: string) => Promise<string> }>();
+  /** Extra lines of the morning summary from heads (overdue milestones, pending documents); null: nothing to say. */
+  readonly summaryLines: (() => string | null)[] = [];
   private jobs: Cron[] = [];
   private readonly llm: LlmClient;
 
@@ -137,6 +143,10 @@ export class Director {
     if (blocked.length) out.push(`Заблокировано:\n${blocked.map((t) => `- #${t.id} ${t.dept}: ${oneLine(t.title, 80)}${t.tags.includes('builder') ? ' (нужен строитель)' : ''}`).join('\n')}`);
     const builders = openBuilderTasks(hq).filter((t) => t.status === 'blocked');
     if (builders.length) out.push(`Открытых builder-issue: ${builders.filter((t) => t.meta.issue).length}, ждут создания issue: ${builders.filter((t) => !t.meta.issue).length}. Список: /builders.`);
+    for (const line of this.summaryLines) {
+      const text = line();
+      if (text) out.push(text);
+    }
     const spend = hq.costSummary(since);
     out.push(spend.length ? `Расходы за сутки: ${spend.map((s) => `${s.dept} ${money(s.usd)}`).join(', ')}.` : 'Расходов за сутки нет.');
     const held = this.held();
@@ -197,7 +207,7 @@ export class Director {
     switch (name) {
       case 'start':
       case 'help':
-        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/kp <лид или описание>: КП, смета, договор\n/referral <клиент> -> <лид>, /referrals, /paid <id>: рекомендации\n/builders: задачи строителям (issue)\nСопровождение: /ticket клиент: вопрос, /tickets, /client, /clients, /invoice клиент сумма за_что, /invoices, /sub, /onboard клиент\n/paid <номер счёта FT-2026-001 или id рекомендации>: оплата счёта (сопровождение) или выплата за рекомендацию (продажи)\n/skip: отменить ожидание правки');
+        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/kp <лид или описание>: КП, смета, договор\n/referral <клиент> -> <лид>, /referrals: рекомендации\n/builders: задачи строителям (issue)\nСопровождение: /ticket клиент: вопрос, /tickets, /client, /clients, /invoice клиент сумма за_что, /invoices, /sub, /onboard клиент\n/paid <номер счёта FT-2026-001 или id рекомендации>: оплата счёта (сопровождение) или выплата за рекомендацию (продажи)\nПроизводство: /project, /pstatus, /target, /mdone\nДокументы и знания: /doc, /lesson, /kb\n/skip: отменить ожидание правки');
       case 'status':
         return this.say(this.statusText());
       case 'tasks':
@@ -231,9 +241,19 @@ export class Director {
       case 'skip':
         for (const e of this.editors.values()) e.cancel();
         return this.say('Ок, ничего не жду.');
-      default:
+      default: {
+        const handler = this.commands.get(name);
+        if (handler) return this.say(await handler.run(arg));
         return;
+      }
     }
+  }
+
+  /** A command of a head by name, only if registered for this department: the model's word is never a command by itself. */
+  private async headCommand(dept: 'production' | 'backoffice', command: string, arg: string): Promise<void> {
+    const handler = this.commands.get(command.replace(/^\//, '').toLowerCase());
+    if (!handler || handler.dept !== dept) return this.say(`Не знаю такой команды отдела. Есть: ${[...this.commands].filter(([, h]) => h.dept === dept).map(([n]) => `/${n}`).join(', ') || 'нет'}.`);
+    return this.say(await handler.run(arg));
   }
 
   async onText(text: string): Promise<void> {
@@ -251,6 +271,10 @@ export class Director {
         return this.createBuilder(intent.title, intent.body ?? text);
       case 'rule':
         return this.proposeRule(intent);
+      case 'production_command':
+        return this.headCommand('production', intent.command, intent.arg);
+      case 'backoffice_command':
+        return this.headCommand('backoffice', intent.command, intent.arg);
       default:
         return this.say(intent.question ? `Уточните: ${intent.question}` : 'Не понял, что нужно сделать. Опишите задачу и отдел, или /help.');
     }
@@ -266,9 +290,17 @@ export class Director {
 {"type":"rule","target":"setting","key":"<настройка>","value":"..."} или {"type":"rule","target":"instructions","agent_id":"<агент>","text":"<новое правило одной строкой>"}
 {"type":"sales_reply","id":<номер бизнеса из карточки Разведчика>,"text":"<текст ответа бизнеса, если он есть в сообщении>"} (бизнес ответил на наше сообщение)
 {"type":"builder","title":"...","body":"..."} (нужен новый инструмент, бот или интеграция, которых нет)
-{"type":"unknown","question":"<что переспросить>"}
+${this.commandForms()}{"type":"unknown","question":"<что переспросить>"}
 Ответ: только JSON-объект.`;
     return tryJson(this.llm, { tier: 'haiku', system, messages: [{ role: 'user', content: text.slice(0, 3000) }], maxTokens: 500 }, intentSchema);
+  }
+
+  /** Prompt lines for the head commands that are registered (none: nothing is offered to the model). */
+  private commandForms(): string {
+    const names = (dept: string) => [...this.commands].filter(([, h]) => h.dept === dept).map(([n]) => n);
+    const prod = names('production');
+    const back = names('backoffice');
+    return `${prod.length ? `{"type":"production_command","command":"${prod.join('|')}","arg":"<аргументы команды>"} (проект из КП: project "клиент: что делаем"; статус клиенту: pstatus; цель деплоя: target; закрыть этап: mdone)\n` : ''}${back.length ? `{"type":"backoffice_command","command":"${back.join('|')}","arg":"<аргументы команды>"} (документ: doc "тип клиент"; урок из проекта: lesson "проект: урок"; поиск по базе знаний: kb "запрос")\n` : ''}`;
   }
 
   // ---- intents ----

@@ -59,14 +59,17 @@ export interface SupportDeps {
   ownerId?: number;
 }
 
-type Action = 'daily' | 'weekly' | 'status' | 'none' | 'ticket' | 'billing' | 'invoice' | 'paid' | 'onboard' | 'sub' | 'client';
+type Action = 'monitor_add' | 'daily' | 'weekly' | 'status' | 'none' | 'ticket' | 'billing' | 'invoice' | 'paid' | 'onboard' | 'sub' | 'client';
 const OWNER_ACTIONS: Action[] = ['ticket', 'billing', 'invoice', 'paid', 'onboard', 'sub', 'client'];
+
+const MONITOR_URL_RE = /https?:\/\/[^\s<>"')]+/i;
 
 /** Owner's free text, without an LLM: only obvious wordings. */
 export function guessAction(task: Task): Action {
   const m = task.meta.action;
   if (m === 'daily' || m === 'weekly' || m === 'status') return m;
   if (typeof m === 'string' && (OWNER_ACTIONS as string[]).includes(m)) return m as Action;
+  if (m === 'monitor_add' || (/мониторинг/i.test(`${task.title} ${task.body}`) && MONITOR_URL_RE.test(`${task.title} ${task.body}`))) return 'monitor_add';
   const text = `${task.title} ${task.body}`.toLowerCase();
   if (/тикет|вопрос клиента|клиент спрашивает|клиент написал/.test(text)) return 'ticket';
   if (/онбординг|выставить счёт|выставь счёт/.test(text)) return 'none'; // needs exact args: /onboard, /invoice
@@ -360,6 +363,14 @@ export class SupportHead {
       const out = await this.ownerAction(task, action);
       const quiet = action === 'billing' && out.startsWith('Счетов, напоминаний');
       await this.finish(task.id, out, task.creator === 'routine' && !quiet);
+      return;
+    }
+    if (action === 'monitor_add') {
+      const url = MONITOR_URL_RE.exec(`${task.title} ${task.body}`)?.[0]?.replace(/[.,;]+$/, '');
+      const text = !url ? 'В задаче нет адреса (https://...) для мониторинга.'
+        : this.d.monitor.addUrl(this.hq.db, url) ? `Адрес ${url} добавлен в мониторинг, проверка со следующего цикла (5 мин).` : `Адрес ${url} уже в мониторинге.`;
+      this.hq.complete(task.id, SUPPORT_HEAD_ID, text);
+      await this.report(task.id, text);
       return;
     }
     const ctx = this.ctx(task);

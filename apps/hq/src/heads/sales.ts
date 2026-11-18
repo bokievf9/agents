@@ -120,6 +120,16 @@ export class SalesHead implements ApprovalEditor {
     d.hq.onApprovalDecision((link, state) => onProspectDecision(base, link, state));
     d.hq.onApprovalDecision((link, state) => onPresalesDecision(base, link, state));
     d.hq.onApprovalDecision((link, state) => onReferralDecision(base, link, state));
+    // Sales -> Production: an approved КП pack becomes a project task for the Production head.
+    d.hq.onApprovalDecision((link, state) => {
+      if (link.kind !== KIND_PACK || state !== 'executed') return;
+      const leadId = Number(link.payload.leadId);
+      const lead = Number.isInteger(leadId) && leadId > 0 ? leadStoreFor(base).get(leadId) : undefined;
+      const client = lead?.name || (lead ? `лид #${lead.id}` : `КП #${String(link.payload.packId)}`);
+      const what = (lead?.task || String(link.payload.direction ?? '')).trim() || 'по утверждённому КП';
+      d.hq.createTask({ title: `Проект: ${client}`, body: what, dept: 'production', creator: 'head', priority: 1, meta: { action: 'project', client, what, source: 'sales' } });
+      d.hq.wake('production-head', 'task');
+    });
   }
 
   private get hq(): Hq {

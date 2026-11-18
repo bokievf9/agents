@@ -56,6 +56,17 @@ describe('Support head', () => {
     expect(w.hq.routines()).toHaveLength(3);
   });
 
+  it('a task with «мониторинг» and a URL adds it to the monitoring list once', async () => {
+    const w = world();
+    const t = w.hq.createTask({ title: 'добавить https://rosa.uz в мониторинг', dept: 'support', creator: 'head' });
+    await w.head.onHeartbeat();
+    expect(w.hq.task(t.id)!.status).toBe('done');
+    expect(w.hq.events(t.id).some((e) => e.body.includes('https://rosa.uz добавлен'))).toBe(true);
+    const t2 = w.hq.createTask({ title: 'мониторинг https://rosa.uz', dept: 'support', creator: 'head' });
+    await w.head.onHeartbeat();
+    expect(w.hq.events(t2.id).some((e) => e.body.includes('уже в мониторинге'))).toBe(true);
+  });
+
   it('an outage: one task per day, one alert, one recovery, no task per tick', async () => {
     const w = world();
     const tick = async () => {

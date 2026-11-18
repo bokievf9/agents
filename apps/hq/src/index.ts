@@ -8,6 +8,8 @@ import { Director } from './director.js';
 import { HEAD_ID, MARKETING, MarketingHead } from './heads/marketing.js';
 import { HEAD_ID as SALES_HEAD_ID, parseCopy, SALES, SalesHead, seedSales } from './heads/sales.js';
 import { seedOrg } from './org.js';
+import { PRODUCTION, PRODUCTION_HEAD_ID, ProductionHead, seedProduction } from './heads/production.js';
+import { BACKOFFICE, BACKOFFICE_HEAD_ID, BackofficeHead, seedBackoffice } from './heads/backoffice.js';
 import { SUPPORT, SUPPORT_COMMANDS, SUPPORT_HEAD_ID, SupportHead, seedSupport } from './heads/support.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -28,6 +30,8 @@ if (!db.prepare("SELECT 1 FROM settings WHERE key = 'tz'").get()) hq.setSetting(
 seedOrg(hq, cfg);
 seedSupport(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'utf8').trim());
 seedSales(hq, cfg);
+seedProduction(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'utf8').trim());
+seedBackoffice(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'utf8').trim());
 
 const bot = createBot(cfg.botToken);
 const messenger = grammyMessenger(bot);
@@ -44,6 +48,8 @@ senders.set('general', topicSender(bot.api));
 if (cfg.marketingBotToken) senders.set(MARKETING, topicSender(new Api(cfg.marketingBotToken)));
 if (cfg.supportBotToken) senders.set(SUPPORT, topicSender(new Api(cfg.supportBotToken)));
 if (cfg.salesBotToken) senders.set(SALES, topicSender(new Api(cfg.salesBotToken)));
+if (cfg.productionBotToken) senders.set(PRODUCTION, topicSender(new Api(cfg.productionBotToken)));
+if (cfg.backofficeBotToken) senders.set(BACKOFFICE, topicSender(new Api(cfg.backofficeBotToken)));
 const reporter = new Reporter(cfg.groupId, cfg.topics, senders);
 
 const director = new Director({ hq, llm, messenger, queue, ownerId: cfg.ownerId, reporter });
@@ -69,6 +75,11 @@ const sales = new SalesHead({
 director.onSalesReply = (id, text) => sales.startReply(id, text);
 director.onSalesCommand = (name, arg) => sales.salesCommand(name, arg);
 director.editors.set('sales:reply', sales); // the owner's text after /reply <id>
+const production = new ProductionHead({ hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter });
+const backoffice = new BackofficeHead({ hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, knowledgeDir: cfg.knowledgeDir });
+for (const name of ['project', 'pstatus', 'target', 'mdone']) director.commands.set(name, { dept: 'production', run: (arg) => production.command(name, arg) });
+for (const name of ['doc', 'lesson', 'kb']) director.commands.set(name, { dept: 'backoffice', run: (arg) => backoffice.command(name, arg) });
+director.summaryLines.push(() => production.overdueLine(), () => backoffice.pendingLine());
 
 // Only the owner in a private chat; everyone else is ignored silently.
 bot.use(async (ctx, next) => {
@@ -113,7 +124,7 @@ bot.on('callback_query:data', async (ctx, next) => {
 installApprovals(bot, queue, cfg.ownerId);
 
 const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
-for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', ...SUPPORT_COMMANDS]) {
+for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', ...SUPPORT_COMMANDS, ...director.commands.keys()]) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
 }
 for (const name of ['kp', 'referral', 'referrals']) {
@@ -129,6 +140,8 @@ const heartbeats = new HeartbeatWorker(hq, async (agent) => {
   if (agent.id === HEAD_ID) await marketing.onHeartbeat();
   if (agent.id === SUPPORT_HEAD_ID) await support.onHeartbeat();
   if (agent.id === SALES_HEAD_ID) await sales.onHeartbeat();
+  if (agent.id === PRODUCTION_HEAD_ID) await production.onHeartbeat();
+  if (agent.id === BACKOFFICE_HEAD_ID) await backoffice.onHeartbeat();
 });
 heartbeats.start();
 const routineJobs = startRoutines(hq);

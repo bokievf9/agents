@@ -44,9 +44,16 @@ export class MonitoringWorker implements Worker {
     return new MonitorStore(db);
   }
 
+  /** Adds a health URL to the list checked from the next tick on (false: already monitored). */
+  addUrl(db: Db, url: string): boolean {
+    if (this.cfg.urls.includes(url)) return false;
+    return this.store(db).addUrl(url);
+  }
+
   async tick(db: Db): Promise<TickResult> {
     const store = this.store(db);
-    const checks = buildChecks(this.cfg, this.deps);
+    const urls = [...new Set([...this.cfg.urls, ...store.urls()])];
+    const checks = buildChecks({ ...this.cfg, urls }, this.deps);
     const results = await Promise.all(
       checks.map((c) =>
         c.run().catch((e: unknown): CheckResult => ({ id: c.id, label: c.id, ok: false, detail: e instanceof Error ? e.message.slice(0, 120) : 'сбой проверки' })),

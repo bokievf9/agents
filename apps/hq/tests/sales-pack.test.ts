@@ -41,6 +41,10 @@ describe('/kp', () => {
 
     await w.decide('approve', 1);
     expect(w.hq.tasks({ dept: 'sales' })[0]!.status).toBe('done');
+    const proj = w.hq.tasks({ dept: 'production' });
+    expect(proj).toHaveLength(1);
+    expect(proj[0]!.title).toMatch(/^Проект: /);
+    expect(proj[0]!.meta).toMatchObject({ action: 'project', source: 'sales' });
     expect(await w.sales.onCopy(1)).toBe('Уже обработано');
   });
 

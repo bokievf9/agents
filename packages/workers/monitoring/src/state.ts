@@ -50,11 +50,21 @@ export class MonitorStore {
         check_id TEXT PRIMARY KEY, status TEXT NOT NULL, fails INTEGER NOT NULL, fail_since INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS mon_samples (at INTEGER NOT NULL, check_id TEXT NOT NULL, ok INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS mon_urls (url TEXT PRIMARY KEY);
       CREATE INDEX IF NOT EXISTS mon_samples_at ON mon_samples (at);
       CREATE TABLE IF NOT EXISTS mon_incidents (
         id INTEGER PRIMARY KEY AUTOINCREMENT, check_id TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER, detail TEXT NOT NULL DEFAULT ''
       );
     `);
+  }
+
+  /** URLs added at runtime (on top of MONITOR_URLS). Returns false when it is already there. */
+  addUrl(url: string): boolean {
+    return this.db.prepare('INSERT OR IGNORE INTO mon_urls (url) VALUES (?)').run(url).changes > 0;
+  }
+
+  urls(): string[] {
+    return (this.db.prepare('SELECT url FROM mon_urls ORDER BY rowid').all() as { url: string }[]).map((r) => r.url);
   }
 
   state(checkId: string): CheckState | undefined {
