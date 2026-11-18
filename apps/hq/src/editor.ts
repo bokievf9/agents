@@ -8,4 +8,8 @@ export interface ApprovalEditor {
   consume(text: string): Promise<boolean>;
   /** /skip */
   cancel(): void;
+  /** Admin API: the parts of this approval that can be edited one by one; null when it is not editable any more. */
+  parts?(approvalId: number): { id: string; label: string }[] | null;
+  /** Admin API: replaces one part (or, without `part`, the whole text) and asks again. Returns false when nothing was applied. */
+  applyEdit?(approvalId: number, text: string, part?: string): Promise<boolean>;
 }

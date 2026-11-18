@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { Director } from '../src/director.js';
 import { MarketingHead, type Integrations } from '../src/heads/marketing.js';
 import { seedOrg } from '../src/org.js';
+import { OwnerChannel } from '../src/presence.js';
 import { Reporter, type TopicSender } from '../src/reporter.js';
 
 export const OWNER = 100;
@@ -52,12 +53,15 @@ export function routedLlm(r: Replies = {}): MockLlm {
   });
 }
 
-export function world(opts: { llm?: LlmClient; groupTopics?: boolean; budget?: number; integrations?: Integrations } = {}) {
+export function world(opts: { presence?: boolean; llm?: LlmClient; groupTopics?: boolean; budget?: number; integrations?: Integrations } = {}) {
   const clock = { t: NOW };
   const db = openDb(':memory:');
   const messenger = new MemoryMessenger();
   const hq = new Hq(db, { now: () => clock.t });
-  const queue = new ApprovalQueue(db, messenger, OWNER, 20, () => clock.t);
+  // with `presence`: the owner channel in front of the (memory) Telegram; `messenger` stays the Telegram side
+  const channel = opts.presence ? new OwnerChannel({ hq, inner: messenger, ownerId: OWNER, approvalPending: (id) => queue.get(id)?.status === 'pending' }) : null;
+  const toOwner = channel ?? messenger;
+  const queue: ApprovalQueue = new ApprovalQueue(db, toOwner, OWNER, 20, () => clock.t);
   hq.attachQueue(queue);
   seedOrg(hq, { instructionsDir, marketingBudgetUsd: opts.budget ?? 0 });
   const llm = opts.llm ?? routedLlm();
@@ -66,14 +70,14 @@ export function world(opts: { llm?: LlmClient; groupTopics?: boolean; budget?: n
   const reporter = opts.groupTopics
     ? new Reporter(-1001, { marketing: 7, general: 2 }, new Map([['marketing', send], ['general', send]]))
     : new Reporter(undefined, {}, new Map());
-  const director = new Director({ hq, llm, messenger, queue, ownerId: OWNER, reporter });
-  const marketing = new MarketingHead({ hq, llm, queue, messenger, ownerId: OWNER, reporter, rng: () => 0.1, ...(opts.integrations ? { integrations: opts.integrations } : {}) });
+  const director = new Director({ hq, llm, messenger: toOwner, queue, ownerId: OWNER, reporter });
+  const marketing = new MarketingHead({ hq, llm, queue, messenger: toOwner, ownerId: OWNER, reporter, rng: () => 0.1, ...(opts.integrations ? { integrations: opts.integrations } : {}) });
   director.editors.set('content_item', marketing);
   /** The owner presses a decision the way the Telegram glue does. */
   const decide = async (action: 'approve' | 'edit' | 'reject', approvalId: number) => {
     await queue.handle(action, approvalId, OWNER);
     director.afterDecision();
   };
-  return { clock, db, messenger, hq, queue, llm, posted, reporter, director, marketing, decide };
+  return { clock, db, messenger, channel, hq, queue, llm, posted, reporter, director, marketing, decide };
 }
 export { OffLlm };

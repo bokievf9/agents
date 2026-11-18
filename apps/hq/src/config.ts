@@ -37,6 +37,10 @@ export interface Config extends BaseConfig {
   webChatToken: string | undefined;
   /** Shared secret of `GET /office` (header `x-office-token`); without it the route answers 404. */
   officeToken: string | undefined;
+  /** Secret of `/admin/*` (header `x-admin-token`); falls back to `OFFICE_TOKEN`. Without both the admin API is off. */
+  adminToken: string | undefined;
+  /** The site counts as gone after this many minutes without a ping: notifications go back to Telegram. */
+  presenceAwayAfterMin: number;
   /** New Scout cards per day. */
   batchSize: number;
   /** Call slots offered to leads, local times in the HQ timezone. */
@@ -124,6 +128,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     salesBotToken: optional(env, 'SALES_BOT_TOKEN'),
     leadWebhookToken: optional(env, 'LEAD_WEBHOOK_TOKEN'),
     officeToken: optional(env, 'OFFICE_TOKEN'),
+    adminToken: optional(env, 'ADMIN_TOKEN') ?? optional(env, 'OFFICE_TOKEN'),
+    presenceAwayAfterMin: num(env, 'PRESENCE_AWAY_AFTER_MIN', 20, 1, 1440),
     webChatToken: optional(env, 'WEB_CHAT_TOKEN') ?? optional(env, 'LEAD_WEBHOOK_TOKEN'),
     webhookPort: Math.round(num(env, 'WEBHOOK_PORT', 8787, 1, 65_535)),
     batchSize: Math.round(num(env, 'BATCH_SIZE', 10, 1, 100)),

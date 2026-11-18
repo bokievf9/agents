@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { z } from 'zod';
 import { errMsg, log } from '@fir/core';
+import type { AdminReply, AdminRequest } from './admin.js';
 import { chatSchema, type ChatOutcome, type ChatRequest } from './client/web.js';
 
 /** Same fields as the firtech.pro form (`../firtech/src/lib/lead.ts` leadSchema); `estimate` is the builder's leadSummary. */
@@ -62,11 +63,29 @@ export function createWebhook(
   office?: { token: string; get: () => unknown },
   /** `POST /chat` (header `x-chat-token`), the website version of the client bot; `ip` is the first `x-forwarded-for`, else the socket. */
   chat?: { token: string; handle: (req: ChatRequest, ip: string) => Promise<ChatOutcome> },
+  /** `/admin/*` (header `x-admin-token`), the owner's website workplace (`admin.ts`); without it the routes answer 404. */
+  admin?: { token: string; handle: (req: AdminRequest) => Promise<AdminReply> },
 ): Server {
   const hits: number[] = [];
   return createServer((req, res) => {
     void (async () => {
       try {
+        if (admin && req.url?.startsWith('/admin/')) {
+          if (!tokenOk(req.headers['x-admin-token'] as string | undefined, admin.token)) return json(res, 401, { ok: false, error: 'unauthorized' });
+          const url = new URL(req.url, 'http://hq.local');
+          let body: unknown = null;
+          if (req.method === 'POST') {
+            const raw = await readBody(req);
+            if (raw === null) return json(res, 413, { ok: false, error: 'too_large' });
+            try {
+              body = raw.trim() ? JSON.parse(raw) : {};
+            } catch {
+              return json(res, 400, { ok: false, error: 'invalid' });
+            }
+          } else if (req.method !== 'GET') return json(res, 405, { ok: false, error: 'method_not_allowed' });
+          const out = await admin.handle({ method: req.method, path: url.pathname, query: url.searchParams, body });
+          return json(res, out.status, out.body);
+        }
         if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ok: true });
         if (req.method === 'GET' && req.url === '/office' && office) {
           if (!tokenOk(req.headers['x-office-token'] as string | undefined, office.token)) return json(res, 401, { ok: false, error: 'unauthorized' });

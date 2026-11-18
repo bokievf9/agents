@@ -7,6 +7,7 @@ import type { ApprovalEditor } from './editor.js';
 import type { Reporter } from './reporter.js';
 import { openBuilderTasks } from './bridge.js';
 import { Progress, deptRu, lastReason, reasonRu } from './progress.js';
+import { OwnerChannel, type InboxKind } from './presence.js';
 
 const DAY = 86_400_000;
 const HM = /^([01]?\d|2[0-3]):[0-5]\d$/;
@@ -78,6 +79,7 @@ export const HELP = [
   '/tasks [отдел]: открытые задачи и что с каждой',
   '/approve: пачка на одобрение (сама приходит в 10:00)',
   '/retry <id>: повторить застрявшую задачу',
+  '/desk: я за столом, всё копится на сайте /admin; /away: я в пути, всё в Telegram',
   '',
   'Ещё:',
   '/costs расходы, /org оргструктура, /pause и /resume <отдел>',
@@ -116,12 +118,15 @@ export class Director {
   readonly summaryLines: (() => string | null)[] = [];
   private jobs: Cron[] = [];
   private readonly llm: LlmClient;
+  /** Set when the messenger is the owner channel: presence routing, the inbox and the website scopes. */
+  readonly channel: OwnerChannel | null;
   /** The «live message» of the owner's tasks: one message, edited as the task moves. */
   readonly progress: Progress;
 
   constructor(private readonly d: DirectorDeps) {
     this.llm = meterLlm(d.llm, d.hq, { agentId: 'director' });
-    this.progress = new Progress({ hq: d.hq, messenger: d.messenger, ownerId: d.ownerId });
+    this.channel = d.messenger instanceof OwnerChannel ? d.messenger : null;
+    this.progress = new Progress({ hq: d.hq, messenger: d.messenger, ownerId: d.ownerId, ...(this.channel ? { channel: this.channel } : {}) });
     d.hq.onAlert((text) => this.alertOwner(text));
   }
 
@@ -132,9 +137,12 @@ export class Director {
   /** The last message sent by `say` (a command reply can become the live message of the task it created). */
   private lastSay: { id: number; text: string } | null = null;
 
-  private async say(text: string, buttons?: { text: string; data: string }[][]): Promise<void> {
-    const id = await this.d.messenger.sendMessage(this.d.ownerId, text, buttons);
-    this.lastSay = { id, text };
+  private async say(text: string, buttons?: { text: string; data: string }[][], kind?: InboxKind, force = false): Promise<void> {
+    const id = this.channel
+      ? await this.channel.notify(kind, text, { ...(buttons ? { buttons } : {}), ...(force ? { force } : {}) })
+      : await this.d.messenger.sendMessage(this.d.ownerId, text, buttons);
+    // id 0: nothing went to Telegram (inbox only or captured for the website), so there is no message to turn into a live one
+    this.lastSay = id > 0 ? { id, text } : null;
   }
 
   private lastTaskId(): number {
@@ -176,7 +184,7 @@ export class Director {
   // ---- the three things the Director writes by itself ----
   async sendMorningSummary(): Promise<void> {
     const text = this.morningSummary();
-    await this.say(text);
+    await this.say(text, undefined, 'summary');
     await this.d.reporter?.post('general', text);
     this.hq.setSetting('held_alerts', '[]');
   }
@@ -212,6 +220,7 @@ export class Director {
 
   /** The batch: every department's proposals as one numbered series. `manual`: say so when there is nothing. */
   async sendApprovalBatch(manual: boolean): Promise<number> {
+    if (manual) await this.channel?.resendUndelivered();
     const n = await this.hq.releaseApprovals();
     if (n > 0) await this.say(`Пачка на одобрение: ${n}. Карточки ниже, у каждой кнопки.`);
     else if (manual) {
@@ -236,7 +245,7 @@ export class Director {
       this.hq.setSetting('held_alerts', JSON.stringify([...this.held(), oneLine(text, 300)].slice(-20)));
       return;
     }
-    await this.say(`Алерт: ${text}`);
+    await this.say(`Алерт: ${text}`, undefined, 'alert');
     await this.d.reporter?.post('general', `Алерт: ${text}`);
   }
 
@@ -268,6 +277,17 @@ export class Director {
   private async runCommand(name: string, arg: string): Promise<void> {
     const dept = arg.trim().toLowerCase();
     switch (name) {
+      case 'desk':
+      case 'away': {
+        if (!this.channel) return this.say('Режим присутствия не подключён.');
+        await this.channel.setMode(name);
+        return this.say(
+          name === 'desk'
+            ? `Вы за столом: сообщения копятся на сайте firtech.pro/admin, в Telegram не шлю (если сайт молчит ${this.channel.awayAfterMin} минут, вернусь в Telegram сам). /away вернёт всё в Telegram.`
+            : 'Вы в пути: всё, что требует вас, шлю в Telegram. /desk переключит на сайт.',
+          undefined, 'message', true,
+        );
+      }
       case 'start':
       case 'help':
         return this.say(HELP);

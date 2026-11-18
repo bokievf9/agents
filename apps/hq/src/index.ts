@@ -21,6 +21,8 @@ import { MonitoringWorker } from '@fir/worker-monitoring';
 import { Reporter, type TopicSender } from './reporter.js';
 import { TopicManager } from './topics.js';
 import { createWebhook } from './webhook.js';
+import { createAdmin } from './admin.js';
+import { OwnerChannel } from './presence.js';
 import { cachedOffice } from './office.js';
 import { Drill } from './drill.js';
 import { BuilderBridge, RestGithubClient } from './bridge.js';
@@ -42,8 +44,13 @@ seedProduction(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 
 seedBackoffice(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'utf8').trim());
 
 const bot = createBot(cfg.botToken);
-const messenger = grammyMessenger(bot);
-const queue = new ApprovalQueue(db, messenger, cfg.ownerId, cfg.trustThreshold);
+// Every message to the owner goes through the channel: inbox always, Telegram only when he is away (presence.ts).
+const telegram = grammyMessenger(bot);
+const channel: OwnerChannel = new OwnerChannel({
+  hq, inner: telegram, ownerId: cfg.ownerId, awayAfterMin: cfg.presenceAwayAfterMin, approvalPending: (id: number): boolean => queue.get(id)?.status === 'pending',
+});
+const messenger = channel;
+const queue: ApprovalQueue = new ApprovalQueue(db, messenger, cfg.ownerId, cfg.trustThreshold);
 hq.attachQueue(queue);
 const llm = createLlm(cfg.llm);
 
@@ -135,8 +142,9 @@ bot.on('message', async (ctx, next) => {
 });
 
 // Only the owner in a private chat; everyone else is ignored silently.
+// What he writes in Telegram is answered in Telegram, whatever the presence mode (the scope follows the handlers' async calls).
 bot.use(async (ctx, next) => {
-  if (ctx.from?.id === cfg.ownerId && ctx.chat?.type === 'private') await next();
+  if (ctx.from?.id === cfg.ownerId && ctx.chat?.type === 'private') await channel.asReply(() => next());
 });
 
 // «Скопировать» on a Scout card: the plain draft as its own message.
@@ -176,11 +184,9 @@ bot.on('callback_query:data', async (ctx, next) => {
 });
 installApprovals(bot, queue, cfg.ownerId);
 
+const botCommands = ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', 'builder', 'topics', 'drill', 'retry', 'desk', 'away', ...SUPPORT_COMMANDS, ...director.commands.keys(), 'kp', 'referral', 'referrals'];
 const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
-for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', 'builder', 'topics', 'drill', 'retry', ...SUPPORT_COMMANDS, ...director.commands.keys()]) {
-  bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
-}
-for (const name of ['kp', 'referral', 'referrals']) {
+for (const name of botCommands) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
 }
 // A free-text message goes through the LLM: run it in the background so buttons stay responsive.
@@ -222,7 +228,14 @@ const webChat = cfg.webChatToken
   : null;
 webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix }));
 
-const webhook = cfg.leadWebhookToken || cfg.webChatToken
+const admin = cfg.adminToken
+  ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: botCommands, drill: (arg) => drill.command(arg) })
+  : null;
+// Presence: the site pings while it is open; without pings the owner counts as away and a digest goes to Telegram.
+const presenceTimer = setInterval(() => void channel.sync().catch((e) => log('error', 'presence sync failed', { err: errMsg(e) })), 60_000);
+presenceTimer.unref();
+
+const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
   ? createWebhook(
       ({ name, contact, service, budget, message, estimate, locale, slot, source }) =>
         Promise.resolve(sales.createLeadTask({ name, contact, service, budget, message, estimate, locale, slot, source }, service)),
@@ -230,12 +243,14 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken
       Date.now,
       cfg.officeToken ? { token: cfg.officeToken, get: cachedOffice(hq) } : undefined,
       webChat && cfg.webChatToken ? { token: cfg.webChatToken, handle: (r, ip) => webChat.handle(r, ip) } : undefined,
-    ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort, lead: Boolean(cfg.leadWebhookToken), chat: Boolean(webChat) }))
+      admin && cfg.adminToken ? { token: cfg.adminToken, handle: (r) => admin.handle(r) } : undefined,
+    ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort, lead: Boolean(cfg.leadWebhookToken), chat: Boolean(webChat), admin: Boolean(admin) }))
   : null;
 if (!webhook) log('warn', 'LEAD_WEBHOOK_TOKEN and WEB_CHAT_TOKEN are not set, POST /lead and POST /chat are disabled');
 
 const stop = () => {
   webhook?.close();
+  clearInterval(presenceTimer);
   heartbeats.stop();
   bridge.stop();
   director.stop();

@@ -298,7 +298,7 @@ id задачи HQ, контекст (описание, последние ко�
 
 ## Переменные
 См. `.env.example`: `HQ_BOT_TOKEN`, `OWNER_TELEGRAM_ID`, `TZ`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_FAST/SMART`;
-необязательные `MARKETING_BOT_TOKEN`, `SALES_BOT_TOKEN`, `LEAD_WEBHOOK_TOKEN`, `OFFICE_TOKEN`, `WEBHOOK_PORT`, `BATCH_SIZE`, `SLOT_HOURS`,
+необязательные `MARKETING_BOT_TOKEN`, `SALES_BOT_TOKEN`, `LEAD_WEBHOOK_TOKEN`, `OFFICE_TOKEN`, `ADMIN_TOKEN`, `PRESENCE_AWAY_AFTER_MIN`, `WEBHOOK_PORT`, `BATCH_SIZE`, `SLOT_HOURS`,
 `REPLY_LEVEL`, `SALES_BUDGET_USD`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
 id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`; сопровождение: `SUPPORT_BOT_TOKEN`, `MONITOR_URLS`, `MONITOR_DOCKER`, `OMNIROUTE_HEALTH_URL`,
 `FIXED_COSTS_USD_MONTH`, `SUPPORT_BUDGET_USD`; производство и бэк-офис: `PRODUCTION_BOT_TOKEN`, `BACKOFFICE_BOT_TOKEN`, `PRODUCTION_BUDGET_USD`, `BACKOFFICE_BUDGET_USD`, `KNOWLEDGE_DIR`; мост: `GITHUB_TOKEN`, `GITHUB_REPO`, `BUILDER_POLL_MINUTES`; клиентский бот: `CLIENT_BOT_TOKEN`, `CLIENT_QUIET_HOURS`, `CLIENT_RATE_PER_HOUR`, `CLIENT_LLM_DAILY_CAP`.
@@ -329,6 +329,36 @@ firtech.pro на том же хосте читает его через `/api/adm
 `activity` (последние 50, только код действия и id, никаких текстов): `head_wake`, `agent_wake`, `routine_fired`, `approval_decided`, `approved`/`rejected`,
 `builder_issue_created`, `llm.call` (агент, без содержимого), `task_created`, `task_done`, `task_blocked`, `task_retried` и прочие.
 Статус агента: paused, offline (есть задача в работе, но нет следов жизни 10 мин), working, waiting, blocked, sleeping (тихие часы или 23:00-07:00 по TZ), idle.
+
+## Admin API и присутствие (`/admin/*`, `src/admin.ts`, `src/presence.ts`)
+Рабочее место владельца на `firtech.pro/admin`; Telegram остаётся запасным каналом. Тот же сервер и порт, что `POST /lead`. Заголовок
+`x-admin-token` = `ADMIN_TOKEN` (если не задан, берётся `OFFICE_TOKEN`; без обоих маршруты 404). Всё JSON: `{ ok: true, ... }` или `{ ok: false, error }`;
+время в ISO. Лимит 600 запросов за 10 минут (429). Это приватный интерфейс владельца: имена и тексты лидов в ответах разрешены (в логах только счётчики).
+
+**Присутствие.** Настройки `presence.mode` (`desk` | `away`, по умолчанию `away`) и `presence.lastPingAt`. Эффективно `away`, если режим `away` или сайт не слал
+`/admin/ping` дольше `PRESENCE_AWAY_AFTER_MIN` (20) минут; иначе `desk`. `/desk` и `/away` в Telegram или `POST /admin/presence` переключают режим (`/desk`
+сам считается «пингом»). **Входящие владельца**: всё, что адресовано владельцу (карточки одобрений, пачка, итоги живых сообщений задач, алерты, утренняя сводка,
+сообщения голов), `OwnerChannel` (он же `Messenger` Директора, очереди одобрений и голов) пишет в таблицу `owner_inbox` и шлёт в Telegram только при эффективном `away`.
+Отчёты в темы группы не меняются. Ответы Директора на то, что владелец написал в самом Telegram, всегда идут в Telegram (в inbox как `reply`). Ответы на команды с сайта
+(`/admin/say`, `/admin/command`) собираются и возвращаются в ответе, в inbox и Telegram не попадают. При переходе в `away` (вручную или по тишине сайта) уходит один дайджест
+«Пока вы были на месте: N одобрений, M задач готово, K алертов. /approve, /status» за последние 2 часа (решённое на сайте не считается); `/approve` в Telegram досылает карточки,
+которые не были доставлены. Живое сообщение задачи в режиме `desk` в Telegram не создаётся: строка лежит в `meta.progress.line`, её итог попадает в inbox (а при `away` уходит в Telegram).
+
+| Маршрут | Что делает |
+|---|---|
+| `GET /admin/state` | `presence {mode, effective, lastPingAt, awayAfterMin}`, `inboxUnread`, `approvalsPending`, `approvalsQueued` (ждут пачки), `tasksOpen`, `builderIssues`, `quietHours`, `tz`, `generatedAt` |
+| `POST /admin/presence` `{mode}`, `POST /admin/ping` | меняют режим или обновляют `lastPingAt`; отвечают как `state` |
+| `GET /admin/inbox?after=&limit=&unread=1` | `items[{id, at, kind, text, taskId, approvalId, read, deliveredTg}]`, новые в конце |
+| `POST /admin/inbox/read` `{ids}` или `{all:true}` | отметить прочитанным |
+| `GET /admin/approvals` | ждущие решения: `id, kind, dept, summary, text, parts?[{id,label}], level, taskId, createdAt, locked` |
+| `POST /admin/approvals/:id` `{action: approve\|reject\|edit, text?, part?}` | `{ok, status, message, notes}`; `edit` как «Править» (сбрасывает счётчик доверия), карточка остаётся на одобрении; 409 если уже решено |
+| `GET /admin/tasks?dept=&status=&open=1&limit=` | список (новые обновления первыми), `progressLine`, `lastEvent` |
+| `GET /admin/tasks/:id` | `task`, `events` (журнал с маскировкой), `approvals`, `children` |
+| `POST /admin/tasks/:id/retry` | как `/retry`, `{replies, task}` |
+| `POST /admin/say` `{text}` | `Director.onText` от имени владельца: `{replies, taskId?}` |
+| `POST /admin/command` `{name, arg}` | `Director.onCommand`; неизвестное имя 400 |
+| `GET /admin/departments` | отделы, голова, исполнители, счётчики задач |
+| `GET /admin/drill`, `POST /admin/drill` `{arg}` | отчёт учений, запуск; `{text}` |
 
 ## Запуск
 `pnpm --filter hq dev` (`.env.local`). Docker: `apps/hq/Dockerfile`, сервис `hq` в `compose.yaml` (единственный порт `127.0.0.1:8787` для webhook лидов, `read_only`,

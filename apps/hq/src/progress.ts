@@ -1,5 +1,6 @@
 import { errMsg, log, type Messenger } from '@fir/core';
 import type { Hq, Task } from '@fir/hq';
+import type { OwnerChannel } from './presence.js';
 
 /** How often the tracker looks at its tasks, and the least time between two edits of one message. */
 export const PROGRESS_TICK_MS = 5000;
@@ -66,9 +67,15 @@ export function lastReason(hq: Hq, t: Task): string {
 }
 
 interface Stored {
-  chatId: number;
-  messageId: number;
+  /** Absent for a web-only task (owner at the desk): there is no Telegram message, only `line`. */
+  chatId?: number;
+  messageId?: number;
   startedAt: number;
+  /** The status line as of the last status change (what the admin API shows for a closed task). */
+  line?: string;
+  /** The status already reported to the owner inbox (done, rejected, blocked). */
+  notified?: string;
+  lineStatus?: string;
   closed?: boolean;
   /** The command reply this message started as: kept under the status lines. */
   note?: string;
@@ -76,13 +83,26 @@ interface Stored {
 
 const storedOf = (t: Task): Stored | null => {
   const p = t.meta.progress as Partial<Stored> | undefined;
-  return p && typeof p.chatId === 'number' && typeof p.messageId === 'number' ? { chatId: p.chatId, messageId: p.messageId, startedAt: typeof p.startedAt === 'number' ? p.startedAt : t.createdAt, ...(p.closed ? { closed: true } : {}), ...(typeof p.note === 'string' ? { note: p.note } : {}) } : null;
+  if (!p) return null;
+  const tg = typeof p.chatId === 'number' && typeof p.messageId === 'number';
+  if (!tg && typeof p.line !== 'string') return null;
+  return {
+    ...(tg ? { chatId: p.chatId!, messageId: p.messageId! } : {}),
+    startedAt: typeof p.startedAt === 'number' ? p.startedAt : t.createdAt,
+    ...(p.closed ? { closed: true } : {}),
+    ...(typeof p.note === 'string' ? { note: p.note } : {}),
+    ...(typeof p.line === 'string' ? { line: p.line } : {}),
+    ...(typeof p.notified === 'string' ? { notified: p.notified } : {}),
+    ...(typeof p.lineStatus === 'string' ? { lineStatus: p.lineStatus } : {}),
+  };
 };
 
 export interface ProgressDeps {
   hq: Hq;
   messenger: Messenger;
   ownerId: number;
+  /** With the owner channel: at the desk (or for a command from the website) tasks get no Telegram message, and final states go to the inbox. */
+  channel?: OwnerChannel;
 }
 
 /**
@@ -138,9 +158,16 @@ export class Progress {
   async track(task: Task, intro?: string): Promise<boolean> {
     if (task.tags.includes('drill')) return false;
     const text = this.render(task);
+    if (this.d.channel?.webOnly()) {
+      const at = this.hq.now();
+      this.hq.setMeta(task.id, { progress: { startedAt: at, line: text, lineStatus: task.status } satisfies Stored });
+      this.watched.add(task.id);
+      this.lastText.set(task.id, text);
+      return false;
+    }
     const id = await this.d.messenger.sendMessage(this.d.ownerId, intro ? `${text}\n\n${intro}` : text);
     const now = this.hq.now();
-    this.hq.setMeta(task.id, { progress: { chatId: this.d.ownerId, messageId: id, startedAt: now } satisfies Stored });
+    this.hq.setMeta(task.id, { progress: { chatId: this.d.ownerId, messageId: id, startedAt: now, line: text, lineStatus: task.status } satisfies Stored });
     this.watched.add(task.id);
     this.lastText.set(task.id, text);
     this.lastEditAt.set(task.id, now);
@@ -155,7 +182,7 @@ export class Progress {
     if (task.tags.includes('drill')) return false;
     const now = this.hq.now();
     const note = reply.slice(0, 600);
-    this.hq.setMeta(task.id, { progress: { chatId: this.d.ownerId, messageId, startedAt: now, note } satisfies Stored });
+    this.hq.setMeta(task.id, { progress: { chatId: this.d.ownerId, messageId, startedAt: now, note, line: this.render(task), lineStatus: task.status } satisfies Stored });
     this.watched.add(task.id);
     this.lastText.set(task.id, reply);
     this.lastEditAt.set(task.id, now);
@@ -178,7 +205,26 @@ export class Progress {
         }
         const final = t.status === 'done' || t.status === 'rejected';
         const expired = now - p.startedAt >= PROGRESS_MAX_MS;
-        const text = p.note ? `${this.render(t)}\n\n${p.note}` : this.render(t);
+        const line = this.render(t);
+        const text = p.note ? `${line}\n\n${p.note}` : line;
+        // the line for the API, kept on status changes only (every write also touches the task's updated_at)
+        const report = (final || t.status === 'blocked') && p.notified !== t.status;
+        if (p.lineStatus !== t.status || report) {
+          p.line = line;
+          p.lineStatus = t.status;
+          if (report) {
+            p.notified = t.status;
+            // a web-only task reaches Telegram now if the owner has left the desk; a Telegram one already shows it in its message
+            if (p.messageId === undefined) await this.d.channel?.notify('progress', line, { taskId: t.id }).catch((e) => log('warn', 'progress notify failed', { task: t.id, err: errMsg(e) }));
+            else this.d.channel?.record('progress', line, t.id);
+          }
+          this.saveQuietly(t, p);
+        }
+        if (p.messageId === undefined || p.chatId === undefined) {
+          // no Telegram message: nothing to edit
+          if (final || expired) this.close(t, p);
+          continue;
+        }
         const last = this.lastText.get(id);
         const due = now - (this.lastEditAt.get(id) ?? 0) >= MIN_EDIT_MS;
         if (text !== last && due) {
@@ -202,6 +248,13 @@ export class Progress {
       this.ticking = false;
     }
     return edited;
+  }
+
+  /** Writes `meta.progress` without touching `updated_at` (the age in the message counts from it). */
+  private saveQuietly(t: Task, p: Stored): void {
+    const fresh = this.hq.task(t.id);
+    if (!fresh) return;
+    this.hq.db.prepare('UPDATE tasks SET meta = ? WHERE id = ?').run(JSON.stringify({ ...fresh.meta, progress: { ...p } }), t.id);
   }
 
   private close(t: Task, p: Stored): void {

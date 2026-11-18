@@ -440,4 +440,24 @@ export class MarketingHead implements ApprovalEditor {
   cancel(): void {
     this.store().setKv('await_edit', null);
   }
+
+  parts(approvalId: number): { id: string; label: string }[] | null {
+    const e = this.editable(approvalId);
+    return e ? editableParts(e.item.type).map((p) => ({ id: p, label: partLabel(e.item.type, p) })) : null;
+  }
+
+  /** The admin API's edit: one part, or (no part) the whole text, kept in step with the item. */
+  async applyEdit(approvalId: number, text: string, part?: string): Promise<boolean> {
+    const e = this.editable(approvalId);
+    if (!e) return false;
+    let next: string | null | undefined = text.trim();
+    if (part !== undefined) {
+      const id = editableParts(e.item.type).find((p) => p === part);
+      if (!id) return false;
+      next = replacePart(typeof e.row.payload.text === 'string' ? e.row.payload.text : e.item.text, id, text);
+    }
+    if (!next) return false;
+    this.store().setText(e.item.id, next, titleOf(next));
+    return this.d.queue.applyEdit(approvalId, next);
+  }
 }
