@@ -126,7 +126,7 @@ describe('Marketing head: review, rework, failures', () => {
   it('without an LLM the heuristic split works for obvious wordings and generation fails cleanly', async () => {
     const w = world({ llm: new OffLlm() });
     const t = w.hq.createTask({ title: 'Нужен клип про цены', dept: 'marketing', creator: 'owner' });
-    const other = w.hq.createTask({ title: 'Настроить SEO', dept: 'marketing', creator: 'owner' });
+    const other = w.hq.createTask({ title: 'Купить рекламу у блогера', dept: 'marketing', creator: 'owner' });
     await cycle(w);
     expect(w.hq.task(t.id)!.status).toBe('blocked');
     expect(w.hq.events(t.id).some((e) => e.kind === 'error' && e.body.includes('LLM off'))).toBe(true);

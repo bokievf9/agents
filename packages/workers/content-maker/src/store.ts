@@ -143,6 +143,27 @@ export class ContentStore {
     tx();
   }
 
+  /** The owner posted this platform's copy by hand (Publisher): it leaves the ready queue. */
+  markPublished(readyId: number): boolean {
+    return this.db.prepare("UPDATE cm_ready SET status = 'published' WHERE id = ? AND status = 'ready'").run(readyId).changes > 0;
+  }
+
+  readyRow(readyId: number): ReadyRow | undefined {
+    return this.readyRowsWhere('id = ?', readyId)[0];
+  }
+
+  /** Rows of one item, any status (the Publisher and the Analyst count published ones). */
+  rowsOfItem(itemId: number): ReadyRow[] {
+    return this.readyRowsWhere('item_id = ?', itemId);
+  }
+
+  private readyRowsWhere(where: string, ...args: unknown[]): ReadyRow[] {
+    const rows = this.db.prepare(`SELECT * FROM cm_ready WHERE ${where} ORDER BY planned_date, item_id, id`).all(...args) as {
+      id: number; item_id: number; platform: Platform; type: ItemType; text: string; planned_date: string; status: string;
+    }[];
+    return rows.map((r) => ({ id: r.id, itemId: r.item_id, platform: r.platform, type: r.type, text: r.text, plannedDate: r.planned_date, status: r.status }));
+  }
+
   readyRows(): ReadyRow[] {
     const rows = this.db.prepare("SELECT * FROM cm_ready WHERE status = 'ready' ORDER BY planned_date, item_id, id").all() as {
       id: number; item_id: number; platform: Platform; type: ItemType; text: string; planned_date: string; status: string;

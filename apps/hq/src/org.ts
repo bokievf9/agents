@@ -19,9 +19,17 @@ export function seedOrg(hq: Hq, cfg: Pick<Config, 'instructionsDir' | 'marketing
     bossId: 'director', bot: 'MARKETING_BOT_TOKEN', budgetUsdMonth: cfg.marketingBudgetUsd,
   });
   hq.ensureAgent({ id: 'content-maker', dept: 'marketing', role: 'worker', title: 'Контент-мейкер', bossId: 'marketing-head' });
+  hq.ensureAgent({ id: 'trend-scout', dept: 'marketing', role: 'worker', title: 'Трендвотчер', bossId: 'marketing-head' });
+  hq.ensureAgent({ id: 'publisher', dept: 'marketing', role: 'worker', title: 'Публикатор', bossId: 'marketing-head' });
+  hq.ensureAgent({ id: 'seo', dept: 'marketing', role: 'worker', title: 'SEO', bossId: 'marketing-head' });
+  hq.ensureAgent({ id: 'analyst', dept: 'marketing', role: 'worker', title: 'Аналитик', bossId: 'marketing-head' });
   const routines = [
     { name: 'marketing-weekly-pack', cron: '0 9 * * 1', dept: 'marketing', title: 'Пакет недели: 7 клипов и карусель', meta: { action: 'pack' }, priority: 1 },
     { name: 'marketing-daily-today', cron: '0 9 * * *', dept: 'marketing', title: 'Что публикуем сегодня', meta: { action: 'daily' } },
+    { name: 'marketing-trends-daily', cron: '30 8 * * *', dept: 'marketing', title: 'Хуки и форматы дня', meta: { action: 'trends' } },
+    { name: 'marketing-trends-weekly', cron: '0 20 * * 0', dept: 'marketing', title: 'Тренды ниши за неделю', meta: { action: 'trends_weekly' } },
+    { name: 'marketing-analyst-weekly', cron: '0 8 * * 1', dept: 'marketing', title: 'Недельный отчёт маркетинга', meta: { action: 'report' } },
+    { name: 'marketing-seo-weekly', cron: '0 11 * * 1', dept: 'marketing', title: 'SEO и AI-SEO проверка сайта', meta: { action: 'seo' } },
   ];
   for (const r of routines) if (!hq.routineByName(r.name)) hq.scheduleRoutine(r);
 }

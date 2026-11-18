@@ -1,0 +1,181 @@
+import { errMsg, log, migrate, tryJson, zonedParts, type Db } from '@fir/core';
+import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
+import { z } from 'zod';
+
+export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
+
+const DAY = 86_400_000;
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS an_snapshots (
+  week_end TEXT PRIMARY KEY,
+  yt_subscribers INTEGER,
+  yt_views INTEGER,
+  yt_videos INTEGER,
+  numbers TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+`;
+
+export interface AnalystOptions {
+  youtubeApiKey?: string | undefined;
+  youtubeChannelId?: string | undefined;
+  fetch?: FetchFn;
+}
+
+export interface YtStats {
+  subscribers: number;
+  views: number;
+  videos: number;
+}
+
+/** The five numbers of the weekly report. null: no data source (shown as "нет данных"). */
+export interface WeekNumbers {
+  approved: number;
+  published: number;
+  publishedByPlatform: Record<string, number>;
+  leads: number;
+  leadsPrev: number;
+  costUsd: number;
+  subscribers: number | null;
+  subscribersDelta: number | null;
+  /** Prospector funnel counts by status, when the Sales tables exist. */
+  funnel: Record<string, number> | null;
+}
+
+const recsSchema = z.object({ recommendations: z.array(z.string().min(5).max(300)).length(3) });
+const ymd = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
+
+const hasTable = (db: Db, name: string): boolean => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
+const hasColumn = (db: Db, table: string, col: string): boolean => (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === col);
+
+/** Sales tables the prospector may use; the first that exists with a `status` column becomes the funnel. */
+export const FUNNEL_TABLES = ['pr_prospects', 'prospects', 'pr_cards'];
+
+export async function fetchYoutubeStats(fetchFn: FetchFn, key: string, channelId: string): Promise<YtStats> {
+  const url = `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${encodeURIComponent(channelId)}&key=${encodeURIComponent(key)}`;
+  const res = await fetchFn(url, { signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`YouTube HTTP ${res.status}`);
+  const s = ((await res.json()) as { items?: { statistics?: { subscriberCount?: string; viewCount?: string; videoCount?: string } }[] }).items?.[0]?.statistics;
+  if (!s) throw new Error('YouTube: канал не найден (проверьте YOUTUBE_CHANNEL_ID)');
+  return { subscribers: Number(s.subscriberCount ?? 0), views: Number(s.viewCount ?? 0), videos: Number(s.videoCount ?? 0) };
+}
+
+/** Everything from the HQ database for the 7 days ending at `to` (inclusive, YYYY-MM-DD, HQ timezone). */
+export function aggregate(db: Db, from: string, to: string, nowMs: number, tz: string, yt: YtStats | null, prevSubs: number | null): WeekNumbers {
+  const toMs = Date.parse(`${to}T00:00:00Z`) + DAY;
+  const fromMs = Date.parse(`${from}T00:00:00Z`);
+  // Timestamps are epoch ms; the week window in HQ time is approximated by UTC day borders shifted by the zone offset.
+  const p = zonedParts(nowMs, tz);
+  const offset = Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi) - Math.floor(nowMs / 60_000) * 60_000;
+  const winFrom = fromMs - offset;
+  const winTo = toMs - offset;
+
+  let approved = 0;
+  if (hasTable(db, 'cm_ready')) {
+    approved = (db.prepare("SELECT COUNT(*) c FROM cm_ready WHERE status IN ('ready','published') AND planned_date >= ? AND planned_date <= ?").get(from, to) as { c: number }).c;
+  }
+  const publishedByPlatform: Record<string, number> = {};
+  let published = 0;
+  if (hasTable(db, 'pb_posts')) {
+    for (const r of db.prepare('SELECT platform, COUNT(*) n FROM pb_posts WHERE published_at >= ? AND published_at < ? GROUP BY platform').all(winFrom, winTo) as { platform: string; n: number }[]) {
+      publishedByPlatform[r.platform] = r.n;
+      published += r.n;
+    }
+  }
+  const leadCount = (a: number, b: number): number => {
+    const rows = db.prepare("SELECT tags, meta, title FROM tasks WHERE dept = 'sales' AND parent_id IS NULL AND created_at >= ? AND created_at < ?").all(a, b) as { tags: string; meta: string; title: string }[];
+    return rows.filter((r) => r.tags.split(',').includes('lead') || /"action":"lead"/.test(r.meta) || /^лид(?![\p{L}])/iu.test(r.title)).length;
+  };
+  let funnel: Record<string, number> | null = null;
+  for (const t of FUNNEL_TABLES) {
+    if (hasTable(db, t) && hasColumn(db, t, 'status')) {
+      funnel = Object.fromEntries((db.prepare(`SELECT status, COUNT(*) n FROM ${t} GROUP BY status`).all() as { status: string; n: number }[]).map((r) => [r.status, r.n]));
+      break;
+    }
+  }
+  const costUsd = hasTable(db, 'costs') ? ((db.prepare('SELECT COALESCE(SUM(usd), 0) s FROM costs WHERE at >= ? AND at < ?').get(winFrom, winTo) as { s: number }).s) : 0;
+  return {
+    approved, published, publishedByPlatform, leads: leadCount(winFrom, winTo), leadsPrev: leadCount(winFrom - 7 * DAY, winFrom), costUsd,
+    subscribers: yt?.subscribers ?? null, subscribersDelta: yt && prevSubs !== null ? yt.subscribers - prevSubs : null, funnel,
+  };
+}
+
+const platformLabel: Record<string, string> = { instagram: 'Instagram', tiktok: 'TikTok', shorts: 'Shorts' };
+
+export function numbersText(n: WeekNumbers): string {
+  const per = Object.entries(n.publishedByPlatform).map(([k, v]) => `${platformLabel[k] ?? k} ${v}`).join(', ');
+  const subs = n.subscribers === null ? 'нет данных (YouTube не подключён)' : `${n.subscribers}${n.subscribersDelta === null ? '' : ` (${n.subscribersDelta >= 0 ? '+' : ''}${n.subscribersDelta} за неделю)`}`;
+  return [
+    `1. Одобрено материалов на неделю (платформ): ${n.approved}`,
+    `2. Опубликовано (отмечено вручную): ${n.published}${per ? ` (${per})` : ''}`,
+    `3. Лидов: ${n.leads} (неделей ранее ${n.leadsPrev})`,
+    `4. Расходы на ИИ за неделю: $${n.costUsd.toFixed(2)}`,
+    `5. Подписчики YouTube: ${subs}`,
+  ].join('\n');
+}
+
+/** Rules for the three recommendations when the model is off or fails. */
+export function fallbackRecommendations(n: WeekNumbers): string[] {
+  const recs: string[] = [];
+  if (n.approved > 0 && n.published < n.approved) recs.push(`Опубликовано ${n.published} из ${n.approved} одобренных: выложите отставшие материалы и нажмите «Опубликовано».`);
+  if (n.leads === 0) recs.push('Лидов нет: проверьте, что ссылка firtech.pro стоит в шапке всех трёх профилей и в каждом призыве.');
+  else if (n.leads < n.leadsPrev) recs.push('Лидов меньше, чем неделей ранее: повторите формат самого просматриваемого ролика недели.');
+  if (n.subscribers === null) recs.push('Подключите YOUTUBE_API_KEY и YOUTUBE_CHANNEL_ID, чтобы отчёт видел рост канала.');
+  recs.push('Сверьте тренды недели с темами пакета: возьмите один формат из свежих хуков в ближайший клип.');
+  recs.push('Держите ритм 7 клипов в неделю: стабильность важнее одного удачного ролика.');
+  return recs.slice(0, 3);
+}
+
+/**
+ * Analyst, stage 1. Action `report` (weekly, Monday 08:00): assembles one RU report from what is already in the HQ
+ * database, content per platform, Sales leads, prospector funnel (when its tables exist), costs, plus YouTube channel
+ * stats when a key and channel id are set. Instagram and TikTok insights are stage 2 (see README). Reads only.
+ */
+export class AnalystWorker implements Worker {
+  readonly id = 'analyst';
+  private readonly fetchFn: FetchFn;
+
+  constructor(private readonly opts: AnalystOptions = {}) {
+    this.fetchFn = opts.fetch ?? ((url, init) => fetch(url, init));
+  }
+
+  async run(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
+    if (task.meta.action !== 'report') return { ok: false, result: '', error: `Неизвестное действие: ${String(task.meta.action)}` };
+    migrate(ctx.db, SCHEMA);
+    const p = zonedParts(ctx.now(), ctx.tz);
+    const today = ymd(Date.UTC(p.y, p.mo - 1, p.d));
+    // The week that just ended: the seven days before today.
+    const to = ymd(Date.parse(`${today}T00:00:00Z`) - DAY);
+    const from = ymd(Date.parse(`${to}T00:00:00Z`) - 6 * DAY);
+    let yt: YtStats | null = null;
+    let note = '';
+    if (this.opts.youtubeApiKey && this.opts.youtubeChannelId) {
+      try {
+        yt = await fetchYoutubeStats(this.fetchFn, this.opts.youtubeApiKey, this.opts.youtubeChannelId);
+      } catch (e) {
+        note = `YouTube: ${errMsg(e).replace(this.opts.youtubeApiKey, '***')}`;
+        log('warn', 'analyst: youtube failed', { err: note });
+      }
+    }
+    const prev = ctx.db.prepare('SELECT yt_subscribers s FROM an_snapshots WHERE week_end < ? ORDER BY week_end DESC LIMIT 1').get(to) as { s: number | null } | undefined;
+    const n = aggregate(ctx.db, from, to, ctx.now(), ctx.tz, yt, prev?.s ?? null);
+    ctx.db
+      .prepare('INSERT INTO an_snapshots (week_end, yt_subscribers, yt_views, yt_videos, numbers, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(week_end) DO UPDATE SET yt_subscribers = excluded.yt_subscribers, yt_views = excluded.yt_views, yt_videos = excluded.yt_videos, numbers = excluded.numbers, created_at = excluded.created_at')
+      .run(to, yt?.subscribers ?? null, yt?.views ?? null, yt?.videos ?? null, JSON.stringify(n), ctx.now());
+
+    const text = numbersText(n);
+    const funnel = n.funnel ? `\nВоронка разведчика: ${Object.entries(n.funnel).map(([k, v]) => `${k} ${v}`).join(', ')}.` : '';
+    const llm = await tryJson(
+      ctx.llm,
+      {
+        tier: 'haiku', maxTokens: 700,
+        system: 'Ты аналитик отдела маркетинга студии Fir Tech (ИИ-агенты и боты, короткие видео RU). По пяти числам недели дай ровно 3 конкретных рекомендации на следующую неделю. Русский, без эмодзи и длинных тире, без выдуманных цифр, только то, что следует из чисел. Ответ: только JSON {"recommendations":["...","...","..."]}.',
+        messages: [{ role: 'user', content: `${text}${funnel}`.slice(0, 3000) }],
+      },
+      recsSchema,
+    );
+    const recs = llm?.recommendations ?? fallbackRecommendations(n);
+    const result = `Недельный отчёт маркетинга, ${from.slice(8)}.${from.slice(5, 7)} - ${to.slice(8)}.${to.slice(5, 7)}\n${text}${funnel}\n\nРекомендации:\n${recs.map((r, i) => `${i + 1}. ${r}`).join('\n')}\n\nInstagram и TikTok: статистики пока нет (этап 2).${note ? `\n${note}` : ''}`;
+    return { ok: true, result };
+  }
+}

@@ -34,6 +34,10 @@ const reporter = new Reporter(cfg.groupId, cfg.topics, senders);
 const director = new Director({ hq, llm, messenger, queue, ownerId: cfg.ownerId, reporter });
 const marketing = new MarketingHead({
   hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, clipsPerWeek: cfg.clipsPerWeek, carouselsPerWeek: cfg.carouselsPerWeek,
+  integrations: {
+    youtubeApiKey: cfg.youtubeApiKey, youtubeChannelId: cfg.youtubeChannelId, trendsRegions: cfg.trendsRegions,
+    gscServiceAccountJson: cfg.gscServiceAccountJson, gscSiteUrl: cfg.gscSiteUrl, siteUrl: cfg.siteUrl,
+  },
 });
 director.editors.set('content_item', marketing);
 
@@ -47,6 +51,11 @@ bot.on('callback_query:data', async (ctx, next) => {
   const edit = /^ap:(\d+):e$/.exec(ctx.callbackQuery.data);
   const part = /^ce:(\d+):(\w+)$/.exec(ctx.callbackQuery.data);
   const rule = /^rl:(\d+):([yn])$/.exec(ctx.callbackQuery.data);
+  const published = /^pb:(\d+)$/.exec(ctx.callbackQuery.data);
+  if (published) {
+    await ctx.answerCallbackQuery({ text: marketing.onPublished(Number(published[1])) });
+    return;
+  }
   if (rule) {
     await ctx.answerCallbackQuery({ text: await director.onRuleButton(Number(rule[1]), rule[2] === 'y') });
     await ctx.editMessageReplyMarkup().catch(() => undefined);

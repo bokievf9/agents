@@ -10,6 +10,10 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/core/package.json packages/core/
 COPY packages/hq/package.json packages/hq/
 COPY packages/workers/content-maker/package.json packages/workers/content-maker/
+COPY packages/workers/trend-scout/package.json packages/workers/trend-scout/
+COPY packages/workers/publisher/package.json packages/workers/publisher/
+COPY packages/workers/seo/package.json packages/workers/seo/
+COPY packages/workers/analyst/package.json packages/workers/analyst/
 COPY apps/hq/package.json apps/hq/
 RUN pnpm install --frozen-lockfile
 COPY packages/core packages/core

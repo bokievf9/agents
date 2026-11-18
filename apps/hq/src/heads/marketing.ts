@@ -1,9 +1,13 @@
 import { errMsg, log, tryJson, zonedParts, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import {
-  KIND, ContentMakerWorker, editableParts, partLabel, replacePart, storeFor, titleOf, todayReport, ymd,
+  KIND, ContentMakerWorker, editableParts, partLabel, replacePart, storeFor, titleOf, ymd,
   type PartId,
 } from '@fir/worker-content-maker';
+import { AnalystWorker } from '@fir/worker-analyst';
+import { PublisherWorker, publishedButtons, renderItemMessage, publishDay } from '@fir/worker-publisher';
+import { KIND as SEO_KIND, SeoWorker, type SeoProposalPayload } from '@fir/worker-seo';
+import { TrendScoutWorker, latestTrendHints } from '@fir/worker-trend-scout';
 import { z } from 'zod';
 import type { ApprovalEditor } from '../editor.js';
 import type { Reporter } from '../reporter.js';
@@ -21,25 +25,47 @@ export interface MarketingDeps {
   reporter: Reporter;
   /** Default: the content-maker. Tests pass their own. */
   worker?: Worker;
+  /** Optional workers (tests pass their own); the defaults are built from `integrations`. */
+  trendScout?: Worker;
+  publisher?: PublisherWorker;
+  seo?: Worker;
+  analyst?: Worker;
+  integrations?: Integrations;
   clipsPerWeek?: number;
   carouselsPerWeek?: number;
   rng?: () => number;
 }
 
+/** Optional external sources (all keys optional: a source without its key is simply off). */
+export interface Integrations {
+  youtubeApiKey?: string | undefined;
+  youtubeChannelId?: string | undefined;
+  trendsRegions?: string[];
+  gscServiceAccountJson?: string | undefined;
+  gscSiteUrl?: string | undefined;
+  siteUrl?: string | undefined;
+  fetch?: (url: string, init?: RequestInit) => Promise<Response>;
+}
+
 const splitSchema = z.object({
-  action: z.enum(['pack', 'topic', 'daily', 'none']),
+  action: z.enum(['pack', 'topic', 'daily', 'trends', 'trends_weekly', 'seo', 'report', 'none']),
   topic: z.string().max(300).optional(),
   type: z.enum(['clip', 'carousel']).optional(),
 });
 const reviewSchema = z.object({ ok: z.boolean(), issues: z.array(z.string()).max(10).default([]) });
 
-type Action = 'pack' | 'topic' | 'daily' | 'none';
+type Action = 'pack' | 'topic' | 'daily' | 'trends' | 'trends_weekly' | 'seo' | 'report' | 'none';
+const DIRECT: Action[] = ['trends', 'trends_weekly', 'seo', 'report'];
+const ACTIONS: Action[] = ['pack', 'topic', 'daily', ...DIRECT];
 
 /** Heuristics for the case without an LLM: only the obvious wordings. */
 function guessAction(task: Task): { action: Action; topic?: string } {
   const text = `${task.title} ${task.body}`.toLowerCase();
   if (/пакет|на неделю|pack/.test(text)) return { action: 'pack' };
   if (/что публикуем|публикуем сегодня/.test(text)) return { action: 'daily' };
+  if (/тренд/.test(text)) return { action: /недел|итог/.test(text) ? 'trends_weekly' : 'trends' };
+  if (/seo|сео/.test(text)) return { action: 'seo' };
+  if (/отч[её]т|аналитик/.test(text)) return { action: 'report' };
   if (/клип|ролик|карусел|рилс|reels|shorts/.test(text)) return { action: 'topic', topic: task.body.trim() || task.title };
   return { action: 'none' };
 }
@@ -52,11 +78,22 @@ function guessAction(task: Task): { action: Action; topic?: string } {
  */
 export class MarketingHead implements ApprovalEditor {
   readonly worker: Worker;
+  readonly trendScout: Worker;
+  readonly publisher: PublisherWorker;
+  readonly seo: Worker;
+  readonly analyst: Worker;
 
   constructor(private readonly d: MarketingDeps) {
+    const i = d.integrations ?? {};
+    const net = i.fetch ? { fetch: i.fetch } : {};
+    this.trendScout = d.trendScout ?? new TrendScoutWorker({ youtubeApiKey: i.youtubeApiKey, regions: i.trendsRegions ?? ['KZ', 'UZ', 'RU'], ...net });
+    this.publisher = d.publisher ?? new PublisherWorker();
+    this.seo = d.seo ?? new SeoWorker({ ...(i.siteUrl ? { siteUrl: i.siteUrl } : {}), gscServiceAccountJson: i.gscServiceAccountJson, gscSiteUrl: i.gscSiteUrl, ...net });
+    this.analyst = d.analyst ?? new AnalystWorker({ youtubeApiKey: i.youtubeApiKey, youtubeChannelId: i.youtubeChannelId, ...net });
     this.worker =
       d.worker ??
       new ContentMakerWorker({
+        trends: (ctx) => latestTrendHints(ctx, d.hq.tz),
         ...(d.clipsPerWeek !== undefined ? { clipsPerWeek: d.clipsPerWeek } : {}),
         ...(d.carouselsPerWeek !== undefined ? { carouselsPerWeek: d.carouselsPerWeek } : {}),
         ...(d.rng ? { rng: d.rng } : {}),
@@ -65,6 +102,16 @@ export class MarketingHead implements ApprovalEditor {
       const spec = this.worker.kindSpec({ db: d.hq.db, now: d.hq.now }, (id) => d.queue.get(id)?.edited ?? false);
       d.hq.registerKind(KIND, spec);
     }
+    // An approved SEO proposal becomes a task: tagged `builder` when the site's code has to change.
+    d.hq.registerKind(SEO_KIND, {
+      initialLevel: 0, locked: true,
+      execute: (payload) => {
+        const p = payload as unknown as SeoProposalPayload;
+        const t = d.hq.createTask({ title: `SEO: ${p.title}`.slice(0, 200), body: `${p.change}\nСтраница: ${p.page}`, dept: MARKETING, creator: 'head', meta: { action: 'seo_fix', key: p.key } });
+        d.hq.block(t.id, HEAD_ID, p.needsBuilder ? 'Нужна правка кода сайта: ждёт строителя' : 'Нужна правка текста: делает владелец или Контент-мейкер', p.needsBuilder ? ['builder'] : []);
+        return Promise.resolve();
+      },
+    });
     // The owner rejected an item: the worker's own table follows.
     d.hq.onApprovalDecision((link, state) => {
       if (link.kind === KIND && state === 'rejected') storeFor({ db: d.hq.db, now: d.hq.now }).setStatus(Number(link.payload.itemId), 'rejected');
@@ -115,14 +162,14 @@ export class MarketingHead implements ApprovalEditor {
 
   private async decide(task: Task): Promise<{ action: Action; topic?: string; type?: 'clip' | 'carousel' }> {
     const metaAction = task.meta.action;
-    if (metaAction === 'pack' || metaAction === 'topic' || metaAction === 'daily') {
-      return { action: metaAction, ...(typeof task.meta.topic === 'string' ? { topic: task.meta.topic } : {}) };
+    if (typeof metaAction === 'string' && ACTIONS.includes(metaAction as Action)) {
+      return { action: metaAction as Action, ...(typeof task.meta.topic === 'string' ? { topic: task.meta.topic } : {}) };
     }
     const res = await tryJson(
       this.llmFor(HEAD_ID, task.id),
       {
         tier: 'haiku', maxTokens: 400,
-        system: `${this.agent().instructions}\n\nОпредели, что нужно сделать исполнителю по задаче. Ответ: только JSON {"action": "pack"|"topic"|"daily"|"none", "topic": "тема материала", "type": "clip"|"carousel"}. pack: пакет недели; topic: один материал на тему; daily: что публикуем сегодня; none: задача не для Контент-мейкера.`,
+        system: `${this.agent().instructions}\n\nОпредели, что нужно сделать исполнителю по задаче. Ответ: только JSON {"action": "pack"|"topic"|"daily"|"trends"|"trends_weekly"|"seo"|"report"|"none", "topic": "тема материала", "type": "clip"|"carousel"}. pack: пакет недели; topic: один материал на тему; daily: что публикуем сегодня; trends: хуки и форматы дня; trends_weekly: тренды недели; seo: проверка сайта; report: недельный отчёт; none: задача не для отдела маркетинга.`,
         messages: [{ role: 'user', content: `Задача: ${task.title}\n${task.body}`.slice(0, 2000) }],
       },
       splitSchema,
@@ -141,10 +188,11 @@ export class MarketingHead implements ApprovalEditor {
       await this.report(task.id, `Задача #${task.id} «${task.title}» не для маркетинга: нет исполнителя. Нужен строитель или другой отдел?`);
       return;
     }
-    if (action === 'daily') {
-      const text = todayReport(storeFor({ db: this.hq.db, now: this.hq.now }), this.today());
-      this.hq.complete(task.id, HEAD_ID, text);
-      return void (await this.report(task.id, text));
+    if (action === 'daily') return this.daily(task);
+    if (DIRECT.includes(action)) {
+      this.hq.setMeta(task.id, { action });
+      const worker = { trends: this.trendScout, trends_weekly: this.trendScout, seo: this.seo, report: this.analyst }[action as 'trends']!;
+      return this.runDirect(task.id, worker);
     }
     if (action === 'topic') {
       this.hq.setMeta(task.id, { action: 'topic', topic: topic ?? (task.body.trim() || task.title), ...(type ? { type } : {}) });
@@ -208,11 +256,11 @@ export class MarketingHead implements ApprovalEditor {
     return res ?? { ok: true, issues: [] }; // LLM off or garbage: the owner's approval is the safety net
   }
 
-  private async runOnce(taskId: number, actor: string, staged: { kind: string; payload: Record<string, unknown>; summary: string }[]): Promise<WorkerResult> {
+  private async runOnce(taskId: number, actor: string, staged: { kind: string; payload: Record<string, unknown>; summary: string }[], worker: Worker = this.worker): Promise<WorkerResult> {
     staged.length = 0;
     const t = this.hq.task(taskId)!;
     try {
-      return await this.worker.run(t, this.ctx(t, staged, actor));
+      return await worker.run(t, this.ctx(t, staged, actor));
     } catch (e) {
       return { ok: false, result: '', error: errMsg(e) };
     }
@@ -242,6 +290,57 @@ export class MarketingHead implements ApprovalEditor {
     for (const s of staged) await this.hq.requestApproval(taskId, actor, s.kind, s.payload, s.summary + warn);
     const t = this.hq.task(taskId)!;
     if (!t.parentId) await this.report(taskId, staged.length > 0 ? `Задача #${taskId} «${t.title}»: ${staged.length} на одобрение (придёт в пачке).` : `Задача #${taskId} «${t.title}» выполнена.`);
+  }
+
+  /** The journal feeds the morning summary on one line: drop source links and notes, cap the length. */
+  private brief(text: string): string {
+    return text.split('\n').filter((l) => !/^\s+Источник:|^Заметки:/.test(l)).join('\n').slice(0, 1100);
+  }
+
+  /** Non-content workers: run, no content checklist (their checks are built in), proposals go to the approval queue. */
+  private async runDirect(taskId: number, worker: Worker): Promise<void> {
+    const staged: { kind: string; payload: Record<string, unknown>; summary: string }[] = [];
+    const res = await this.runOnce(taskId, worker.id, staged, worker);
+    if (!res.ok) {
+      this.hq.block(taskId, worker.id, res.error ?? 'исполнитель не вернул результат');
+      return void (await this.hq.alert(`Маркетинг: задача #${taskId} (${worker.id}) не выполнена: ${(res.error ?? '').slice(0, 200)}`));
+    }
+    this.hq.complete(taskId, worker.id, res.result, staged.length > 0 ? 'review' : 'done');
+    for (const s of staged) await this.hq.requestApproval(taskId, worker.id, s.kind, s.payload, s.summary);
+    await this.report(taskId, this.brief(res.result) + (staged.length ? `\nНа одобрение: ${staged.length} (придёт в пачке).` : ''));
+  }
+
+  /**
+   * «Что публикуем сегодня»: the Publisher assembles per-platform packs for approved items whose date arrived. The
+   * packs go to the owner as info items with an «Опубликовано» button per platform (this is the only private message a
+   * head sends, and it needs no decision). Nothing is posted by itself: the owner posts, then presses the button.
+   */
+  private async daily(task: Task): Promise<void> {
+    const staged: { kind: string; payload: Record<string, unknown>; summary: string }[] = [];
+    const res = await this.runOnce(task.id, this.publisher.id, staged, this.publisher);
+    if (!res.ok) return void this.hq.block(task.id, HEAD_ID, res.error ?? 'публикатор не вернул результат');
+    const tctx = { db: this.hq.db, now: this.hq.now, tz: this.hq.tz };
+    const groups = this.publisher.packsToSend(tctx);
+    let sent = 0;
+    for (const g of groups) {
+      try {
+        await this.d.messenger.send(this.d.ownerId, renderItemMessage(g, publishDay(tctx)), publishedButtons(g));
+        this.publisher.markSent(tctx, g);
+        sent++;
+      } catch (e) {
+        log('warn', 'publish pack not delivered', { err: errMsg(e) });
+      }
+    }
+    const text = `${res.result}${groups.length ? `\nПакетов отправлено владельцу: ${sent} из ${groups.length}.` : ''}`;
+    this.hq.complete(task.id, HEAD_ID, text);
+    await this.report(task.id, text);
+  }
+
+  /** «Опубликовано» pressed: records the publication. Returns the callback toast. */
+  onPublished(readyId: number): string {
+    const r = this.publisher.markPublished({ db: this.hq.db, now: this.hq.now }, readyId);
+    if (r.ok) this.hq.log('owner', 'published', 'content_ready', String(readyId));
+    return r.text;
   }
 
   // ---- part-by-part editing of items (ApprovalEditor) ----

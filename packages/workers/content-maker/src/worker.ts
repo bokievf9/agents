@@ -1,6 +1,6 @@
 import { errMsg, log, zonedParts, type KindSpec, type Payload } from '@fir/core';
 import type { SubtaskSpec, Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
-import { generateItem, loadPrompts, type Prompts } from './generate.js';
+import { generateItem, loadPrompts, noTrends, type Prompts, type TrendHint, type TrendsProvider } from './generate.js';
 import { PLATFORM_LABEL, splitPlatforms, type ItemType, type Platform } from './format.js';
 import { ContentStore } from './store.js';
 import { ALL_TOPICS, freeTopic, pickTopics, type Topic } from './topics.js';
@@ -88,6 +88,14 @@ export interface ContentWorkerOptions {
   /** Directory with system.md, clip.md, carousel.md. Default: the package's own prompts. */
   promptsDir?: string;
   rng?: () => number;
+  /** Fresh niche trends for the prompt (the Trend scout's latest items). Default: none. */
+  trends?: TrendsProvider;
+}
+
+/** Up to two trends for a topic: the ones suggested for its direction first, then the top of the list. */
+export function pickTrends(all: TrendHint[], directionId: string | null): TrendHint[] {
+  const own = directionId ? all.filter((t) => t.direction === directionId) : [];
+  return [...own, ...all.filter((t) => !own.includes(t))].slice(0, 2);
 }
 
 /**
@@ -101,11 +109,13 @@ export class ContentMakerWorker implements Worker {
   private readonly prompts: Prompts;
   private readonly cadence: Cadence;
   private readonly rng: () => number;
+  private readonly trends: TrendsProvider;
 
   constructor(opts: ContentWorkerOptions = {}) {
     this.prompts = loadPrompts(opts.promptsDir ?? new URL('../prompts', import.meta.url).pathname);
     this.cadence = { clipsPerWeek: opts.clipsPerWeek ?? DEFAULT_CADENCE.clipsPerWeek, carouselsPerWeek: opts.carouselsPerWeek ?? DEFAULT_CADENCE.carouselsPerWeek };
     this.rng = opts.rng ?? Math.random;
+    this.trends = opts.trends ?? noTrends;
   }
 
   /** The approval kind to register in the HQ (never promoted to level 1: every item needs the owner's button). */
@@ -155,9 +165,15 @@ export class ContentMakerWorker implements Worker {
     if (!item) return { ok: false, result: '', error: `Материал ${itemId} не найден` };
     const topic: Topic = ALL_TOPICS.find((t) => t.key === item.topicKey) ?? { key: item.topicKey, directionId: null, text: item.topicText };
     const feedback = typeof task.meta.feedback === 'string' ? task.meta.feedback : '';
+    let trends: TrendHint[] = [];
+    try {
+      trends = pickTrends(this.trends({ db: ctx.db, now: ctx.now }), topic.directionId);
+    } catch (e) {
+      log('warn', 'trends provider failed, continuing without trends', { err: errMsg(e) });
+    }
     try {
       const gen = await generateItem(ctx.llm, this.prompts, {
-        type: item.type, topic, week: item.packId ? `с ${ddmm(item.plannedDate)}` : '', ...(feedback ? { comment: feedback, previous: item.text } : {}),
+        type: item.type, topic, week: item.packId ? `с ${ddmm(item.plannedDate)}` : '', ...(feedback ? { comment: feedback, previous: item.text } : {}), ...(trends.length ? { trends } : {}),
       });
       if (!gen) {
         store.setStatus(itemId, 'failed');

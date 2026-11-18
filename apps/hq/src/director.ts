@@ -117,7 +117,7 @@ export class Director {
     const reports = hq.reports(since);
     out.push(
       reports.length
-        ? `Отчёты отделов за сутки:\n${reports.map((r) => `- ${r.dept}: ${oneLine(r.body, 400)}`).join('\n')}`
+        ? `Отчёты отделов за сутки:\n${reports.map((r) => `- ${r.dept}: ${oneLine(r.body, 1200)}`).join('\n')}`
         : 'Отчётов отделов за сутки нет.',
     );
     const queued = hq.queuedApprovals().length;
