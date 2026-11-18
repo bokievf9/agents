@@ -41,6 +41,7 @@ export class HeartbeatWorker {
           const agent = this.hq.agent(hb.agentId);
           if (!agent) return;
           this.running.add(agent.id);
+          this.hq.log(agent.id, agent.role === 'head' ? 'head_wake' : 'agent_wake', 'agent', agent.id);
           try {
             await this.handler(agent, hb);
           } catch (e) {

@@ -69,7 +69,7 @@ const DEPT_ORDER = ['marketing', 'sales', 'support', 'production', 'backoffice']
 type State = 'ok' | 'wait' | 'fail' | 'run';
 const ICON: Record<State, string> = { ok: '✅', wait: '⚠️', fail: '❌', run: '⏳' };
 
-interface Row { worker: string; title: string; state: State; ms: number; text: string }
+interface Row { worker: string; title: string; state: State; ms: number; text: string; missing?: boolean }
 
 const oneLine = (s: string, n: number) => {
   const t = s.replace(/\s+/g, ' ').trim();
@@ -237,17 +237,25 @@ export class Drill {
     return this.hq.tasks({ dept: 'production', limit: 500 }).filter((t) => t.meta.projectId === p.id && t.meta.kind === kind);
   }
 
+  /** One row per scenario (and per dependent worker), always in order: a task that does not exist shows as «задача не создана». */
   private rows(): Row[] {
     const names = (id: string) => this.hq.agent(id)?.title ?? id;
+    const started = Number(this.hq.setting(STARTED) || 0);
+    const notCreated = (worker: string): Row => ({ worker, title: names(worker), state: 'run', ms: -1, text: 'задача не создана', missing: true });
     const rows: Row[] = [];
     for (const s of SCENARIOS) {
       const t = this.latest(s.worker);
       if (t) rows.push(this.rowOf(s.worker, names(s.worker), t));
       else if (s.after && this.latest(s.after)) rows.push({ worker: s.worker, title: names(s.worker), state: 'wait', ms: -1, text: 'ждёт одобрения клипа' });
-      if (s.worker === 'project-manager' && t) {
+      else {
+        // an unexpected hole after a drill started is worth a log line (ids only)
+        if (started && !s.after) log('warn', 'drill task not found', { worker: s.worker, dept: s.dept, startedAt: started });
+        rows.push(notCreated(s.worker));
+      }
+      if (s.worker === 'project-manager') {
         for (const dep of DEPENDENT) {
-          const bt = this.projectTasks(dep.kind).at(-1);
-          rows.push(bt ? this.rowOf(dep.worker, names(dep.worker), bt) : { worker: dep.worker, title: names(dep.worker), state: 'wait', ms: -1, text: 'ждёт одобрения ТЗ / строителя' });
+          const bt = t ? this.projectTasks(dep.kind).at(-1) : undefined;
+          rows.push(bt ? this.rowOf(dep.worker, names(dep.worker), bt) : t ? { worker: dep.worker, title: names(dep.worker), state: 'wait', ms: -1, text: 'ждёт одобрения ТЗ / строителя' } : notCreated(dep.worker));
         }
       }
     }
@@ -257,7 +265,7 @@ export class Drill {
   reportText(): string {
     this.advance();
     const rows = this.rows();
-    if (!rows.length) return 'Учений ещё не было: /drill.';
+    if (!this.drillTasks().length && !Number(this.hq.setting(STARTED) || 0)) return 'Учений ещё не было: /drill.';
     const started = Number(this.hq.setting(STARTED) || 0);
     const count = (s: State) => rows.filter((r) => r.state === s).length;
     const ids = this.family(this.drillTasks()).map((t) => t.id);
@@ -277,7 +285,7 @@ export class Drill {
     const started = Number(this.hq.setting(STARTED) || 0);
     if (!started || this.hq.setting(REPORTED)) return false;
     this.advance();
-    const settled = this.rows().every((r) => r.state !== 'run');
+    const settled = this.rows().every((r) => r.state !== 'run' || r.missing);
     if (!settled && this.hq.now() - started < AUTO_REPORT_MS) return false;
     this.hq.setSetting(REPORTED, '1');
     const text = this.reportText();

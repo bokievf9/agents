@@ -13,7 +13,13 @@ export function meterLlm(llm: LlmClient, hq: Hq, ctx: { agentId: string; taskId?
   const run = async (req: LlmRequest): Promise<LlmResult> => {
     const agent = hq.agent(ctx.agentId);
     if (agent && hq.overBudget(agent.dept)) throw new Error(`Лимит расходов отдела ${agent.dept} исчерпан`);
-    const res: LlmResult = llm.completeDetailed ? await llm.completeDetailed(req) : { text: await llm.complete(req) };
+    const end = hq.beginLlm(ctx.agentId);
+    let res: LlmResult;
+    try {
+      res = llm.completeDetailed ? await llm.completeDetailed(req) : { text: await llm.complete(req) };
+    } finally {
+      end();
+    }
     const u = res.usage;
     hq.recordCost({
       taskId: ctx.taskId ?? null,

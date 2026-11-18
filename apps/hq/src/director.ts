@@ -6,6 +6,7 @@ import { dailyCron } from './config.js';
 import type { ApprovalEditor } from './editor.js';
 import type { Reporter } from './reporter.js';
 import { openBuilderTasks } from './bridge.js';
+import { Progress, deptRu, lastReason, reasonRu } from './progress.js';
 
 const DAY = 86_400_000;
 const HM = /^([01]?\d|2[0-3]):[0-5]\d$/;
@@ -64,6 +65,29 @@ export interface DirectorDeps {
 }
 
 const ruRole: Record<string, string> = { director: 'директор', head: 'голова', worker: 'исполнитель' };
+const STATUS_RU: Record<string, string> = {
+  inbox: 'ждёт отдел', assigned: 'ждёт отдел', running: 'в работе', review: 'на проверке', approval: 'ждёт вас в /approve', blocked: 'застряла', done: 'выполнена', rejected: 'отклонена',
+};
+/** Compact cheat sheet for /help (the full page: apps/hq/docs/owner-cheatsheet.md). */
+export const HELP = [
+  'Директор Fir Tech. Пишите задачу обычным текстом: передам отделу и буду править одно сообщение по ходу работы (взял, делает, ждёт вас, готово).',
+  'Куда что приходит: ответы, карточки на одобрение и «живые» сообщения о задачах здесь, в личке. Отчёты отделов и сводки в группе HQ по темам.',
+  '',
+  'Каждый день:',
+  '/status: кто чем занят, что ждёт вас, ближайшая рутина',
+  '/tasks [отдел]: открытые задачи и что с каждой',
+  '/approve: пачка на одобрение (сама приходит в 10:00)',
+  '/retry <id>: повторить застрявшую задачу',
+  '',
+  'Ещё:',
+  '/costs расходы, /org оргструктура, /pause и /resume <отдел>',
+  '/reply <id>, /kp <лид или описание>, /referral, /referrals: продажи',
+  '/ticket, /tickets, /client, /clients, /invoice, /invoices, /sub, /onboard, /paid <счёт или id>: сопровождение',
+  '/project, /pstatus, /target, /mdone: производство; /doc, /lesson, /kb: документы и знания',
+  '/builders, /builder <id>: задачи строителям; /topics: темы в группе; /drill: учения; /skip: отменить ожидание правки',
+  '',
+  'Статусы на сайте офиса: работает (идёт задача), ждёт (ответ за вами), застрял (нужна помощь, /retry), спит (ночь или тихие часы), офлайн (давно не отзывался).',
+].join('\n');
 const money = (n: number) => `$${n.toFixed(2)}`;
 const oneLine = (s: string, n = 160) => s.replace(/\s+/g, ' ').trim().slice(0, n);
 
@@ -92,9 +116,12 @@ export class Director {
   readonly summaryLines: (() => string | null)[] = [];
   private jobs: Cron[] = [];
   private readonly llm: LlmClient;
+  /** The «live message» of the owner's tasks: one message, edited as the task moves. */
+  readonly progress: Progress;
 
   constructor(private readonly d: DirectorDeps) {
     this.llm = meterLlm(d.llm, d.hq, { agentId: 'director' });
+    this.progress = new Progress({ hq: d.hq, messenger: d.messenger, ownerId: d.ownerId });
     d.hq.onAlert((text) => this.alertOwner(text));
   }
 
@@ -102,13 +129,37 @@ export class Director {
     return this.d.hq;
   }
 
-  private say(text: string, buttons?: { text: string; data: string }[][]): Promise<void> {
-    return this.d.messenger.send(this.d.ownerId, text, buttons);
+  /** The last message sent by `say` (a command reply can become the live message of the task it created). */
+  private lastSay: { id: number; text: string } | null = null;
+
+  private async say(text: string, buttons?: { text: string; data: string }[][]): Promise<void> {
+    const id = await this.d.messenger.sendMessage(this.d.ownerId, text, buttons);
+    this.lastSay = { id, text };
+  }
+
+  private lastTaskId(): number {
+    return (this.hq.db.prepare('SELECT COALESCE(MAX(id), 0) m FROM tasks').get() as { m: number }).m;
+  }
+
+  /** Tasks the owner's message created through a head command (`/kp`, `/project`, `/doc`...): each gets its live message. */
+  private async trackNew(afterId: number): Promise<void> {
+    let reply = this.lastSay;
+    for (const t of this.hq.tasks({ limit: 1000 })) {
+      if (t.id <= afterId || t.creator !== 'owner' || t.meta.progress || t.status === 'done' || t.status === 'rejected') continue;
+      if (reply) {
+        // the command's own reply is the one message of the task
+        this.progress.adopt(t, reply.id, reply.text);
+        reply = null;
+        continue;
+      }
+      await this.progress.track(t).catch((e) => log('warn', 'progress start failed', { task: t.id, err: errMsg(e) }));
+    }
   }
 
   // ---- scheduling ----
   start(): void {
     this.stop();
+    this.progress.start();
     const tz = this.hq.tz;
     this.jobs = [
       schedule('director-summary', dailyCron(this.hq.setting('summary_time')), tz, () => this.sendMorningSummary()),
@@ -117,6 +168,7 @@ export class Director {
   }
 
   stop(): void {
+    this.progress.stop();
     for (const j of this.jobs) j.stop();
     this.jobs = [];
   }
@@ -207,15 +259,24 @@ export class Director {
   }
 
   async onCommand(name: string, arg = ''): Promise<void> {
+    const before = this.lastTaskId();
+    this.lastSay = null;
+    await this.runCommand(name, arg);
+    await this.trackNew(before);
+  }
+
+  private async runCommand(name: string, arg: string): Promise<void> {
     const dept = arg.trim().toLowerCase();
     switch (name) {
       case 'start':
       case 'help':
-        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/kp <лид или описание>: КП, смета, договор\n/referral <клиент> -> <лид>, /referrals: рекомендации\n/builders: задачи строителям (issue), /builder <id>: отдать задачу строителям\n/topics: создать темы в группе HQ\nСопровождение: /ticket клиент: вопрос, /tickets, /client, /clients, /invoice клиент сумма за_что, /invoices, /sub, /onboard клиент\n/paid <номер счёта FT-2026-001 или id рекомендации>: оплата счёта (сопровождение) или выплата за рекомендацию (продажи)\nПроизводство: /project, /pstatus, /target, /mdone\nДокументы и знания: /doc, /lesson, /kb\n/drill [отдел|report|clear]: учения, тестовое задание каждому исполнителю\n/skip: отменить ожидание правки');
+        return this.say(HELP);
       case 'status':
         return this.say(this.statusText());
       case 'tasks':
         return this.say(this.tasksText(dept || undefined));
+      case 'retry':
+        return this.retry(arg);
       case 'approve':
         await this.sendApprovalBatch(true);
         return;
@@ -276,6 +337,13 @@ export class Director {
 
   async onText(text: string): Promise<void> {
     for (const e of this.editors.values()) if (await e.consume(text)) return;
+    const before = this.lastTaskId();
+    this.lastSay = null;
+    await this.handleText(text);
+    await this.trackNew(before);
+  }
+
+  private async handleText(text: string): Promise<void> {
     const intent = await this.parse(text);
     if (!intent) return this.say('Не смог разобрать сообщение (модель недоступна или ответила не по форме). Команды: /help.');
     switch (intent.type) {
@@ -333,7 +401,28 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
     }
     const t = this.hq.createTask({ title: i.title, body: i.body ?? '', dept, creator: 'owner', priority: i.priority, dueAt });
     this.hq.wake(head.id, 'task');
-    return this.say(`Задача #${t.id} отделу ${dept}: «${oneLine(t.title, 100)}»${i.priority > 0 ? ', приоритет выше обычного' : ''}. Голова возьмёт её при ближайшем пробуждении (до 30 секунд).`);
+    const fresh = this.hq.task(t.id)!;
+    const intro = `${this.progress.intro(fresh)}${i.priority > 0 ? ' Приоритет выше обычного.' : ''}`;
+    const sent = await this.progress.track(fresh, intro).catch(() => false);
+    if (!sent) await this.say(`Задача #${t.id} отделу ${deptRu(dept)}: «${oneLine(t.title, 100)}». ${intro}`);
+  }
+
+  /** `/retry <id>`: a blocked task goes back to its department, with a new live message. */
+  private async retry(arg: string): Promise<void> {
+    const id = Number.parseInt(arg.trim().replace(/^#/, ''), 10);
+    const t = Number.isFinite(id) ? this.hq.task(id) : undefined;
+    if (!t) return this.say('Укажите номер задачи: /retry 12. Номера: /tasks.');
+    if (t.tags.includes('drill')) return this.say('Это задача учений, повторять её не нужно (/drill).');
+    if (t.status === 'done' || t.status === 'rejected') return this.say(`Задача #${t.id} уже закрыта. Создайте новую обычным текстом.`);
+    if (t.status !== 'blocked') return this.say(`Задача #${t.id} не застряла (${STATUS_RU[t.status]}), повторять нечего.`);
+    if (t.tags.includes('builder')) return this.say(`Задача #${t.id} у строителей, повтор не поможет: смотрите /builders.`);
+    const head = this.hq.headOf(t.dept);
+    if (!head) return this.say(`У отдела «${t.dept}» нет головы, повторить нельзя.`);
+    this.hq.requeue(t.id, 'owner');
+    this.hq.wake(head.id, 'task');
+    const fresh = this.hq.task(t.id)!;
+    const sent = await this.progress.track(fresh, `Поставил заново в очередь отдела ${deptRu(t.dept)}. Я обновлю это сообщение.`).catch(() => false);
+    if (!sent) await this.say(`Задача #${t.id} снова в очереди отдела ${deptRu(t.dept)}.`);
   }
 
   private async salesReply(id: number, text: string | undefined): Promise<void> {
@@ -346,7 +435,9 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
     const t = this.hq.createTask({ title, body, dept: 'hq', creator: 'owner', tags: ['builder'] });
     this.hq.block(t.id, 'director', 'Нужен строитель: задача для главного окна Claude Code', ['builder']);
     await this.onBuilderTask?.().catch(() => undefined);
-    return this.say(`Записал для строителя (главное окно): #${t.id} «${oneLine(title, 100)}». Статус blocked, пометка builder.`);
+    const fresh = this.hq.task(t.id)!;
+    const sent = await this.progress.track(fresh, 'Строители работают в Claude Code, это не минуты. Список: /builders.').catch(() => false);
+    if (!sent) await this.say(`Записал для строителя: #${t.id} «${oneLine(title, 100)}». Issue появится в течение 10 минут (/builders).`);
   }
 
   // ---- rule changes (written only after the owner's button) ----
@@ -399,23 +490,94 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
   }
 
   // ---- texts ----
+  /** One journal entry in words, or null when it is not worth showing (assignments, comments). */
+  private eventWords(e: { kind: string; body: string }): string | null {
+    const b = e.body;
+    if (e.kind === 'result') return 'результат готов';
+    if (e.kind === 'error') return `застряла: ${reasonRu(b)}`;
+    if (e.kind === 'report') return 'отдел отчитался';
+    if (e.kind === 'approval') {
+      if (/executed/.test(b)) return 'вы одобрили';
+      if (/rejected/.test(b)) return 'вы отклонили';
+      if (/sent to the owner/.test(b)) return 'прислала вам карточку на одобрение';
+      if (/failed/.test(b)) return 'одобренное не удалось выполнить';
+      return 'ждёт вас в /approve';
+    }
+    if (e.kind !== 'status') return null;
+    if (/^created/.test(b)) return 'создана';
+    if (/claimed|-> running/.test(b)) return 'взята в работу';
+    if (/-> approval/.test(b)) return 'ждёт вас в /approve';
+    if (/-> review/.test(b)) return 'на проверке';
+    if (/-> done/.test(b)) return 'выполнена';
+    if (/-> blocked/.test(b)) return null; // the error entry before it says why
+    if (/-> rejected/.test(b)) return 'отклонена';
+    if (/-> inbox/.test(b)) return 'поставлена в очередь заново';
+    return null;
+  }
+
+  private hm(at: number): string {
+    const p = zonedParts(at, this.hq.tz);
+    return `${String(p.h).padStart(2, '0')}:${String(p.mi).padStart(2, '0')}`;
+  }
+
+  private nextRoutine(): string | null {
+    const now = this.hq.now();
+    let best: { at: number; title: string; dept: string } | null = null;
+    for (const r of this.hq.routines().filter((x) => x.enabled)) {
+      let at: number | undefined;
+      try {
+        at = new Cron(r.cron, { timezone: this.hq.tz, paused: true }).nextRun(new Date(now))?.getTime();
+      } catch {
+        at = undefined;
+      }
+      if (at !== undefined && (!best || at < best.at)) best = { at, title: r.title, dept: r.dept };
+    }
+    if (!best) return null;
+    const p = zonedParts(best.at, this.hq.tz);
+    const today = zonedParts(now, this.hq.tz);
+    const day = p.d === today.d && p.mo === today.mo ? '' : `${String(p.d).padStart(2, '0')}.${String(p.mo).padStart(2, '0')} `;
+    return `${day}${this.hm(best.at)}, ${deptRu(best.dept)}: ${oneLine(best.title, 60)}`;
+  }
+
   statusText(): string {
     const hq = this.hq;
+    const open = hq.tasks({ open: true, limit: 1000 }).filter((t) => !t.tags.includes('drill'));
     const lines = hq.departments().map((dept) => {
-      const c = hq.countByStatus(dept);
+      const mine = open.filter((t) => t.dept === dept);
       const head = hq.headOf(dept);
-      const open = c.inbox + c.assigned + c.running + c.review;
-      return `${dept}${head?.status === 'paused' ? ' (пауза)' : ''}: в работе ${open}, на одобрении ${c.approval}, заблокировано ${c.blocked}, готово ${c.done}`;
+      const work = mine.filter((t) => ['inbox', 'assigned', 'running', 'review'].includes(t.status)).length;
+      const you = mine.filter((t) => t.status === 'approval').length;
+      const stuck = mine.filter((t) => t.status === 'blocked').length;
+      return `${deptRu(dept)}${head?.status === 'paused' ? ' (пауза)' : ''}: работает ${work} · ждут вас ${you} · застряли ${stuck}`;
     });
+    const out = [`Сейчас в офисе:\n${lines.join('\n') || 'отделов пока нет'}`];
+    const events = hq.recentEvents(40).map((e) => ({ e, w: this.eventWords(e) })).filter((x) => x.w).slice(0, 3);
+    if (events.length) out.push(`Последнее:\n${events.map(({ e, w }) => `• ${this.hm(e.at)} #${e.taskId} ${deptRu(e.dept)}: ${w}`).join('\n')}`);
+    const next = this.nextRoutine();
+    if (next) out.push(`Дальше по расписанию: ${next}.`);
     const waiting = hq.queuedApprovals().length + this.d.queue.pending().length;
-    return [lines.length ? lines.join('\n') : 'Отделов пока нет.', `Ждёт одобрения: ${waiting}.`, `Расходы за месяц: ${this.costLine()}`].join('\n\n');
+    out.push(waiting ? `Ждёт вашего решения: ${waiting}, откройте /approve.` : 'Ничего не ждёт вашего решения.');
+    out.push(`Расходы за месяц: ${this.costLine()}`);
+    return out.join('\n\n');
+  }
+
+  /** The task's last event in words: «ждёт вас в /approve», «застряла: причина». */
+  private taskWords(t: Task): string {
+    switch (t.status) {
+      case 'inbox': case 'assigned': return 'ждёт, пока голова отдела её возьмёт';
+      case 'running': return 'в работе';
+      case 'review': return 'на проверке';
+      case 'approval': return 'ждёт вас в /approve';
+      case 'blocked': return t.tags.includes('builder') ? 'у строителей (/builders)' : `застряла: ${reasonRu(lastReason(this.hq, t))} (повторить: /retry ${t.id})`;
+      default: return STATUS_RU[t.status] ?? t.status;
+    }
   }
 
   tasksText(dept?: string): string {
     if (dept && !this.hq.departments().includes(dept)) return `Нет отдела «${dept}». Есть: ${this.hq.departments().join(', ')}.`;
-    const tasks = this.hq.tasks({ ...(dept ? { dept } : {}), open: true, limit: 20 });
-    if (!tasks.length) return dept ? `В отделе ${dept} открытых задач нет.` : 'Открытых задач нет.';
-    return tasks.map((t: Task) => `#${t.id} [${t.status}] ${t.dept}: ${oneLine(t.title, 90)}`).join('\n');
+    const tasks = this.hq.tasks({ ...(dept ? { dept } : {}), open: true, limit: 50 }).filter((t) => !t.tags.includes('drill')).slice(0, 20);
+    if (!tasks.length) return dept ? `В отделе ${deptRu(dept)} открытых задач нет.` : 'Открытых задач нет.';
+    return tasks.map((t: Task) => `#${t.id} ${deptRu(t.dept)}: ${oneLine(t.title, 70)}\n  ${this.taskWords(t)}`).join('\n');
   }
 
   buildersText(): string {

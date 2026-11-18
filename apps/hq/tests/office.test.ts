@@ -1,7 +1,7 @@
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
-import { openDb } from '@fir/core';
-import { Hq } from '@fir/hq';
+import { MockLlm, openDb } from '@fir/core';
+import { HeartbeatWorker, Hq, meterLlm } from '@fir/hq';
 import { describe, expect, it } from 'vitest';
 import { buildOffice, cachedOffice, deriveStatus, officeSchema, publicActivity, publicTitle } from '../src/office.js';
 import { createWebhook } from '../src/webhook.js';
@@ -126,5 +126,84 @@ describe('privacy', () => {
     const hq = world();
     hq.log('sales-head', 'note', 'lead', '@dilnoza', 'телефон +79991234567');
     expect(JSON.stringify(buildOffice(hq, NOW).activity)).not.toMatch(/dilnoza|7999/);
+  });
+});
+
+describe('office liveliness', () => {
+  it('an agent stays working for 60 s after its last event, then goes back to idle', () => {
+    const hq = world();
+    hq.log('content-maker', 'task_done', 'task', '1');
+    expect(buildOffice(hq, NOW).departments[0]!.workers[0]!.status).toBe('working');
+    expect(buildOffice(hq, NOW + 59_000).departments[0]!.workers[0]!.status).toBe('working');
+    expect(buildOffice(hq, NOW + 61_000).departments[0]!.workers[0]!.status).toBe('idle');
+    expect(deriveStatus(facts({ lastEventAt: NOW - 30_000 }))).toBe('working');
+    expect(deriveStatus(facts({ lastEventAt: NOW - 61_000 }))).toBe('idle');
+    expect(deriveStatus(facts({ paused: true, lastEventAt: NOW }))).toBe('paused');
+  });
+
+  it('lastActiveAt follows every event, including journal entries and wake-ups', async () => {
+    const hq = world();
+    const w = buildOffice(hq, NOW).departments[0]!.workers[0]!;
+    expect(w.lastActiveAt).toBeNull();
+    const t = hq.createTask({ title: 'x', dept: 'marketing', creator: 'head', assigneeId: 'content-maker' });
+    hq.addEvent(t.id, 'report', 'content-maker', 'готово');
+    expect(officeSchema.parse(buildOffice(hq, NOW)).departments[0]!.workers[0]!.lastActiveAt).toBe(new Date(NOW).toISOString());
+    const hb = new HeartbeatWorker(hq, () => Promise.resolve());
+    hq.wake('sales-head', 'task');
+    await hb.tick();
+    const sales = officeSchema.parse(buildOffice(hq, NOW)).departments[1]!.head!;
+    expect(sales.lastActiveAt).toBe(new Date(NOW).toISOString());
+    expect(sales.status).toBe('working');
+  });
+
+  it('thinking is true only while an LLM call of that agent is in flight; the call is logged as llm.call', async () => {
+    const hq = world();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    const llm = meterLlm(new MockLlm(async () => { await gate; return 'ok'; }), hq, { agentId: 'content-maker' });
+    const call = llm.complete({ tier: 'haiku', system: 's', messages: [{ role: 'user', content: 'u' }] });
+    const mid = officeSchema.parse(buildOffice(hq, NOW));
+    expect(mid.departments[0]!.workers[0]!.thinking).toBe(true);
+    expect(mid.departments[0]!.head!.thinking).toBe(false);
+    expect(mid.director.thinking).toBe(false);
+    release();
+    await call;
+    expect(buildOffice(hq, NOW).departments[0]!.workers[0]!.thinking).toBe(false);
+    expect(buildOffice(hq, NOW).activity.some((a) => a.agent === 'content-maker' && a.action === 'llm.call')).toBe(true);
+  });
+
+  it('a failing LLM call does not leave the agent thinking', async () => {
+    const hq = world();
+    const llm = meterLlm(new MockLlm(() => { throw new Error('boom'); }), hq, { agentId: 'content-maker' });
+    await expect(llm.complete({ tier: 'haiku', system: 's', messages: [{ role: 'user', content: 'u' }] })).rejects.toThrow();
+    expect(hq.thinking('content-maker')).toBe(false);
+  });
+
+  it('queueEmpty and lastEventAt', () => {
+    const hq = world();
+    expect(buildOffice(hq, NOW)).toMatchObject({ queueEmpty: true, lastEventAt: null });
+    const t = hq.createTask({ title: 'x', dept: 'marketing', creator: 'owner' });
+    const o = officeSchema.parse(buildOffice(hq, NOW));
+    expect(o.queueEmpty).toBe(false);
+    expect(o.lastEventAt).toBe(new Date(NOW).toISOString());
+    hq.setStatus(t.id, 'done', 'owner');
+    expect(buildOffice(hq, NOW).queueEmpty).toBe(true);
+  });
+
+  it('activity lists wake-ups, routine fires, approvals decided and LLM calls; last 50; no free text', async () => {
+    const hq = world();
+    hq.scheduleRoutine({ name: 'marketing-daily', cron: '0 9 * * *', dept: 'marketing', title: 'Что публикуем' });
+    hq.runRoutine('marketing-daily');
+    hq.wake('marketing-head', 'task');
+    await new HeartbeatWorker(hq, () => Promise.resolve()).tick();
+    const kinds = new Set(buildOffice(hq, NOW).activity.map((a) => a.action));
+    expect(kinds).toContain('routine_fired');
+    expect(kinds).toContain('head_wake');
+    for (let i = 0; i < 80; i++) hq.log('content-maker', 'llm.call');
+    const act = buildOffice(hq, NOW).activity;
+    expect(act).toHaveLength(50);
+    expect(JSON.stringify(act)).not.toMatch(/Что публикуем/);
+    hq.log('owner', 'approval_decided', 'task', '3', 'executed');
+    expect(buildOffice(hq, NOW).activity[0]).toMatchObject({ agent: 'owner', action: 'approval_decided', object: 'task:3' });
   });
 });

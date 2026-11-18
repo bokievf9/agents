@@ -9,23 +9,29 @@ const taskStatus = z.enum(['inbox', 'assigned', 'running', 'review', 'approval',
 export const AGENT_STATUSES = ['working', 'waiting', 'blocked', 'idle', 'sleeping', 'paused', 'offline'] as const;
 const agentStatus = z.enum(AGENT_STATUSES);
 const currentTask = z.object({ id: z.number(), title: z.string(), since: iso }).nullable();
+/** Additive, optional fields: older readers of the contract ignore them. */
+const thinking = z.boolean().optional();
 
 export const officeSchema = z.object({
   ok: z.literal(true),
   generatedAt: iso,
+  /** No open task at all (nothing inbox/assigned/running/review/approval/blocked). */
+  queueEmpty: z.boolean().optional(),
+  /** The latest event of any agent (activity or task journal). */
+  lastEventAt: iso.nullable().optional(),
   tz: z.string(),
   quietHours: z.boolean(),
   director: z.object({
-    id: z.string(), title: z.string(), status: agentStatus,
+    id: z.string(), title: z.string(), status: agentStatus, thinking,
     lastSummaryAt: iso.nullable(), nextSummaryAt: iso.nullable(), pendingApprovals: z.number(), openBuilderIssues: z.number(),
   }),
   departments: z.array(
     z.object({
       id: z.string(), title: z.string(),
-      head: z.object({ id: z.string(), title: z.string(), status: agentStatus, currentTask }).nullable(),
+      head: z.object({ id: z.string(), title: z.string(), status: agentStatus, currentTask, thinking, lastActiveAt: iso.nullable().optional() }).nullable(),
       workers: z.array(
         z.object({
-          id: z.string(), title: z.string(), status: agentStatus, currentTask,
+          id: z.string(), title: z.string(), status: agentStatus, currentTask, thinking,
           lastActiveAt: iso.nullable(), tasksToday: z.number(), costTodayUsd: z.number(),
         }),
       ),
@@ -54,6 +60,9 @@ const DEPT_TITLES: Record<string, string> = {
   marketing: 'Marketing', sales: 'Sales', support: 'Support', production: 'Production', backoffice: 'Back Office',
 };
 const OFFLINE_MS = 10 * 60_000;
+/** An agent keeps the `working` status this long after its last event, so the page shows motion between model runs. */
+export const STICKY_WORKING_MS = 60_000;
+const ACTIVITY_LIMIT = 50;
 const SENSITIVE_DEPTS = new Set(['sales', 'support', 'production', 'backoffice']);
 
 /**
@@ -84,18 +93,21 @@ export interface AgentFacts {
   tasks: { status: TaskStatus; updatedAt: number }[];
   /** Latest sign of life (heartbeat, activity or task update), epoch ms. */
   lastSeenAt: number | null;
+  /** The agent's latest own event (activity row or task journal entry), epoch ms. */
+  lastEventAt?: number | null;
   now: number;
 }
 
 /**
- * paused (department) > offline (has work in flight but silent for 10 min) > working (a running task) >
- * waiting (latest task in review/approval) > blocked (latest task blocked) > sleeping (quiet hours or night) > idle.
+ * paused (department) > offline (has work in flight but silent for 10 min) > working (a running task, or any own event
+ * in the last 60 s) > waiting (latest task in review/approval) > blocked (latest task blocked) > sleeping (quiet hours or night) > idle.
  */
 export function deriveStatus(f: AgentFacts): AgentStatusName {
   if (f.paused) return 'paused';
   const inFlight = f.tasks.some((t) => t.status === 'running' || t.status === 'assigned');
   if (inFlight && (f.lastSeenAt === null || f.now - f.lastSeenAt > OFFLINE_MS)) return 'offline';
   if (f.tasks.some((t) => t.status === 'running')) return 'working';
+  if (f.lastEventAt != null && f.now - f.lastEventAt >= 0 && f.now - f.lastEventAt < STICKY_WORKING_MS) return 'working';
   const latest = f.tasks.find((t) => t.status !== 'done' && t.status !== 'rejected');
   if (latest && (latest.status === 'review' || latest.status === 'approval')) return 'waiting';
   if (latest && latest.status === 'blocked') return 'blocked';
@@ -149,6 +161,15 @@ export function buildOffice(hq: Hq, now: number = hq.now()): OfficeData {
   for (const r of q<{ a: string; m: number }>('SELECT agent_id a, MAX(created_at) m FROM heartbeats GROUP BY agent_id')) bump(r.a, r.m);
   for (const r of q<{ a: string; m: number }>('SELECT agent_id a, MAX(at) m FROM activity WHERE agent_id IS NOT NULL GROUP BY agent_id')) bump(r.a, r.m);
   for (const t of taskRows) bump(t.assignee_id, t.updated_at);
+  // every event an agent produces: journal entries (claims, results, reports, errors) count too
+  const lastEvent = new Map<string, number>();
+  const bumpEvent = (id: string | null, at: number) => {
+    if (id && at > (lastEvent.get(id) ?? 0)) lastEvent.set(id, at);
+    bump(id, at);
+  };
+  for (const r of q<{ a: string; m: number }>('SELECT agent_id a, MAX(at) m FROM activity WHERE agent_id IS NOT NULL GROUP BY agent_id')) bumpEvent(r.a, r.m);
+  for (const r of q<{ a: string; m: number }>('SELECT actor a, MAX(at) m FROM task_events WHERE actor IS NOT NULL GROUP BY actor')) bumpEvent(r.a, r.m);
+  const lastEventAt = Math.max(0, ...lastEvent.values(), ...q<{ m: number | null }>('SELECT MAX(at) m FROM activity').map((r) => r.m ?? 0));
 
   const costToday = new Map(q<{ a: string; u: number }>('SELECT agent_id a, SUM(usd) u FROM costs WHERE at >= ? GROUP BY agent_id', dayStart).map((r) => [r.a, r.u] as const));
   const round = (n: number) => Math.round(n * 10_000) / 10_000;
@@ -157,12 +178,13 @@ export function buildOffice(hq: Hq, now: number = hq.now()): OfficeData {
     const mine = taskRows.filter((t) => t.assignee_id === a.id);
     const running = mine.find((t) => t.status === 'running');
     const status = deriveStatus({
-      paused: a.status === 'paused', sleeping, now, lastSeenAt: lastSeen.get(a.id) ?? null,
+      paused: a.status === 'paused', sleeping, now, lastSeenAt: lastSeen.get(a.id) ?? null, lastEventAt: lastEvent.get(a.id) ?? null,
       tasks: mine.map((t) => ({ status: t.status, updatedAt: t.updated_at })),
     });
     return {
       status,
       currentTask: running ? { id: running.id, title: titleOf(running), since: new Date(running.updated_at).toISOString() } : null,
+      thinking: hq.thinking(a.id),
       lastActiveAt: iso(lastSeen.get(a.id)),
       tasksToday: mine.filter((t) => t.updated_at >= dayStart).length,
       costTodayUsd: round(costToday.get(a.id) ?? 0),
@@ -207,7 +229,7 @@ export function buildOffice(hq: Hq, now: number = hq.now()): OfficeData {
     return {
       id: dept,
       title: DEPT_TITLES[dept] ?? dept,
-      head: head ? { id: head.id, title: head.title, status: view(head).status, currentTask: view(head).currentTask } : null,
+      head: head ? (() => { const v = view(head); return { id: head.id, title: head.title, status: v.status, currentTask: v.currentTask, thinking: v.thinking, lastActiveAt: v.lastActiveAt }; })() : null,
       workers: agents.filter((a) => a.dept === dept && a.role === 'worker').map((a) => {
         const v = view(a);
         return { id: a.id, title: a.title, ...v };
@@ -241,6 +263,8 @@ export function buildOffice(hq: Hq, now: number = hq.now()): OfficeData {
   return {
     ok: true,
     generatedAt: new Date(now).toISOString(),
+    queueEmpty: !taskRows.some((t) => t.status !== 'done' && t.status !== 'rejected'),
+    lastEventAt: iso(lastEventAt || null),
     tz,
     quietHours: quiet,
     director: {
@@ -249,6 +273,7 @@ export function buildOffice(hq: Hq, now: number = hq.now()): OfficeData {
       status: directorView ? (directorView.status === 'idle' && pendingApprovals > 0 ? 'waiting' : directorView.status) : sleeping ? 'sleeping' : 'idle',
       lastSummaryAt: iso(lastSummary),
       nextSummaryAt: summaryPattern ? iso(nextOf(summaryPattern)) : null,
+      thinking: hq.thinking('director'),
       pendingApprovals,
       openBuilderIssues,
     },
@@ -257,7 +282,7 @@ export function buildOffice(hq: Hq, now: number = hq.now()): OfficeData {
       counts,
       recent: taskRows.slice(0, 20).map((t) => ({ id: t.id, title: titleOf(t), dept: t.dept, status: t.status, updatedAt: new Date(t.updated_at).toISOString() })),
     },
-    activity: hq.activity(40).map((r) => ({ at: new Date(r.at).toISOString(), agent: r.agentId, ...publicActivity(r) })),
+    activity: hq.activity(ACTIVITY_LIMIT).map((r) => ({ at: new Date(r.at).toISOString(), agent: r.agentId, ...publicActivity(r) })),
     costs: {
       todayUsd: round(sum('SELECT SUM(usd) s FROM costs WHERE at >= ?', dayStart)),
       monthUsd: round(sum('SELECT SUM(usd) s FROM costs WHERE at >= ?', monthStart)),

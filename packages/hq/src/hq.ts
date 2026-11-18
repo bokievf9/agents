@@ -336,6 +336,54 @@ export class Hq {
     return out;
   }
 
+  /**
+   * Owner's `/retry`: a blocked task goes back to its department's inbox without an assignee, so the head takes it again.
+   * Returns false when the task is not blocked.
+   */
+  requeue(taskId: number, actor = 'owner'): boolean {
+    const t = this.task(taskId);
+    if (!t || t.status !== 'blocked') return false;
+    this.db.prepare('UPDATE tasks SET assignee_id = NULL WHERE id = ?').run(taskId);
+    this.move(taskId, 'inbox', actor, 'retry');
+    this.addEvent(taskId, 'comment', actor, 'retry');
+    this.log(actor, 'task_retried', 'task', String(taskId));
+    return true;
+  }
+
+  /** Latest journal events across all tasks (newest first), without drill tasks. */
+  recentEvents(limit = 30): (TaskEvent & { title: string; dept: string })[] {
+    return (this.db
+      .prepare(
+        `SELECT e.*, t.title title, t.dept dept FROM task_events e JOIN tasks t ON t.id = e.task_id
+         WHERE (',' || t.tags || ',') NOT LIKE '%,drill,%' ORDER BY e.id DESC LIMIT ?`,
+      )
+      .all(limit) as { id: number; task_id: number; kind: string; actor: string | null; body: string; at: number; title: string; dept: string }[]).map((r) => ({
+      id: r.id, taskId: r.task_id, kind: r.kind, actor: r.actor, body: r.body, at: r.at, title: r.title, dept: r.dept,
+    }));
+  }
+
+  // ---- LLM calls in flight (for the office's "thinking") ----
+  private readonly llmInFlight = new Map<string, number>();
+
+  /** Marks an LLM call of an agent as started; call the returned function when it ends. Logs `llm.call` to the activity. */
+  beginLlm(agentId: string): () => void {
+    this.llmInFlight.set(agentId, (this.llmInFlight.get(agentId) ?? 0) + 1);
+    this.log(agentId, 'llm.call');
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      const n = (this.llmInFlight.get(agentId) ?? 1) - 1;
+      if (n <= 0) this.llmInFlight.delete(agentId);
+      else this.llmInFlight.set(agentId, n);
+    };
+  }
+
+  /** True while an LLM call of the agent is in flight. */
+  thinking(agentId: string): boolean {
+    return (this.llmInFlight.get(agentId) ?? 0) > 0;
+  }
+
   // ---- approvals (core queue + link to the task) ----
   attachQueue(queue: ApprovalQueue): void {
     this.queue = queue;
@@ -420,6 +468,7 @@ export class Hq {
       const next: ApprovalState | null = status === 'executed' ? 'executed' : status === 'rejected' ? 'rejected' : status === 'failed' ? 'failed' : null;
       if (!next) continue;
       this.db.prepare('UPDATE task_approvals SET state = ? WHERE id = ?').run(next, row.id);
+      this.log('owner', 'approval_decided', 'task', String(row.task_id), next);
       changed++;
       for (const sink of this.decisionSinks) sink(this.approvalLink(row.id)!, next);
       const open = this.db.prepare("SELECT COUNT(*) c FROM task_approvals WHERE task_id = ? AND state IN ('queued','asked')").get(row.task_id) as { c: number };
@@ -481,6 +530,7 @@ export class Hq {
       routineId: r.id,
     });
     this.db.prepare('UPDATE routines SET last_run_at = ?, last_task_id = ? WHERE id = ?').run(this.now(), t.id, r.id);
+    this.log('routine', 'routine_fired', 'routine', name);
     const target = r.assigneeId ?? this.headOf(r.dept)?.id;
     if (target) this.wake(target, 'schedule');
     return t;

@@ -14,7 +14,11 @@ describe('Director: owner messages', () => {
     expect(t).toMatchObject({ title: 'Ролик про барбершоп', creator: 'owner', priority: 2, status: 'inbox' });
     expect(t.dueAt).toBe(Date.UTC(2026, 10, 25, 18, 59)); // 23:59 Tashkent
     expect(w.hq.pendingHeartbeats()).toBe(1);
-    expect(w.messenger.last()!.text).toContain(`Задача #${t.id} отделу marketing`);
+    const live = w.messenger.last()!;
+    expect(live.text).toContain(`#${t.id} Маркетинг: «Ролик про барбершоп»`);
+    expect(live.text).toContain('✅ принял');
+    expect(live.text).toContain('Маркетинг взял задачу');
+    expect(live.text).toContain('Я обновлю это сообщение');
   });
 
   it('an unknown department creates nothing', async () => {
@@ -106,7 +110,7 @@ describe('Director: commands, summary, batch, alerts', () => {
     const w = world();
     w.hq.createTask({ title: 'Задача А', dept: 'marketing', creator: 'owner' });
     await w.director.onCommand('status');
-    expect(w.messenger.last()!.text).toContain('marketing: в работе 1');
+    expect(w.messenger.last()!.text).toContain('Маркетинг: работает 1 · ждут вас 0 · застряли 0');
     await w.director.onCommand('tasks', 'marketing');
     expect(w.messenger.last()!.text).toContain('Задача А');
     await w.director.onCommand('tasks', 'nope');
@@ -118,7 +122,7 @@ describe('Director: commands, summary, batch, alerts', () => {
     await w.director.onCommand('pause', 'marketing');
     expect(w.hq.agent('marketing-head')!.status).toBe('paused');
     await w.director.onCommand('status');
-    expect(w.messenger.last()!.text).toContain('marketing (пауза)');
+    expect(w.messenger.last()!.text).toContain('Маркетинг (пауза)');
     await w.director.onCommand('resume', 'marketing');
     expect(w.hq.agent('marketing-head')!.status).toBe('active');
     await w.director.onCommand('pause', 'x');

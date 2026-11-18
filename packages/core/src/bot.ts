@@ -10,14 +10,26 @@ export function createBot(token: string): Bot {
 }
 
 export function grammyMessenger(bot: Bot): Messenger {
+  const sendMessage = async (chatId: number, text: string, buttons?: { text: string; data: string }[][]): Promise<number> => {
+    const m = await bot.api.sendMessage(chatId, text, {
+      ...(buttons
+        ? { reply_markup: { inline_keyboard: buttons.map((row) => row.map((b) => ({ text: b.text, callback_data: b.data }))) } }
+        : {}),
+      link_preview_options: { is_disabled: true },
+    });
+    return m.message_id;
+  };
   return {
     async send(chatId, text, buttons) {
-      await bot.api.sendMessage(chatId, text, {
-        ...(buttons
-          ? { reply_markup: { inline_keyboard: buttons.map((row) => row.map((b) => ({ text: b.text, callback_data: b.data }))) } }
-          : {}),
-        link_preview_options: { is_disabled: true },
-      });
+      await sendMessage(chatId, text, buttons);
+    },
+    sendMessage,
+    async edit(chatId, messageId, text) {
+      try {
+        await bot.api.editMessageText(chatId, messageId, text, { link_preview_options: { is_disabled: true } });
+      } catch (e) {
+        if (!/message is not modified/i.test(errMsg(e))) throw e;
+      }
     },
   };
 }

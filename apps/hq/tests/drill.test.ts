@@ -95,7 +95,7 @@ describe('/drill', () => {
     expect(lead.name).toBe('Тест: нужен сайт');
     expect(lead.contact).toContain('invalid');
     await w.director.onCommand('help');
-    expect(w.messenger.last()!.text).toContain('/drill [отдел|report|clear]: учения, тестовое задание каждому исполнителю');
+    expect(w.messenger.last()!.text).toContain('/drill: учения');
     await w.director.onCommand('drill', 'nope');
     expect(w.messenger.last()!.text).toContain('Формат: /drill');
   });
@@ -143,6 +143,24 @@ describe('/drill', () => {
     await w.beat();
     await w.director.onCommand('drill', 'report');
     expect(w.messenger.last()!.text).toMatch(/✅ Публикатор/);
+  });
+
+  it('the table always lists every scenario in order: 19 rows, a missing task is visible', async () => {
+    const w = drillWorld();
+    const rowLines = (text: string) => text.split('\n').filter((l) => /^(✅|⚠️|❌|⏳) /.test(l));
+    await w.director.onCommand('drill', 'backoffice'); // only two tasks exist
+    await w.director.onCommand('drill', 'report');
+    const rows = rowLines(w.messenger.last()!.text);
+    expect(rows).toHaveLength(19);
+    expect(rows[0]).toBe('⏳ Трендвотчер: задача не создана');
+    expect(rows.filter((r) => r.endsWith('задача не создана'))).toHaveLength(17);
+    expect(rows.findIndex((r) => r.includes('Проектный менеджер'))).toBeGreaterThan(rows.findIndex((r) => r.includes('Приёмщик лидов')));
+    // a full drill: still 19
+    await w.director.onCommand('drill', 'clear');
+    await w.director.onCommand('drill');
+    await w.beat();
+    await w.director.onCommand('drill', 'report');
+    expect(rowLines(w.messenger.last()!.text)).toHaveLength(19);
   });
 
   it('a failing head shows ❌ with the block reason', async () => {
