@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { dailyCron } from './config.js';
 import type { ApprovalEditor } from './editor.js';
 import type { Reporter } from './reporter.js';
+import { openBuilderTasks } from './bridge.js';
 
 const DAY = 86_400_000;
 const HM = /^([01]?\d|2[0-3]):[0-5]\d$/;
@@ -73,6 +74,8 @@ export class Director {
   readonly editors = new Map<string, ApprovalEditor>();
   /** Set by the Sales head: a business answered (`/reply <id>` or free text). Returns what to tell the owner. */
   onSalesReply: ((id: number, text?: string) => Promise<string>) | null = null;
+  /** Set by the builder bridge: a builder task was just created, make its issue now instead of at the next poll. */
+  onBuilderTask: (() => Promise<unknown>) | null = null;
   private jobs: Cron[] = [];
   private readonly llm: LlmClient;
 
@@ -128,6 +131,8 @@ export class Director {
     out.push(queued + waiting > 0 ? `Ждёт одобрения: ${queued + waiting} (в пачке в ${hq.setting('approval_time')} или /approve).` : 'На одобрении ничего нет.');
     const blocked = hq.tasks({ status: 'blocked', limit: 10 });
     if (blocked.length) out.push(`Заблокировано:\n${blocked.map((t) => `- #${t.id} ${t.dept}: ${oneLine(t.title, 80)}${t.tags.includes('builder') ? ' (нужен строитель)' : ''}`).join('\n')}`);
+    const builders = openBuilderTasks(hq).filter((t) => t.status === 'blocked');
+    if (builders.length) out.push(`Открытых builder-issue: ${builders.filter((t) => t.meta.issue).length}, ждут создания issue: ${builders.filter((t) => !t.meta.issue).length}. Список: /builders.`);
     const spend = hq.costSummary(since);
     out.push(spend.length ? `Расходы за сутки: ${spend.map((s) => `${s.dept} ${money(s.usd)}`).join(', ')}.` : 'Расходов за сутки нет.');
     const held = this.held();
@@ -188,7 +193,7 @@ export class Director {
     switch (name) {
       case 'start':
       case 'help':
-        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/skip: отменить ожидание правки');
+        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/builders: задачи строителям (issue)\n/skip: отменить ожидание правки');
       case 'status':
         return this.say(this.statusText());
       case 'tasks':
@@ -198,6 +203,8 @@ export class Director {
         return;
       case 'costs':
         return this.say(this.costsText());
+      case 'builders':
+        return this.say(this.buildersText());
       case 'org':
         return this.say(this.orgText());
       case 'pause':
@@ -275,6 +282,7 @@ export class Director {
   private async createBuilder(title: string, body: string): Promise<void> {
     const t = this.hq.createTask({ title, body, dept: 'hq', creator: 'owner', tags: ['builder'] });
     this.hq.block(t.id, 'director', 'Нужен строитель: задача для главного окна Claude Code', ['builder']);
+    await this.onBuilderTask?.().catch(() => undefined);
     return this.say(`Записал для строителя (главное окно): #${t.id} «${oneLine(title, 100)}». Статус blocked, пометка builder.`);
   }
 
@@ -345,6 +353,18 @@ export class Director {
     const tasks = this.hq.tasks({ ...(dept ? { dept } : {}), open: true, limit: 20 });
     if (!tasks.length) return dept ? `В отделе ${dept} открытых задач нет.` : 'Открытых задач нет.';
     return tasks.map((t: Task) => `#${t.id} [${t.status}] ${t.dept}: ${oneLine(t.title, 90)}`).join('\n');
+  }
+
+  buildersText(): string {
+    const tasks = openBuilderTasks(this.hq);
+    if (!tasks.length) return 'Открытых задач для строителей нет.';
+    return tasks
+      .slice(0, 30)
+      .map((t) => {
+        const issue = t.meta.issue as { number?: number; url?: string } | undefined;
+        return `#${t.id} [${t.status}] ${t.dept}: ${oneLine(t.title, 80)}${issue?.url ? `\n  issue #${issue.number}: ${issue.url}` : '\n  issue ещё не создан'}`;
+      })
+      .join('\n');
   }
 
   private costLine(): string {

@@ -1,7 +1,7 @@
 import { errMsg, log, tryJson, zonedParts, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import {
-  KIND, ContentMakerWorker, editableParts, partLabel, replacePart, storeFor, titleOf, ymd,
+  KIND, ContentMakerWorker, editableParts, partLabel, replacePart, splitPlatforms, storeFor, titleOf, ymd,
   type PartId,
 } from '@fir/worker-content-maker';
 import { AnalystWorker } from '@fir/worker-analyst';
@@ -87,7 +87,7 @@ export class MarketingHead implements ApprovalEditor {
     const i = d.integrations ?? {};
     const net = i.fetch ? { fetch: i.fetch } : {};
     this.trendScout = d.trendScout ?? new TrendScoutWorker({ youtubeApiKey: i.youtubeApiKey, regions: i.trendsRegions ?? ['KZ', 'UZ', 'RU'], ...net });
-    this.publisher = d.publisher ?? new PublisherWorker();
+    this.publisher = d.publisher ?? new PublisherWorker({ render: (itemId) => this.renderedClip(itemId) });
     this.seo = d.seo ?? new SeoWorker({ ...(i.siteUrl ? { siteUrl: i.siteUrl } : {}), gscServiceAccountJson: i.gscServiceAccountJson, gscSiteUrl: i.gscSiteUrl, ...net });
     this.analyst = d.analyst ?? new AnalystWorker({ youtubeApiKey: i.youtubeApiKey, youtubeChannelId: i.youtubeChannelId, ...net });
     this.worker =
@@ -100,7 +100,18 @@ export class MarketingHead implements ApprovalEditor {
       });
     if (this.worker instanceof ContentMakerWorker) {
       const spec = this.worker.kindSpec({ db: d.hq.db, now: d.hq.now }, (id) => d.queue.get(id)?.edited ?? false);
-      d.hq.registerKind(KIND, spec);
+      const approve = spec.execute;
+      d.hq.registerKind(KIND, {
+        ...spec,
+        execute: async (payload, approvalId) => {
+          await approve(payload, approvalId);
+          try {
+            this.requestClipBuild(Number(payload.itemId), d.hq.approvalByCoreId(approvalId)?.taskId ?? null);
+          } catch (e) {
+            log('error', 'clip build task not created', { err: errMsg(e) });
+          }
+        },
+      });
     }
     // An approved SEO proposal becomes a task: tagged `builder` when the site's code has to change.
     d.hq.registerKind(SEO_KIND, {
@@ -120,6 +131,37 @@ export class MarketingHead implements ApprovalEditor {
 
   private get hq(): Hq {
     return this.d.hq;
+  }
+
+  /**
+   * An approved clip script becomes a blocked `builder` task «Собрать клип»; the builder bridge turns it into an
+   * issue. Once per item. The script, subtitles, CTA and captions travel in `meta`.
+   */
+  private requestClipBuild(itemId: number, parentId: number | null): Task | null {
+    const item = storeFor({ db: this.hq.db, now: this.hq.now }).item(itemId);
+    if (!item || item.type !== 'clip') return null;
+    if (this.hq.tasks({ dept: MARKETING, open: true, limit: 500 }).some((t) => t.meta.action === 'build_clip' && t.meta.itemId === itemId)) return null;
+    const { body, sections } = splitPlatforms(item.text);
+    const subtitles = [...body.matchAll(/^\s+Субтитр: (.+)$/gm)].map((m) => m[1]!.trim());
+    const cta = /^CTA: (.+)$/m.exec(body)?.[1]?.trim() ?? '';
+    const title = item.title || titleOf(item.text);
+    const t = this.hq.createTask({
+      title: `Собрать клип: ${title}`.slice(0, 200),
+      body: `Собрать готовый клип по одобренному сценарию. Материал #${itemId}, плановая дата публикации ${item.plannedDate}.`,
+      dept: MARKETING, creator: 'head', ...(parentId ? { parentId } : {}),
+      meta: {
+        action: 'build_clip', itemId, script: body, subtitles, cta, captions: sections,
+        target: '9:16, 20-40 с, mp4 h264, субтитры вшиты в кадр, синтезированный русский голос',
+      },
+    });
+    this.hq.block(t.id, HEAD_ID, 'Нужен строитель: собрать клип (Remotion)', ['builder']);
+    return t;
+  }
+
+  /** The rendered file of a clip (the builder's result path or URL), once its task reached review. */
+  private renderedClip(itemId: number): string | null {
+    const t = this.hq.tasks({ dept: MARKETING, status: ['review', 'done'], limit: 500 }).find((x) => x.meta.action === 'build_clip' && x.meta.itemId === itemId && typeof x.meta.result === 'string' && x.meta.result);
+    return t ? (t.meta.result as string) : null;
   }
 
   private agent(): Agent {

@@ -42,6 +42,10 @@ export interface Config extends BaseConfig {
   gscServiceAccountJson: string | undefined;
   gscSiteUrl: string | undefined;
   siteUrl: string;
+  /** Builder bridge: fine-grained token (Issues read/write on `githubRepo`). Without it the bridge is off. */
+  githubToken: string | undefined;
+  githubRepo: string;
+  builderPollMinutes: number;
 }
 
 function num(env: NodeJS.ProcessEnv, key: string, def: number, min: number, max: number): number {
@@ -97,6 +101,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     trendsRegions: (optional(env, 'TRENDS_REGIONS') ?? 'KZ,UZ,RU').split(',').map((r) => r.trim().toUpperCase()).filter((r) => /^[A-Z]{2}$/.test(r)),
     gscServiceAccountJson: optional(env, 'GSC_SERVICE_ACCOUNT_JSON'),
     gscSiteUrl: optional(env, 'GSC_SITE_URL'),
+    githubToken: optional(env, 'GITHUB_TOKEN'),
+    githubRepo: optional(env, 'GITHUB_REPO') ?? 'bokievf9/agents',
+    builderPollMinutes: Math.round(num(env, 'BUILDER_POLL_MINUTES', 10, 1, 59)),
     siteUrl: (optional(env, 'SITE_URL') ?? 'https://firtech.pro').replace(/\/$/, ''),
   };
 }

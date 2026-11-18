@@ -26,7 +26,7 @@
 спискам, неизвестное отклоняется. Изменение правил пишется только после кнопки «Применить»: настройки `tz`,
 `summary_time`, `approval_time`, `quiet_hours` или новая строка в раздел «Правила владельца» инструкции агента.
 Без LLM (нет ключа) Директор отвечает, что не смог разобрать, команды работают.
-Команды: `/status`, `/tasks [отдел]`, `/approve`, `/costs`, `/org`, `/pause <отдел>`, `/resume <отдел>`, `/skip`, `/help`.
+Команды: `/status`, `/tasks [отдел]`, `/approve`, `/costs`, `/org`, `/pause <отдел>`, `/resume <отдел>`, `/builders`, `/skip`, `/help`.
 
 ## Маркетинг (`src/heads/marketing.ts`)
 Бот отдела `MARKETING_BOT_TOKEN` необязателен (тишина без него). Рутины создаются при первом старте (дальше правятся
@@ -89,6 +89,30 @@
 (`seo_proposal`, уровень 0). Кнопка `pb:<id>` («Опубликовано») обрабатывается в `src/index.ts` и пишет `published_at`.
 Все источники необязательны: без ключа источник выключен.
 
+## Мост к строителям (`src/bridge.ts`)
+Задача `blocked` с тегом `builder` без `meta.issue` (Директор по «нужен строитель», голова маркетинга для SEO-правок и клипов)
+становится issue в `GITHUB_REPO` (по умолчанию `bokievf9/agents`) с меткой `builder`. Заголовок: название задачи. Тело: отдел,
+id задачи HQ, контекст (описание, последние комментарии, для клипа одобренный сценарий, субтитры, CTA, подписи платформ и
+целевая спецификация 9:16, 20-40 с, mp4 h264, субтитры вшиты, синтез русского голоса), чек-лист приёмки и последняя
+строка `HQ-TASK: <id>`. `meta.issue = {number, url}`, в журнал пишется событие `builder_issue_created`.
+- **Без `GITHUB_TOKEN`** мост выключен: ничего не создаётся и не опрашивается, задача остаётся `blocked` и видна в утренней
+  сводке и в `/builders`. Токен fine-grained, только Issues read/write на один репо.
+- **Опрос** каждые `BUILDER_POLL_MINUTES` (10) минут: issue закрыт, значит задача уходит в `review` к голове отдела,
+  последний комментарий пишется событием «Результат строителя», путь под `/opt/fir-agents/data/hq/artifacts/` или URL из него
+  кладётся в `meta.result`. Issue открыт снова: задача возвращается в `blocked`. Метка `builder-blocked-question` на issue:
+  один алерт владельцу (путь Директора) и событие с текстом вопроса.
+- **Клипы.** Одобренный сценарий клипа: голова маркетинга создаёт дочернюю задачу «Собрать клип: <название>» (`blocked`, `builder`,
+  `meta.action=build_clip`, `meta.itemId`, сценарий, субтитры, CTA, подписи, спецификация). Когда она в `review` с `meta.result`,
+  пачка публикации этого материала показывает «Файл: <путь>».
+- **Директор:** `/builders` (открытые задачи строителям со ссылками на issue), в утренней сводке счётчик открытых issue.
+
+### Как строитель закрывает issue
+1. Положить результат в `/opt/fir-agents/data/hq/artifacts/` (файл) или выложить по URL.
+2. Последний комментарий перед закрытием: результат одной-двумя строками, в нём путь или URL (берётся первый).
+3. Строка `HQ-TASK: <id>` в теле issue не удаляется и не меняется.
+4. Закрывать issue только после этого комментария: после закрытия мост читает именно последний комментарий.
+5. Вопрос к владельцу: комментарий с вопросом и метка `builder-blocked-question`, issue не закрывать. Переоткрытие вернёт задачу в `blocked`.
+
 ## Инструкции агентов
 `instructions/director.md`, `instructions/marketing-head.md` и `instructions/sales-head.md` (русский) загружаются в таблицу `agents` один раз при первом
 старте (`ensureAgent`). Дальше правда в базе: меняются через Директора (кнопка) или `hq import`. Чек-лист проверки
@@ -99,7 +123,7 @@
 необязательные `MARKETING_BOT_TOKEN`, `SALES_BOT_TOKEN`, `LEAD_WEBHOOK_TOKEN`, `WEBHOOK_PORT`, `BATCH_SIZE`, `SLOT_HOURS`,
 `REPLY_LEVEL`, `SALES_BUDGET_USD`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
 id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`; сопровождение: `SUPPORT_BOT_TOKEN`, `MONITOR_URLS`, `MONITOR_DOCKER`, `OMNIROUTE_HEALTH_URL`,
-`FIXED_COSTS_USD_MONTH`, `SUPPORT_BUDGET_USD`.
+`FIXED_COSTS_USD_MONTH`, `SUPPORT_BUDGET_USD`; мост: `GITHUB_TOKEN`, `GITHUB_REPO`, `BUILDER_POLL_MINUTES`.
 необязательные `YOUTUBE_API_KEY`, `YOUTUBE_CHANNEL_ID`, `TRENDS_REGIONS` (по умолчанию `KZ,UZ,RU`), `GSC_SERVICE_ACCOUNT_JSON`, `GSC_SITE_URL`, `SITE_URL` (по умолчанию `https://firtech.pro`), `MARKETING_BOT_TOKEN`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
 id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`.
 

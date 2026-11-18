@@ -15,6 +15,7 @@ import { FinanceWorker } from '@fir/worker-finance';
 import { MonitoringWorker } from '@fir/worker-monitoring';
 import { Reporter, type TopicSender } from './reporter.js';
 import { createWebhook } from './webhook.js';
+import { BuilderBridge, RestGithubClient } from './bridge.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
@@ -103,7 +104,7 @@ bot.on('callback_query:data', async (ctx, next) => {
 installApprovals(bot, queue, cfg.ownerId);
 
 const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
-for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip']) {
+for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders']) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
 }
 // A free-text message goes through the LLM: run it in the background so buttons stay responsive.
@@ -119,6 +120,12 @@ const heartbeats = new HeartbeatWorker(hq, async (agent) => {
 });
 heartbeats.start();
 const routineJobs = startRoutines(hq);
+const bridge = new BuilderBridge({
+  hq, pollMinutes: cfg.builderPollMinutes,
+  github: cfg.githubToken ? new RestGithubClient(cfg.githubToken, cfg.githubRepo) : null,
+});
+director.onBuilderTask = () => bridge.syncNew();
+bridge.start();
 director.start();
 support.start();
 // Wake every head once at start: tasks that waited while the process was down.
@@ -140,6 +147,7 @@ if (!webhook) log('warn', 'LEAD_WEBHOOK_TOKEN is not set, POST /lead is disabled
 const stop = () => {
   webhook?.close();
   heartbeats.stop();
+  bridge.stop();
   director.stop();
   support.stop();
   routineJobs.forEach((j) => j.stop());
