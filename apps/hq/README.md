@@ -357,6 +357,24 @@ firtech.pro на том же хосте читает его через `/api/adm
 `builder_issue_created`, `llm.call` (агент, без содержимого), `task_created`, `task_done`, `task_blocked`, `task_retried` и прочие.
 Статус агента: paused, offline (есть задача в работе, но нет следов жизни 10 мин), working, waiting, blocked, sleeping (тихие часы или 23:00-07:00 по TZ), idle.
 
+**Блок `scene` и `visitorsActive`** (office v2, необязательные, ничего не переименовано; клиентских текстов, имён и контактов нет, только счётчики и коды):
+- Корень `visitorsActive`: число клиентских чатов, активных за 30 минут (для «сейчас в чате: N» на публичной странице, без ограничения 20).
+- `scene.visitors[]` (до 20, новые первыми): `{ id: "v-xxxxxx", channel: "web"|"telegram", state: "chat"|"intake"|"contact"|"done"|"human", since }`.
+  Источники: `web_chat_sessions` и `cb_chats` (заблокировавшие бота не считаются), активность за 30 минут. `id` = 6 hex от sha256 с солью процесса
+  (стабилен, пока HQ работает; настоящий id чата или сессии не отдаётся). Состояния: web `contact` = шаг контакта, `idle` с итогом = `done`, `ask` и `idle` без
+  итога = `chat`, остальные шаги анкеты = `intake`; Telegram `muted` = `human`, `idle` с лид-задачей = `done`, шаги анкеты = `intake`. `since`: web = создание сессии,
+  Telegram = не раньше чем last_at минус 30 минут.
+- `leadsToday` (задачи Sales с `meta.action = lead`, без тега `drill`, созданные сегодня по TZ компании), `publishedToday` (activity `published`, его пишет голова
+  Маркетинга при отметке «опубликовано»), `approvedToday`/`rejectedToday` (таблица `decisions`, `approve` и `reject`; `auto` и `edit` не считаются), `visitorsTotalToday`
+  (чаты с активностью сегодня).
+- `builderIssuesByDept`: блокированные задачи с тегом `builder` по отделам. `approvalsByAgent`: одобрения в состоянии `queued`/`asked` (`task_approvals`) по
+  исполнителю задачи или, если его нет, голове отдела.
+- `reactions[]` (последние 10 минут, старые первыми, не больше 30): `{ agent, kind, at }`, `kind`: `approved`/`rejected` (агент = исполнитель задачи), `published`
+  (агент `publisher`), `blocked`, `issue_closed`, `lead` (новая лид-задача Sales), `done` (из activity: `approved`, `rejected`, `published`, `task_blocked`,
+  `builder_issue_closed`, `task_created`, `task_done`).
+- `notice`: первая непустая строка последней записи `owner_inbox` с видом `summary`, без разметки, не длиннее 80 символов ('' если сводок нет). `uptimeDays`: аптайм
+  процесса HQ в днях, 1 знак.
+
 ## Admin API и присутствие (`/admin/*`, `src/admin.ts`, `src/presence.ts`)
 Рабочее место владельца на `firtech.pro/admin`; Telegram остаётся запасным каналом. Тот же сервер и порт, что `POST /lead`. Заголовок
 `x-admin-token` = `ADMIN_TOKEN` (если не задан, берётся `OFFICE_TOKEN`; без обоих маршруты 404). Всё JSON: `{ ok: true, ... }` или `{ ok: false, error }`;

@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { Cron } from 'croner';
 import { z } from 'zod';
 import { zonedParts, zonedToMs } from '@fir/core';
@@ -11,6 +12,9 @@ const agentStatus = z.enum(AGENT_STATUSES);
 const currentTask = z.object({ id: z.number(), title: z.string(), since: iso }).nullable();
 /** Additive, optional fields: older readers of the contract ignore them. */
 const thinking = z.boolean().optional();
+
+export const REACTION_KINDS = ['approved', 'rejected', 'published', 'blocked', 'issue_closed', 'lead', 'done'] as const;
+export type ReactionKind = (typeof REACTION_KINDS)[number];
 
 export const officeSchema = z.object({
   ok: z.literal(true),
@@ -52,6 +56,20 @@ export const officeSchema = z.object({
   }),
   funnel: z.object({ leadsWeek: z.number(), prospects: z.record(z.string(), z.number()) }),
   products: z.array(z.object({ id: z.string(), title: z.string(), status: z.union([agentStatus, z.literal('unknown')]) })),
+  /** Client chats active in the last 30 minutes (a count for the public page). */
+  visitorsActive: z.number().optional(),
+  scene: z
+    .object({
+      visitors: z.array(z.object({ id: z.string(), channel: z.enum(['web', 'telegram']), state: z.enum(['chat', 'intake', 'contact', 'done', 'human']), since: iso })),
+      leadsToday: z.number(), publishedToday: z.number(), approvedToday: z.number(), rejectedToday: z.number(),
+      builderIssuesByDept: z.record(z.string(), z.number()),
+      approvalsByAgent: z.record(z.string(), z.number()),
+      reactions: z.array(z.object({ agent: z.string(), kind: z.enum(REACTION_KINDS), at: iso })),
+      notice: z.string(),
+      uptimeDays: z.number(),
+      visitorsTotalToday: z.number(),
+    })
+    .optional(),
 });
 export type OfficeData = z.infer<typeof officeSchema>;
 export type AgentStatusName = (typeof AGENT_STATUSES)[number];
@@ -116,8 +134,24 @@ export function deriveStatus(f: AgentFacts): AgentStatusName {
 
 interface Row { [k: string]: unknown }
 
+const VISITOR_WINDOW_MS = 30 * 60_000;
+const VISITOR_CAP = 20;
+const REACTION_WINDOW_MS = 10 * 60_000;
+const REACTION_CAP = 30;
+const NOTICE_MAX = 80;
+/** Per-process salt: visitor ids are stable while HQ runs but cannot be brute-forced from a numeric chat id. */
+const VISITOR_SALT = randomBytes(8).toString('hex');
+export const visitorId = (channel: 'web' | 'telegram', realId: string | number): string =>
+  `v-${createHash('sha256').update(`${VISITOR_SALT}:${channel}:${realId}`).digest('hex').slice(0, 6)}`;
+
+/** First line of the Director's summary, markup stripped, at most 80 characters. */
+export function noticeFrom(text: string | undefined): string {
+  const line = (text ?? '').split('\n').map((l) => l.replace(/<[^>]*>/g, '').trim()).find(Boolean) ?? '';
+  return line.length > NOTICE_MAX ? `${line.slice(0, NOTICE_MAX - 1)}…` : line;
+}
+
 /** Reads everything the page needs from the HQ database. Worker tables (mon_*, li_*, pr_*) may not exist yet: they count as empty. */
-export function buildOffice(hq: Hq, now: number = hq.now()): OfficeData {
+export function buildOffice(hq: Hq, now: number = hq.now(), uptimeSec: number = process.uptime()): OfficeData {
   const db = hq.db;
   const tz = hq.tz;
   const q = <T = Row>(sql: string, ...args: unknown[]): T[] => {
@@ -137,8 +171,8 @@ export function buildOffice(hq: Hq, now: number = hq.now()): OfficeData {
 
   // tasks
   const taskRows = q<{
-    id: number; title: string; dept: string; assignee_id: string | null; status: TaskStatus; routine_id: number | null; meta: string; tags: string; updated_at: number;
-  }>('SELECT id, title, dept, assignee_id, status, routine_id, meta, tags, updated_at FROM tasks ORDER BY updated_at DESC, id DESC');
+    id: number; title: string; dept: string; assignee_id: string | null; status: TaskStatus; routine_id: number | null; meta: string; tags: string; updated_at: number; created_at: number;
+  }>('SELECT id, title, dept, assignee_id, status, routine_id, meta, tags, updated_at, created_at FROM tasks ORDER BY updated_at DESC, id DESC');
   const parseMeta = (s: string): Record<string, unknown> => {
     try {
       return JSON.parse(s) as Record<string, unknown>;
@@ -199,6 +233,71 @@ export function buildOffice(hq: Hq, now: number = hq.now()): OfficeData {
     return parseMeta(t.meta).issue !== undefined;
   }).length;
 
+  const agents = hq.agents();
+  // ---- scene (office v2): counts and codes only, never client texts, names or contacts ----
+  const headOf = (dept: string) => agents.find((a) => a.dept === dept && a.role === 'head')?.id ?? null;
+  const taskById = new Map(taskRows.map((t) => [t.id, t] as const));
+  const agentOfTask = (taskId: number): string | null => {
+    const t = taskById.get(taskId);
+    return t ? t.assignee_id ?? headOf(t.dept) : null;
+  };
+  const visitors: { id: string; channel: 'web' | 'telegram'; state: 'chat' | 'intake' | 'contact' | 'done' | 'human'; since: string; at: number }[] = [];
+  const activeFrom = now - VISITOR_WINDOW_MS;
+  for (const r of q<{ id: string; state: string; summary: string; created_at: number; updated_at: number }>(
+    'SELECT id, state, summary, created_at, updated_at FROM web_chat_sessions WHERE updated_at >= ?', activeFrom,
+  )) {
+    const state = r.state === 'contact' ? 'contact' : r.state === 'idle' ? (r.summary ? 'done' : 'chat') : r.state === 'ask' ? 'chat' : 'intake';
+    visitors.push({ id: visitorId('web', r.id), channel: 'web', state, since: new Date(r.created_at).toISOString(), at: r.updated_at });
+  }
+  for (const r of q<{ chat_id: number; state: string; muted: number; lead_task: number | null; created_at: number; last_at: number }>(
+    'SELECT chat_id, state, muted, lead_task, created_at, last_at FROM cb_chats WHERE last_at >= ? AND blocked = 0', activeFrom,
+  )) {
+    const state = r.muted ? 'human' : r.state === 'idle' ? (r.lead_task !== null ? 'done' : 'chat') : 'intake';
+    visitors.push({ id: visitorId('telegram', r.chat_id), channel: 'telegram', state, since: new Date(Math.max(r.created_at, r.last_at - VISITOR_WINDOW_MS)).toISOString(), at: r.last_at });
+  }
+  visitors.sort((a, b) => b.at - a.at);
+  const visitorsTotalToday =
+    (q<{ c: number }>('SELECT COUNT(*) c FROM web_chat_sessions WHERE updated_at >= ?', dayStart)[0]?.c ?? 0) +
+    (q<{ c: number }>('SELECT COUNT(*) c FROM cb_chats WHERE last_at >= ?', dayStart)[0]?.c ?? 0);
+
+  const leadsToday = taskRows.filter((t) => t.dept === 'sales' && t.created_at >= dayStart && parseMeta(t.meta).action === 'lead' && !t.tags.split(',').includes('drill')).length;
+  const countSince = (sql: string) => q<{ c: number }>(sql, dayStart)[0]?.c ?? 0;
+  const publishedToday = countSince("SELECT COUNT(*) c FROM activity WHERE action = 'published' AND at >= ?");
+  const approvedToday = countSince("SELECT COUNT(*) c FROM decisions WHERE decision = 'approve' AND at >= ?");
+  const rejectedToday = countSince("SELECT COUNT(*) c FROM decisions WHERE decision = 'reject' AND at >= ?");
+
+  const builderIssuesByDept: Record<string, number> = {};
+  for (const t of taskRows) {
+    if (t.status === 'blocked' && t.tags.split(',').includes('builder')) builderIssuesByDept[t.dept] = (builderIssuesByDept[t.dept] ?? 0) + 1;
+  }
+  const approvalsByAgent: Record<string, number> = {};
+  for (const r of q<{ task_id: number }>("SELECT task_id FROM task_approvals WHERE state IN ('queued','asked')")) {
+    const a = agentOfTask(r.task_id);
+    if (a) approvalsByAgent[a] = (approvalsByAgent[a] ?? 0) + 1;
+  }
+
+  const reactions: { agent: string; kind: ReactionKind; at: number }[] = [];
+  const taskOf = (objectType: string | null, objectId: string | null) => (objectType === 'task' && objectId ? agentOfTask(Number(objectId)) : null);
+  for (const r of q<{ agent_id: string | null; action: string; object_type: string | null; object_id: string | null; at: number }>(
+    "SELECT agent_id, action, object_type, object_id, at FROM activity WHERE at >= ? AND action IN ('approved','rejected','published','task_blocked','builder_issue_closed','task_done','task_created') ORDER BY at, id", now - REACTION_WINDOW_MS,
+  )) {
+    if (r.at > now) continue;
+    let kind: ReactionKind | null = null;
+    let agent = r.agent_id;
+    if (r.action === 'approved' || r.action === 'rejected') [kind, agent] = [r.action, taskOf(r.object_type, r.object_id)];
+    else if (r.action === 'published') [kind, agent] = ['published', 'publisher'];
+    else if (r.action === 'task_blocked') kind = 'blocked';
+    else if (r.action === 'builder_issue_closed') [kind, agent] = ['issue_closed', taskOf(r.object_type, r.object_id) ?? agent];
+    else if (r.action === 'task_done') kind = 'done';
+    else if (r.action === 'task_created') {
+      const t = r.object_type === 'task' && r.object_id ? taskById.get(Number(r.object_id)) : undefined;
+      if (t && t.dept === 'sales' && parseMeta(t.meta).action === 'lead' && !t.tags.split(',').includes('drill')) [kind, agent] = ['lead', t.assignee_id ?? headOf('sales')];
+    }
+    if (kind && agent) reactions.push({ agent, kind, at: r.at });
+  }
+
+  const summaryRow = q<{ text: string }>("SELECT text FROM owner_inbox WHERE kind = 'summary' ORDER BY id DESC LIMIT 1")[0];
+
   // routines (summary times belong to the Director)
   const nextOf = (pattern: string, after = now): number | null => {
     try {
@@ -222,7 +321,6 @@ export function buildOffice(hq: Hq, now: number = hq.now()): OfficeData {
   const director = hq.agent('director');
   const directorView = director ? view(director) : null;
 
-  const agents = hq.agents();
   const departments = hq.departments().map((dept) => {
     const inDept = taskRows.filter((t) => t.dept === dept);
     const head = agents.find((a) => a.dept === dept && a.role === 'head');
@@ -306,6 +404,16 @@ export function buildOffice(hq: Hq, now: number = hq.now()): OfficeData {
     },
     // No cheap signal for the products yet (Dono and Polly run outside HQ).
     products: [{ id: 'dono', title: 'Dono', status: 'unknown' }, { id: 'polly', title: 'Polly', status: 'unknown' }],
+    visitorsActive: visitors.length,
+    scene: {
+      visitors: visitors.slice(0, VISITOR_CAP).map((v) => ({ id: v.id, channel: v.channel, state: v.state, since: v.since })),
+      leadsToday, publishedToday, approvedToday, rejectedToday,
+      builderIssuesByDept, approvalsByAgent,
+      reactions: reactions.slice(-REACTION_CAP).map((r) => ({ agent: r.agent, kind: r.kind, at: new Date(r.at).toISOString() })),
+      notice: noticeFrom(summaryRow?.text),
+      uptimeDays: Math.round((uptimeSec / 86_400) * 10) / 10,
+      visitorsTotalToday,
+    },
   };
 }
 
