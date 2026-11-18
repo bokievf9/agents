@@ -76,17 +76,17 @@ function world(o: Opts = {}) {
 const ids = (b?: { id: string }[]) => (b ?? []).map((x) => x.id);
 
 describe('greeting and language', () => {
-  it('/start returns the greeting with three buttons, in the requested language', async () => {
+  it('/start returns the greeting with four buttons, in the requested language', async () => {
     const w = world();
     const ru = await w.say('/start');
     expect(ru).toMatchObject({ ok: true, state: 'chat' });
     expect(ru.reply).toMatch(/Fir Tech/);
     expect(ru.buttons).toEqual([
-      { id: 'intake', label: 'Обсудить проект' }, { id: 'client', label: 'Я уже клиент' }, { id: 'ask', label: 'Задать вопрос' },
+      { id: 'intake', label: 'Обсудить проект' }, { id: 'products', label: 'Продукты' }, { id: 'client', label: 'Я уже клиент' }, { id: 'ask', label: 'Задать вопрос' },
     ]);
     const en = await w.say('/start', { sessionId: 'visitor-0002-abcd', locale: 'en' });
     expect(en.reply).toMatch(/Hello/);
-    expect(en.buttons!.map((b) => b.label)).toEqual(['Discuss a project', 'I am a client', 'Ask a question']);
+    expect(en.buttons!.map((b) => b.label)).toEqual(['Discuss a project', 'Products', 'I am a client', 'Ask a question']);
     expect(w.llmCalls()).toBe(0);
   });
 
@@ -94,12 +94,12 @@ describe('greeting and language', () => {
     const w = world();
     const hi = await w.say('Здравствуйте!');
     expect(hi.reply).toMatch(/Fir Tech/);
-    expect(ids(hi.buttons)).toEqual(['intake', 'client', 'ask']);
+    expect(ids(hi.buttons)).toEqual(['intake', 'products', 'client', 'ask']);
     expect(w.llmCalls()).toBe(0);
     const q = await w.say('Делаете ботов для салонов?', { sessionId: 'visitor-0003-abcd' });
     expect(q.reply).toMatch(/Fir Tech/);
     expect(q.reply).toMatch(/салонов/);
-    expect(ids(q.buttons)).toEqual(['intake', 'client', 'ask']);
+    expect(ids(q.buttons)).toEqual(['intake', 'products', 'client', 'ask']);
   });
 });
 
@@ -109,7 +109,7 @@ describe('intake to a web lead', () => {
     await w.say('/start', { page: '/ru/services' });
     const s1 = await w.say('/btn intake');
     expect(s1).toMatchObject({ state: 'intake' });
-    expect(ids(s1.buttons)).toEqual(['need:site', 'need:bot', 'need:app', 'need:automation', 'need:other']);
+    expect(ids(s1.buttons)).toEqual(['need:admin', 'need:receptionist', 'need:automation', 'need:content', 'need:miniapp', 'need:agent', 'need:ai', 'need:site', 'need:other']);
     const s2 = await w.say('/btn need:bot');
     expect(s2.state).toBe('intake');
     expect(ids(s2.buttons)).toEqual(['deadline:urgent', 'deadline:month', 'deadline:norush']);
@@ -172,6 +172,44 @@ describe('intake to a web lead', () => {
   });
 });
 
+describe('products in the web chat', () => {
+  it('greeting carries the product line; /btn products lists, product:<id> opens the card, need:<id> starts the intake with the product', async () => {
+    const w = world();
+    const hi = await w.say('/start');
+    expect(hi.reply).toContain('Строим бота-администратора для записи, ИИ-приёмщика заявок');
+    const list = await w.say('/btn products');
+    expect(ids(list.buttons)).toEqual(['product:admin', 'product:receptionist', 'product:automation', 'product:content', 'product:miniapp', 'product:agent', 'product:ai', 'product:site']);
+    const card = await w.say('/btn product:receptionist');
+    expect(card.reply).toContain('ИИ-приёмщик заявок 24/7');
+    expect(card.reply).toContain('Для кого');
+    expect(card.reply).toContain('Что внутри');
+    expect(card.reply).toContain('Этот чат и есть демо');
+    expect(ids(card.buttons)).toEqual(['need:receptionist', 'products']);
+    const started = await w.say('/btn need:receptionist');
+    expect(started.state).toBe('intake');
+    expect(ids(started.buttons)).toEqual(['deadline:urgent', 'deadline:month', 'deadline:norush']);
+    await w.say('/btn deadline:month');
+    await w.say('/btn budget:mid');
+    await w.say('@dilnoza_salon');
+    const lead = w.leadTasks()[0]!.meta.lead as Record<string, unknown>;
+    expect(lead).toMatchObject({ product: 'ИИ-приёмщик заявок 24/7', service: 'bots', source: 'web' });
+    expect(String(lead.message)).toContain('Продукт: ИИ-приёмщик заявок 24/7');
+  });
+
+  it('English cards and a niche hint after a free-text need', async () => {
+    const w = world();
+    const en = { locale: 'en' as const };
+    await w.say('/start', en);
+    const card = await w.say('/btn product:admin', en);
+    expect(card.reply).toContain('Booking assistant bot');
+    expect(card.reply).toContain('barbershops');
+    await w.say('/btn intake', en);
+    const r = await w.say('We run a dental clinic', en);
+    expect(r.reply).toContain('For a clinic we usually suggest “Booking assistant bot”');
+    expect(ids(r.buttons)).toEqual(['deadline:urgent', 'deadline:month', 'deadline:norush']);
+  });
+});
+
 describe('«Я уже клиент»', () => {
   it('unknown name: question, then contact, then a lead with the note; the reply is the same as for a known client', async () => {
     const w = world();
@@ -209,7 +247,7 @@ describe('/btn handling', () => {
     const w = world();
     await w.say('/start');
     const stale = await w.say('/btn budget:mid');
-    expect(ids(stale.buttons)).toEqual(['intake', 'client', 'ask']);
+    expect(ids(stale.buttons)).toEqual(['intake', 'products', 'client', 'ask']);
     expect(w.leadTasks()).toHaveLength(0);
     await w.say('/btn intake');
     const again = await w.say('/btn nonsense');
@@ -346,7 +384,7 @@ describe('POST /chat over HTTP', () => {
       const j = (await ok.json()) as Record<string, unknown>;
       expect(j).toMatchObject({ ok: true, state: 'chat' });
       expect(typeof j.reply).toBe('string');
-      expect(j.buttons).toHaveLength(3);
+      expect(j.buttons).toHaveLength(4);
       expect(j).not.toHaveProperty('leadCreated');
     } finally {
       server.close();

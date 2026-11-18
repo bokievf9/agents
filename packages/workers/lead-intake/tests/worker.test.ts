@@ -20,6 +20,20 @@ describe('classification (LLM off)', () => {
   });
 });
 
+describe('product in the lead', () => {
+  it('is accepted by the schema, shown on the lead card and used in the reply context', async () => {
+    const parsed = webLeadSchema.parse({ name: 'A', contact: '@abcde', product: 'Бот-администратор для услуг' });
+    expect(parsed.product).toBe('Бот-администратор для услуг');
+    expect(webLeadSchema.parse({ name: 'A', contact: '@abcde' }).product).toBe('');
+    const r = setup();
+    const res = await r.run(r.task(webLead({ product: 'Бот-администратор для услуг' })));
+    expect(res.result).toContain('Продукт: Бот-администратор для услуг');
+    expect(String(r.staged[0]!.summary)).toContain('Продукт: Бот-администратор для услуг');
+    const none = setup();
+    expect((await none.run(none.task())).result).not.toContain('Продукт:');
+  });
+});
+
 describe('slots', () => {
   it('are the next two working days at 11:00 and 15:00 Tashkent, skipping weekends', () => {
     const [a, b] = nextSlots(NOW, 'Asia/Tashkent', ['11:00', '15:00']);

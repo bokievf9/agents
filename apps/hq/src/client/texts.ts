@@ -1,4 +1,5 @@
 import type { Button } from '@fir/core';
+import { isCatalogueId, KIND_LABELS, PRODUCT_IDS, PRODUCTS, PUBLIC_PRICES, type CatalogueId } from './products.js';
 
 export type Lang = 'ru' | 'en';
 
@@ -6,7 +7,9 @@ export type Lang = 'ru' | 'en';
 export const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /** Intake choices: the key travels in callback data, the label is what the person and the lead card see. */
-export const NEEDS = ['site', 'bot', 'app', 'automation', 'other'] as const;
+/** Intake step 1: the seven products, the classics and «other». `bot` and `app` stay valid keys (old buttons) but are not offered. */
+export const NEED_BUTTONS = ['admin', 'receptionist', 'automation', 'content', 'miniapp', 'agent', 'ai', 'site', 'other'] as const;
+export const NEEDS = [...NEED_BUTTONS, 'bot', 'app'] as const;
 export const DEADLINES = ['urgent', 'month', 'norush'] as const;
 export const BUDGETS = ['lt300', 'mid', 'gt1000', 'unknown'] as const;
 export type Need = (typeof NEEDS)[number];
@@ -14,11 +17,20 @@ export type Deadline = (typeof DEADLINES)[number];
 export type Budget = (typeof BUDGETS)[number];
 
 /** `service` of the lead (same values as the site form). */
-export const SERVICE: Record<Need, string> = { site: 'web', bot: 'bots', app: 'app', automation: 'automation', other: 'other' };
+export const SERVICE: Record<Need, string> = {
+  site: 'web', bot: 'bots', app: 'app', automation: 'automation', other: 'other',
+  admin: 'bots', receptionist: 'bots', content: 'other', miniapp: 'app', agent: 'bots', ai: 'automation',
+};
+
+/** The catalogue name of a chosen need in Russian (the lead's `product` field), empty for «other». */
+export const productOf = (need: Need | undefined): string => (need && isCatalogueId(need) ? PRODUCTS[need].name.ru : '');
 
 interface Texts {
   welcome(name: string): string;
-  menu: { discuss: string; client: string; human: string; lang: string };
+  menu: { discuss: string; products: string; client: string; human: string; lang: string };
+  productsTitle: string;
+  productsIntro: string;
+  card: { forWhom: string; inside: string; pairs: string; demo: string; discuss: string; back: string };
   need: Record<Need, string>;
   needLabel: Record<Need, string>;
   deadline: Record<Deadline, string>;
@@ -48,13 +60,29 @@ interface Texts {
   langSwitched: string;
 }
 
+/** Labels for every need key: the catalogue names for products, `extra` for site, other and the old bot and app keys. */
+function needLabels(lang: 'ru' | 'en', extra: Record<'site' | 'other' | 'bot' | 'app', string>, emoji = true): Record<Need, string> {
+  const out = { ...extra } as Record<string, string>;
+  for (const id of PRODUCT_IDS) out[id] = emoji ? `${PRODUCTS[id].emoji} ${SHORT[lang][id]}` : PRODUCTS[id].name[lang];
+  return out as Record<Need, string>;
+}
+
+/** Shorter button labels of the products (the full names are on the cards). */
+const SHORT: Record<'ru' | 'en', Record<string, string>> = {
+  ru: { admin: 'Бот-администратор', receptionist: 'ИИ-приёмщик заявок', automation: 'Автоматизация', content: 'Контент по подписке', miniapp: 'Mini App', agent: 'Личный агент', ai: 'ИИ в компанию' },
+  en: { admin: 'Booking bot', receptionist: 'AI request handler', automation: 'Automation', content: 'Content subscription', miniapp: 'Mini App', agent: 'Personal agent', ai: 'AI for company' },
+};
+
 const RU: Texts = {
   welcome: (name) =>
-    `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Мы делаем сайты, Telegram-ботов, приложения и автоматизацию для бизнеса.\n\n` +
+    `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Строим бота-администратора для записи, ИИ-приёмщика заявок, автоматизацию, Mini Apps, личных агентов и внедряем ИИ в компании.\n\n` +
     'Наши собственные боты работают каждый день: Dono ведёт учёбу студента, Polly учит языкам. Этот чат тоже наша работа: так выглядит ИИ-приёмщик заявок.\n\nЧем помочь?',
-  menu: { discuss: '💬 Обсудить проект', client: '🧾 Я уже клиент', human: '👤 Позвать человека', lang: '🇬🇧 English' },
-  need: { site: '🌐 Сайт', bot: '🤖 Telegram-бот', app: '📱 Приложение', automation: '⚙️ Автоматизация', other: '✏️ Другое' },
-  needLabel: { site: 'сайт', bot: 'Telegram-бот', app: 'приложение', automation: 'автоматизация', other: 'другое' },
+  menu: { discuss: '💬 Обсудить проект', products: '🧩 Продукты', client: '🧾 Я уже клиент', human: '👤 Позвать человека', lang: '🇬🇧 English' },
+  productsTitle: '<b>Продукты Fir Tech</b>',
+  productsIntro: 'Выберите, что интересно: расскажу, для кого это и что внутри.',
+  card: { forWhom: 'Для кого', inside: 'Что внутри', pairs: 'Обычно берут вместе с', demo: 'Посмотреть', discuss: '💬 Обсудить', back: '← Все продукты' },
+  need: needLabels('ru', { site: '🌐 Сайт', other: '✏️ Другое', bot: '🤖 Telegram-бот', app: '📱 Приложение' }),
+  needLabel: needLabels('ru', { site: 'сайт', other: 'другое', bot: 'Telegram-бот', app: 'приложение' }, false),
   deadline: { urgent: '⚡ Срочно', month: '📅 В этом месяце', norush: '🕊 Не горит' },
   deadlineLabel: { urgent: 'срочно', month: 'в этом месяце', norush: 'не горит' },
   budget: { lt300: 'до $300', mid: '$300–1000', gt1000: '$1000+', unknown: 'Пока не знаю' },
@@ -88,11 +116,14 @@ const RU: Texts = {
 
 const EN: Texts = {
   welcome: (name) =>
-    `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. We build websites, Telegram bots, apps and automation for businesses.\n\n` +
+    `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. We build a booking assistant bot, an AI request handler, automation, Mini Apps and personal agents, and bring AI into companies.\n\n` +
     'Our own bots work every day: Dono runs a student’s studies, Polly teaches languages. This chat is our work too: this is what an AI request handler looks like.\n\nHow can we help?',
-  menu: { discuss: '💬 Discuss a project', client: '🧾 I am a client', human: '👤 Talk to a person', lang: '🇷🇺 Русский' },
-  need: { site: '🌐 Website', bot: '🤖 Telegram bot', app: '📱 App', automation: '⚙️ Automation', other: '✏️ Something else' },
-  needLabel: { site: 'website', bot: 'Telegram bot', app: 'app', automation: 'automation', other: 'something else' },
+  menu: { discuss: '💬 Discuss a project', products: '🧩 Products', client: '🧾 I am a client', human: '👤 Talk to a person', lang: '🇷🇺 Русский' },
+  productsTitle: '<b>Fir Tech products</b>',
+  productsIntro: 'Pick what interests you: I will tell you who it is for and what is inside.',
+  card: { forWhom: 'Who it is for', inside: 'What is inside', pairs: 'Usually taken together with', demo: 'See it', discuss: '💬 Discuss', back: '← All products' },
+  need: needLabels('en', { site: '🌐 Website', other: '✏️ Something else', bot: '🤖 Telegram bot', app: '📱 App' }),
+  needLabel: needLabels('en', { site: 'website', other: 'something else', bot: 'Telegram bot', app: 'app' }, false),
   deadline: { urgent: '⚡ Urgent', month: '📅 This month', norush: '🕊 No rush' },
   deadlineLabel: { urgent: 'urgent', month: 'this month', norush: 'no rush' },
   budget: { lt300: 'under $300', mid: '$300–1000', gt1000: '$1000+', unknown: 'Not sure yet' },
@@ -129,19 +160,47 @@ export const T: Record<Lang, Texts> = { ru: RU, en: EN };
 export const menuButtons = (lang: Lang): Button[][] => {
   const m = T[lang].menu;
   return [
-    [{ text: m.discuss, data: 'm:discuss' }, { text: m.client, data: 'm:client' }],
-    [{ text: m.human, data: 'm:human' }, { text: m.lang, data: 'm:lang' }],
+    [{ text: m.discuss, data: 'm:discuss' }, { text: m.products, data: 'm:products' }],
+    [{ text: m.client, data: 'm:client' }, { text: m.human, data: 'm:human' }],
+    [{ text: m.lang, data: 'm:lang' }],
   ];
 };
 
 export const needButtons = (lang: Lang): Button[][] => {
   const n = T[lang].need;
-  return [
-    [{ text: n.site, data: 'n:site' }, { text: n.bot, data: 'n:bot' }],
-    [{ text: n.app, data: 'n:app' }, { text: n.automation, data: 'n:automation' }],
-    [{ text: n.other, data: 'n:other' }],
-  ];
+  const btns = NEED_BUTTONS.map((k) => ({ text: n[k], data: `n:${k}` }));
+  const rows: Button[][] = [];
+  for (let i = 0; i < btns.length; i += 2) rows.push(btns.slice(i, i + 2));
+  return rows;
 };
+
+/** The product list: one button per product, then the classic site. */
+export const productListButtons = (lang: Lang): Button[][] => [
+  ...[...PRODUCT_IDS, 'site' as const].map((id) => [{ text: `${PRODUCTS[id].emoji} ${PRODUCTS[id].name[lang]}`, data: `p:${id}` }]),
+];
+
+export const productListHtml = (lang: Lang): string => `${T[lang].productsTitle}
+${T[lang].productsIntro}`;
+
+export const productCardButtons = (lang: Lang, id: CatalogueId): Button[][] => [
+  [{ text: T[lang].card.discuss, data: `pd:${id}` }, { text: T[lang].card.back, data: 'm:products' }],
+];
+
+/** A product card: benefit, for whom, what is inside, the usual pairing and how to see it. */
+export function productCardHtml(lang: Lang, id: CatalogueId): string {
+  const p = PRODUCTS[id];
+  const c = T[lang].card;
+  const whom = p.kinds.map((k) => KIND_LABELS[k][lang]).join(', ');
+  const pair = p.pairs.map((i) => PRODUCTS[i].name[lang]).join(', ');
+  return [
+    `<b>${p.emoji} ${esc(p.name[lang])}</b>`,
+    esc(p.benefit[lang]),
+    ...(whom ? [`\n<b>${c.forWhom}:</b> ${esc(whom)}`] : []),
+    `\n<b>${c.inside}:</b>\n${p.inside[lang].map((x) => `• ${esc(x)}`).join('\n')}`,
+    `\n<b>${c.pairs}:</b> ${esc(pair)}`,
+    `${esc(p.demo[lang])}${id === 'agent' ? ` ${esc(PUBLIC_PRICES[lang])}` : ''}`,
+  ].join('\n');
+}
 
 export const deadlineButtons = (lang: Lang): Button[][] => [DEADLINES.map((k) => ({ text: T[lang].deadline[k], data: `d:${k}` }))];
 

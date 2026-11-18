@@ -3,7 +3,7 @@ import { isPriceQuestion } from '@fir/worker-lead-intake';
 import { systemPrompt, TEAM_MARK } from './prompt.js';
 import { sanitizeAnswer } from './sanitize.js';
 import type { Draft } from './store.js';
-import { SERVICE, T, type Lang } from './texts.js';
+import { productOf, SERVICE, T, type Lang } from './texts.js';
 
 /**
  * Transport-independent parts of the client conversation, used by both the Telegram engine and the web chat:
@@ -59,7 +59,7 @@ export class TurnHistory<K extends string | number> {
 /** The finished intake as the Sales lead fields (Russian, for the owner and the Sales head); `shown` is for the person. */
 export function intakeRecord(
   d: Draft, lang: Lang, origin: string,
-): { message: string; budget: string; service: string; masked: string; shown: { need: string; deadline: string; budget: string } } {
+): { message: string; budget: string; service: string; product: string; masked: string; shown: { need: string; deadline: string; budget: string } } {
   const t = T[lang];
   const ru = T.ru;
   const shown = {
@@ -69,12 +69,13 @@ export function intakeRecord(
   };
   const message = [
     d.needText ? `Задача (словами клиента): ${d.needText}` : `Нужно: ${ru.needLabel[d.need ?? 'other']}`,
+    ...(productOf(d.need) ? [`Продукт: ${productOf(d.need)}`] : []),
     `Срок: ${d.deadline ? ru.deadlineLabel[d.deadline] : d.deadlineText || 'не указан'}`,
     origin,
   ].join('\n');
   const budget = d.budget ? (d.budget === 'unknown' ? '' : ru.budget[d.budget]) : d.budgetText ?? '';
   const masked = `проект: ${d.need ? ru.needLabel[d.need] : 'своими словами'}, ${d.deadline ? ru.deadlineLabel[d.deadline] : 'срок словами'}, ${d.budget ? ru.budget[d.budget] : 'бюджет словами'}`;
-  return { message, budget, service: SERVICE[d.need ?? 'other'], masked, shown };
+  return { message, budget, service: SERVICE[d.need ?? 'other'], product: productOf(d.need), masked, shown };
 }
 
 export type FreeResult =

@@ -6,7 +6,8 @@ import { clip, freeAnswer, GREETING, intakeRecord, TurnHistory } from './shared.
 import type { Draft } from './store.js';
 import { BUDGETS, DEADLINES, NEEDS, T, type Budget, type Deadline, type Lang, type Need } from './texts.js';
 import { WebSessionStore, type WebSession, type WebState } from './web-store.js';
-import { budgetButtons, deadlineButtons, intakeButton, menuButtons, needButtons, plain, W, type WebButton } from './web-texts.js';
+import { isCatalogueId, nicheHint } from './products.js';
+import { budgetButtons, deadlineButtons, intakeButton, menuButtons, needButtons, plain, productCardButtons, productCardText, productListButtons, W, type WebButton } from './web-texts.js';
 
 /** The request contract of `POST /chat` (the site is built against exactly these names). */
 export const chatSchema = z.object({
@@ -176,6 +177,12 @@ export class WebChatEngine {
       this.setState(s, 'need', this.fresh(s));
       return { reply: plain(t.step1), buttons: needButtons(lang) };
     }
+    if (id === 'products') return { reply: W[lang].productsIntro, buttons: productListButtons(lang) };
+    if (kind === 'product' && isCatalogueId(key)) return { reply: productCardText(lang, key), buttons: productCardButtons(lang, key) };
+    if (kind === 'need' && isCatalogueId(key) && (s.state === 'idle' || s.state === 'ask')) {
+      this.setState(s, 'need', this.fresh(s));
+      return this.afterNeed({ ...s, state: 'need', draft: this.fresh(s) }, lang, { need: key });
+    }
     if (id === 'client') {
       this.setState(s, 'client_name', this.fresh(s));
       return { reply: plain(t.askClient) };
@@ -210,7 +217,8 @@ export class WebChatEngine {
   // ---- the 3-step intake, then the contact ----
   private afterNeed(s: WebSession, lang: Lang, patch: Draft): Step {
     this.setState(s, 'deadline', { ...s.draft, ...patch });
-    return { reply: plain(T[lang].step2), buttons: deadlineButtons(lang) };
+    const hint = patch.needText ? nicheHint(lang, patch.needText) : '';
+    return { reply: `${hint ? `${hint}\n\n` : ''}${plain(T[lang].step2)}`, buttons: deadlineButtons(lang) };
   }
 
   private afterDeadline(s: WebSession, lang: Lang, patch: Draft): Step {
@@ -253,7 +261,7 @@ export class WebChatEngine {
       return { reply: W[lang].clientDone(false, night), created: true };
     }
     const rec = intakeRecord(d, lang, 'Заявка из веб-чата на сайте.');
-    const taskId = sinks.createLead({ ...base, service: rec.service, budget: clip(rec.budget, 40), message: clip(`${rec.message}${pageLine}`, 2000) }, rec.service);
+    const taskId = sinks.createLead({ ...base, service: rec.service, product: rec.product, budget: clip(rec.budget, 40), message: clip(`${rec.message}${pageLine}`, 2000) }, rec.service);
     this.finished(s, `${rec.masked} · задача #${taskId}`, taskId, 'lead');
     return { reply: W[lang].done(rec.shown.need, rec.shown.deadline, rec.shown.budget, night), created: true };
   }

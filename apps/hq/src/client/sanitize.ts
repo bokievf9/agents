@@ -23,7 +23,16 @@ const DATE_PROMISE = new RegExp(
   'i',
 );
 
-export const hasMoneyOrDate = (s: string): boolean => MONEY.test(s) || DATE_PROMISE.test(s);
+/** The two prices the owner made public: Dono and Polly, exactly these amounts and no others. */
+const PUBLIC_PRICE_RES = [
+  /\bDono\b[^.!?\n$]{0,30}\$150(?:\s?\+\s?\$15(?:\s?(?:\/|в|per|a)\s?(?:мес[а-я]*|month))?)?/gi,
+  /\bPolly\b[^.!?\n$]{0,30}\$100(?:\s?\+\s?\$10(?:\s?(?:\/|в|per|a)\s?(?:мес[а-я]*|month))?)?/gi,
+];
+
+export const hasMoneyOrDate = (s: string): boolean => {
+  const rest = PUBLIC_PRICE_RES.reduce((t, re) => t.replace(re, ' '), s);
+  return MONEY.test(rest) || DATE_PROMISE.test(rest);
+};
 
 export interface Sanitized {
   text: string;

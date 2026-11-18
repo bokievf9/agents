@@ -11,6 +11,8 @@ import { ClientBot } from '../src/client/bot.js';
 import { ClientBlockedError } from '../src/client/channel.js';
 import { ClientEngine, type ClientTransport, type From } from '../src/client/engine.js';
 import { inWindow, linksOnly, RateLimiter, sanitizeAnswer } from '../src/client/sanitize.js';
+import { catalogueText, CLASSIC_IDS, nicheHint, PRODUCT_IDS, PRODUCTS } from '../src/client/products.js';
+import { systemPrompt } from '../src/client/prompt.js';
 import { clientSinks } from '../src/client/sinks.js';
 import { Director } from '../src/director.js';
 import { SalesHead, seedSales } from '../src/heads/sales.js';
@@ -123,7 +125,7 @@ function world(o: Opts = {}) {
 const buttonTexts = (b?: Button[][]) => (b ?? []).flat().map((x) => x.text);
 
 describe('welcome and language', () => {
-  it('/start: a short HTML welcome with the four menu buttons, one emoji each; English switches in place and is remembered', async () => {
+  it('/start: a short HTML welcome with the menu buttons, one emoji each; English switches in place and is remembered', async () => {
     const w = world();
     await w.engine.onCommand(ME, 'start', '');
     const welcome = w.transport.last(CLIENT)!;
@@ -132,14 +134,15 @@ describe('welcome and language', () => {
     expect(welcome.html).toMatch(/Dono/);
     expect(welcome.html).toMatch(/Polly/);
     expect(welcome.html).not.toContain('!');
-    expect(welcome.html.length).toBeLessThan(500);
-    expect(buttonTexts(welcome.buttons)).toEqual(['💬 Обсудить проект', '🧾 Я уже клиент', '👤 Позвать человека', '🇬🇧 English']);
+    expect(welcome.html.length).toBeLessThan(700);
+    expect(welcome.html).toContain('Строим бота-администратора для записи, ИИ-приёмщика заявок, автоматизацию, Mini Apps, личных агентов и внедряем ИИ в компании');
+    expect(buttonTexts(welcome.buttons)).toEqual(['💬 Обсудить проект', '🧩 Продукты', '🧾 Я уже клиент', '👤 Позвать человека', '🇬🇧 English']);
     for (const t of buttonTexts(welcome.buttons)) expect((t.match(/\p{Extended_Pictographic}/gu) ?? []).length).toBeLessThanOrEqual(1);
 
     await w.engine.onButton(ME, 'm:lang', welcome.id);
     const edited = w.transport.edits.at(-1)!;
     expect(edited.messageId).toBe(welcome.id);
-    expect(edited.html).toContain('We build websites');
+    expect(edited.html).toContain('We build a booking assistant bot');
     expect(buttonTexts(edited.buttons)).toContain('🇷🇺 Русский');
     expect(w.engine.store.get(CLIENT)!.lang).toBe('en');
     await w.engine.onCommand(ME, 'start', '');
@@ -561,5 +564,107 @@ describe('grammy wiring', () => {
     expect(methods.filter((m) => m === 'setMyShortDescription')).toHaveLength(2);
     for (const c of calls.filter((x) => x.method === 'setMyShortDescription')) expect(String(c.payload.short_description).length).toBeLessThanOrEqual(120);
     for (const c of calls.filter((x) => x.method === 'setMyDescription')) expect(String(c.payload.description).length).toBeLessThanOrEqual(512);
+  });
+});
+
+describe('products in the chat', () => {
+  it('the catalogue is complete in Russian and English: seven products and the classics', () => {
+    expect(PRODUCT_IDS).toHaveLength(7);
+    expect(CLASSIC_IDS).toEqual(['site', 'bot', 'app']);
+    for (const id of [...PRODUCT_IDS, ...CLASSIC_IDS]) {
+      const p = PRODUCTS[id];
+      for (const lang of ['ru', 'en'] as const) {
+        expect(p.name[lang].length).toBeGreaterThan(2);
+        expect(p.benefit[lang].length).toBeGreaterThan(20);
+        expect(p.inside[lang]).toHaveLength(3);
+        expect(p.demo[lang].length).toBeGreaterThan(10);
+        expect(`${p.name[lang]}${p.benefit[lang]}${p.inside[lang].join('')}`).not.toMatch(/[—–]/);
+      }
+      expect(p.pairs.length).toBeGreaterThan(0);
+      if (PRODUCT_IDS.includes(id as never)) expect(p.kinds.length).toBeGreaterThan(0);
+    }
+    expect(catalogueText('ru')).toContain('Бот-администратор для услуг');
+    expect(catalogueText('en')).toContain('Booking assistant bot');
+  });
+
+  it('the LLM system prompt carries the catalogue and the price rule', () => {
+    const sys = systemPrompt('Инструкции', 'ru');
+    expect(sys).toContain('ИИ-приёмщик заявок 24/7');
+    expect(sys).toContain('Dono: $150 + $15/мес');
+    expect(sys).toContain('Подбери продукт');
+    expect(systemPrompt('x', 'en')).toContain('Polly: $100 + $10/month');
+  });
+
+  it('«Продукты» shows a list in place, a card per product, and «Обсудить» starts the intake with the product chosen', async () => {
+    const w = world();
+    await w.engine.onCommand(ME, 'start', '');
+    const welcome = w.card();
+    await w.engine.onButton(ME, 'm:products', welcome);
+    const list = w.transport.edits.at(-1)!;
+    expect(list.messageId).toBe(welcome);
+    expect(buttonTexts(list.buttons)).toHaveLength(8);
+    expect(buttonTexts(list.buttons)[0]).toContain('Бот-администратор для услуг');
+    expect(list.buttons!.flat()[0]!.data).toBe('p:admin');
+    await w.engine.onButton(ME, 'p:admin', welcome);
+    const card = w.transport.edits.at(-1)!;
+    expect(card.html).toContain('Бот-администратор для услуг');
+    expect(card.html).toContain('Для кого');
+    expect(card.html).toContain('барбершопы');
+    expect(card.html).toContain('Что внутри');
+    expect(card.html).toContain('•');
+    expect(card.buttons!.flat().map((b) => b.data)).toEqual(['pd:admin', 'm:products']);
+    await w.engine.onButton(ME, 'pd:admin', welcome);
+    expect(w.transport.edits.at(-1)!.html).toContain('2 из 3'); // step 1 skipped
+    await w.engine.onButton(ME, 'd:month', w.card());
+    await w.engine.onButton(ME, 'b:mid', w.card());
+    const lead = w.leadTasks()[0]!.meta.lead as Record<string, unknown>;
+    expect(lead).toMatchObject({ product: 'Бот-администратор для услуг', service: 'bots' });
+    expect(String(lead.message)).toContain('Продукт: Бот-администратор для услуг');
+  });
+
+  it('intake step 1 offers the products as buttons and stores the chosen one; the agent card shows only the public prices', async () => {
+    const w = world();
+    await w.engine.onCommand(ME, 'start', '');
+    await w.engine.onButton(ME, 'm:discuss', w.card());
+    const step1 = w.transport.edits.at(-1)!;
+    expect(step1.buttons!.flat().map((b) => b.data)).toEqual([
+      'n:admin', 'n:receptionist', 'n:automation', 'n:content', 'n:miniapp', 'n:agent', 'n:ai', 'n:site', 'n:other',
+    ]);
+    await w.engine.onButton(ME, 'n:miniapp', w.card());
+    await w.engine.onButton(ME, 'd:month', w.card());
+    await w.engine.onButton(ME, 'b:mid', w.card());
+    expect(w.leadTasks()[0]!.meta.lead).toMatchObject({ product: 'Telegram Mini App', service: 'app' });
+    await w.engine.onButton(ME, 'p:agent', w.card()).catch(() => undefined);
+    const agent = (await import('../src/client/texts.js')).productCardHtml('ru', 'agent');
+    expect(agent).toContain('$150 + $15/мес');
+    expect(agent).toContain('$100 + $10/мес');
+  });
+
+  it('a niche in free text gets one line with the typical product and its pairing', async () => {
+    const w = world();
+    await w.engine.onCommand(ME, 'start', '');
+    await w.engine.onButton(ME, 'm:discuss', w.card());
+    await w.engine.onText(ME, 'У меня барбершоп, клиенты пишут в директ');
+    const step2 = w.transport.last(CLIENT)!;
+    expect(step2.html).toContain('Для барбершопа обычно подходит «Бот-администратор для услуг»');
+    expect(step2.html).toContain('Контент на автопилоте');
+    expect(step2.html).toContain('2 из 3');
+    expect(nicheHint('ru', 'кафе в центре')).toContain('Telegram Mini App');
+    expect(nicheHint('en', 'we run a dental clinic')).toContain('Booking assistant bot');
+    expect(nicheHint('ru', 'что-то непонятное')).toBe('');
+  });
+
+  it('the sanitiser lets the Dono and Polly prices through and still strips every other price', () => {
+    const NOTE = 'Стоимость и сроки назовём после короткого разговора с командой.';
+    const ok = sanitizeAnswer('Dono стоит $150 + $15/мес. Polly: $100 + $10/мес.', NOTE);
+    expect(ok.removed).toBe(0);
+    expect(ok.text).toContain('$150 + $15/мес');
+    expect(ok.text).toContain('$100 + $10/мес');
+    expect(sanitizeAnswer('Dono: $150 + $15/month.', NOTE).removed).toBe(0);
+    for (const bad of ['Dono стоит $200 + $15/мес.', 'Dono: $150 + $25/мес.', 'Бот-администратор стоит $150.', 'Polly: $150 + $10/мес.', 'Сайт от 300 долларов.']) {
+      const r = sanitizeAnswer(bad, NOTE);
+      expect(r.removed, bad).toBe(1);
+      expect(r.text).toBe(NOTE);
+    }
   });
 });

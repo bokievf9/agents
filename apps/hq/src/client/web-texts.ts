@@ -1,4 +1,5 @@
-import { BUDGETS, DEADLINES, NEEDS, T, type Lang } from './texts.js';
+import { PRODUCT_IDS, PRODUCTS, type CatalogueId } from './products.js';
+import { BUDGETS, DEADLINES, NEED_BUTTONS, productCardHtml, T, type Lang } from './texts.js';
 
 /** Telegram texts are HTML; the website chat shows plain text. */
 export const plain = (html: string): string => html.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
@@ -12,7 +13,10 @@ export interface WebButton {
 
 interface WebTexts {
   welcome: string;
-  menu: Record<'intake' | 'client' | 'ask', string>;
+  menu: Record<'intake' | 'products' | 'client' | 'ask', string>;
+  productsIntro: string;
+  discuss: string;
+  allProducts: string;
   ask: string;
   askContact: string;
   contactBad: string;
@@ -26,8 +30,11 @@ interface WebTexts {
 
 const RU: WebTexts = {
   welcome:
-    'Здравствуйте. Это ИИ-приёмщик заявок студии Fir Tech: так же он может принимать клиентов вашего бизнеса. Мы делаем сайты, Telegram-ботов, приложения и автоматизацию. Чем помочь?',
-  menu: { intake: 'Обсудить проект', client: 'Я уже клиент', ask: 'Задать вопрос' },
+    'Здравствуйте. Это ИИ-приёмщик заявок студии Fir Tech: так же он может принимать клиентов вашего бизнеса. Строим бота-администратора для записи, ИИ-приёмщика заявок, автоматизацию, Mini Apps, личных агентов и внедряем ИИ в компании. Чем помочь?',
+  productsIntro: 'Наши продукты. Выберите, расскажу, для кого это и что внутри.',
+  discuss: 'Обсудить',
+  allProducts: 'Все продукты',
+  menu: { intake: 'Обсудить проект', products: 'Продукты', client: 'Я уже клиент', ask: 'Задать вопрос' },
   ask: 'Спрашивайте: расскажу, что и как мы делаем. Цены и сроки называет команда после короткого разговора.',
   askContact: 'Последний шаг. Как с вами связаться? Напишите Telegram @username, телефон или email.',
   contactBad: 'Не похоже на контакт. Напишите Telegram @username, телефон с кодом страны или email.',
@@ -44,8 +51,11 @@ const RU: WebTexts = {
 
 const EN: WebTexts = {
   welcome:
-    'Hello. This is the AI request handler of the Fir Tech studio: it can receive your business’s clients the same way. We build websites, Telegram bots, apps and automation. How can we help?',
-  menu: { intake: 'Discuss a project', client: 'I am a client', ask: 'Ask a question' },
+    'Hello. This is the AI request handler of the Fir Tech studio: it can receive your business’s clients the same way. We build a booking assistant bot, an AI request handler, automation, Mini Apps and personal agents, and bring AI into companies. How can we help?',
+  productsIntro: 'Our products. Pick one and I will tell you who it is for and what is inside.',
+  discuss: 'Discuss',
+  allProducts: 'All products',
+  menu: { intake: 'Discuss a project', products: 'Products', client: 'I am a client', ask: 'Ask a question' },
   ask: 'Go ahead: I will tell you what we do and how. The team names prices and timing after a short talk.',
   askContact: 'Last step. How can we reach you? Send a Telegram @username, a phone number or an email.',
   contactBad: 'That does not look like a contact. Send a Telegram @username, a phone number with country code or an email.',
@@ -62,9 +72,18 @@ const EN: WebTexts = {
 
 export const W: Record<Lang, WebTexts> = { ru: RU, en: EN };
 
-export const menuButtons = (lang: Lang): WebButton[] => (['intake', 'client', 'ask'] as const).map((id) => ({ id, label: W[lang].menu[id] }));
+export const menuButtons = (lang: Lang): WebButton[] => (['intake', 'products', 'client', 'ask'] as const).map((id) => ({ id, label: W[lang].menu[id] }));
 export const intakeButton = (lang: Lang): WebButton[] => [{ id: 'intake', label: W[lang].menu.intake }];
 
-export const needButtons = (lang: Lang): WebButton[] => NEEDS.map((k) => ({ id: `need:${k}`, label: label(T[lang].need[k]) }));
+export const needButtons = (lang: Lang): WebButton[] => NEED_BUTTONS.map((k) => ({ id: `need:${k}`, label: label(T[lang].need[k]) }));
 export const deadlineButtons = (lang: Lang): WebButton[] => DEADLINES.map((k) => ({ id: `deadline:${k}`, label: label(T[lang].deadline[k]) }));
 export const budgetButtons = (lang: Lang): WebButton[] => BUDGETS.map((k) => ({ id: `budget:${k}`, label: label(T[lang].budget[k]) }));
+
+export const productListButtons = (lang: Lang): WebButton[] => [...PRODUCT_IDS, 'site' as const].map((id) => ({ id: `product:${id}`, label: PRODUCTS[id].name[lang] }));
+export const productCardButtons = (lang: Lang, id: CatalogueId): WebButton[] => [
+  { id: `need:${id}`, label: W[lang].discuss },
+  { id: 'products', label: W[lang].allProducts },
+];
+
+/** The product card as plain text. */
+export const productCardText = (lang: Lang, id: CatalogueId): string => plain(productCardHtml(lang, id));

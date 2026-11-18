@@ -23,6 +23,8 @@ export const webLeadSchema = z.object({
   locale: z.enum(['ru', 'en']).default('ru'),
   slot: z.string().trim().max(40).default(''),
   source: z.string().trim().max(40).default(''),
+  /** The product the visitor chose in the client bot or the web chat (catalogue name), empty when none. */
+  product: z.string().trim().max(60).default(''),
   /** Set when the lead came through the public client bot: the approved texts go back to this private chat. */
   chatId: z.number().int().positive().optional(),
   username: z.string().trim().max(40).optional(),
@@ -78,12 +80,13 @@ export function nextSlots(now: number, tz: string, hours: [string, string]): [nu
 }
 
 /** Lead card for the owner (what the head puts above the reply draft and into the task result). */
-export function leadCard(l: Lead, tz: string, service: string, slotText: string, viaBot = false): string {
+export function leadCard(l: Lead, tz: string, service: string, slotText: string, viaBot = false, product = ''): string {
   return [
     `Лид #${l.id}: ${TEMP_RU[l.temperature].toUpperCase()}`,
     viaBot ? `Источник: Telegram, клиентский бот (${service})` : `Источник: форма firtech.pro (${service})`,
     `Имя: ${l.name || '-'}`,
     `Контакт: ${l.contact || '-'}`,
+    ...(product ? [`Продукт: ${product}`] : []),
     `Ниша: ${l.niche || 'не выяснена'}`,
     `Задача: ${l.task || 'не выяснена'}`,
     `Срок: ${l.deadline || 'не выяснен'}`,
@@ -172,14 +175,14 @@ export class LeadIntakeWorker implements Worker {
   }
 
   /** First reply: the model writes it (no numbers, both slots inside), otherwise a template. */
-  private async draftReply(ctx: WorkerCtx, l: Lead, slotLines: string, slotsText: string, feedback: string): Promise<string> {
+  private async draftReply(ctx: WorkerCtx, l: Lead, slotLines: string, slotsText: string, feedback: string, product = ''): Promise<string> {
     const t = tpl(l.lang);
     const template = `${t.reply(l.name)} ${l.priceAsked ? `${t.hold} ` : ''}${slotsText}`.replace(/\s+\n/g, '\n');
     const draft = await tryComplete(ctx.llm, {
       tier: 'sonnet',
       maxTokens: 500,
-      system: `You write the first reply of Fir Tech studio (websites, Telegram bots, automation) to a person who left a request on the site. Write in ${l.lang === 'ru' ? 'Russian' : 'English'}, polite, at most 4 sentences, no emoji, no markdown, no long dashes. Greet by name, thank for the request, show you understood the task in your own words. Never state a price, number of money or deadline yourself. Then include this call proposal exactly as given, line by line:\n${slotsText}${feedback ? `\nThe reviewer asked to fix: ${feedback}` : ''}`,
-      messages: [{ role: 'user', content: `Name: ${l.name}\nBusiness: ${l.niche || 'unknown'}\nTask: ${l.task || 'unknown'}\nPrice asked: ${l.priceAsked ? 'yes (say the team will confirm price and terms)' : 'no'}` }],
+      system: `You write the first reply of Fir Tech studio (websites, Telegram bots, automation) to a person who left a request on the site. Write in ${l.lang === 'ru' ? 'Russian' : 'English'}, polite, at most 4 sentences, no emoji, no markdown, no long dashes. Greet by name, thank for the request, show you understood the task in your own words${product ? ` and mention the product they chose (${product})` : ''}. Never state a price, number of money or deadline yourself. Then include this call proposal exactly as given, line by line:\n${slotsText}${feedback ? `\nThe reviewer asked to fix: ${feedback}` : ''}`,
+      messages: [{ role: 'user', content: `Name: ${l.name}\nBusiness: ${l.niche || 'unknown'}\nTask: ${l.task || 'unknown'}\nProduct: ${product || 'not chosen'}\nPrice asked: ${l.priceAsked ? 'yes (say the team will confirm price and terms)' : 'no'}` }],
     });
     const text = draft?.trim();
     const ok = text && text.length >= 40 && text.length <= 900 && !hasMoney(text) && !hasPlaceholder(text) && !/[—–]/.test(text) && slotLines.split('\n').every((s) => text.includes(s));
@@ -206,11 +209,11 @@ export class LeadIntakeWorker implements Worker {
     const t = tpl(lang);
     const slotText = chosenSlot ? formatSlot(chosenSlot, ctx.tz, 'ru') : `предложены: ${slots.map((s) => formatSlot(s, ctx.tz, 'ru')).join(' / ')}`;
     const viaBot = w.chatId !== undefined;
-    const card = leadCard(lead, ctx.tz, w.service, slotText, viaBot);
+    const card = leadCard(lead, ctx.tz, w.service, slotText, viaBot, w.product);
     const route = viaBot ? { chatId: w.chatId } : {};
     const slotLines = chosenSlot ? t.slotChosen(formatSlot(chosenSlot, ctx.tz, lang)) : slots.map((s) => formatSlot(s, ctx.tz, lang)).join('\n');
     const slotsText = chosenSlot ? slotLines : t.slots(formatSlot(slots[0]!, ctx.tz, lang), formatSlot(slots[1]!, ctx.tz, lang));
-    const reply = await this.draftReply(ctx, lead, slotLines, slotsText, feedback);
+    const reply = await this.draftReply(ctx, lead, slotLines, slotsText, feedback, w.product);
 
     await ctx.requestApproval(
       KIND_REPLY,

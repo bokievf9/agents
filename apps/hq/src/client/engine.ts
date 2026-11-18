@@ -4,8 +4,10 @@ import { inWindow, linksOnly, RateLimiter } from './sanitize.js';
 import { clip, freeAnswer, GREETING, intakeRecord, TurnHistory } from './shared.js';
 import { ChatStore, maskUsername, textHash, type Chat, type Draft } from './store.js';
 import {
-  BUDGETS, budgetButtons, DEADLINES, deadlineButtons, esc, menuButtons, NEEDS, needButtons, T, type Budget, type Deadline, type Lang, type Need,
+  BUDGETS, budgetButtons, DEADLINES, deadlineButtons, esc, menuButtons, NEEDS, needButtons, productCardButtons, productCardHtml, productListButtons,
+  productListHtml, T, type Budget, type Deadline, type Lang, type Need,
 } from './texts.js';
+import { isCatalogueId, nicheHint } from './products.js';
 
 /** What the engine needs from Telegram; the grammy bot implements it, tests keep everything in memory. */
 export interface ClientTransport {
@@ -181,6 +183,15 @@ export class ClientEngine implements ClientChannel {
       return T[chat.lang].stale;
     };
     if (messageId === undefined || chat.card !== messageId) return stale();
+    if (kind === 'p' && isCatalogueId(key)) {
+      await this.edit(chat.chatId, messageId, productCardHtml(chat.lang, key), productCardButtons(chat.lang, key));
+      return undefined;
+    }
+    if (kind === 'pd' && isCatalogueId(key)) {
+      this.store.update(chat.chatId, { state: 'need', draft: {} });
+      await this.afterNeed({ ...chat, state: 'need', draft: {} }, { need: key }, messageId);
+      return undefined;
+    }
     if (kind === 'n' && chat.state === 'need' && (NEEDS as readonly string[]).includes(key)) {
       if (key === 'other') {
         this.store.update(chat.chatId, { state: 'need_text' });
@@ -230,6 +241,15 @@ export class ClientEngine implements ClientChannel {
         }
         return;
       }
+      case 'products': {
+        this.store.update(chat.chatId, { state: 'idle', draft: {} });
+        if (onCard) await this.edit(chat.chatId, messageId!, productListHtml(chat.lang), productListButtons(chat.lang));
+        else {
+          await this.dropCard(chat);
+          this.store.update(chat.chatId, { card: await this.say(chat.chatId, productListHtml(chat.lang), productListButtons(chat.lang)) });
+        }
+        return;
+      }
       case 'client': {
         this.store.update(chat.chatId, { state: 'client_name', draft: {}, card: null });
         if (onCard) await this.edit(chat.chatId, messageId!, t.askClient);
@@ -257,7 +277,9 @@ export class ClientEngine implements ClientChannel {
   private async afterNeed(chat: Chat, patch: Draft, messageId?: number): Promise<void> {
     const draft = { ...chat.draft, ...patch };
     this.store.update(chat.chatId, { state: 'deadline', draft });
-    await this.nextCard(chat, T[chat.lang].step2, deadlineButtons(chat.lang), messageId);
+    // A niche in the visitor's own words: one line with the product that usually fits it.
+    const hint = patch.needText ? nicheHint(chat.lang, patch.needText) : '';
+    await this.nextCard(chat, `${hint ? `${esc(hint)}\n\n` : ''}${T[chat.lang].step2}`, deadlineButtons(chat.lang), messageId);
   }
 
   private async afterDeadline(chat: Chat, patch: Draft, messageId?: number): Promise<void> {
@@ -282,11 +304,11 @@ export class ClientEngine implements ClientChannel {
       await this.dropCard(chat);
       await this.say(chat.chatId, done);
     }
-    await this.createLead(chat, from, { message: rec.message, budget: rec.budget, service: rec.service }, rec.masked);
+    await this.createLead(chat, from, { message: rec.message, budget: rec.budget, service: rec.service, product: rec.product }, rec.masked);
   }
 
   /** The lead goes to Sales exactly like a website form lead, with the chat id so replies come back here. */
-  private async createLead(chat: Chat, from: From, x: { message: string; budget: string; service: string }, masked: string): Promise<void> {
+  private async createLead(chat: Chat, from: From, x: { message: string; budget: string; service: string; product?: string }, masked: string): Promise<void> {
     this.store.update(chat.chatId, { state: 'idle', draft: {}, card: null });
     if (!this.sinks) {
       await this.forward(chat, x.message, 'Заявка (продажи не подключены)');
@@ -295,7 +317,7 @@ export class ClientEngine implements ClientChannel {
     const name = clip(from.firstName?.trim() || (from.username ? `@${from.username}` : '') || 'Клиент из Telegram', 80);
     const lead = {
       name, contact: from.username ? `@${from.username}` : `Telegram id ${chat.chatId}`, service: x.service, budget: clip(x.budget, 40),
-      message: clip(x.message, 2000), estimate: '', locale: chat.lang, slot: '', source: 'telegram', chatId: chat.chatId,
+      message: clip(x.message, 2000), estimate: '', locale: chat.lang, slot: '', source: 'telegram', chatId: chat.chatId, product: x.product ?? '',
       ...(from.username ? { username: from.username.slice(0, 40) } : {}),
     };
     const taskId = this.sinks.createLead(lead, x.service);
