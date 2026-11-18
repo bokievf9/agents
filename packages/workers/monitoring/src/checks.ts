@@ -43,7 +43,7 @@ export interface MonitorConfig {
 }
 
 export const DEFAULT_URLS = ['https://firtech.pro/api/health'];
-export const DEFAULT_OMNIROUTE_URL = 'http://omniroute:20128/health';
+export const DEFAULT_OMNIROUTE_URL = 'http://omniroute:20128/healthz';
 
 /** JSON list of http(s) URLs; empty or missing gives the default. */
 export function parseMonitorUrls(raw: string | undefined): string[] {
@@ -122,7 +122,7 @@ export async function checkTls(deps: CheckDeps, cfg: MonitorConfig, host: string
 export async function checkOmniroute(deps: CheckDeps, cfg: MonitorConfig): Promise<CheckResult> {
   const base = { id: 'omniroute', label: 'OmniRoute' };
   try {
-    // The key goes only to the models endpoint (it needs auth); /health is open.
+    // The key goes only to the models endpoint (it needs auth); /healthz is open (OmniRoute has no /health: 404).
     const auth = cfg.llmApiKey && /\/v1\/models\/?$/.test(cfg.omnirouteUrl) ? { authorization: `Bearer ${cfg.llmApiKey}` } : undefined;
     const r = await get(deps, cfg.omnirouteUrl, cfg.timeoutMs, auth);
     return { ...base, ok: r.status >= 200 && r.status < 300, detail: `HTTP ${r.status}` };

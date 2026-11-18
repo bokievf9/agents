@@ -143,7 +143,7 @@ bot.on('callback_query:data', async (ctx, next) => {
 installApprovals(bot, queue, cfg.ownerId);
 
 const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
-for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', 'topics', ...SUPPORT_COMMANDS, ...director.commands.keys()]) {
+for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', 'builder', 'topics', ...SUPPORT_COMMANDS, ...director.commands.keys()]) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
 }
 for (const name of ['kp', 'referral', 'referrals']) {

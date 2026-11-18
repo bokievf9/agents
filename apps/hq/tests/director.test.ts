@@ -212,4 +212,18 @@ describe('org and config', () => {
     expect(() => dailyCron('25:00')).toThrow();
     expect(OWNER).toBe(100);
   });
+  it('/builder <id> hands an existing task to the builders; bad ids and closed tasks are refused', async () => {
+    const w = world();
+    const t = w.hq.createTask({ title: 'Исправление ошибки на проде', dept: 'production', creator: 'owner' });
+    await w.director.onCommand('builder', String(t.id));
+    expect(w.hq.task(t.id)).toMatchObject({ status: 'blocked', tags: ['builder'], meta: { kind: 'adhoc' } });
+    expect(w.messenger.last()!.text).toContain('передана строителям');
+    await w.director.onCommand('builder', String(t.id));
+    expect(w.messenger.last()!.text).toContain('уже у строителей');
+    await w.director.onCommand('builder', 'abc');
+    expect(w.messenger.last()!.text).toContain('Укажите номер');
+    w.hq.setStatus(t.id, 'rejected', 'owner', 'не нужно');
+    await w.director.onCommand('builder', String(t.id));
+    expect(w.messenger.last()!.text).toContain('уже закрыта');
+  });
 });

@@ -7,7 +7,7 @@ import {
 
 const NOW = Date.UTC(2026, 10, 18, 7, 0);
 const cfg: MonitorConfig = {
-  urls: ['https://firtech.pro/api/health'], omnirouteUrl: 'http://omniroute:20128/health', dataDir: '/data', docker: false,
+  urls: ['https://firtech.pro/api/health'], omnirouteUrl: 'http://omniroute:20128/healthz', dataDir: '/data', docker: false,
   dockerSocket: '/s', diskMaxPct: 85, certMinDays: 14, timeoutMs: 1000,
 };
 

@@ -192,4 +192,22 @@ describe('Production head', () => {
     expect(last).toContain('/lesson');
     expect(w.store.project(p.id)!.status).toBe('done');
   });
+  it('a free-form task from the Director becomes a builder task: blocked, tagged builder, issue created, result closes it', async () => {
+    const w = world();
+    const t = w.hq.createTask({ title: 'Исправление ошибки на проде', body: 'Мониторинг: OmniRoute HTTP 404', dept: 'production', creator: 'owner' });
+    await w.head.onHeartbeat();
+    const blocked = w.hq.task(t.id)!;
+    expect(blocked.status).toBe('blocked');
+    expect(blocked.tags).toContain('builder');
+    expect(blocked.meta.kind).toBe('adhoc');
+    expect(w.hq.events(t.id).filter((e) => e.kind === 'report').at(-1)!.body).toContain('передана строителям');
+    await w.bridge.poll();
+    expect(w.gh.created.map((i) => i.title)).toContain('Исправление ошибки на проде');
+    const issue = (w.hq.task(t.id)!.meta.issue as { number: number }).number;
+    w.gh.close(issue, 'Починил: /healthz вместо /health');
+    await w.bridge.poll();
+    await w.head.onHeartbeat();
+    expect(w.hq.task(t.id)!.status).toBe('done');
+    expect(w.hq.events(t.id).filter((e) => e.kind === 'report').at(-1)!.body).toContain('Строитель закончил');
+  });
 });

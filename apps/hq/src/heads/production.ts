@@ -211,8 +211,11 @@ export class ProductionHead {
       for (const s of staged) await this.hq.requestApproval(task.id, PM_ID, s.kind, s.payload, s.summary);
       return void (await this.report(task.id, `${res.result}${staged.some((s) => this.d.queue.level(s.kind) === 0) ? ' Придёт в пачке на одобрение.' : ''}`));
     }
-    this.hq.block(task.id, PRODUCTION_HEAD_ID, 'Производство умеет: проект из КП (/project), статус клиенту (/pstatus), просрочки');
-    await this.report(task.id, `Задача #${task.id} «${oneLine(task.title, 80)}» не для производства: используйте /project <клиент>: <что делаем>.`);
+    // Anything else from the Director (a bug on prod, a code change, an investigation) is work for a builder:
+    // the task is blocked with the `builder` tag and the bridge turns it into a GitHub issue.
+    this.hq.setMeta(task.id, { kind: 'adhoc' });
+    this.hq.block(task.id, PRODUCTION_HEAD_ID, 'Нужен строитель: задача для Claude Code', ['builder']);
+    await this.report(task.id, `Задача #${task.id} «${oneLine(task.title, 80)}» передана строителям: issue появится в течение 10 минут (/builders). Проекты клиентов: /project <клиент>: <что делаем>.`);
   }
 
   // ---- the approved ТЗ becomes builder tasks ----
@@ -262,8 +265,10 @@ export class ProductionHead {
       await this.report(task.id, `Ревью готово (задача #${task.id}): ${oneLine(comment, 600)}`);
       const parent = typeof task.meta.parentTaskId === 'number' ? this.hq.task(task.meta.parentTaskId) : undefined;
       if (parent && parent.status === 'review') await this.finishWork(parent, 'Ревью выполнено, замечания в задаче ревью.');
-    } else {
+    } else if (kind === 'deploy') {
       await this.report(task.id, `Деплой готов (задача #${task.id}): ${oneLine(comment, 600)}`);
+    } else {
+      await this.report(task.id, `Строитель закончил задачу #${task.id} «${oneLine(task.title, 80)}»: ${oneLine(comment, 600)}`);
     }
   }
 

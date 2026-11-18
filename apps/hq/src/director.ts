@@ -209,7 +209,7 @@ export class Director {
     switch (name) {
       case 'start':
       case 'help':
-        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/kp <лид или описание>: КП, смета, договор\n/referral <клиент> -> <лид>, /referrals: рекомендации\n/builders: задачи строителям (issue)\n/topics: создать темы в группе HQ\nСопровождение: /ticket клиент: вопрос, /tickets, /client, /clients, /invoice клиент сумма за_что, /invoices, /sub, /onboard клиент\n/paid <номер счёта FT-2026-001 или id рекомендации>: оплата счёта (сопровождение) или выплата за рекомендацию (продажи)\nПроизводство: /project, /pstatus, /target, /mdone\nДокументы и знания: /doc, /lesson, /kb\n/skip: отменить ожидание правки');
+        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/kp <лид или описание>: КП, смета, договор\n/referral <клиент> -> <лид>, /referrals: рекомендации\n/builders: задачи строителям (issue), /builder <id>: отдать задачу строителям\n/topics: создать темы в группе HQ\nСопровождение: /ticket клиент: вопрос, /tickets, /client, /clients, /invoice клиент сумма за_что, /invoices, /sub, /onboard клиент\n/paid <номер счёта FT-2026-001 или id рекомендации>: оплата счёта (сопровождение) или выплата за рекомендацию (продажи)\nПроизводство: /project, /pstatus, /target, /mdone\nДокументы и знания: /doc, /lesson, /kb\n/skip: отменить ожидание правки');
       case 'status':
         return this.say(this.statusText());
       case 'tasks':
@@ -221,6 +221,16 @@ export class Director {
         return this.say(this.costsText());
       case 'builders':
         return this.say(this.buildersText());
+      case 'builder': {
+        const id = Number.parseInt(dept, 10);
+        const t = Number.isFinite(id) ? this.hq.task(id) : undefined;
+        if (!t) return this.say('Укажите номер задачи: /builder <id>.');
+        if (t.status === 'done' || t.status === 'rejected') return this.say(`Задача #${t.id} уже закрыта (${t.status}).`);
+        if (t.tags.includes('builder') && t.status === 'blocked') return this.say(`Задача #${t.id} уже у строителей (/builders).`);
+        if (typeof t.meta.kind !== 'string') this.hq.setMeta(t.id, { kind: 'adhoc' });
+        this.hq.block(t.id, 'director', 'Нужен строитель: задача для Claude Code', ['builder']);
+        return this.say(`Задача #${t.id} «${t.title.slice(0, 80)}» передана строителям: issue появится в течение 10 минут (/builders).`);
+      }
       case 'org':
         return this.say(this.orgText());
       case 'pause':
