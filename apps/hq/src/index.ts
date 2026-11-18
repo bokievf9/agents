@@ -24,6 +24,9 @@ import { createWebhook } from './webhook.js';
 import { cachedOffice } from './office.js';
 import { Drill } from './drill.js';
 import { BuilderBridge, RestGithubClient } from './bridge.js';
+import { ClientBot } from './client/bot.js';
+import { FALLBACK_INSTRUCTIONS } from './client/prompt.js';
+import { clientSinks } from './client/sinks.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
@@ -58,6 +61,23 @@ if (cfg.backofficeBotToken) senders.set(BACKOFFICE, topicSender(new Api(cfg.back
 const reporter = new Reporter(() => topicManager.groupId(), () => topicManager.topics(), senders, topicSender(bot.api));
 
 const director = new Director({ hq, llm, messenger, queue, ownerId: cfg.ownerId, reporter });
+
+// The public client bot (@firtech_bot): only with CLIENT_BOT_TOKEN. The heads deliver approved client texts through it.
+const readClientInstructions = (): string => {
+  try {
+    return readFileSync(join(cfg.instructionsDir, 'client-bot.md'), 'utf8');
+  } catch (e) {
+    log('warn', 'client-bot.md not readable, using the short built-in rules', { err: errMsg(e) });
+    return FALLBACK_INSTRUCTIONS;
+  }
+};
+const clientBot = cfg.clientBotToken
+  ? new ClientBot({
+      token: cfg.clientBotToken, db, now: hq.now, tz: () => hq.tz, llm, ownerId: cfg.ownerId, instructions: readClientInstructions(),
+      quietHours: cfg.clientQuietHours, perHour: cfg.clientRatePerHour, dailyCap: cfg.clientLlmDailyCap,
+      ownerFallback: (text) => messenger.send(cfg.ownerId, text),
+    })
+  : null;
 const marketing = new MarketingHead({
   hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, clipsPerWeek: cfg.clipsPerWeek, carouselsPerWeek: cfg.carouselsPerWeek,
   integrations: {
@@ -70,13 +90,15 @@ const support = new SupportHead({
   hq, llm, reporter, monitor: new MonitoringWorker(cfg.monitor), finance: new FinanceWorker({ fixedCosts: cfg.fixedCostsUsdMonth }),
   cs: new CustomerSupportWorker({ slaHours: cfg.supportSlaHours }),
   billing: new BillingWorker({ prefix: cfg.invoicePrefix, paymentDetails: cfg.paymentDetails }),
-  onboarding: new OnboardingWorker(), messenger, ownerId: cfg.ownerId,
+  onboarding: new OnboardingWorker(), messenger, ownerId: cfg.ownerId, ...(clientBot ? { client: clientBot } : {}),
 });
 director.onSupportCommand = (name, args) => support.onCommand(name, args);
 const sales = new SalesHead({
   hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel,
   referralReward: cfg.referralReward, prepaymentPercent: cfg.prepaymentPercent, kpValidDays: cfg.kpValidDays,
+  ...(clientBot ? { client: clientBot } : {}),
 });
+clientBot?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix }));
 director.onSalesReply = (id, text) => sales.startReply(id, text);
 director.onSalesCommand = (name, arg) => sales.salesCommand(name, arg);
 director.editors.set('sales:reply', sales); // the owner's text after /reply <id>
@@ -210,12 +232,15 @@ const stop = () => {
   support.stop();
   drill.stop();
   routineJobs.forEach((j) => j.stop());
-  void bot.stop().finally(() => process.exit(0));
+  void Promise.all([bot.stop(), clientBot?.stop()]).finally(() => process.exit(0));
 };
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
 
-log('info', 'hq starting', { tz: hq.tz, departments: hq.departments(), group: cfg.groupId !== undefined, marketingBot: Boolean(cfg.marketingBotToken), supportBot: Boolean(cfg.supportBotToken), salesBot: Boolean(cfg.salesBotToken) });
+log('info', 'hq starting', { tz: hq.tz, departments: hq.departments(), group: cfg.groupId !== undefined, marketingBot: Boolean(cfg.marketingBotToken), supportBot: Boolean(cfg.supportBotToken), salesBot: Boolean(cfg.salesBotToken), clientBot: Boolean(clientBot) });
+// The client bot polls on its own; if it stops, HQ keeps working (the Director stays the owner's interface).
+clientBot?.start().catch((e) => log('error', 'client bot stopped', { err: errMsg(e) }));
+if (!clientBot) log('info', 'CLIENT_BOT_TOKEN is not set, the public client bot is off');
 startPolling(bot).catch((e) => {
   log('error', 'bot stopped', { err: errMsg(e) });
   process.exit(1);

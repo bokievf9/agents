@@ -67,8 +67,10 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 без бота и крона, таблицы `li_*` и `pr_*` в SQLite HQ). Голова: `apps/hq/src/heads/sales.ts` (бот `SALES_BOT_TOKEN`, он же
 @firtech_leads_bot), webhook `POST /lead` (`x-lead-token` = `LEAD_WEBHOOK_TOKEN`, порт `WEBHOOK_PORT`) в `apps/hq/src/webhook.ts`
 создаёт задачу отдела на лид. Рутины: карточки Разведчика 10:00, дожимы 10:05. Первый ответ лиду уровень 1, всё с ценой уровень 0
-(`locked`); бизнесам в холодную пишет владелец вручную. Подробно: `apps/hq/README.md`, README пакетов. Telegram-диалог с клиентами
-старого lead-intake не переехал.
+(`locked`); бизнесам в холодную пишет владелец вручную. Подробно: `apps/hq/README.md`, README пакетов.
+Публичный бот клиентов `apps/hq/src/client/` (`CLIENT_BOT_TOKEN`, @firtech_bot, только с токеном): приветствие, анкета из 3 шагов
+в лид продаж (`source: telegram`, `chatId`), «я уже клиент» в тикет, «позвать человека» (`/reply`, `/resume`), LLM-ответы через
+санитайзер (без цен и дат), тихие часы, лимиты. Одобренные ответы лидам и тикетам из бота бот отправляет сам (`ClientChannel`).
 
 ## apps/polly: Polly, учитель языков (этап 1)
 Личный агент владельца (бриф `../docs/brief-polly.md`). Отдельный бот (`POLLY_BOT_TOKEN`, не `TELEGRAM_BOT_TOKEN` лидов),

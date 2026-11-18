@@ -23,6 +23,9 @@ export const webLeadSchema = z.object({
   locale: z.enum(['ru', 'en']).default('ru'),
   slot: z.string().trim().max(40).default(''),
   source: z.string().trim().max(40).default(''),
+  /** Set when the lead came through the public client bot: the approved texts go back to this private chat. */
+  chatId: z.number().int().positive().optional(),
+  username: z.string().trim().max(40).optional(),
 });
 export type WebLead = z.output<typeof webLeadSchema>;
 
@@ -40,6 +43,8 @@ export interface Delivery {
   contact: string;
   name: string;
   kind: string;
+  /** The client's private chat with the public bot, when the lead came from there: the text goes back to it. */
+  chatId?: number;
 }
 
 const ExtractSchema = z.object({ niche: z.string().default(''), task: z.string().default(''), deadline: z.string().default('') });
@@ -73,10 +78,10 @@ export function nextSlots(now: number, tz: string, hours: [string, string]): [nu
 }
 
 /** Lead card for the owner (what the head puts above the reply draft and into the task result). */
-export function leadCard(l: Lead, tz: string, service: string, slotText: string): string {
+export function leadCard(l: Lead, tz: string, service: string, slotText: string, viaBot = false): string {
   return [
     `Лид #${l.id}: ${TEMP_RU[l.temperature].toUpperCase()}`,
-    `Источник: форма firtech.pro (${service})`,
+    viaBot ? `Источник: Telegram, клиентский бот (${service})` : `Источник: форма firtech.pro (${service})`,
     `Имя: ${l.name || '-'}`,
     `Контакт: ${l.contact || '-'}`,
     `Ниша: ${l.niche || 'не выяснена'}`,
@@ -85,7 +90,7 @@ export function leadCard(l: Lead, tz: string, service: string, slotText: string)
     ...(l.origin ? [`Метка источника: ${l.origin}`] : []),
     ...(l.budget ? [`Бюджет: ${l.budget}`] : []),
     `Звонок: ${slotText}`,
-    'Клиент не писал боту: связаться вручную по контакту.',
+    viaBot ? 'Клиент пишет в клиентский бот: одобренные ответы бот отправит ему сам.' : 'Клиент не писал боту: связаться вручную по контакту.',
     `(часовой пояс слотов: ${tz})`,
   ].join('\n');
 }
@@ -110,7 +115,10 @@ export class LeadIntakeWorker implements Worker {
   kindSpecs(ctx: Pick<WorkerCtx, 'db' | 'now'>, deliver: (d: Delivery) => Promise<void>): Record<string, KindSpec> {
     const toDelivery = (p: Payload, kind: string): Delivery => {
       if (typeof p.text !== 'string' || !p.text.trim()) throw new Error('nothing to deliver');
-      return { text: p.text, leadId: Number(p.leadId), contact: String(p.contact ?? ''), name: String(p.name ?? ''), kind };
+      return {
+        text: p.text, leadId: Number(p.leadId), contact: String(p.contact ?? ''), name: String(p.name ?? ''), kind,
+        ...(typeof p.chatId === 'number' ? { chatId: p.chatId } : {}),
+      };
     };
     return {
       [KIND_REPLY]: {
@@ -197,15 +205,17 @@ export class LeadIntakeWorker implements Worker {
 
     const t = tpl(lang);
     const slotText = chosenSlot ? formatSlot(chosenSlot, ctx.tz, 'ru') : `предложены: ${slots.map((s) => formatSlot(s, ctx.tz, 'ru')).join(' / ')}`;
-    const card = leadCard(lead, ctx.tz, w.service, slotText);
+    const viaBot = w.chatId !== undefined;
+    const card = leadCard(lead, ctx.tz, w.service, slotText, viaBot);
+    const route = viaBot ? { chatId: w.chatId } : {};
     const slotLines = chosenSlot ? t.slotChosen(formatSlot(chosenSlot, ctx.tz, lang)) : slots.map((s) => formatSlot(s, ctx.tz, lang)).join('\n');
     const slotsText = chosenSlot ? slotLines : t.slots(formatSlot(slots[0]!, ctx.tz, lang), formatSlot(slots[1]!, ctx.tz, lang));
     const reply = await this.draftReply(ctx, lead, slotLines, slotsText, feedback);
 
     await ctx.requestApproval(
       KIND_REPLY,
-      { text: reply, leadId: lead.id, contact: lead.contact, name: lead.name },
-      `${card}\n\nПервый ответ клиенту. Отправьте его сами по контакту (одобрение = «ответ ушёл»).`,
+      { text: reply, leadId: lead.id, contact: lead.contact, name: lead.name, ...route },
+      `${card}\n\nПервый ответ клиенту. ${viaBot ? 'Одобрение = бот отправит его клиенту сам.' : 'Отправьте его сами по контакту (одобрение = «ответ ушёл»).'}`,
     );
     if (priceAsked) {
       const draft =
@@ -218,8 +228,8 @@ export class LeadIntakeWorker implements Worker {
       const safe = hasMoney(draft) || !hasPlaceholder(draft) ? t.priceDraft : draft;
       await ctx.requestApproval(
         KIND_PRICE,
-        { text: safe, leadId: lead.id, contact: lead.contact, name: lead.name },
-        `Клиент спрашивает цену или сроки. Лид #${lead.id}: ниша ${lead.niche || '?'}, задача ${lead.task || '?'}, срок ${lead.deadline || '?'}. Нажмите «Править» и впишите цену и срок вместо меток.`,
+        { text: safe, leadId: lead.id, contact: lead.contact, name: lead.name, ...route },
+        `Клиент спрашивает цену или сроки. Лид #${lead.id}: ниша ${lead.niche || '?'}, задача ${lead.task || '?'}, срок ${lead.deadline || '?'}. Нажмите «Править» и впишите цену и срок вместо меток.${viaBot ? ' После одобрения бот отправит текст клиенту сам.' : ''}`,
       );
     }
     log('info', 'lead processed', { leadId: lead.id, temperature, priceAsked });

@@ -1,11 +1,12 @@
 import { errMsg, log, schedule, zonedParts, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type WorkerCtx } from '@fir/hq';
 import { BillingWorker, parseInvoiceArgs, parseSubArgs } from '@fir/worker-billing';
-import { CustomerSupportWorker, csStoreFor, parseClientArgs, parseTicketArgs } from '@fir/worker-customer-support';
+import { CustomerSupportWorker, csStoreFor, parseClientArgs, parseTicketArgs, type TicketDelivery } from '@fir/worker-customer-support';
 import { FinanceWorker } from '@fir/worker-finance';
 import { MonitoringWorker, type MonEvent } from '@fir/worker-monitoring';
 import { OnboardingWorker, obStoreFor, parseOnboardArgs } from '@fir/worker-onboarding';
 import type { Cron } from 'croner';
+import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
 import type { Reporter } from '../reporter.js';
 
 export const SUPPORT = 'support';
@@ -57,6 +58,8 @@ export interface SupportDeps {
   /** Where approved client texts go: to the owner, who sends them himself. Without it they are only logged. */
   messenger?: Messenger;
   ownerId?: number;
+  /** The public client bot: approved answers to tickets that came from it go back into the client's chat. */
+  client?: ClientChannel;
 }
 
 type Action = 'monitor_add' | 'daily' | 'weekly' | 'status' | 'none' | 'ticket' | 'billing' | 'invoice' | 'paid' | 'onboard' | 'sub' | 'client';
@@ -98,7 +101,11 @@ export class SupportHead {
     this.onboarding = d.onboarding ?? new OnboardingWorker();
     const base = { db: d.hq.db, now: d.hq.now };
     const toOwner = (text: string) => (d.messenger && d.ownerId !== undefined ? d.messenger.send(d.ownerId, text) : Promise.resolve());
-    for (const [k, spec] of Object.entries(this.cs.kindSpecs(base, (x) => toOwner(`Тикет #${x.ticketId}: ответ утверждён, отправьте клиенту ${x.contact || x.name}${x.contact ? ` (${x.name})` : ''}:\n\n${x.text}`)))) d.hq.registerKind(k, spec);
+    const ticketDelivery = (x: TicketDelivery) => deliverOrHandOff({
+      client: d.client, messenger: d.messenger, ownerId: d.ownerId, chatId: x.chatId, text: x.text, ref: `Тикет #${x.ticketId}`, contact: x.contact || x.name,
+      ownerText: `Тикет #${x.ticketId}: ответ утверждён, отправьте клиенту ${x.contact || x.name}${x.contact ? ` (${x.name})` : ''}:\n\n${x.text}`,
+    });
+    for (const [k, spec] of Object.entries(this.cs.kindSpecs(base, ticketDelivery))) d.hq.registerKind(k, spec);
     for (const [k, spec] of Object.entries(this.billing.kindSpecs(base, (x) => toOwner(`${x.kind === 'billing_invoice' ? 'Счёт утверждён' : 'Напоминание утверждено'}, отправьте клиенту ${x.name}:\n\n${x.text}`)))) d.hq.registerKind(k, spec);
     for (const [k, spec] of Object.entries(this.onboarding.kindSpecs((x) => toOwner(`Инструкция для ${x.name} утверждена, отправьте клиенту:\n\n${x.text}`)))) d.hq.registerKind(k, spec);
   }
@@ -231,6 +238,22 @@ export class SupportHead {
     }
   }
 
+  /**
+   * A known client wrote to the public bot: a ticket task with the chat id, so the approved answer goes back to the chat.
+   * Returns the task id. The owner is not asked anything here; the answer follows the usual levels and the SLA alert.
+   */
+  async clientTicket(client: string, text: string, chatId: number): Promise<number> {
+    const name = client.replace(/:/g, ' ').trim().slice(0, 80) || 'клиент';
+    const t = this.hq.createTask({ title: `Тикет из бота: ${name.slice(0, 60)}`, dept: SUPPORT, assigneeId: SUPPORT_HEAD_ID, creator: 'routine', meta: { action: 'ticket', args: `${name}: ${text}`, chatId } });
+    if (!this.hq.claim(t.id, SUPPORT_HEAD_ID)) return t.id;
+    try {
+      await this.finish(t.id, await this.ownerAction(this.hq.task(t.id)!, 'ticket'), false);
+    } catch (e) {
+      await this.crash(t, e);
+    }
+    return t.id;
+  }
+
   private async runCommand(action: Action, title: string, args: string): Promise<string> {
     const t = this.hq.createTask({ title, dept: SUPPORT, assigneeId: SUPPORT_HEAD_ID, creator: 'owner', meta: { action, args } });
     if (!this.hq.claim(t.id, SUPPORT_HEAD_ID)) return 'Не удалось взять задачу, попробуйте ещё раз.';
@@ -284,7 +307,9 @@ export class SupportHead {
           this.hq.block(task.id, SUPPORT_HEAD_ID, 'Нужен формат «клиент: вопрос»');
           return 'Для тикета нужен формат «клиент: вопрос клиента» (или /ticket).';
         }
-        const r = await this.cs.handleTicket(ctx, p);
+        const chatId = typeof task.meta.chatId === 'number' ? task.meta.chatId : undefined;
+        const r = await this.cs.handleTicket(ctx, { ...p, ...(chatId !== undefined ? { chatId } : {}) });
+        if (chatId !== undefined) return `${r.line}\n\nКлиент написал в клиентский бот: одобренный ответ бот отправит ему сам.`;
         return `${r.line}\n\nЧерновик:\n${r.text}\n\nОдобрите его (/approve или в пачке): после этого я пришлю текст для отправки клиенту.`;
       }
       case 'client': {

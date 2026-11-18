@@ -15,6 +15,7 @@ import {
   kindSpecs as presalesKinds, KIND_PACK, onDecision as onPresalesDecision, PresalesWorker, packMessages,
 } from '@fir/worker-presales';
 import { z } from 'zod';
+import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
 import type { ApprovalEditor } from '../editor.js';
 import type { Reporter } from '../reporter.js';
 
@@ -47,6 +48,8 @@ export interface SalesDeps {
   batchSize?: number;
   slotHours?: [string, string];
   replyLevel?: 0 | 1;
+  /** The public client bot: approved replies to leads that came from it go back into the client's chat. */
+  client?: ClientChannel;
 }
 
 type Action = 'lead' | 'batch' | 'followups' | 'reply' | 'stats' | 'kp' | 'referral_reminders' | 'none';
@@ -158,9 +161,12 @@ export class SalesHead implements ApprovalEditor {
     await this.d.reporter.post(SALES, text);
   }
 
-  /** The approved first reply to a lead: handed to the owner with the contact, he sends it himself. */
+  /** The approved reply to a lead: into the client's bot chat when the lead came from there, else to the owner to send himself. */
   private async deliver(x: Delivery): Promise<void> {
-    await this.d.messenger.send(this.d.ownerId, `Лид #${x.leadId}: ответ утверждён, отправьте клиенту ${x.contact}${x.name ? ` (${x.name})` : ''}:\n\n${x.text}`);
+    await deliverOrHandOff({
+      client: this.d.client, messenger: this.d.messenger, ownerId: this.d.ownerId, chatId: x.chatId, text: x.text, ref: `Лид #${x.leadId}`, contact: x.contact,
+      ownerText: `Лид #${x.leadId}: ответ утверждён, отправьте клиенту ${x.contact}${x.name ? ` (${x.name})` : ''}:\n\n${x.text}`,
+    });
   }
 
   // ---- heartbeat ----
@@ -312,9 +318,10 @@ export class SalesHead implements ApprovalEditor {
   }
 
   // ---- the webhook creates a task per lead ----
-  /** `POST /lead` calls this: a Sales task with the form fields in `meta.lead`, the head wakes. Returns the task id. */
+  /** `POST /lead` and the client bot call this: a Sales task with the lead fields in `meta.lead`, the head wakes. Returns the task id. */
   createLeadTask(lead: Record<string, unknown>, service: string): number {
-    const t = this.hq.createTask({ title: `Лид с сайта (${service || 'форма'})`, dept: SALES, creator: 'routine', priority: 1, meta: { action: 'lead', lead } });
+    const where = lead.source === 'telegram' ? 'Лид из Telegram' : 'Лид с сайта';
+    const t = this.hq.createTask({ title: `${where} (${service || 'форма'})`, dept: SALES, creator: 'routine', priority: 1, meta: { action: 'lead', lead } });
     this.hq.wake(HEAD_ID, 'task');
     return t.id;
   }

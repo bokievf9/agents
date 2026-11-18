@@ -23,6 +23,8 @@ export interface TicketDelivery {
   contact: string;
   name: string;
   kind: string;
+  /** The client's private chat with the public bot, when the ticket came from there: the text goes back to it. */
+  chatId?: number;
 }
 
 export const hasPlaceholder = (text: string): boolean => /\[[^\]]*\]/.test(text);
@@ -80,7 +82,10 @@ export class CustomerSupportWorker {
     const run = (kind: string) => async (p: Payload): Promise<void> => {
       if (typeof p.text !== 'string' || !p.text.trim()) throw new Error('nothing to deliver');
       if (hasPlaceholder(p.text)) throw new Error('answer still has a placeholder');
-      await deliver({ text: p.text, ticketId: Number(p.ticketId), contact: String(p.contact ?? ''), name: String(p.name ?? ''), kind });
+      await deliver({
+        text: p.text, ticketId: Number(p.ticketId), contact: String(p.contact ?? ''), name: String(p.name ?? ''), kind,
+        ...(typeof p.chatId === 'number' ? { chatId: p.chatId } : {}),
+      });
       if (Number.isInteger(p.ticketId)) csStoreFor(ctx).markAnswered(Number(p.ticketId));
     };
     return {
@@ -104,13 +109,13 @@ export class CustomerSupportWorker {
   }
 
   /** Creates the ticket and stages the answer for approval. Returns a short line for the owner. */
-  async handleTicket(ctx: WorkerCtx, input: { client: string; text: string }): Promise<{ ticket: CsTicket; text: string; line: string }> {
+  async handleTicket(ctx: WorkerCtx, input: { client: string; text: string; chatId?: number }): Promise<{ ticket: CsTicket; text: string; line: string }> {
     const store = csStoreFor(ctx);
     const money = isMoneyTopic(input.text);
     const ticket = store.addTicket({ clientName: input.client, text: input.text, money });
     const known = store.clientByName(input.client);
     const who = `${ticket.clientName}${known ? '' : ' (нет в базе клиентов: /client)'}`;
-    const payload = { ticketId: ticket.id, contact: ticket.contact, name: ticket.clientName };
+    const payload = { ticketId: ticket.id, contact: ticket.contact, name: ticket.clientName, ...(input.chatId !== undefined ? { chatId: input.chatId } : {}) };
     if (money) {
       const text = `Здравствуйте, ${ticket.clientName}. Передал ваш вопрос владельцу студии, он ответит лично. [решение владельца]`;
       await ctx.requestApproval(KIND_MONEY, { ...payload, text }, `Тикет #${ticket.id}, ${who}: вопрос про деньги или возврат. Решаете вы: нажмите «Править» и впишите ответ вместо метки.\nВопрос: ${clip(input.text, 400)}`);

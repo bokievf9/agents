@@ -66,6 +66,13 @@ export interface Config extends BaseConfig {
   githubToken: string | undefined;
   githubRepo: string;
   builderPollMinutes: number;
+  /** Public client bot (@firtech_bot). Without the token the bot does not start and leads come only from the site. */
+  clientBotToken: string | undefined;
+  /** Quiet hours of the client bot in the HQ timezone: templates only, no LLM. */
+  clientQuietHours: string;
+  /** Client messages per chat per hour, and LLM answers per day for all chats. */
+  clientRatePerHour: number;
+  clientLlmDailyCap: number;
 }
 
 function num(env: NodeJS.ProcessEnv, key: string, def: number, min: number, max: number): number {
@@ -136,8 +143,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     githubToken: optional(env, 'GITHUB_TOKEN'),
     githubRepo: optional(env, 'GITHUB_REPO') ?? 'bokievf9/agents',
     builderPollMinutes: Math.round(num(env, 'BUILDER_POLL_MINUTES', 10, 1, 59)),
+    clientBotToken: optional(env, 'CLIENT_BOT_TOKEN'),
+    clientQuietHours: quietWindow(optional(env, 'CLIENT_QUIET_HOURS') ?? '22:00-08:00'),
+    clientRatePerHour: Math.round(num(env, 'CLIENT_RATE_PER_HOUR', 20, 1, 1000)),
+    clientLlmDailyCap: Math.round(num(env, 'CLIENT_LLM_DAILY_CAP', 300, 0, 100_000)),
     siteUrl: (optional(env, 'SITE_URL') ?? 'https://firtech.pro').replace(/\/$/, ''),
   };
+}
+
+/** "HH:mm-HH:mm" (or empty: never quiet), validated. */
+function quietWindow(v: string): string {
+  const t = v.trim();
+  if (t && !/^([01]?\d|2[0-3]):[0-5]\d-([01]?\d|2[0-3]):[0-5]\d$/.test(t)) throw new Error('CLIENT_QUIET_HOURS must be "HH:mm-HH:mm", e.g. 22:00-08:00');
+  return t;
 }
 
 /** "HH:MM" to a daily cron pattern, validated. */
