@@ -43,7 +43,8 @@ export async function synthesize(text: string, out: string, engine: TtsEngine, v
         await run('edge-tts', ['--voice', v, '--rate=+5%', '--text', text, '--write-media', out]);
         return;
       } catch (err) {
-        process.stderr.write(`edge-tts ${v} failed, trying next: ${String((err as Error).message).split('\n')[0].slice(0, 120)}\n`);
+        const first = String((err as Error).message ?? err).split('\n')[0] ?? '';
+        process.stderr.write(`edge-tts ${v} failed, trying next: ${first.slice(0, 120)}\n`);
       }
     }
     if (!(await has('say'))) throw new Error('edge-tts failed for every voice and `say` is unavailable');
