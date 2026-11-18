@@ -1,7 +1,7 @@
 import type { Db } from './db.js';
 import { migrate } from './db.js';
 import { errMsg, log } from './log.js';
-import type { Messenger } from './messenger.js';
+import type { Button, Messenger } from './messenger.js';
 
 /** What an agent proposes. `text` is what the owner can edit (a reply to a client, a post, a price). */
 export interface Payload {
@@ -16,6 +16,11 @@ export interface KindSpec {
   locked?: boolean;
   /** Runs only after "approve" (or at level 1). Throwing marks the approval failed. */
   execute(payload: Payload, approvalId: number): Promise<void>;
+  /**
+   * Own button rows for the owner's card instead of the default «Одобрить / Править / Отклонить». Buttons that decide must
+   * keep the `ap:<id>:a|e|r` data (approve, edit, reject) so the core's handlers still work; others are the app's own.
+   */
+  buttons?(id: number, payload: Payload): Button[][];
 }
 
 export type Action = 'approve' | 'edit' | 'reject';
@@ -243,7 +248,7 @@ export class ApprovalQueue {
     await this.messenger.send(
       this.ownerId,
       `#${id} ${row.kind} (уровень ${level}, подряд ${this.streak(row.kind)})\n${row.summary}${body}`,
-      [[
+      this.spec(row.kind).buttons?.(id, row.payload) ?? [[
         { text: 'Одобрить', data: `ap:${id}:a` },
         { text: 'Править', data: `ap:${id}:e` },
         { text: 'Отклонить', data: `ap:${id}:r` },
