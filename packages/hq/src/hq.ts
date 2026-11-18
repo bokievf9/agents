@@ -91,6 +91,7 @@ export interface TaskFilter {
  */
 export class Hq {
   private queue: ApprovalQueue | null = null;
+  private readonly decisionSinks: ((link: TaskApproval, state: ApprovalState) => void)[] = [];
   private readonly alertSinks: ((text: string) => Promise<void> | void)[] = [];
   readonly now: () => number;
   prices: PriceTable;
@@ -357,6 +358,11 @@ export class Hq {
     return queued.length;
   }
 
+  /** Called for every proposal the owner decided (executed, rejected or failed), e.g. to update a worker's own tables. */
+  onApprovalDecision(sink: (link: TaskApproval, state: ApprovalState) => void): void {
+    this.decisionSinks.push(sink);
+  }
+
   /** Brings tasks in line with the core queue's decisions (approved: done, rejected: rejected, failed: blocked). */
   reconcileApprovals(): number {
     const asked = this.db.prepare("SELECT * FROM task_approvals WHERE state = 'asked' AND approval_id IS NOT NULL").all() as LinkRow[];
@@ -367,6 +373,7 @@ export class Hq {
       if (!next) continue;
       this.db.prepare('UPDATE task_approvals SET state = ? WHERE id = ?').run(next, row.id);
       changed++;
+      for (const sink of this.decisionSinks) sink(this.approvalLink(row.id)!, next);
       const open = this.db.prepare("SELECT COUNT(*) c FROM task_approvals WHERE task_id = ? AND state IN ('queued','asked')").get(row.task_id) as { c: number };
       const t = this.task(row.task_id);
       if (!t || TERMINAL.includes(t.status)) continue;

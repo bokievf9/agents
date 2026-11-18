@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DIRECTIONS } from '../src/directions.js';
 import { ALL_TOPICS, REPEAT_WINDOW_DAYS, pickTopics, type History } from '../src/topics.js';
+import { storeFor } from '../src/worker.js';
 import { NOW, setup } from './helpers.js';
 
 const DAY = 86_400_000;
@@ -41,8 +42,8 @@ describe('topic rotation', () => {
   });
 
   it('records topics of a pack in the SQLite history', async () => {
-    const { head, store } = setup();
-    await head.generatePack(true);
-    expect(store.history().size).toBe(8);
+    const { worker, ctx, task } = setup();
+    await worker.plan(task({ action: 'pack' }), ctx);
+    expect(storeFor(ctx).history().size).toBe(8);
   });
 });

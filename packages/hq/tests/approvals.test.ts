@@ -86,4 +86,17 @@ describe('approvals through the Director batch', () => {
     expect(hq.task(t.id)!.status).toBe('done');
     expect(messenger.sent).toHaveLength(0);
   });
+
+  it('decision sinks hear about every decided proposal', async () => {
+    const { hq, queue, task } = kindSetup();
+    const seen: string[] = [];
+    hq.onApprovalDecision((l, state) => void seen.push(`${l.kind}:${state}`));
+    const t = task();
+    await hq.requestApproval(t.id, 'marketing-head', 'post', { text: 'x' }, 's');
+    await hq.releaseApprovals();
+    await queue.handle('reject', queue.pending()[0]!.id, OWNER);
+    hq.reconcileApprovals();
+    hq.reconcileApprovals();
+    expect(seen).toEqual(['post:rejected']);
+  });
 });

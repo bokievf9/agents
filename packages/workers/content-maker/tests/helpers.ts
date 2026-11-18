@@ -1,13 +1,11 @@
-import { ApprovalQueue, MemoryMessenger, MockLlm, OffLlm, openDb, type LlmClient, type LlmRequest } from '@fir/core';
+import { MockLlm, OffLlm, openDb, type LlmClient, type LlmRequest, type Payload } from '@fir/core';
+import type { Task, WorkerCtx } from '@fir/hq';
 import { fileURLToPath } from 'node:url';
-import { loadPrompts } from '../src/generate.js';
-import { ContentHead } from '../src/head.js';
-import { ContentStore } from '../src/store.js';
+import { ContentMakerWorker } from '../src/worker.js';
 
-export const OWNER = 100;
-// Wed 2026-11-18 12:00 UTC (Tashkent): the next pack week starts Mon 2026-11-23
-export const NOW = Date.UTC(2026, 10, 18, 12, 0);
-export const prompts = loadPrompts(fileURLToPath(new URL('../prompts', import.meta.url)));
+export const promptsDir = fileURLToPath(new URL('../prompts', import.meta.url));
+// Wed 2026-11-18 12:00 Tashkent: the next pack week starts Mon 2026-11-23
+export const NOW = Date.UTC(2026, 10, 18, 7, 0);
 
 const cap = (t: string) => ({ text: `${t} подпись`, hashtags: ['#fir', '#боты', '#ai'] });
 
@@ -40,20 +38,30 @@ export function carouselJson(): string {
 /** Mock model: carousel prompt gets a carousel, everything else a clip. */
 export const smartLlm = () => new MockLlm((r: LlmRequest) => (r.messages[0]!.content.startsWith('Составь карусель') ? carouselJson() : clipJson()));
 
-export function setup(opts: { llm?: LlmClient } = {}) {
-  const clock = { t: NOW };
-  const messenger = new MemoryMessenger();
+export interface Staged {
+  kind: string;
+  payload: Payload;
+  summary: string;
+}
+
+/** A worker context the way a head builds it: shared in-memory db, requestApproval stages proposals. */
+export function setup(opts: { llm?: LlmClient; clipsPerWeek?: number; carouselsPerWeek?: number } = {}) {
   const db = openDb(':memory:');
-  const now = () => clock.t;
-  const queue = new ApprovalQueue(db, messenger, OWNER, 20, now);
-  const store = new ContentStore(db, now);
+  const staged: Staged[] = [];
+  const clock = { t: NOW };
+  const logs: string[] = [];
   const llm = opts.llm ?? smartLlm();
-  const head = new ContentHead({ store, messenger, llm, queue, prompts, cfg: { ownerId: OWNER, tz: 'Asia/Tashkent' }, now, rng: () => 0.1 });
-  /** Press a decision the way the bot glue does. */
-  const decide = async (action: 'approve' | 'edit' | 'reject', approvalId: number) => {
-    await queue.handle(action, approvalId, OWNER);
-    await head.afterDecision(approvalId, action);
+  const ctx: WorkerCtx = {
+    llm, db, tz: 'Asia/Tashkent', now: () => clock.t,
+    requestApproval: (kind, payload, summary) => Promise.resolve(staged.push({ kind, payload, summary }) - 1),
+    log: (action, detail) => void logs.push(detail ? `${action}: ${detail}` : action),
   };
-  return { head, store, queue, messenger, db, clock, decide, llm };
+  const worker = new ContentMakerWorker({ promptsDir, rng: () => 0.1, ...(opts.clipsPerWeek !== undefined ? { clipsPerWeek: opts.clipsPerWeek } : {}), ...(opts.carouselsPerWeek !== undefined ? { carouselsPerWeek: opts.carouselsPerWeek } : {}) });
+  let n = 0;
+  const task = (meta: Record<string, unknown>, title = 'T'): Task => ({
+    id: ++n, title, body: '', dept: 'marketing', assigneeId: 'content-maker', creator: 'routine', parentId: null, status: 'running', priority: 0,
+    dueAt: null, result: null, costUsd: 0, meta, tags: [], routineId: null, createdAt: 0, updatedAt: 0,
+  });
+  return { worker, ctx, db, staged, clock, logs, task, llm };
 }
 export { OffLlm };
