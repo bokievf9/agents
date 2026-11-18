@@ -79,7 +79,6 @@ export function intakeRecord(
 
 export type FreeResult =
   | { kind: 'price' }
-  | { kind: 'night' }
   | { kind: 'fallback' }
   | { kind: 'answer'; text: string; team: boolean; removed: number };
 
@@ -88,16 +87,13 @@ export interface FreeDeps {
   instructions: string;
   /** LLM budget gate (the daily cap shared by Telegram and the web chat). */
   gate: { llmAllowed(): boolean; llmUsed(): void };
-  night: boolean;
 }
 
 /**
- * One free-conversation turn: a direct price question gets the template, the night gets the template, LLM off or the
- * daily cap fall back, otherwise the model answers and the sanitiser cleans it (prices, dates, markdown, length).
+ * One free-conversation turn: a direct price question gets the template, LLM off or the daily cap fall back, otherwise the model answers and the sanitiser cleans it (prices, dates, markdown, length).
  */
 export async function freeAnswer(d: FreeDeps, lang: Lang, text: string, turns: Turn[], beforeCall?: () => Promise<void>): Promise<FreeResult> {
   if (isPriceQuestion(text)) return { kind: 'price' };
-  if (d.night) return { kind: 'night' };
   if (!d.llm.enabled || !d.gate.llmAllowed()) return { kind: 'fallback' };
   await beforeCall?.();
   d.gate.llmUsed();

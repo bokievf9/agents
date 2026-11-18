@@ -238,14 +238,13 @@ describe('free conversation', () => {
     expect(w.llmCalls()).toBe(1);
   });
 
-  it('quiet hours: no LLM call, a template and the intake button', async () => {
+  it('quiet hours: the LLM still answers questions at night', async () => {
     const w = world();
     w.clock.t = NIGHT;
     await w.say('/start');
     const r = await w.say('Что вы умеете?');
-    expect(w.llmCalls()).toBe(0);
-    expect(r.reply).toMatch(/ночь/);
-    expect(ids(r.buttons)).toEqual(['intake']);
+    expect(w.llmCalls()).toBe(1);
+    expect(r.reply).not.toMatch(/ночь/);
   });
 
   it('a direct price question gets the template without the LLM', async () => {

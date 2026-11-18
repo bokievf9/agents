@@ -59,7 +59,7 @@ export interface ClientEngineDeps {
 /**
  * The public client bot («лицо компании»): welcome and menu, a 3-step project intake that becomes a Sales lead, «я уже
  * клиент» that becomes a Support ticket, «позвать человека» that hands the chat to the owner, and a free conversation
- * answered by the LLM within strict rules (sanitised, rate limited, no LLM at night). Approved replies of the heads
+ * answered by the LLM within strict rules (sanitised, rate limited, round the clock; quiet hours only mean a human answers in the morning). Approved replies of the heads
  * come back through `deliver`. Stores per chat only the `cb_chats` row; client texts go into lead and ticket records
  * the way the website form does, never into logs.
  */
@@ -373,16 +373,13 @@ export class ClientEngine implements ClientChannel {
   private async answer(chat: Chat, text: string): Promise<void> {
     const t = T[chat.lang];
     const r = await freeAnswer(
-      { llm: this.d.llm, instructions: this.d.instructions, gate: this.limiter, night: this.isNight() }, chat.lang, text, this.turns(chat.chatId),
+      { llm: this.d.llm, instructions: this.d.instructions, gate: this.limiter }, chat.lang, text, this.turns(chat.chatId),
       () => this.d.transport.typing(chat.chatId).catch(() => undefined),
     );
     switch (r.kind) {
       case 'price':
         await this.say(chat.chatId, t.priceAnswer, this.discussButton(chat.lang));
         return;
-      case 'night':
-        await this.say(chat.chatId, t.night, this.discussButton(chat.lang));
-        return this.forward(chat, text, 'Сообщение ночью');
       case 'fallback':
         return this.fallback(chat, text);
       default:

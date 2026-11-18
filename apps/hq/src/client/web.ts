@@ -276,11 +276,10 @@ export class WebChatEngine {
         this.d.gate.llmUsed();
       },
     };
-    const r = await freeAnswer({ llm: this.d.llm, instructions: this.d.instructions, gate, night: this.isNight() }, lang, text, this.history.turns(s.id));
+    const r = await freeAnswer({ llm: this.d.llm, instructions: this.d.instructions, gate }, lang, text, this.history.turns(s.id));
     if (used) this.store.update(s.id, { llmAnswers: s.llmAnswers + used });
     switch (r.kind) {
       case 'price': return { reply: w.price, buttons: intakeButton(lang) };
-      case 'night': return { reply: w.night, buttons: intakeButton(lang) };
       case 'fallback': return { reply: s.llmAnswers >= cap ? w.cap : w.fallback, buttons: intakeButton(lang) };
       default:
     }

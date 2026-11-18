@@ -439,14 +439,13 @@ describe('free conversation', () => {
     expect(w.transport.last(CLIENT)!.html).toContain('Передал команде');
   });
 
-  it('quiet hours: no LLM call, the night template, the owner gets a silent notice', async () => {
+  it('quiet hours: the bot still answers with the LLM, only the intake says a human replies in the morning', async () => {
     const w = world();
     w.clock.t = NIGHT;
     expect(w.engine.isNight()).toBe(true);
     await w.engine.onText(ME, 'Вы делаете ботов?');
-    expect(w.llmCalls()).toBe(0);
-    expect(w.transport.last(CLIENT)!.html).toContain('ответит утром');
-    expect(w.transport.last(OWNER)!.silent).toBe(true);
+    expect(w.llmCalls()).toBe(1);
+    expect(w.transport.last(CLIENT)!.html).not.toContain('ответит утром');
     // the intake still works at night and says the answer comes in the morning
     await w.intake();
     expect(w.transport.edits.at(-1)!.html).toContain('утром');
