@@ -22,6 +22,7 @@ The font (Inter, with Cyrillic) is loaded through `@remotion/google-fonts`, so t
 ```sh
 pnpm --filter @fir/clips render <script.json> <out.mp4>
 pnpm --filter @fir/clips preview     # Remotion Studio
+pnpm --filter @fir/clips send <file.mp4> [caption]   # send the clip to the owner in Telegram
 ```
 
 Relative paths are resolved from the directory where you typed the command. Image and music paths inside the script are
@@ -59,8 +60,12 @@ in about 45 s on an M1 Pro (about 1.5 MB).
 2. Render:
    `pnpm --filter @fir/clips render out/clips/<slug>.json out/clips/<slug>.mp4` from `/Users/firdavs/fir-tech/agents`.
 3. Check the file: duration 20 to 40 s, size under about 10 MB, and look at one or two frames (`ffmpeg -ss 5 -i f.mp4 -frames:v 1 f.png`).
-4. Comment on the issue with the local path `/Users/firdavs/fir-tech/agents/out/clips/<slug>.mp4`, the duration and the
-   voice engine. For now the file reaches the owner through the Telegram publish pack; there is no upload step yet.
+4. Send to the owner: `pnpm --filter @fir/clips send out/clips/<slug>.mp4 "<caption>"`. It calls the Bot API `sendVideo`
+   (multipart) with `HQ_BOT_TOKEN` and `OWNER_TELEGRAM_ID`, taken from the environment or from the env file
+   `CLIPS_ENV_FILE` (absolute, or relative to the package; default `../../apps/hq/.env.local`). The token is never printed.
+   On success it prints `message: <id>`.
+5. Comment on the issue: «отправлен владельцу в Telegram, message <id>» plus the local path
+   `/Users/firdavs/fir-tech/agents/out/clips/<slug>.mp4`, the duration and the voice engine. Then close the issue.
 
 ## Limits
 

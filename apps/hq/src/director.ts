@@ -80,6 +80,8 @@ export class Director {
   onSalesCommand: ((name: string, arg: string) => Promise<string>) | null = null;
   /** Set by the Support head: `/ticket`, `/tickets`, `/client`, `/invoice`, `/paid`, `/onboard`... (generic passthrough). */
   onSupportCommand: ((name: string, args: string) => Promise<string>) | null = null;
+  /** Set by the topic manager: `/topics` creates the missing topics (or explains the two steps). Returns the reply. */
+  onTopicsCommand: (() => Promise<string>) | null = null;
   /** Set by the builder bridge: a builder task was just created, make its issue now instead of at the next poll. */
   onBuilderTask: (() => Promise<unknown>) | null = null;
   /** Commands of the Production and Back Office heads (`/project`, `/doc`...): name -> handler returning the reply. */
@@ -207,7 +209,7 @@ export class Director {
     switch (name) {
       case 'start':
       case 'help':
-        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/kp <лид или описание>: КП, смета, договор\n/referral <клиент> -> <лид>, /referrals: рекомендации\n/builders: задачи строителям (issue)\nСопровождение: /ticket клиент: вопрос, /tickets, /client, /clients, /invoice клиент сумма за_что, /invoices, /sub, /onboard клиент\n/paid <номер счёта FT-2026-001 или id рекомендации>: оплата счёта (сопровождение) или выплата за рекомендацию (продажи)\nПроизводство: /project, /pstatus, /target, /mdone\nДокументы и знания: /doc, /lesson, /kb\n/skip: отменить ожидание правки');
+        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/kp <лид или описание>: КП, смета, договор\n/referral <клиент> -> <лид>, /referrals: рекомендации\n/builders: задачи строителям (issue)\n/topics: создать темы в группе HQ\nСопровождение: /ticket клиент: вопрос, /tickets, /client, /clients, /invoice клиент сумма за_что, /invoices, /sub, /onboard клиент\n/paid <номер счёта FT-2026-001 или id рекомендации>: оплата счёта (сопровождение) или выплата за рекомендацию (продажи)\nПроизводство: /project, /pstatus, /target, /mdone\nДокументы и знания: /doc, /lesson, /kb\n/skip: отменить ожидание правки');
       case 'status':
         return this.say(this.statusText());
       case 'tasks':
@@ -238,6 +240,8 @@ export class Director {
         return this.salesReply(Number(arg.trim().replace(/^#/, '')), undefined);
       case 'ticket': case 'tickets': case 'client': case 'clients': case 'invoice': case 'invoices': case 'sub': case 'onboard':
         return this.say(this.onSupportCommand ? await this.onSupportCommand(name, arg) : 'Отдел сопровождения не подключён.');
+      case 'topics':
+        return this.say(this.onTopicsCommand ? await this.onTopicsCommand() : 'Группа HQ не подключена.');
       case 'skip':
         for (const e of this.editors.values()) e.cancel();
         return this.say('Ок, ничего не жду.');

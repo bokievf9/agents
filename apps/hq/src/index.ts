@@ -19,6 +19,7 @@ import { FinanceWorker } from '@fir/worker-finance';
 import { OnboardingWorker } from '@fir/worker-onboarding';
 import { MonitoringWorker } from '@fir/worker-monitoring';
 import { Reporter, type TopicSender } from './reporter.js';
+import { TopicManager } from './topics.js';
 import { createWebhook } from './webhook.js';
 import { BuilderBridge, RestGithubClient } from './bridge.js';
 
@@ -45,12 +46,14 @@ const topicSender = (api: Api): TopicSender => async (chatId, threadId, text) =>
   await api.sendMessage(chatId, text, { message_thread_id: threadId, link_preview_options: { is_disabled: true } });
 };
 senders.set('general', topicSender(bot.api));
+// Every department reports through the Director's bot unless it has its own bot token (the department bots are optional).
+const topicManager = new TopicManager(hq, cfg.groupId, cfg.topics, bot.api);
 if (cfg.marketingBotToken) senders.set(MARKETING, topicSender(new Api(cfg.marketingBotToken)));
 if (cfg.supportBotToken) senders.set(SUPPORT, topicSender(new Api(cfg.supportBotToken)));
 if (cfg.salesBotToken) senders.set(SALES, topicSender(new Api(cfg.salesBotToken)));
 if (cfg.productionBotToken) senders.set(PRODUCTION, topicSender(new Api(cfg.productionBotToken)));
 if (cfg.backofficeBotToken) senders.set(BACKOFFICE, topicSender(new Api(cfg.backofficeBotToken)));
-const reporter = new Reporter(cfg.groupId, cfg.topics, senders);
+const reporter = new Reporter(() => topicManager.groupId(), () => topicManager.topics(), senders, topicSender(bot.api));
 
 const director = new Director({ hq, llm, messenger, queue, ownerId: cfg.ownerId, reporter });
 const marketing = new MarketingHead({
@@ -79,7 +82,22 @@ const production = new ProductionHead({ hq, llm, queue, messenger, ownerId: cfg.
 const backoffice = new BackofficeHead({ hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, knowledgeDir: cfg.knowledgeDir });
 for (const name of ['project', 'pstatus', 'target', 'mdone']) director.commands.set(name, { dept: 'production', run: (arg) => production.command(name, arg) });
 for (const name of ['doc', 'lesson', 'kb']) director.commands.set(name, { dept: 'backoffice', run: (arg) => backoffice.command(name, arg) });
-director.summaryLines.push(() => production.overdueLine(), () => backoffice.pendingLine());
+director.onTopicsCommand = async () => (await topicManager.ensure()).text;
+director.summaryLines.push(() => topicManager.summaryNote(), () => production.overdueLine(), () => backoffice.pendingLine());
+
+// Group service messages: the basic group became a supergroup (new id), or a topic was created by hand.
+bot.on('message', async (ctx, next) => {
+  if (ctx.chat.type === 'private') return next();
+  const m = ctx.message;
+  const changed = topicManager.onGroupEvent({
+    chatId: ctx.chat.id,
+    ...(m.message_thread_id !== undefined ? { threadId: m.message_thread_id } : {}),
+    ...(m.migrate_to_chat_id !== undefined ? { migrateTo: m.migrate_to_chat_id } : {}),
+    ...(m.migrate_from_chat_id !== undefined ? { migrateFrom: m.migrate_from_chat_id } : {}),
+    ...(m.forum_topic_created ? { topicName: m.forum_topic_created.name } : {}),
+  });
+  if (changed && (m.migrate_to_chat_id !== undefined || m.migrate_from_chat_id !== undefined)) void topicManager.ensure().catch(() => undefined);
+});
 
 // Only the owner in a private chat; everyone else is ignored silently.
 bot.use(async (ctx, next) => {
@@ -124,7 +142,7 @@ bot.on('callback_query:data', async (ctx, next) => {
 installApprovals(bot, queue, cfg.ownerId);
 
 const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
-for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', ...SUPPORT_COMMANDS, ...director.commands.keys()]) {
+for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', 'topics', ...SUPPORT_COMMANDS, ...director.commands.keys()]) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
 }
 for (const name of ['kp', 'referral', 'referrals']) {
@@ -153,6 +171,7 @@ director.onBuilderTask = () => bridge.syncNew();
 bridge.start();
 director.start();
 support.start();
+void topicManager.ensure().then((r) => log('info', 'topics checked', { state: r.state, created: r.created }));
 // Wake every head once at start: tasks that waited while the process was down.
 for (const dept of hq.departments()) {
   const head = hq.headOf(dept);

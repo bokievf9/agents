@@ -6,6 +6,7 @@
   "description": "Faceless vertical clips (Remotion). Mac-only dev tool, not part of the Docker image.",
   "scripts": {
     "render": "tsx src/cli.ts",
+    "send": "tsx src/send-cli.ts",
     "preview": "remotion studio src/remotion/index.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
