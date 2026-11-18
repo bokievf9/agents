@@ -33,8 +33,20 @@ export async function pickEngine(): Promise<TtsEngine> {
 /** Voice-over text to an mp3 file. */
 export async function synthesize(text: string, out: string, engine: TtsEngine, voice?: string): Promise<void> {
   if (engine === 'edge-tts') {
-    await run('edge-tts', ['--voice', voice ?? 'ru-RU-DmitryNeural', '--rate=+5%', '--text', text, '--write-media', out]);
-    return;
+    // The Microsoft service sometimes answers "No audio was received" for one voice and one text
+    // (seen with ru-RU-DmitryNeural on ordinary sentences) while another voice works, so try the
+    // requested voice, then the alternate, then fall back to macOS `say` so a clip is never blocked.
+    const primary = voice ?? 'ru-RU-SvetlanaNeural';
+    const alternate = primary === 'ru-RU-SvetlanaNeural' ? 'ru-RU-DmitryNeural' : 'ru-RU-SvetlanaNeural';
+    for (const v of [primary, alternate]) {
+      try {
+        await run('edge-tts', ['--voice', v, '--rate=+5%', '--text', text, '--write-media', out]);
+        return;
+      } catch (err) {
+        process.stderr.write(`edge-tts ${v} failed, trying next: ${String((err as Error).message).split('\n')[0].slice(0, 120)}\n`);
+      }
+    }
+    if (!(await has('say'))) throw new Error('edge-tts failed for every voice and `say` is unavailable');
   }
   const aiff = out.replace(/\.mp3$/, '.aiff');
   await run('say', ['-v', voice ?? 'Milena', '-o', aiff, '--', text]);
