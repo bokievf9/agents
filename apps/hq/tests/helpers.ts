@@ -59,7 +59,7 @@ export function world(opts: { presence?: boolean; llm?: LlmClient; groupTopics?:
   const messenger = new MemoryMessenger();
   const hq = new Hq(db, { now: () => clock.t });
   // with `presence`: the owner channel in front of the (memory) Telegram; `messenger` stays the Telegram side
-  const channel = opts.presence ? new OwnerChannel({ hq, inner: messenger, ownerId: OWNER, approvalPending: (id) => queue.get(id)?.status === 'pending' }) : null;
+  const channel = opts.presence ? new OwnerChannel({ hq, inner: messenger, ownerId: OWNER, approvalPending: (id) => queue.get(id)?.status === 'pending', onCardSent: (id, m) => queue.noteCard(id, OWNER, m) }) : null;
   const toOwner = channel ?? messenger;
   const queue: ApprovalQueue = new ApprovalQueue(db, toOwner, OWNER, 20, () => clock.t);
   hq.attachQueue(queue);

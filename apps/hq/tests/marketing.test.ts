@@ -31,9 +31,9 @@ describe('Marketing head: weekly pack end to end', () => {
     // Costs of the head and worker calls were metered per department
     expect(w.hq.costSummary(0)[0]!.dept).toBe('marketing');
 
-    // The Director's batch: one numbered series, each with buttons
+    // The Director's batch: a header with «Одобрить все обычные», then one numbered series, each card with buttons
     expect(await w.director.sendApprovalBatch(false)).toBe(8);
-    const cards = w.messenger.sent.filter((m) => m.buttons);
+    const cards = w.messenger.sent.filter((m) => m.buttons?.flat().some((b) => /^ap:\d+:a$/.test(b.data)));
     expect(cards).toHaveLength(8);
     expect(cards[0]!.text).toContain('[1/8] marketing');
     expect(cards[0]!.text).toContain('Пакет, материал 1 из 8');

@@ -1,6 +1,6 @@
 import { Api } from 'grammy';
 import {
-  ApprovalQueue, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, startPolling,
+  ApprovalQueue, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, setupBotMenu, startPolling,
 } from '@fir/core';
 import { HeartbeatWorker, Hq, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
@@ -31,6 +31,7 @@ import { RateLimiter } from './client/sanitize.js';
 import { WebChatEngine } from './client/web.js';
 import { FALLBACK_INSTRUCTIONS } from './client/prompt.js';
 import { clientSinks } from './client/sinks.js';
+import { DIRECTOR_COMMANDS, DIRECTOR_PROFILE, deptBotMenu, menuCommand } from './tg.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
@@ -48,6 +49,7 @@ const bot = createBot(cfg.botToken);
 const telegram = grammyMessenger(bot);
 const channel: OwnerChannel = new OwnerChannel({
   hq, inner: telegram, ownerId: cfg.ownerId, awayAfterMin: cfg.presenceAwayAfterMin, approvalPending: (id: number): boolean => queue.get(id)?.status === 'pending',
+  onCardSent: (id: number, messageId: number) => queue.noteCard(id, cfg.ownerId, messageId),
 });
 const messenger = channel;
 const queue: ApprovalQueue = new ApprovalQueue(db, messenger, cfg.ownerId, cfg.trustThreshold);
@@ -62,11 +64,13 @@ const topicSender = (api: Api): TopicSender => async (chatId, threadId, text) =>
 senders.set('general', topicSender(bot.api));
 // Every department reports through the Director's bot unless it has its own bot token (the department bots are optional).
 const topicManager = new TopicManager(hq, cfg.groupId, cfg.topics, bot.api);
-if (cfg.marketingBotToken) senders.set(MARKETING, topicSender(new Api(cfg.marketingBotToken)));
-if (cfg.supportBotToken) senders.set(SUPPORT, topicSender(new Api(cfg.supportBotToken)));
-if (cfg.salesBotToken) senders.set(SALES, topicSender(new Api(cfg.salesBotToken)));
-if (cfg.productionBotToken) senders.set(PRODUCTION, topicSender(new Api(cfg.productionBotToken)));
-if (cfg.backofficeBotToken) senders.set(BACKOFFICE, topicSender(new Api(cfg.backofficeBotToken)));
+const deptApis = new Map<string, Api>();
+for (const [dept, token] of [[MARKETING, cfg.marketingBotToken], [SUPPORT, cfg.supportBotToken], [SALES, cfg.salesBotToken], [PRODUCTION, cfg.productionBotToken], [BACKOFFICE, cfg.backofficeBotToken]] as const) {
+  if (!token) continue;
+  const api = new Api(token);
+  deptApis.set(dept, api);
+  senders.set(dept, topicSender(api));
+}
 const reporter = new Reporter(() => topicManager.groupId(), () => topicManager.topics(), senders, topicSender(bot.api));
 
 const director = new Director({ hq, llm, messenger, queue, ownerId: cfg.ownerId, reporter });
@@ -147,6 +151,25 @@ bot.use(async (ctx, next) => {
   if (ctx.from?.id === cfg.ownerId && ctx.chat?.type === 'private') await channel.asReply(() => next());
 });
 
+// A button never spins: a handler that throws still answers the callback query.
+bot.on('callback_query:data', async (ctx, next) => {
+  try {
+    await next();
+  } catch (e) {
+    log('error', 'button handler failed', { err: errMsg(e) });
+    await ctx.answerCallbackQuery({ text: 'Не получилось, попробуйте ещё раз' }).catch(() => undefined);
+  }
+});
+
+// The Director's own buttons: task lists and cards, departments, the batch header, «👁 Полностью» on a card.
+bot.on('callback_query:data', async (ctx, next) => {
+  const msg = ctx.callbackQuery.message;
+  if (!msg) return next();
+  const toast = await director.onButton(ctx.callbackQuery.data, { chatId: msg.chat.id, messageId: msg.message_id });
+  if (toast === null) return next();
+  await ctx.answerCallbackQuery({ text: toast }).catch(() => undefined);
+});
+
 // «Скопировать» on a Scout card: the plain draft as its own message.
 bot.on('callback_query:data', async (ctx, next) => {
   const copyId = parseCopy(ctx.callbackQuery.data);
@@ -173,7 +196,9 @@ bot.on('callback_query:data', async (ctx, next) => {
   const text = edit ? await director.onEditPressed(Number(edit[1])) : await director.onPartPicked(Number(part![1]), part![2]!);
   if (text === null) return next(); // no editor for this kind: the core's own edit
   await ctx.answerCallbackQuery({ text });
-  if (part) await ctx.editMessageReplyMarkup().catch(() => undefined);
+  // the part picker message loses its buttons; the approval card itself (part buttons on it) keeps them
+  const onCard = part && queue.cardMessage(Number(part[1]))?.messageId === ctx.callbackQuery.message?.message_id;
+  if (part && !onCard) await ctx.editMessageReplyMarkup().catch(() => undefined);
 });
 
 // After the core ran the approval buttons, tasks follow the owner's decision.
@@ -182,17 +207,36 @@ bot.on('callback_query:data', async (ctx, next) => {
   await next();
   if (m) director.afterDecision();
 });
-installApprovals(bot, queue, cfg.ownerId);
+// Commands and the reply keyboard's buttons are never taken for an edit text.
+installApprovals(bot, queue, cfg.ownerId, { passthrough: (text) => text.startsWith('/') || menuCommand(text) !== null });
+// Anything else (an old card from before a restart, a button of a removed feature): answered, never left spinning.
+bot.on('callback_query:data', async (ctx) => {
+  await ctx.answerCallbackQuery({ text: 'Устарело' }).catch(() => undefined);
+});
 
-const botCommands = ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', 'builder', 'topics', 'drill', 'retry', 'desk', 'away', ...SUPPORT_COMMANDS, ...director.commands.keys(), 'kp', 'referral', 'referrals'];
+const botCommands = ['start', 'help', 'status', 'depts', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', 'builder', 'topics', 'drill', 'retry', 'desk', 'away', ...SUPPORT_COMMANDS, ...director.commands.keys(), 'kp', 'referral', 'referrals'];
 const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
 for (const name of botCommands) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
 }
 // A free-text message goes through the LLM: run it in the background so buttons stay responsive.
+// An unknown /command gets a short hint with the keyboard instead of silence.
 bot.on('message:text', (ctx) => {
-  if (!ctx.message.text.startsWith('/')) background('text', () => director.onText(ctx.message.text));
+  const text = ctx.message.text;
+  if (!text.startsWith('/')) background('text', () => director.onText(text));
+  else background('unknown', () => director.hint(`Не знаю команды ${text.split(/\s/)[0]!.slice(0, 40)}.`));
 });
+
+// The menu: the owner's command list with descriptions, the menu button, profile texts; department bots point to the Director.
+const setupMenus = async () => {
+  await setupBotMenu(bot.api, {
+    commands: [], ownerCommands: { chatId: cfg.ownerId, commands: DIRECTOR_COMMANDS }, description: DIRECTOR_PROFILE.description,
+    shortDescription: DIRECTOR_PROFILE.short, menuButtonChatId: cfg.ownerId,
+  }, 'director');
+  const me = await bot.api.getMe().then((m) => m.username).catch(() => undefined);
+  for (const [dept, api] of deptApis) await setupBotMenu(api, deptBotMenu(dept, me), dept);
+};
+void setupMenus().catch((e) => log('warn', 'bot menu setup failed', { err: errMsg(e) }));
 
 // Heartbeat: the heads work only when woken (a task, a message or a routine).
 const heartbeats = new HeartbeatWorker(hq, async (agent) => {

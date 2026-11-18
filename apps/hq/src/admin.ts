@@ -106,6 +106,8 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
       // the new card the queue sends after an edit is the owner's own action: not stored, not sent
       const { result } = await channel.capture(() => (editor?.applyEdit ? editor.applyEdit(id, text, part) : queue.applyEdit(id, text)));
       if (!result) return fail(409, 'not_applied', { status: queue.get(id)?.status ?? row.status });
+      // the Telegram card (if it went there) shows the edited text with its buttons again
+      await queue.settleCard(id).catch(() => false);
       return ok({ status: queue.get(id)!.status });
     }
     const { result: message, replies } = await channel.capture(async () => {
@@ -114,6 +116,8 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
       return answer;
     });
     channel.resolveApproval(id);
+    // decided on the site: the Telegram card is edited to «Одобрено» / «Отклонено», no buttons left
+    await queue.settleCard(id).catch(() => false);
     const status = queue.get(id)!.status;
     if (status === 'failed') return { status: 200, body: { ok: false, error: 'failed', status, message, notes: replies } };
     return ok({ status, message, notes: replies });

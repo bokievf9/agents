@@ -1,5 +1,5 @@
 import { Cron } from 'croner';
-import { errMsg, log, schedule, tryJson, zonedParts, zonedToMs, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
+import { errMsg, escapeHtml, log, schedule, stripHtml, tryJson, zonedParts, zonedToMs, type ApprovalQueue, type Button, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Hq, type Task } from '@fir/hq';
 import { z } from 'zod';
 import { dailyCron } from './config.js';
@@ -8,6 +8,22 @@ import type { Reporter } from './reporter.js';
 import { openBuilderTasks } from './bridge.js';
 import { Progress, deptRu, lastReason, reasonRu } from './progress.js';
 import { OwnerChannel, type InboxKind } from './presence.js';
+import { KEYBOARD, approvalCardFormat, bold, cb, clip, code, esc, menuCommand, parseNav, type Nav } from './tg.js';
+
+/** Tasks per page of the /tasks list. */
+export const TASKS_PAGE = 10;
+const plural = (n: number, one: string, few: string, many: string) => {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+};
+const proposals = (n: number) => `${n} ${plural(n, 'предложение', 'предложения', 'предложений')}`;
+
+/** Where a button was pressed: the message to edit in place. */
+export interface ButtonAt {
+  chatId: number;
+  messageId: number;
+}
 
 const DAY = 86_400_000;
 const HM = /^([01]?\d|2[0-3]):[0-5]\d$/;
@@ -69,27 +85,35 @@ const ruRole: Record<string, string> = { director: 'директор', head: 'г
 const STATUS_RU: Record<string, string> = {
   inbox: 'ждёт отдел', assigned: 'ждёт отдел', running: 'в работе', review: 'на проверке', approval: 'ждёт вас в /approve', blocked: 'застряла', done: 'выполнена', rejected: 'отклонена',
 };
-/** Compact cheat sheet for /help (the full page: apps/hq/docs/owner-cheatsheet.md). */
+/** Compact cheat sheet for /help, Telegram HTML (the full page: apps/hq/docs/owner-cheatsheet.md). */
 export const HELP = [
-  'Директор Fir Tech. Пишите задачу обычным текстом: передам отделу и буду править одно сообщение по ходу работы (взял, делает, ждёт вас, готово).',
+  '🆘 <b>Директор Fir Tech</b>',
+  'Пишите задачу обычным текстом: передам отделу и буду править одно сообщение по ходу работы (взял, делает, ждёт вас, готово). Кнопки внизу: одобрения, задачи, статус, отделы, помощь.',
   'Куда что приходит: ответы, карточки на одобрение и «живые» сообщения о задачах здесь, в личке. Отчёты отделов и сводки в группе HQ по темам.',
   '',
-  'Каждый день:',
-  '/status: кто чем занят, что ждёт вас, ближайшая рутина',
-  '/tasks [отдел]: открытые задачи и что с каждой',
-  '/approve: пачка на одобрение (сама приходит в 10:00)',
-  '/retry <id>: повторить застрявшую задачу',
+  '<b>Каждый день</b>',
+  '/status: кто чем занят, что ждёт вас (кнопки ведут в отделы)',
+  '/tasks [отдел]: задачи по страницам, у каждой карточка с действиями',
+  '/approve: пачка на одобрение карточками (сама приходит в 10:00)',
+  '/depts: отделы, пауза и возобновление кнопкой',
+  '/retry &lt;id&gt;: повторить застрявшую задачу (или 🔁 в карточке задачи)',
   '/desk: я за столом, всё копится на сайте /admin; /away: я в пути, всё в Telegram',
   '',
-  'Ещё:',
-  '/costs расходы, /org оргструктура, /pause и /resume <отдел>',
-  '/reply <id>, /kp <лид или описание>, /referral, /referrals: продажи',
-  '/ticket, /tickets, /client, /clients, /invoice, /invoices, /sub, /onboard, /paid <счёт или id>: сопровождение',
+  '<b>Ещё</b>',
+  '/costs расходы, /org оргструктура, /pause и /resume &lt;отдел&gt;',
+  '/reply &lt;id&gt;, /kp &lt;лид или описание&gt;, /referral, /referrals: продажи',
+  '/ticket, /tickets, /client, /clients, /invoice, /invoices, /sub, /onboard, /paid &lt;счёт или id&gt;: сопровождение',
   '/project, /pstatus, /target, /mdone: производство; /doc, /lesson, /kb: документы и знания',
-  '/builders, /builder <id>: задачи строителям; /topics: темы в группе; /drill: учения; /skip: отменить ожидание правки',
+  '/builders, /builder &lt;id&gt;: задачи строителям; /topics: темы в группе; /drill: учения; /skip: отменить ожидание правки',
   '',
-  'Статусы на сайте офиса: работает (идёт задача), ждёт (ответ за вами), застрял (нужна помощь, /retry), спит (ночь или тихие часы), офлайн (давно не отзывался).',
+  '<i>Статусы на сайте офиса: работает, ждёт (ответ за вами), застрял (/retry), спит (ночь или тихие часы), офлайн.</i>',
 ].join('\n');
+export const WELCOME = [
+  '👋 <b>Директор Fir Tech</b>',
+  'Пишите задачу обычным текстом: я передам её отделу и покажу ход работы в одном сообщении.',
+  'Кнопки внизу: одобрения, задачи, статус, отделы, помощь. Все команды: кнопка «Меню» слева от поля ввода.',
+].join('\n');
+const HINT = 'Кнопки внизу: одобрения, задачи, статус. Или опишите задачу и отдел обычным текстом. Все команды: /help.';
 const money = (n: number) => `$${n.toFixed(2)}`;
 const oneLine = (s: string, n = 160) => s.replace(/\s+/g, ' ').trim().slice(0, n);
 
@@ -128,6 +152,7 @@ export class Director {
     this.channel = d.messenger instanceof OwnerChannel ? d.messenger : null;
     this.progress = new Progress({ hq: d.hq, messenger: d.messenger, ownerId: d.ownerId, ...(this.channel ? { channel: this.channel } : {}) });
     d.hq.onAlert((text) => this.alertOwner(text));
+    d.queue.setCardFormat(approvalCardFormat(d.hq, this.editors));
   }
 
   private get hq(): Hq {
@@ -137,12 +162,25 @@ export class Director {
   /** The last message sent by `say` (a command reply can become the live message of the task it created). */
   private lastSay: { id: number; text: string } | null = null;
 
-  private async say(text: string, buttons?: { text: string; data: string }[][], kind?: InboxKind, force = false): Promise<void> {
+  /** A plain text to the owner (escaped, sent as HTML like everything the Director writes). */
+  private async say(text: string, buttons?: Button[][], kind?: InboxKind, force = false): Promise<void> {
+    await this.sayHtml(escapeHtml(text), { ...(buttons ? { buttons } : {}), ...(kind ? { kind } : {}), force });
+  }
+
+  /** Telegram HTML to the owner, through the owner channel when there is one. Returns the Telegram message id (0: none). */
+  private async sayHtml(html: string, o: { buttons?: Button[][]; kind?: InboxKind; force?: boolean; keyboard?: boolean } = {}): Promise<number> {
+    const keyboard = o.keyboard && !o.buttons ? { keyboard: KEYBOARD } : {};
     const id = this.channel
-      ? await this.channel.notify(kind, text, { ...(buttons ? { buttons } : {}), ...(force ? { force } : {}) })
-      : await this.d.messenger.sendMessage(this.d.ownerId, text, buttons);
+      ? await this.channel.notify(o.kind, html, { ...(o.buttons ? { buttons: o.buttons } : {}), ...(o.force ? { force: true } : {}), html: true, ...keyboard })
+      : await this.d.messenger.sendMessage(this.d.ownerId, html, o.buttons, { html: true, ...keyboard });
     // id 0: nothing went to Telegram (inbox only or captured for the website), so there is no message to turn into a live one
-    this.lastSay = id > 0 ? { id, text } : null;
+    this.lastSay = id > 0 ? { id, text: stripHtml(html) } : null;
+    return id;
+  }
+
+  /** Edits the message a button was on (HTML, the new buttons or none). */
+  private async editAt(at: ButtonAt, html: string, buttons?: Button[][]): Promise<void> {
+    await this.d.messenger.edit(at.chatId, at.messageId, html, { html: true, ...(buttons ? { buttons } : {}) });
   }
 
   private lastTaskId(): number {
@@ -218,14 +256,31 @@ export class Director {
     return out.join('\n\n');
   }
 
-  /** The batch: every department's proposals as one numbered series. `manual`: say so when there is nothing. */
+  /**
+   * The batch: a header «Пачка на одобрение: N» with «✅ Одобрить все обычные» and «⏭ Позже», then one card per proposal
+   * (every department, one numbered series). `manual`: say so when there is nothing new.
+   */
   async sendApprovalBatch(manual: boolean): Promise<number> {
-    if (manual) await this.channel?.resendUndelivered();
+    const resent = manual ? (await this.channel?.resendUndelivered()) ?? 0 : 0;
+    const queued = this.hq.queuedApprovals();
+    // the header with «Одобрить все обычные» only when there are at least two ordinary cards to approve at once
+    const ordinary = queued.filter((l) => !this.d.queue.isLocked(l.kind) && !this.d.queue.hasOwnButtons(l.kind)).length;
+    if (queued.length > 0 && ordinary >= 2) {
+      await this.sayHtml(
+        `Пачка на одобрение: ${proposals(queued.length)}. Карточки ниже, у каждой кнопки.\n<i>«Одобрить все обычные» не трогает цены, деньги и карточки со своими кнопками: их по одной.</i>`,
+        { buttons: [[{ text: '✅ Одобрить все обычные', data: 'ap:all' }, { text: '⏭ Позже', data: 'ap:later' }]] },
+      );
+    }
     const n = await this.hq.releaseApprovals();
-    if (n > 0) await this.say(`Пачка на одобрение: ${n}. Карточки ниже, у каждой кнопки.`);
-    else if (manual) {
+    if (n > 0 && ordinary < 2) await this.say(`Пачка на одобрение: ${proposals(n)}, карточки выше. Решаются по одной.`);
+    if (n === 0 && manual && resent > 0) await this.say(`Карточки, которые копились на сайте: ${resent}, они выше.`);
+    else if (n === 0 && manual) {
       const old = this.d.queue.pending().length;
-      await this.say(old ? `Новых предложений нет. Ждут вашего решения ранее присланные: ${old}.` : 'Нечего одобрять.');
+      if (old) {
+        await this.say(`Новых предложений нет. Ждут вашего решения ранее присланные: ${old}.`, [[
+          { text: '📥 Показать снова', data: 'ap:show' }, { text: '✅ Одобрить все обычные', data: 'ap:all' },
+        ]]);
+      } else await this.say('Нечего одобрять.');
     }
     return n;
   }
@@ -289,12 +344,20 @@ export class Director {
         );
       }
       case 'start':
+        await this.sayHtml(WELCOME, { keyboard: true });
+        return;
       case 'help':
-        return this.say(HELP);
+        await this.sayHtml(HELP, { keyboard: true });
+        return;
       case 'status':
-        return this.say(this.statusText());
+        return this.sendStatus();
       case 'tasks':
-        return this.say(this.tasksText(dept || undefined));
+        return this.sendTasks(dept || undefined);
+      case 'depts': {
+        const v = this.deptsView();
+        await this.sayHtml(v.text, { buttons: v.buttons });
+        return;
+      }
       case 'retry':
         return this.retry(arg);
       case 'approve':
@@ -343,9 +406,14 @@ export class Director {
       default: {
         const handler = this.commands.get(name);
         if (handler) return this.say(await handler.run(arg));
-        return;
+        return this.hint(`Не знаю команды /${name}.`);
       }
     }
+  }
+
+  /** Unknown input: a short hint and the reply keyboard, never silence. */
+  async hint(lead = 'Не понял.'): Promise<void> {
+    await this.sayHtml(`${esc(lead)} ${esc(HINT)}`, { keyboard: true });
   }
 
   /** A command of a head by name, only if registered for this department: the model's word is never a command by itself. */
@@ -356,6 +424,8 @@ export class Director {
   }
 
   async onText(text: string): Promise<void> {
+    const menu = menuCommand(text);
+    if (menu) return this.onCommand(menu, '');
     for (const e of this.editors.values()) if (await e.consume(text)) return;
     const before = this.lastTaskId();
     this.lastSay = null;
@@ -365,12 +435,15 @@ export class Director {
 
   private async handleText(text: string): Promise<void> {
     const intent = await this.parse(text);
-    if (!intent) return this.say('Не смог разобрать сообщение (модель недоступна или ответила не по форме). Команды: /help.');
+    if (!intent) {
+      await this.sayHtml(esc('Не смог разобрать сообщение (модель недоступна или ответила не по форме). Кнопки внизу или /help.'), { keyboard: true });
+      return;
+    }
     switch (intent.type) {
       case 'task':
         return this.createTask(intent);
       case 'status':
-        return this.say(intent.dept ? this.tasksText(intent.dept.toLowerCase()) : this.statusText());
+        return intent.dept ? this.sendTasks(intent.dept.toLowerCase()) : this.sendStatus();
       case 'sales_reply':
         return this.salesReply(intent.id, intent.text);
       case 'builder':
@@ -382,7 +455,8 @@ export class Director {
       case 'backoffice_command':
         return this.headCommand('backoffice', intent.command, intent.arg);
       default:
-        return this.say(intent.question ? `Уточните: ${intent.question}` : 'Не понял, что нужно сделать. Опишите задачу и отдел, или /help.');
+        if (intent.question) return this.say(`Уточните: ${intent.question}`);
+        return this.hint('Не понял, что нужно сделать.');
     }
   }
 
@@ -509,6 +583,286 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
     return 'Применено';
   }
 
+  // ---- buttons: lists and cards edited in place ----
+  /**
+   * An inline button of the Director (`pg:`, `tk:`, `dp:`, `ap:all|later|show`, `ap:<id>:f|s`). Edits the message it was
+   * on and returns the callback toast; null when the data is not the Director's (the next handler answers it).
+   */
+  async onButton(data: string, at: ButtonAt): Promise<string | null> {
+    const nav = parseNav(data);
+    if (!nav) return null;
+    try {
+      return await this.navigate(nav, at);
+    } catch (e) {
+      log('warn', 'button failed', { ns: nav.ns, err: errMsg(e) });
+      return 'Не получилось, попробуйте ещё раз';
+    }
+  }
+
+  private async navigate(nav: Nav, at: ButtonAt): Promise<string> {
+    switch (nav.ns) {
+      case 'pg': {
+        if (nav.filter !== 'all' && !this.hq.departments().includes(nav.filter)) return 'Устарело';
+        const v = this.tasksView(nav.filter, nav.page);
+        await this.editAt(at, v.text, v.buttons);
+        return v.pages > 1 ? `Стр. ${v.page + 1} из ${v.pages}` : 'Задачи';
+      }
+      case 'tk':
+        return this.taskButton(nav, at);
+      case 'dp': {
+        if (nav.op === 'list' || !nav.dept) {
+          const v = this.deptsView();
+          await this.editAt(at, v.text, v.buttons);
+          return 'Отделы';
+        }
+        if (!this.hq.departments().includes(nav.dept)) return 'Устарело';
+        let toast = deptRu(nav.dept);
+        if (nav.op === 'p' || nav.op === 'r') {
+          this.hq.setDeptStatus(nav.dept, nav.op === 'p' ? 'paused' : 'active');
+          toast = nav.op === 'p' ? '⏸ На паузе' : '▶ Снова работает';
+        }
+        const v = this.deptCard(nav.dept);
+        await this.editAt(at, v.text, v.buttons);
+        return toast;
+      }
+      case 'ap':
+        return this.approvalButton(nav, at);
+    }
+  }
+
+  private async approvalButton(nav: Extract<Nav, { ns: 'ap' }>, at: ButtonAt): Promise<string> {
+    const q = this.d.queue;
+    if (nav.op === 'full' || nav.op === 'short') return q.expandCard(nav.id!, nav.op === 'full', at);
+    if (nav.op === 'later') {
+      const n = q.pending().length;
+      await this.editAt(at, n ? `⏭ ${bold('Отложено')}: ждут решения ${proposals(n)}. Кнопка «📥 Одобрения» покажет их снова.` : 'Нечего одобрять.');
+      return 'Позже';
+    }
+    if (nav.op === 'show') {
+      const rows = q.pending();
+      if (!rows.length) {
+        await this.editAt(at, 'Нечего одобрять.');
+        return 'Устарело';
+      }
+      await this.editAt(at, `📥 ${bold('Ждут решения')}: ${proposals(rows.length)}, карточки ниже.`, [[{ text: '✅ Одобрить все обычные', data: 'ap:all' }]]);
+      for (const r of rows) await q.showCard(r.id);
+      return 'Карточки ниже';
+    }
+    // approve every ordinary one
+    const r = await q.approveAll(this.d.ownerId);
+    this.afterDecision();
+    if (r.approved + r.failed === 0) {
+      await this.editAt(at, r.skipped ? `Обычных нет: ${proposals(r.skipped)} решаются по одной (цены, деньги, особые карточки).` : 'Нечего одобрять.');
+      return r.skipped ? 'Только по одной' : 'Устарело';
+    }
+    const lines = [`✅ ${bold('Одобрено')}: ${code(r.approved)}`];
+    if (r.failed) lines.push(`⚠️ Не выполнено: ${code(r.failed)} (подробности в логе)`);
+    if (r.skipped) lines.push(`По одной осталось: ${code(r.skipped)} (цены, деньги, особые карточки), их карточки выше.`);
+    await this.editAt(at, lines.join('\n'));
+    return `Одобрено: ${r.approved}`;
+  }
+
+  async sendStatus(): Promise<void> {
+    const v = this.statusView();
+    await this.sayHtml(v.text, { buttons: v.buttons });
+  }
+
+  async sendTasks(dept?: string): Promise<void> {
+    if (dept && !this.hq.departments().includes(dept)) return this.say(`Нет отдела «${dept}». Есть: ${this.hq.departments().join(', ')}.`);
+    const v = this.tasksView(dept ?? 'all', 0);
+    await this.sayHtml(v.text, { buttons: v.buttons });
+  }
+
+  private openTasks(dept?: string): Task[] {
+    return this.hq.tasks({ ...(dept ? { dept } : {}), open: true, limit: 1000 }).filter((t) => !t.tags.includes('drill'));
+  }
+
+  private counts(dept: string, open: Task[]): { work: number; you: number; stuck: number } {
+    const mine = open.filter((t) => t.dept === dept);
+    return {
+      work: mine.filter((t) => ['inbox', 'assigned', 'running', 'review'].includes(t.status)).length,
+      you: mine.filter((t) => t.status === 'approval').length,
+      stuck: mine.filter((t) => t.status === 'blocked').length,
+    };
+  }
+
+  /** `/status`: the summary with a button per department (its tasks), «Отделы» and the approvals when something waits. */
+  statusView(): { text: string; buttons: Button[][] } {
+    const html = esc(this.statusText())
+      .replace(/^Сейчас в офисе:/, `📊 ${bold('Сейчас в офисе:')}`)
+      .replace(/\nПоследнее:/, `\n${bold('Последнее:')}`);
+    const open = this.openTasks();
+    const depts = this.hq.departments().map((dept) => {
+      const n = open.filter((t) => t.dept === dept).length;
+      return { text: `${deptRu(dept)} · ${n}`, data: cb.page(dept, 0) };
+    });
+    const buttons: Button[][] = [];
+    for (let i = 0; i < depts.length; i += 3) buttons.push(depts.slice(i, i + 3));
+    const waiting = this.hq.queuedApprovals().length + this.d.queue.pending().length;
+    buttons.push([{ text: '🏢 Отделы', data: cb.depts }, ...(waiting ? [{ text: `📥 Одобрения · ${waiting}`, data: 'ap:show' }] : [])]);
+    return { text: html, buttons };
+  }
+
+  /** `/tasks`: 10 per page, a filter row of departments on top, a `#id` button per task, ◀ ▶ under it. */
+  tasksView(filter: string, page: number): { text: string; buttons: Button[][]; page: number; pages: number } {
+    const dept = filter === 'all' ? undefined : filter;
+    const tasks = this.openTasks(dept);
+    const pages = Math.max(1, Math.ceil(tasks.length / TASKS_PAGE));
+    const p = Math.min(Math.max(0, page), pages - 1);
+    const slice = tasks.slice(p * TASKS_PAGE, (p + 1) * TASKS_PAGE);
+    const head = `📋 ${bold('Открытые задачи')} · ${esc(dept ? deptRu(dept) : 'все отделы')} · ${code(tasks.length)}`;
+    const body = slice.length
+      ? slice.map((t) => `${code(`#${t.id}`)} ${dept ? '' : `${esc(deptRu(t.dept))}: `}${esc(clip(t.title, 60))}\n  <i>${esc(this.taskWords(t))}</i>`).join('\n')
+      : esc(dept ? `В отделе ${deptRu(dept)} открытых задач нет.` : 'Открытых задач нет.');
+    const filters = [{ text: filter === 'all' ? '• Все' : 'Все', data: cb.page('all', 0) }, ...this.hq.departments().map((d) => ({ text: `${d === filter ? '• ' : ''}${deptRu(d)}`, data: cb.page(d, 0) }))];
+    const buttons: Button[][] = [];
+    for (let i = 0; i < filters.length; i += 3) buttons.push(filters.slice(i, i + 3));
+    for (let i = 0; i < slice.length; i += 5) buttons.push(slice.slice(i, i + 5).map((t) => ({ text: `#${t.id}`, data: cb.task(t.id, 'o', filter, p) })));
+    if (pages > 1) {
+      buttons.push([
+        { text: '◀', data: cb.page(filter, p > 0 ? p - 1 : pages - 1) },
+        { text: `${p + 1} / ${pages}`, data: cb.page(filter, p) },
+        { text: '▶', data: cb.page(filter, p < pages - 1 ? p + 1 : 0) },
+      ]);
+    }
+    return { text: `${head}${pages > 1 ? ` · стр. ${p + 1}/${pages}` : ''}\n\n${body}`, buttons, page: p, pages };
+  }
+
+  private async taskButton(nav: Extract<Nav, { ns: 'tk' }>, at: ButtonAt): Promise<string> {
+    const t = this.hq.task(nav.id);
+    if (!t) return 'Устарело';
+    const back = { filter: nav.filter, page: nav.page };
+    let toast = `Задача #${t.id}`;
+    let extra = '';
+    if (nav.op === 'j') {
+      const v = this.journalView(t, back);
+      await this.editAt(at, v.text, v.buttons);
+      return 'Журнал';
+    }
+    if (nav.op === 'r') {
+      if (t.status !== 'blocked' || t.tags.includes('builder') || t.tags.includes('drill')) toast = 'Повторять нечего';
+      else {
+        const head = this.hq.headOf(t.dept);
+        if (!head) toast = 'У отдела нет головы';
+        else {
+          this.hq.requeue(t.id, 'owner');
+          this.hq.wake(head.id, 'task');
+          toast = '🔁 Снова в очереди';
+          extra = `🔁 Поставил заново в очередь отдела ${deptRu(t.dept)}.`;
+        }
+      }
+    }
+    if (nav.op === 'x') {
+      if (t.status === 'done' || t.status === 'rejected') toast = 'Задача уже закрыта';
+      else {
+        const v = this.taskCard(t, back);
+        await this.editAt(at, `${v.text}\n\n❓ ${bold('Отклонить задачу?')} Отдел перестанет над ней работать, её карточки на одобрение тоже отклоню.`, [[
+          { text: '❌ Да, отклонить', data: cb.task(t.id, 'X', nav.filter, nav.page) },
+          { text: '◀ Нет', data: cb.task(t.id, 'o', nav.filter, nav.page) },
+        ]]);
+        return 'Подтвердите';
+      }
+    }
+    if (nav.op === 'X') {
+      if (t.status === 'done' || t.status === 'rejected') toast = 'Задача уже закрыта';
+      else {
+        await this.rejectTask(t);
+        toast = '❌ Отклонена';
+        extra = '❌ Вы отклонили задачу.';
+      }
+    }
+    const fresh = this.hq.task(t.id)!;
+    const v = this.taskCard(fresh, back);
+    await this.editAt(at, extra ? `${v.text}\n\n${esc(extra)}` : v.text, v.buttons);
+    return toast;
+  }
+
+  /** The owner rejects a task: its pending proposals are rejected, queued ones dropped, the task closed. */
+  private async rejectTask(t: Task): Promise<void> {
+    const links = this.hq.db.prepare("SELECT id, approval_id, state FROM task_approvals WHERE task_id = ? AND state IN ('queued','asked')").all(t.id) as { id: number; approval_id: number | null; state: string }[];
+    for (const l of links) {
+      if (l.state === 'asked' && l.approval_id !== null) {
+        await this.d.queue.handle('reject', l.approval_id, this.d.ownerId);
+        await this.d.queue.settleCard(l.approval_id).catch(() => false);
+      } else this.hq.db.prepare("UPDATE task_approvals SET state = 'rejected' WHERE id = ?").run(l.id);
+    }
+    this.afterDecision();
+    const fresh = this.hq.task(t.id);
+    if (fresh && fresh.status !== 'done' && fresh.status !== 'rejected') this.hq.setStatus(t.id, 'rejected', 'owner', 'отклонена владельцем');
+    this.hq.log('owner', 'rejected', 'task', String(t.id));
+  }
+
+  /** A task card: title, department, status in words, assignee, progress line, last event; actions by status. */
+  taskCard(t: Task, back: { filter: string; page: number } = { filter: 'all', page: 0 }): { text: string; buttons: Button[][] } {
+    const assignee = t.assigneeId ? this.hq.agent(t.assigneeId)?.title ?? t.assigneeId : this.hq.headOf(t.dept)?.title ?? 'голова отдела';
+    const progressLine = this.progress.render(t).split('\n').slice(1).join('\n');
+    const last = this.hq.events(t.id).map((e) => ({ e, w: this.eventWords(e) })).filter((x) => x.w).at(-1);
+    const lines = [
+      `📌 ${bold(`#${t.id} · ${deptRu(t.dept)}`)}`,
+      esc(`«${clip(t.title, 200)}»`),
+      '',
+      `Статус: ${bold(STATUS_RU[t.status] ?? t.status)}`,
+      `Исполнитель: ${esc(assignee)}`,
+    ];
+    if (progressLine) lines.push(`Ход: ${esc(progressLine)}`);
+    if (last) lines.push(`Последнее: ${code(this.hm(last.e.at))} ${esc(last.w!)}`);
+    const open = t.status !== 'done' && t.status !== 'rejected';
+    const row: Button[] = [];
+    if (t.status === 'blocked' && !t.tags.includes('builder') && !t.tags.includes('drill')) row.push({ text: '🔁 Повторить', data: cb.task(t.id, 'r', back.filter, back.page) });
+    if (open) row.push({ text: '❌ Отклонить', data: cb.task(t.id, 'x', back.filter, back.page) });
+    const buttons: Button[][] = [];
+    if (row.length) buttons.push(row);
+    buttons.push([{ text: '📜 Журнал', data: cb.task(t.id, 'j', back.filter, back.page) }, { text: '◀ Назад', data: cb.page(back.filter, back.page) }]);
+    return { text: lines.join('\n'), buttons };
+  }
+
+  /** The last 8 journal entries of a task, in words. */
+  journalView(t: Task, back: { filter: string; page: number }): { text: string; buttons: Button[][] } {
+    const rows = this.hq.events(t.id).map((e) => ({ e, w: this.eventWords(e) ?? (e.kind === 'comment' ? `комментарий: ${clip(e.body, 80)}` : null) })).filter((x) => x.w).slice(-8);
+    const body = rows.length ? rows.map(({ e, w }) => `${code(this.hm(e.at))} ${esc(w!)}`).join('\n') : 'Записей пока нет.';
+    return {
+      text: `📜 ${bold(`Журнал #${t.id}`)} · ${esc(clip(t.title, 60))}\n\n${body}`,
+      buttons: [[{ text: '◀ К задаче', data: cb.task(t.id, 'o', back.filter, back.page) }, { text: '📋 К списку', data: cb.page(back.filter, back.page) }]],
+    };
+  }
+
+  /** «🏢 Отделы»: one line per department, a button opens its card. */
+  deptsView(): { text: string; buttons: Button[][] } {
+    const open = this.openTasks();
+    const lines = this.hq.departments().map((dept) => {
+      const c = this.counts(dept, open);
+      const paused = this.hq.headOf(dept)?.status === 'paused';
+      return `${paused ? '⏸' : '▶'} ${bold(deptRu(dept))}: работает ${c.work} · ждут вас ${c.you} · застряли ${c.stuck}`;
+    });
+    const btns = this.hq.departments().map((d) => ({ text: deptRu(d), data: cb.dept(d) }));
+    const buttons: Button[][] = [];
+    for (let i = 0; i < btns.length; i += 3) buttons.push(btns.slice(i, i + 3));
+    return { text: `🏢 ${bold('Отделы')}\n\n${lines.join('\n') || 'Отделов пока нет.'}`, buttons };
+  }
+
+  /** A department card: state, head, open tasks, month spend; pause or resume, its tasks, back. */
+  deptCard(dept: string): { text: string; buttons: Button[][] } {
+    const head = this.hq.headOf(dept);
+    const paused = head?.status === 'paused';
+    const c = this.counts(dept, this.openTasks());
+    const spent = this.hq.costSummary(this.hq.monthStart()).find((r) => r.dept === dept)?.usd ?? 0;
+    const limit = this.hq.deptBudget(dept);
+    const text = [
+      `🏢 ${bold(deptRu(dept))} · ${paused ? '⏸ на паузе' : '▶ работает'}`,
+      `Голова: ${esc(head?.title ?? 'нет')} · исполнителей ${this.hq.agents(dept).filter((a) => a.role === 'worker').length}`,
+      `Задачи: работает ${c.work} · ждут вас ${c.you} · застряли ${c.stuck}`,
+      `Расходы за месяц: ${code(money(spent))}${limit > 0 ? ` из ${code(money(limit))}` : ' (без лимита)'}`,
+      paused ? '<i>На паузе отдел не берёт новые задачи.</i>' : '',
+    ].filter(Boolean).join('\n');
+    return {
+      text,
+      buttons: [
+        [paused ? { text: '▶ Возобновить', data: cb.dept(dept, 'r') } : { text: '⏸ Пауза', data: cb.dept(dept, 'p') }, { text: '📋 Задачи', data: cb.page(dept, 0) }],
+        [{ text: '◀ Отделы', data: cb.depts }],
+      ],
+    };
+  }
+
   // ---- texts ----
   /** One journal entry in words, or null when it is not worth showing (assignments, comments). */
   private eventWords(e: { kind: string; body: string }): string | null {
@@ -593,12 +947,6 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
     }
   }
 
-  tasksText(dept?: string): string {
-    if (dept && !this.hq.departments().includes(dept)) return `Нет отдела «${dept}». Есть: ${this.hq.departments().join(', ')}.`;
-    const tasks = this.hq.tasks({ ...(dept ? { dept } : {}), open: true, limit: 50 }).filter((t) => !t.tags.includes('drill')).slice(0, 20);
-    if (!tasks.length) return dept ? `В отделе ${deptRu(dept)} открытых задач нет.` : 'Открытых задач нет.';
-    return tasks.map((t: Task) => `#${t.id} ${deptRu(t.dept)}: ${oneLine(t.title, 70)}\n  ${this.taskWords(t)}`).join('\n');
-  }
 
   buildersText(): string {
     const tasks = openBuilderTasks(this.hq);

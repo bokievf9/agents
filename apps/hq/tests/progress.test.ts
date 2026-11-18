@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { stripHtml } from '@fir/core';
 import { Progress, mask, reasonRu } from '../src/progress.js';
 import { OWNER, routedLlm, world } from './helpers.js';
 
@@ -165,7 +166,7 @@ describe('/status and /tasks in words', () => {
     w.hq.block(b.id, 'marketing-head', 'Сбой: нет ответа');
     w.hq.createTask({ title: 'Третья', dept: 'marketing', creator: 'owner' });
     await w.director.onCommand('status');
-    const text = w.messenger.last()!.text;
+    const text = stripHtml(w.messenger.last()!.text); // the Director writes Telegram HTML
     expect(text).toContain('Маркетинг: работает 1 · ждут вас 1 · застряли 1');
     expect(text).toContain('Последнее:');
     expect(text).toMatch(/• \d\d:\d\d #\d Маркетинг: застряла: сбой: нет ответа/);
@@ -184,7 +185,7 @@ describe('/status and /tasks in words', () => {
     w.hq.block(b.id, 'marketing-head', 'Сбой: нет ответа');
     w.hq.createTask({ title: 'Учения: x', dept: 'marketing', creator: 'owner', tags: ['drill'] });
     await w.director.onCommand('tasks');
-    const text = w.messenger.last()!.text;
+    const text = stripHtml(w.messenger.last()!.text); // the Director writes Telegram HTML
     expect(text).toContain(`#${a.id} Маркетинг: Ждёт вас\n  ждёт вас в /approve`);
     expect(text).toContain(`#${b.id} Маркетинг: Застряла\n  застряла: сбой: нет ответа (повторить: /retry ${b.id})`);
     expect(text).not.toContain('Учения');
@@ -193,7 +194,7 @@ describe('/status and /tasks in words', () => {
   it('/help is the compact cheat sheet', async () => {
     const w = world();
     await w.director.onCommand('help');
-    const text = w.messenger.last()!.text;
+    const text = stripHtml(w.messenger.last()!.text); // the Director writes Telegram HTML
     for (const c of ['/status', '/tasks', '/approve', '/retry <id>', 'группе HQ']) expect(text).toContain(c);
   });
 });

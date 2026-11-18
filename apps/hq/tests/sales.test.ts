@@ -52,7 +52,7 @@ describe('lead from the webhook', () => {
     expect(await w.director.sendApprovalBatch(false)).toBe(1);
     const card = w.messenger.sent.find((m) => m.buttons)!;
     expect(card.text).toContain('lead_reply');
-    expect(card.buttons![0]!.map((b) => b.text)).toEqual(['Одобрить', 'Править', 'Отклонить']);
+    expect(card.buttons![0]!.map((b) => b.text)).toEqual(['✅ Одобрить', '✏️ Править', '❌ Отклонить']);
     const approval = w.queue.pending()[0]!;
     await w.decide('approve', approval.id);
     expect(w.hq.task(id)!.status).toBe('done');

@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { errMsg, log, migrate, type Button, type Db, type Messenger } from '@fir/core';
+import { errMsg, log, migrate, stripHtml, type Button, type Db, type EditOptions, type Messenger, type ReplyKeyboard, type SendOptions } from '@fir/core';
 import type { Hq } from '@fir/hq';
 
 export type InboxKind = 'message' | 'approval' | 'progress' | 'alert' | 'summary' | 'reply';
@@ -39,6 +39,10 @@ export interface NotifyOpts {
   taskId?: number;
   /** Goes to Telegram even at the desk (presence confirmations). */
   force?: boolean;
+  /** The text is Telegram HTML: Telegram gets it as is, the inbox and the website the plain text. */
+  html?: boolean;
+  /** The reply keyboard to show with this message (Telegram only). */
+  keyboard?: ReplyKeyboard;
 }
 
 export interface OwnerChannelDeps {
@@ -49,6 +53,8 @@ export interface OwnerChannelDeps {
   awayAfterMin?: number;
   /** Is the core approval still waiting for the owner? Used to keep digests and resends honest. */
   approvalPending?: (approvalId: number) => boolean;
+  /** An approval card reached Telegram later (resent from the inbox): where it is, so it can be edited after the decision. */
+  onCardSent?: (approvalId: number, messageId: number) => void;
 }
 
 type Scope = { mode: 'capture'; replies: string[] } | { mode: 'reply' };
@@ -67,6 +73,9 @@ export class OwnerChannel implements Messenger {
   constructor(private readonly d: OwnerChannelDeps) {
     this.awayAfterMin = d.awayAfterMin ?? 20;
     migrate(d.hq.db, SCHEMA);
+    // added later: the Telegram HTML of a message (the `text` column stays plain for the website)
+    const cols = d.hq.db.prepare('PRAGMA table_info(owner_inbox)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'html')) d.hq.db.exec('ALTER TABLE owner_inbox ADD COLUMN html TEXT');
   }
 
   private get db(): Db {
@@ -156,17 +165,22 @@ export class OwnerChannel implements Messenger {
   }
 
   // ---- sending ----
-  send(chatId: number, text: string, buttons?: Button[][]): Promise<void> {
-    return this.sendMessage(chatId, text, buttons).then(() => undefined);
+  send(chatId: number, text: string, buttons?: Button[][], opts?: SendOptions): Promise<void> {
+    return this.sendMessage(chatId, text, buttons, opts).then(() => undefined);
   }
 
-  async sendMessage(chatId: number, text: string, buttons?: Button[][]): Promise<number> {
-    if (chatId !== this.d.ownerId) return this.d.inner.sendMessage(chatId, text, buttons);
-    return this.notify(undefined, text, buttons ? { buttons } : {});
+  async sendMessage(chatId: number, text: string, buttons?: Button[][], opts?: SendOptions): Promise<number> {
+    if (chatId !== this.d.ownerId) return this.d.inner.sendMessage(chatId, text, buttons, opts);
+    return this.notify(undefined, text, { ...(buttons ? { buttons } : {}), ...(opts?.html ? { html: true } : {}), ...(opts?.keyboard ? { keyboard: opts.keyboard } : {}) });
   }
 
-  edit(chatId: number, messageId: number, text: string): Promise<void> {
-    return this.d.inner.edit(chatId, messageId, text);
+  /** Edits of a Telegram message (a button press, a live task message) go straight through: the owner already has it. */
+  edit(chatId: number, messageId: number, text: string, opts?: EditOptions): Promise<void> {
+    return this.d.inner.edit(chatId, messageId, text, opts);
+  }
+
+  editButtons(chatId: number, messageId: number, buttons: Button[][] | null): Promise<void> {
+    return this.d.inner.editButtons(chatId, messageId, buttons);
   }
 
   private classify(text: string, buttons?: Button[][]): { kind: InboxKind; approvalId: number | null } {
@@ -184,18 +198,19 @@ export class OwnerChannel implements Messenger {
   /** The one way to the owner. Returns the Telegram message id, or 0 when nothing went to Telegram. */
   async notify(kind: InboxKind | undefined, text: string, o: NotifyOpts = {}): Promise<number> {
     const scope = this.als.getStore();
+    const plain = o.html ? stripHtml(text) : text;
     if (scope?.mode === 'capture') {
-      scope.replies.push(text);
+      scope.replies.push(plain);
       return 0;
     }
     await this.sync();
-    const c = this.classify(text, o.buttons);
+    const c = this.classify(plain, o.buttons);
     const inReply = scope?.mode === 'reply';
     const k: InboxKind = c.kind === 'approval' ? 'approval' : inReply ? 'reply' : (kind ?? c.kind);
     const toTg = Boolean(o.force) || inReply || this.effective() === 'away';
-    const id = this.insert(k, text, o.taskId ?? null, c.approvalId, o.buttons, inReply && k === 'reply');
+    const id = this.insert(k, plain, o.taskId ?? null, c.approvalId, o.buttons, inReply && k === 'reply', false, o.html ? text : null);
     if (!toTg) return 0;
-    const msgId = await this.d.inner.sendMessage(this.d.ownerId, text, o.buttons);
+    const msgId = await this.d.inner.sendMessage(this.d.ownerId, text, o.buttons, { ...(o.html ? { html: true } : {}), ...(o.keyboard && !o.buttons ? { keyboard: o.keyboard } : {}) });
     this.db.prepare('UPDATE owner_inbox SET delivered_tg = 1 WHERE id = ?').run(id);
     return msgId;
   }
@@ -206,10 +221,10 @@ export class OwnerChannel implements Messenger {
     this.insert(kind, text, taskId ?? null, null, undefined, false, true);
   }
 
-  private insert(kind: InboxKind, text: string, taskId: number | null, approvalId: number | null, buttons: Button[][] | undefined, read: boolean, delivered = false): number {
+  private insert(kind: InboxKind, text: string, taskId: number | null, approvalId: number | null, buttons: Button[][] | undefined, read: boolean, delivered = false, html: string | null = null): number {
     const r = this.db
-      .prepare('INSERT INTO owner_inbox (at, kind, text, task_id, approval_id, delivered_tg, read, buttons) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(this.d.hq.now(), kind, text.slice(0, 8000), taskId, approvalId, delivered ? 1 : 0, read ? 1 : 0, buttons ? JSON.stringify(buttons) : null);
+      .prepare('INSERT INTO owner_inbox (at, kind, text, task_id, approval_id, delivered_tg, read, buttons, html) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(this.d.hq.now(), kind, text.slice(0, 8000), taskId, approvalId, delivered ? 1 : 0, read ? 1 : 0, buttons ? JSON.stringify(buttons) : null, html && html.length <= 8000 ? html : null);
     // the inbox is a feed, not an archive
     if (Number(r.lastInsertRowid) % 50 === 0) this.db.prepare('DELETE FROM owner_inbox WHERE at < ?').run(this.d.hq.now() - INBOX_KEEP_MS);
     return Number(r.lastInsertRowid);
@@ -219,12 +234,13 @@ export class OwnerChannel implements Messenger {
   async resendUndelivered(): Promise<number> {
     if (this.capturing()) return 0;
     const rows = this.db
-      .prepare("SELECT id, text, approval_id, buttons FROM owner_inbox WHERE kind = 'approval' AND delivered_tg = 0 AND buttons IS NOT NULL ORDER BY id")
-      .all() as { id: number; text: string; approval_id: number | null; buttons: string }[];
+      .prepare("SELECT id, text, html, approval_id, buttons FROM owner_inbox WHERE kind = 'approval' AND delivered_tg = 0 AND buttons IS NOT NULL ORDER BY id")
+      .all() as { id: number; text: string; html: string | null; approval_id: number | null; buttons: string }[];
     let n = 0;
     for (const r of rows) {
       if (r.approval_id !== null && this.d.approvalPending && !this.d.approvalPending(r.approval_id)) continue;
-      await this.d.inner.send(this.d.ownerId, r.text, JSON.parse(r.buttons) as Button[][]);
+      const msgId = await this.d.inner.sendMessage(this.d.ownerId, r.html ?? r.text, JSON.parse(r.buttons) as Button[][], r.html ? { html: true } : undefined);
+      if (r.approval_id !== null) this.d.onCardSent?.(r.approval_id, msgId);
       this.db.prepare('UPDATE owner_inbox SET delivered_tg = 1 WHERE id = ?').run(r.id);
       n++;
     }

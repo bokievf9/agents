@@ -3,6 +3,33 @@ import { migrate } from './db.js';
 import { errMsg, log } from './log.js';
 import type { Button, Messenger } from './messenger.js';
 
+/** What the app's card format gets for one proposal. */
+export interface CardInfo {
+  row: ApprovalRow;
+  level: 0 | 1;
+  streak: number;
+  locked: boolean;
+  /** The owner asked for the whole text («👁 Полностью»). */
+  full: boolean;
+  /** The kind brings its own buttons (`KindSpec.buttons`): the format must not replace them. */
+  custom: boolean;
+}
+
+/**
+ * The app's look of approval cards (Telegram HTML). Without one the core sends its plain card and only strips the
+ * buttons after a decision. `buttons` are used only when the kind has no own buttons.
+ */
+export interface CardFormat {
+  card(info: CardInfo): { text: string; buttons: Button[][] };
+  /** The card after the owner's decision (or while waiting for the edit text): no decision buttons left, unless given. */
+  settled(row: ApprovalRow, state: 'executed' | 'rejected' | 'failed' | 'editing' | 'edited' | 'stale'): { text: string; buttons?: Button[][] };
+}
+
+export interface CardRef {
+  chatId: number;
+  messageId: number;
+}
+
 /** What an agent proposes. `text` is what the owner can edit (a reply to a client, a post, a price). */
 export interface Payload {
   text?: string;
@@ -59,6 +86,11 @@ CREATE TABLE IF NOT EXISTS trust (
   level INTEGER NOT NULL,
   streak INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS approval_cards (
+  approval_id INTEGER PRIMARY KEY,
+  chat_id INTEGER NOT NULL,
+  message_id INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS decisions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   approval_id INTEGER,
@@ -86,6 +118,7 @@ interface ApprovalDbRow {
 export class ApprovalQueue {
   private readonly kinds = new Map<string, KindSpec>();
   private editing: number | null = null;
+  private format: CardFormat | null = null;
 
   constructor(
     private readonly db: Db,
@@ -106,6 +139,108 @@ export class ApprovalQueue {
     const s = this.kinds.get(kind);
     if (!s) throw new Error(`Unknown approval kind "${kind}"`);
     return s;
+  }
+
+  /** The app's card look (HTML, decisions edited in place). */
+  setCardFormat(format: CardFormat | null): void {
+    this.format = format;
+  }
+
+  hasCardFormat(): boolean {
+    return this.format !== null;
+  }
+
+  /** Money, prices, contracts: never approved in bulk, never promoted by the counter. */
+  isLocked(kind: string): boolean {
+    return Boolean(this.kinds.get(kind)?.locked);
+  }
+
+  /** The kind brings its own buttons (an app-specific card, e.g. «Скопировать / Отправлено»). */
+  hasOwnButtons(kind: string): boolean {
+    return Boolean(this.kinds.get(kind)?.buttons);
+  }
+
+  /** The Telegram message that shows the proposal's card (the last one sent). */
+  cardMessage(id: number): CardRef | undefined {
+    const r = this.db.prepare('SELECT chat_id, message_id FROM approval_cards WHERE approval_id = ?').get(id) as { chat_id: number; message_id: number } | undefined;
+    return r ? { chatId: r.chat_id, messageId: r.message_id } : undefined;
+  }
+
+  /** Remembers where the card was sent (also when it went out later, e.g. resent from the owner inbox). */
+  noteCard(id: number, chatId: number, messageId: number): void {
+    if (messageId <= 0) return;
+    this.db.prepare('INSERT INTO approval_cards (approval_id, chat_id, message_id) VALUES (?, ?, ?) ON CONFLICT(approval_id) DO UPDATE SET chat_id = excluded.chat_id, message_id = excluded.message_id').run(id, chatId, messageId);
+  }
+
+  /** The card's text and buttons as the format renders it now (null without a format or for an unknown id). */
+  cardView(id: number, full = false): { text: string; buttons: Button[][] } | null {
+    const row = this.get(id);
+    if (!row || !this.format) return null;
+    const spec = this.kinds.get(row.kind);
+    const custom = spec?.buttons?.(id, row.payload);
+    const view = this.format.card({ row, level: this.level(row.kind), streak: this.streak(row.kind), locked: Boolean(spec?.locked), full, custom: Boolean(custom) });
+    return { text: view.text, buttons: custom ?? view.buttons };
+  }
+
+  /**
+   * Edits the card in place to match the proposal's state: decided (no buttons), waiting for the edit text, or still
+   * pending (the full card again). `at`: the message the button was on. Returns false without a card format.
+   */
+  async settleCard(id: number, at?: CardRef): Promise<boolean> {
+    if (!this.format) return false;
+    const ref = at ?? this.cardMessage(id);
+    const row = this.get(id);
+    if (!ref) return false;
+    if (at) this.noteCard(id, at.chatId, at.messageId);
+    let view: { text: string; buttons?: Button[][] };
+    if (!row) view = this.format.settled({ id, kind: '', payload: {}, summary: '', status: 'rejected', edited: false }, 'stale');
+    else if (row.status === 'pending') view = this.cardView(id)!;
+    else view = this.format.settled(row, row.status);
+    await this.messenger.edit(ref.chatId, ref.messageId, view.text, { html: true, ...(view.buttons ? { buttons: view.buttons } : {}) });
+    return true;
+  }
+
+  /** Sends the card of a pending proposal again (a fresh copy at the bottom of the chat). False when it is decided. */
+  async showCard(id: number): Promise<boolean> {
+    const row = this.get(id);
+    if (!row || (row.status !== 'pending' && row.status !== 'editing')) return false;
+    await this.ask(id);
+    return true;
+  }
+
+  /** «👁 Полностью» / «Свернуть»: the card shows the whole text or the preview again. Returns the callback toast. */
+  async expandCard(id: number, full: boolean, at: CardRef): Promise<string> {
+    const row = this.get(id);
+    if (!row || !this.format) return 'Устарело';
+    if (row.status !== 'pending') {
+      await this.settleCard(id, at);
+      return 'Уже обработано';
+    }
+    const view = this.cardView(id, full)!;
+    this.noteCard(id, at.chatId, at.messageId);
+    await this.messenger.edit(at.chatId, at.messageId, view.text, { html: true, buttons: view.buttons });
+    return full ? 'Полный текст' : 'Свернул';
+  }
+
+  /**
+   * «Одобрить все обычные»: approves every pending proposal that is not locked (money, prices) and has no own buttons
+   * (those need the owner's own action), one by one through `handle`, so trust counters and the journal stay as for a
+   * button press. Each decided card is edited in place.
+   */
+  async approveAll(fromId: number): Promise<{ approved: number; failed: number; skipped: number }> {
+    const out = { approved: 0, failed: 0, skipped: 0 };
+    if (fromId !== this.ownerId) return out;
+    for (const row of this.pending()) {
+      if (row.status !== 'pending' || this.isLocked(row.kind) || this.hasOwnButtons(row.kind)) {
+        out.skipped++;
+        continue;
+      }
+      const answer = await this.handle('approve', row.id, fromId);
+      if (answer === 'Одобрено') out.approved++;
+      else out.failed++;
+      await this.settleCard(row.id).catch((e) => log('warn', 'card settle failed', { approvalId: row.id, err: errMsg(e) }));
+    }
+    return out;
   }
 
   level(kind: string): 0 | 1 {
@@ -226,6 +361,11 @@ export class ApprovalQueue {
     this.db.prepare("UPDATE approvals SET payload = ?, edited = 1, status = 'pending' WHERE id = ?").run(JSON.stringify(payload), id);
     this.bump(row.kind, 'reset');
     this.journal(id, row.kind, 'edit');
+    const old = this.format ? this.cardMessage(id) : undefined;
+    if (old && this.format) {
+      const view = this.format.settled(this.get(id)!, 'edited');
+      await this.messenger.edit(old.chatId, old.messageId, view.text, { html: true }).catch((e) => log('warn', 'card settle failed', { approvalId: id, err: errMsg(e) }));
+    }
     await this.ask(id);
     return true;
   }
@@ -242,10 +382,16 @@ export class ApprovalQueue {
   }
 
   private async ask(id: number): Promise<void> {
+    const view = this.cardView(id);
+    if (view) {
+      const messageId = await this.messenger.sendMessage(this.ownerId, view.text, view.buttons, { html: true });
+      this.noteCard(id, this.ownerId, messageId);
+      return;
+    }
     const row = this.get(id)!;
     const body = typeof row.payload.text === 'string' ? `\n\nПредлагаю отправить:\n${row.payload.text}` : '';
     const level = this.level(row.kind);
-    await this.messenger.send(
+    const messageId = await this.messenger.sendMessage(
       this.ownerId,
       `#${id} ${row.kind} (уровень ${level}, подряд ${this.streak(row.kind)})\n${row.summary}${body}`,
       this.spec(row.kind).buttons?.(id, row.payload) ?? [[
@@ -254,6 +400,7 @@ export class ApprovalQueue {
         { text: 'Отклонить', data: `ap:${id}:r` },
       ]],
     );
+    this.noteCard(id, this.ownerId, messageId);
   }
 
   private async run(id: number, spec: KindSpec, payload: Payload): Promise<boolean> {

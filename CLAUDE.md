@@ -19,8 +19,10 @@ Node 22, TypeScript ESM (NodeNext), pnpm 12 workspaces. `grammy` (long polling),
 ## packages/core (`@fir/core`)
 - `env.ts`: общий конфиг (`loadBaseConfig`: токен бота, `OWNER_TELEGRAM_ID`, `TZ`, `DATA_DIR`, порог доверия, LLM).
 - `db.ts`: SQLite (WAL), `migrate()` для схемы головы. `time.ts`: часовые пояса через Intl.
-- `bot.ts`: `createBot`, `grammyMessenger`, `installApprovals` (кнопки и правка владельца), `startPolling`.
-  `messenger.ts`: интерфейс `Messenger` (в тестах `MemoryMessenger`, сеть не нужна).
+- `bot.ts`: `createBot`, `grammyMessenger`, `installApprovals` (кнопки и правка владельца), `setupBotMenu` (команды,
+  описания, кнопка меню), `startPolling`. `messenger.ts`: интерфейс `Messenger` (HTML, reply-клавиатура, `edit` с кнопками,
+  `editButtons`; в тестах `MemoryMessenger`, сеть не нужна), `escapeHtml`/`stripHtml`. Вид карточек одобрений задаёт
+  приложение (`queue.setCardFormat`), после решения ядро правит карточку на месте (`settleCard`). UX Директора: `apps/hq/docs/telegram-ux.md`.
 - `scheduler.ts`: `schedule(name, cron, tz, job)` на croner, ошибка задачи логируется и не роняет процесс.
 - `approvals.ts`: **очередь одобрений**. Голова регистрирует тип действия (`register(kind, {initialLevel, locked, execute})`)
   и вызывает `propose(kind, payload, summary)`. Уровень 0: владельцу уходит сообщение с кнопками
