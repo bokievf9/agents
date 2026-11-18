@@ -90,4 +90,18 @@ describe('aggregation', () => {
     expect((await w.run(task({ action: 'weekly' }), ctx)).result).toContain('Расходы за месяц');
     expect(logs).toEqual(['finance_daily', 'finance_weekly']);
   });
+
+  it('reads paid revenue from billing invoices when the table exists, 0 and no line when not', () => {
+    const { db } = setup();
+    expect(aggregate(db, { now: NOW, tz: TZ, fixed }).revenue).toEqual({ yesterday: 0, month: 0 });
+    expect(dailyLine(aggregate(db, { now: NOW, tz: TZ, fixed }))).not.toContain('Выручка');
+    db.exec("CREATE TABLE bl_invoices (id INTEGER PRIMARY KEY, amount_usd REAL, status TEXT, paid_at INTEGER)");
+    const ins = db.prepare('INSERT INTO bl_invoices (amount_usd, status, paid_at) VALUES (?, ?, ?)');
+    ins.run(100, 'paid', NOW - 36 * 3600_000); // earlier this month
+    ins.run(40, 'paid', NOW - 20 * 3600_000); // yesterday
+    ins.run(999, 'issued', null);
+    const r = aggregate(db, { now: NOW, tz: TZ, fixed, includeToday: true });
+    expect(r.revenue.month).toBe(140);
+    expect(dailyLine(r)).toContain('Выручка (оплаченные счета)');
+  });
 });

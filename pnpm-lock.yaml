@@ -209,9 +209,15 @@ importers:
       '@fir/worker-analyst':
         specifier: workspace:*
         version: link:../../packages/workers/analyst
+      '@fir/worker-billing':
+        specifier: workspace:*
+        version: link:../../packages/workers/billing
       '@fir/worker-content-maker':
         specifier: workspace:*
         version: link:../../packages/workers/content-maker
+      '@fir/worker-customer-support':
+        specifier: workspace:*
+        version: link:../../packages/workers/customer-support
       '@fir/worker-finance':
         specifier: workspace:*
         version: link:../../packages/workers/finance
@@ -221,6 +227,9 @@ importers:
       '@fir/worker-monitoring':
         specifier: workspace:*
         version: link:../../packages/workers/monitoring
+      '@fir/worker-onboarding':
+        specifier: workspace:*
+        version: link:../../packages/workers/onboarding
       '@fir/worker-prospector':
         specifier: workspace:*
         version: link:../../packages/workers/prospector
@@ -372,7 +381,45 @@ importers:
         specifier: ^13.2.0
         version: 13.2.0
 
+  packages/workers/billing:
+    dependencies:
+      '@fir/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@fir/hq':
+        specifier: workspace:*
+        version: link:../../hq
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^9.6.0
+        version: 9.6.0
+      better-sqlite3:
+        specifier: ^13.2.0
+        version: 13.2.0
+
   packages/workers/content-maker:
+    dependencies:
+      '@fir/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@fir/hq':
+        specifier: workspace:*
+        version: link:../../hq
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^9.6.0
+        version: 9.6.0
+      better-sqlite3:
+        specifier: ^13.2.0
+        version: 13.2.0
+
+  packages/workers/customer-support:
     dependencies:
       '@fir/core':
         specifier: workspace:*
@@ -430,6 +477,25 @@ importers:
         version: 13.2.0
 
   packages/workers/monitoring:
+    dependencies:
+      '@fir/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@fir/hq':
+        specifier: workspace:*
+        version: link:../../hq
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^9.6.0
+        version: 9.6.0
+      better-sqlite3:
+        specifier: ^13.2.0
+        version: 13.2.0
+
+  packages/workers/onboarding:
     dependencies:
       '@fir/core':
         specifier: workspace:*

@@ -29,6 +29,8 @@ export interface FinanceReport {
   fixed: Record<string, number>;
   /** Department monthly limits (head's budget) where set. */
   budgets: Record<string, number>;
+  /** Paid revenue in USD from Billing's `bl_invoices` (0 when Billing has no table or no payments). */
+  revenue: { yesterday: number; month: number };
 }
 
 const fixedSchema = z.record(z.string(), z.number().min(0));
@@ -76,6 +78,16 @@ export function period(db: Db, from: number, to: number, fixedUsd: number): Peri
 }
 
 /**
+ * Paid revenue (USD) for payments in [from, to), read from Billing's `bl_invoices`. Finance does not import the
+ * Billing worker: it only reads the table, and returns 0 while the table does not exist.
+ */
+export function revenue(db: Db, from: number, to: number): number {
+  const has = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'bl_invoices'").get();
+  if (!has) return 0;
+  return (db.prepare("SELECT COALESCE(SUM(amount_usd), 0) s FROM bl_invoices WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?").get(from, to) as { s: number }).s;
+}
+
+/**
  * Costs for yesterday, this calendar week (from Monday) and this month, all in the HQ timezone. Fixed costs are
  * prorated per day at the current month's rate (monthly total / days in month). By default the week and the month
  * run through the end of yesterday (the morning line); `includeToday` runs them through `now` (the Sunday report).
@@ -109,5 +121,6 @@ export function aggregate(db: Db, o: { now: number; tz: string; fixed: Record<st
     fixedMonthTotal: fixedTotal,
     fixed: o.fixed,
     budgets,
+    revenue: { yesterday: revenue(db, yStart, todayStart), month: revenue(db, monthStart, end) },
   };
 }

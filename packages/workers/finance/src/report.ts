@@ -22,6 +22,7 @@ export function dailyLine(r: FinanceReport): string {
   if (depts.length) lines.push(`По отделам за месяц: ${depts.map((d) => `${d.dept} ${usd(d.usd)} (${tokens(d.inputTokens + d.outputTokens)})`).join(', ')}.`);
   const over = Object.entries(r.budgets).filter(([d, b]) => (r.month.byDept.find((x) => x.dept === d)?.usd ?? 0) >= b * 0.8);
   if (over.length) lines.push(`Близко к лимиту: ${over.map(([d, b]) => `${d} ${usd(r.month.byDept.find((x) => x.dept === d)!.usd)} из ${usd(b)}`).join(', ')}.`);
+  if (r.revenue.month > 0 || r.revenue.yesterday > 0) lines.push(`Выручка (оплаченные счета): вчера ${usd(r.revenue.yesterday)}, месяц ${usd(r.revenue.month)}.`);
   return lines.join('\n');
 }
 
@@ -48,6 +49,7 @@ export function monthlyReport(r: FinanceReport): string {
     const forecast = (m.usd / r.monthDays) * r.daysInMonth + r.fixedMonthTotal;
     out.push(`Прогноз на весь месяц: ${usd(forecast)} (API по текущему темпу плюс постоянные).`);
   }
+  if (r.revenue.month > 0) out.push(`Выручка за месяц (оплаченные счета): ${usd(r.revenue.month)}. Расходы ${usd(all(m))}, разница ${usd(r.revenue.month - all(m))}.`);
   out.push(`Вчера: ${part('', r.yesterday).trim()}.`);
   return out.join('\n');
 }

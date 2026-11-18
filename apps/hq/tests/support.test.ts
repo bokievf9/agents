@@ -1,5 +1,6 @@
 import { ApprovalQueue, MemoryMessenger, MockLlm, openDb } from '@fir/core';
 import { Hq } from '@fir/hq';
+import { BillingWorker } from '@fir/worker-billing';
 import { FinanceWorker } from '@fir/worker-finance';
 import { DAY_MS, MonitoringWorker, type CheckDeps, type MonitorConfig } from '@fir/worker-monitoring';
 import { describe, expect, it } from 'vitest';
@@ -39,18 +40,20 @@ function world() {
   };
   const llm = new MockLlm(() => '');
   const director = new Director({ hq, llm, messenger, queue, ownerId: OWNER, reporter });
-  const head = new SupportHead({ hq, llm, reporter, monitor: new MonitoringWorker({ ...cfg, omnirouteUrl: 'http://omniroute:20128/health' }, deps), finance: new FinanceWorker({ fixedCosts: { droplet: 30 } }) });
+  const head = new SupportHead({ hq, llm, reporter, monitor: new MonitoringWorker({ ...cfg, omnirouteUrl: 'http://omniroute:20128/health' }, deps), finance: new FinanceWorker({ fixedCosts: { droplet: 30 } }),
+    billing: new BillingWorker({ paymentDetails: { payme: '+998 00' } }), messenger, ownerId: OWNER });
+  director.onSupportCommand = (name, args) => head.onCommand(name, args);
   return { clock, hq, messenger, posted, director, head };
 }
 
 describe('Support head', () => {
   it('seeds the department and two routines once', () => {
     const w = world();
-    expect(w.hq.agents('support').map((a) => a.id)).toEqual(['support-head', 'finance', 'monitoring']);
-    expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([['support-daily', '50 7 * * *'], ['support-weekly', '0 20 * * 0']]);
+    expect(w.hq.agents('support').map((a) => a.id).sort()).toEqual(['billing', 'customer-support', 'finance', 'monitoring', 'onboarding', 'support-head']);
+    expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([['support-daily', '50 7 * * *'], ['support-weekly', '0 20 * * 0'], ['support-billing', '30 9 * * *']]);
     seedSupport(w.hq, { supportBudgetUsd: 5 }, () => 'другая');
     expect(w.hq.agent(SUPPORT_HEAD_ID)!.instructions).toBe('Инструкция головы');
-    expect(w.hq.routines()).toHaveLength(2);
+    expect(w.hq.routines()).toHaveLength(3);
   });
 
   it('an outage: one task per day, one alert, one recovery, no task per tick', async () => {
@@ -118,5 +121,64 @@ describe('Support head', () => {
     const asked = w.hq.createTask({ title: 'Сколько мы потратили в этом месяце?', dept: 'support', creator: 'owner' });
     await w.head.onHeartbeat();
     expect(w.hq.task(asked.id)!.status).toBe('done');
+  });
+
+  it('ticket: /ticket drafts a KB answer at level 1 (sent to the owner at once), /tickets lists it', async () => {
+    const w = world();
+    await w.director.onCommand('client', 'Dilnoza | @dil | бот записи | базовый');
+    await w.director.onCommand('ticket', 'Dilnoza: как оплатить подписку?');
+    const msgs = w.messenger.sent.map((m) => m.text).join('\n');
+    expect(msgs).toContain('Тикет #1');
+    expect(msgs).toContain('ответ утверждён, отправьте клиенту @dil');
+    expect(msgs).toContain('Kaspi');
+    await w.director.onCommand('tickets', '');
+    expect(w.messenger.sent.at(-1)!.text).toContain('#1 отвечен');
+    await w.director.onCommand('ticket', 'без двоеточия');
+    expect(w.messenger.sent.at(-1)!.text).toContain('Формат: /ticket');
+  });
+
+  it('ticket SLA: a money ticket waits at level 0 and becomes one alert after 4 hours', async () => {
+    const w = world();
+    await w.director.onCommand('ticket', 'Roza: верните деньги за сайт');
+    expect(w.hq.queuedApprovals().map((a) => a.kind)).toEqual(['support_money']);
+    w.clock.t += 3 * 3600_000;
+    expect(await w.head.slaTick()).toEqual([]);
+    w.clock.t += 1.1 * 3600_000;
+    const alerts = await w.head.slaTick();
+    expect(alerts).toHaveLength(1);
+    expect(w.messenger.sent.some((m) => m.text.includes('Тикет #1 (Roza) без утверждённого ответа'))).toBe(true);
+    expect(await w.head.slaTick()).toEqual([]);
+  });
+
+  it('a forwarded task "вопрос клиента Имя: текст" becomes a ticket on the heartbeat', async () => {
+    const w = world();
+    const t = w.hq.createTask({ title: 'Вопрос клиента', body: 'Roza: где мои заявки?', dept: 'support', creator: 'owner' });
+    await w.head.onHeartbeat();
+    expect(w.hq.task(t.id)!.status).toBe('done');
+    expect(w.messenger.sent.some((m) => m.text.includes('Тикет #1: ответ утверждён'))).toBe(true);
+  });
+
+  it('paid new-project invoice: revenue reaches the finance line and onboarding starts (checklist task + guide), check-ins fire via the routine', async () => {
+    const w = world();
+    await w.director.onCommand('invoice', 'Dilnoza 150 бот записи new');
+    expect(w.messenger.sent.at(-1)!.text).toContain('FT-2026-001');
+    expect(w.hq.queuedApprovals().map((a) => a.kind)).toEqual(['billing_invoice']);
+    await w.director.onCommand('paid', 'FT-2026-001');
+    const reply = w.messenger.sent.at(-1)!.text;
+    expect(reply).toContain('оплачен');
+    expect(reply).toContain('Онбординг: Dilnoza');
+    expect(w.hq.tasks({ dept: 'support', status: 'blocked' }).map((t) => t.title)).toContain('Онбординг: Dilnoza');
+    expect(w.hq.queuedApprovals().map((a) => a.kind)).toContain('onboarding_guide');
+    // revenue shows up in the Finance line
+    w.clock.t += 24 * 3600_000; // next morning: yesterday's payment is in the morning line
+    const daily = w.hq.runRoutine('support-daily')!;
+    await w.head.onHeartbeat();
+    expect(w.hq.task(daily.id)!.result).toContain('Выручка (оплаченные счета): вчера $150.00, месяц $150.00');
+    // day 1 check-in through the daily billing routine
+    w.clock.t += 7 * 3600_000;
+    const billing = w.hq.runRoutine('support-billing')!;
+    await w.head.onHeartbeat();
+    expect(w.hq.task(billing.id)!.result).toContain('Онбординг Dilnoza: День 1');
+    expect(w.messenger.sent.some((m) => m.text.includes('Онбординг Dilnoza: День 1'))).toBe(true);
   });
 });

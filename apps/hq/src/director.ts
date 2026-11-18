@@ -74,6 +74,8 @@ export class Director {
   readonly editors = new Map<string, ApprovalEditor>();
   /** Set by the Sales head: a business answered (`/reply <id>` or free text). Returns what to tell the owner. */
   onSalesReply: ((id: number, text?: string) => Promise<string>) | null = null;
+  /** Set by the Support head: `/ticket`, `/tickets`, `/client`, `/invoice`, `/paid`, `/onboard`... (generic passthrough). */
+  onSupportCommand: ((name: string, args: string) => Promise<string>) | null = null;
   /** Set by the builder bridge: a builder task was just created, make its issue now instead of at the next poll. */
   onBuilderTask: (() => Promise<unknown>) | null = null;
   private jobs: Cron[] = [];
@@ -193,7 +195,7 @@ export class Director {
     switch (name) {
       case 'start':
       case 'help':
-        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/builders: задачи строителям (issue)\n/skip: отменить ожидание правки');
+        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/builders: задачи строителям (issue)\nСопровождение: /ticket клиент: вопрос, /tickets, /client, /clients, /invoice клиент сумма за_что, /invoices, /sub, /paid номер, /onboard клиент\n/skip: отменить ожидание правки');
       case 'status':
         return this.say(this.statusText());
       case 'tasks':
@@ -215,6 +217,8 @@ export class Director {
       }
       case 'reply':
         return this.salesReply(Number(arg.trim().replace(/^#/, '')), undefined);
+      case 'ticket': case 'tickets': case 'client': case 'clients': case 'invoice': case 'invoices': case 'sub': case 'paid': case 'onboard':
+        return this.say(this.onSupportCommand ? await this.onSupportCommand(name, arg) : 'Отдел сопровождения не подключён.');
       case 'skip':
         for (const e of this.editors.values()) e.cancel();
         return this.say('Ок, ничего не жду.');
