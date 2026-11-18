@@ -14,6 +14,8 @@ COPY packages/workers/monitoring/package.json packages/workers/monitoring/
 COPY packages/workers/finance/package.json packages/workers/finance/
 COPY packages/workers/lead-intake/package.json packages/workers/lead-intake/
 COPY packages/workers/prospector/package.json packages/workers/prospector/
+COPY packages/workers/presales/package.json packages/workers/presales/
+COPY packages/workers/referral/package.json packages/workers/referral/
 COPY packages/workers/trend-scout/package.json packages/workers/trend-scout/
 COPY packages/workers/publisher/package.json packages/workers/publisher/
 COPY packages/workers/seo/package.json packages/workers/seo/

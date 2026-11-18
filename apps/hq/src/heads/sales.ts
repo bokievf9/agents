@@ -7,6 +7,13 @@ import {
   COPY_PREFIX, kindSpecs as prospectKinds, markReplied, onDecision as onProspectDecision, ProspectorWorker, PROSPECT_KINDS, statsText, storeFor as prospectStoreFor,
   STATUS_RU,
 } from '@fir/worker-prospector';
+import {
+  DEFAULT_REWARD, kindSpecs as referralKinds, markPaid, onDecision as onReferralDecision, parseReferralArg, ReferralWorker, referrerFromSource, rewardSummary,
+  statsText as referralStats, storeFor as referralStoreFor, KIND_REWARD, describe as describeReferral,
+} from '@fir/worker-referral';
+import {
+  kindSpecs as presalesKinds, KIND_PACK, onDecision as onPresalesDecision, PresalesWorker, packMessages,
+} from '@fir/worker-presales';
 import { z } from 'zod';
 import type { ApprovalEditor } from '../editor.js';
 import type { Reporter } from '../reporter.js';
@@ -15,6 +22,8 @@ export const SALES = 'sales';
 export const HEAD_ID = 'sales-head';
 const PROSPECTOR_ID = 'prospector';
 const LEADS_ID = 'lead-intake';
+const PRESALES_ID = 'presales';
+const REFERRAL_ID = 'referral';
 const AWAIT_KEY = 'sales_await_reply';
 
 export interface SalesDeps {
@@ -27,14 +36,21 @@ export interface SalesDeps {
   /** Defaults: the real workers. Tests pass their own. */
   prospector?: Worker;
   leads?: Worker;
+  presales?: Worker;
+  referral?: Worker;
+  /** Reward for a referral after the referred client pays (env REFERRAL_REWARD). */
+  referralReward?: string;
+  /** КП: prepayment share in percent and validity in days (env PREPAYMENT_PERCENT, KP_VALID_DAYS). */
+  prepaymentPercent?: number;
+  kpValidDays?: number;
   /** New Scout cards per daily batch. */
   batchSize?: number;
   slotHours?: [string, string];
   replyLevel?: 0 | 1;
 }
 
-type Action = 'lead' | 'batch' | 'followups' | 'reply' | 'stats' | 'none';
-const ACTIONS: Action[] = ['lead', 'batch', 'followups', 'reply', 'stats'];
+type Action = 'lead' | 'batch' | 'followups' | 'reply' | 'stats' | 'kp' | 'referral_reminders' | 'none';
+const ACTIONS: Action[] = ['lead', 'batch', 'followups', 'reply', 'stats', 'kp', 'referral_reminders'];
 const splitSchema = z.object({ action: z.enum(['batch', 'followups', 'stats', 'none']) });
 const reviewSchema = z.object({ ok: z.boolean(), issues: z.array(z.string()).max(10).default([]) });
 
@@ -63,9 +79,12 @@ export function seedSales(hq: Hq, cfg: { instructionsDir: string; salesBudgetUsd
   });
   hq.ensureAgent({ id: PROSPECTOR_ID, dept: SALES, role: 'worker', title: 'Разведчик', bossId: HEAD_ID });
   hq.ensureAgent({ id: LEADS_ID, dept: SALES, role: 'worker', title: 'Приёмщик лидов', bossId: HEAD_ID });
+  hq.ensureAgent({ id: PRESALES_ID, dept: SALES, role: 'worker', title: 'Пресейл', bossId: HEAD_ID });
+  hq.ensureAgent({ id: REFERRAL_ID, dept: SALES, role: 'worker', title: 'Рекомендации', bossId: HEAD_ID });
   const routines = [
     { name: 'sales-daily-cards', cron: '0 10 * * *', dept: SALES, title: 'Карточки Разведчика на сегодня', meta: { action: 'batch' } },
     { name: 'sales-followups', cron: '5 10 * * *', dept: SALES, title: 'Дожимы Разведчика', meta: { action: 'followups' } },
+    { name: 'sales-referral-reminders', cron: '30 9 * * *', dept: SALES, title: 'Напоминания по рекомендациям', meta: { action: 'referral_reminders' } },
   ];
   for (const r of routines) if (!hq.routineByName(r.name)) hq.scheduleRoutine(r);
 }
@@ -80,17 +99,27 @@ export function seedSales(hq: Hq, cfg: { instructionsDir: string; salesBudgetUsd
 export class SalesHead implements ApprovalEditor {
   readonly prospector: Worker;
   readonly leads: Worker;
+  readonly presales: Worker;
+  readonly referral: Worker;
 
   constructor(private readonly d: SalesDeps) {
     this.prospector = d.prospector ?? new ProspectorWorker({ ...(d.batchSize !== undefined ? { batchSize: d.batchSize } : {}) });
     this.leads = d.leads ?? new LeadIntakeWorker({ ...(d.slotHours ? { slotHours: d.slotHours } : {}), ...(d.replyLevel !== undefined ? { replyLevel: d.replyLevel } : {}) });
+    this.presales = d.presales ?? new PresalesWorker({
+      ...(d.prepaymentPercent !== undefined ? { prepaymentPercent: d.prepaymentPercent } : {}), ...(d.kpValidDays !== undefined ? { validDays: d.kpValidDays } : {}),
+    });
+    this.referral = d.referral ?? new ReferralWorker();
     const base = { db: d.hq.db, now: d.hq.now };
+    referralStoreFor(base, d.referralReward ?? DEFAULT_REWARD); // fixes the reward text before any worker touches the table
+    for (const [kind, spec] of Object.entries({ ...presalesKinds(base), ...referralKinds(base) })) d.hq.registerKind(kind, spec);
     for (const [kind, spec] of Object.entries(prospectKinds(base))) d.hq.registerKind(kind, spec);
     if (this.leads instanceof LeadIntakeWorker) {
       for (const [kind, spec] of Object.entries(this.leads.kindSpecs(base, (x) => this.deliver(x)))) d.hq.registerKind(kind, spec);
     }
     // The owner skipped a card or its execution failed: the prospect follows.
     d.hq.onApprovalDecision((link, state) => onProspectDecision(base, link, state));
+    d.hq.onApprovalDecision((link, state) => onPresalesDecision(base, link, state));
+    d.hq.onApprovalDecision((link, state) => onReferralDecision(base, link, state));
   }
 
   private get hq(): Hq {
@@ -103,6 +132,10 @@ export class SalesHead implements ApprovalEditor {
 
   private llmFor(agentId: string, taskId: number | null): LlmClient {
     return meterLlm(this.d.llm, this.hq, { agentId, taskId });
+  }
+
+  private rstore() {
+    return referralStoreFor({ db: this.hq.db, now: this.hq.now });
   }
 
   private pstore() {
@@ -163,8 +196,15 @@ export class SalesHead implements ApprovalEditor {
       this.hq.complete(task.id, HEAD_ID, text);
       return void (await this.report(task.id, text));
     }
+    if (action === 'referral_reminders') {
+      const res = await this.runOnce(task.id, this.referral, REFERRAL_ID, []);
+      if (!res.ok) return void this.hq.block(task.id, HEAD_ID, res.error ?? 'сбой напоминаний');
+      this.hq.complete(task.id, HEAD_ID, res.result || 'Напоминаний нет');
+      if (res.result) await this.report(task.id, res.result);
+      return;
+    }
     this.hq.setMeta(task.id, { action });
-    await this.runWorkerTask(task.id, action === 'lead' ? LEADS_ID : PROSPECTOR_ID, action);
+    await this.runWorkerTask(task.id, action === 'lead' ? LEADS_ID : action === 'kp' ? PRESALES_ID : PROSPECTOR_ID, action);
   }
 
   // ---- worker run, review (leads), approvals ----
@@ -200,7 +240,7 @@ export class SalesHead implements ApprovalEditor {
   }
 
   private async runWorkerTask(taskId: number, actor: string, action: Action): Promise<void> {
-    const worker = actor === LEADS_ID ? this.leads : this.prospector;
+    const worker = actor === LEADS_ID ? this.leads : actor === PRESALES_ID ? this.presales : this.prospector;
     const staged: Staged[] = [];
     const fail = async (error: string | undefined) => {
       this.hq.block(taskId, actor, error ?? 'исполнитель не вернул результат');
@@ -253,6 +293,11 @@ export class SalesHead implements ApprovalEditor {
       taskId,
       `Лид #${lead.id}: ${TEMP_RU[lead.temperature]}, ниша ${lead.niche || '?'}, задача ${oneLine(lead.task, 80) || '?'}. ${approvals} на одобрение, контакт в карточке.`,
     );
+    const ref = referrerFromSource(lead.origin);
+    if (ref) {
+      const { referral, created } = this.rstore().propose({ referrer: ref, referred: lead.name || `лид #${lead.id}`, leadId: lead.id, source: 'lead' });
+      if (created) await this.report(taskId, `Рекомендация ${describeReferral(referral)}, награда после оплаты: ${referral.reward}. Оплатит: /paid ${referral.id}.`);
+    }
     if (lead.temperature === 'hot') await this.hq.alert(`Горячий лид #${lead.id} (${lead.niche || 'ниша не ясна'}). Карточка с контактом в пачке на одобрение, /approve.`);
   }
 
@@ -284,6 +329,52 @@ export class SalesHead implements ApprovalEditor {
     return `Готовлю черновик ответа для #${prospectId} ${name}. Карточка придёт в пачке на одобрение (10:00 или /approve).`;
   }
 
+  // ---- the owner's commands /kp, /referral, /referrals, /paid (the Director passes them through as they are) ----
+  /** Returns what to tell the owner. */
+  async salesCommand(name: string, arg: string): Promise<string> {
+    const a = arg.trim();
+    if (name === 'kp') return this.startKp(a);
+    if (name === 'referrals') return referralStats(this.rstore());
+    if (name === 'referral') {
+      const p = parseReferralArg(a);
+      if (!p) return 'Формат: /referral <клиент> -> <новый лид>, например /referral Cambridge -> Blanche.';
+      const asLead = /^#?\d+$/.test(p.referred) ? leadStoreFor({ db: this.hq.db, now: this.hq.now }).get(Number(p.referred.replace('#', ''))) : undefined;
+      const { referral, created } = this.rstore().propose({ referrer: p.referrer, referred: asLead ? asLead.name || p.referred : p.referred, leadId: asLead?.id ?? null, source: 'owner' });
+      return created
+        ? `Записал: ${describeReferral(referral)}. Награда после оплаты: ${referral.reward}. Когда клиент оплатит: /paid ${referral.id}.`
+        : `Уже записано: ${describeReferral(referral)}, статус «${referral.status}».`;
+    }
+    if (name === 'paid') return this.paid(Number(a.replace(/^#/, '')));
+    return 'Неизвестная команда продаж.';
+  }
+
+  private startKp(arg: string): string {
+    if (!arg) return 'Формат: /kp <номер лида> или /kp <описание клиента и задачи>.';
+    const m = /^#?(\d+)$/.exec(arg);
+    const meta: Record<string, unknown> = { action: 'kp' };
+    let title = 'КП по запросу владельца';
+    if (m) {
+      const lead = leadStoreFor({ db: this.hq.db, now: this.hq.now }).get(Number(m[1]));
+      if (!lead) return `Лид ${m[1]} не найден. Номер в карточке лида (#12).`;
+      meta.leadId = lead.id;
+      title = `КП для лида #${lead.id} ${oneLine(lead.name, 60)}`;
+    } else meta.text = arg.slice(0, 2000);
+    this.hq.createTask({ title, dept: SALES, creator: 'owner', priority: 1, meta });
+    this.hq.wake(HEAD_ID, 'task');
+    return `Готовлю КП, смету и черновик договора. Придут одним предложением в пачке на одобрение (10:00 или /approve).`;
+  }
+
+  private async paid(id: number): Promise<string> {
+    const r = markPaid(this.rstore(), id);
+    if (!r.ok) return r.reason === 'unknown' ? 'Не нашёл такой рекомендации. Формат: /paid <id>, список: /referrals.' : `${describeReferral(r.referral!)}: награда уже применена.`;
+    if (r.already && r.referral.rewardRequested) return `${describeReferral(r.referral)}: награда уже ждёт вашего решения (/approve).`;
+    const t = this.hq.createTask({ title: `Награда за рекомендацию #${r.referral.id}`, dept: SALES, assigneeId: REFERRAL_ID, creator: 'owner', priority: 1, meta: { action: 'referral_reward', referralId: r.referral.id } });
+    this.hq.claim(t.id, REFERRAL_ID);
+    this.rstore().setRewardRequested(r.referral.id, true);
+    await this.hq.requestApproval(t.id, REFERRAL_ID, KIND_REWARD, { referralId: r.referral.id }, rewardSummary(r.referral));
+    return `${describeReferral(r.referral)}: оплата отмечена. Награда (${r.referral.reward}) придёт на одобрение в пачке (10:00 или /approve).`;
+  }
+
   // ---- the owner's free text after /reply (ApprovalEditor contract; no per-kind part editing here) ----
   async press(): Promise<string> {
     return 'Уже обработано';
@@ -311,6 +402,10 @@ export class SalesHead implements ApprovalEditor {
   /** Button `pc:<approvalId>:c`: sends the plain draft as a separate message. Returns the callback toast. */
   async onCopy(approvalId: number): Promise<string> {
     const row = this.d.queue.get(approvalId);
+    if (row?.kind === KIND_PACK && (row.status === 'pending' || row.status === 'editing')) {
+      for (const m of packMessages(row.payload)) await this.d.messenger.send(this.d.ownerId, m);
+      return 'Документы ниже';
+    }
     if (!row || !(PROSPECT_KINDS as readonly string[]).includes(row.kind) || (row.status !== 'pending' && row.status !== 'editing') || typeof row.payload.text !== 'string') return 'Уже обработано';
     await this.d.messenger.send(this.d.ownerId, row.payload.text);
     return 'Текст ниже';

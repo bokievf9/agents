@@ -57,8 +57,10 @@ const support = new SupportHead({
 });
 const sales = new SalesHead({
   hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel,
+  referralReward: cfg.referralReward, prepaymentPercent: cfg.prepaymentPercent, kpValidDays: cfg.kpValidDays,
 });
 director.onSalesReply = (id, text) => sales.startReply(id, text);
+director.onSalesCommand = (name, arg) => sales.salesCommand(name, arg);
 director.editors.set('sales:reply', sales); // the owner's text after /reply <id>
 
 // Only the owner in a private chat; everyone else is ignored silently.
@@ -105,6 +107,9 @@ installApprovals(bot, queue, cfg.ownerId);
 
 const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
 for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders']) {
+  bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
+}
+for (const name of ['kp', 'referral', 'referrals', 'paid']) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
 }
 // A free-text message goes through the LLM: run it in the background so buttons stay responsive.

@@ -74,6 +74,8 @@ export class Director {
   readonly editors = new Map<string, ApprovalEditor>();
   /** Set by the Sales head: a business answered (`/reply <id>` or free text). Returns what to tell the owner. */
   onSalesReply: ((id: number, text?: string) => Promise<string>) | null = null;
+  /** Set by the Sales head: /kp, /referral, /referrals, /paid go through as they are. Returns what to tell the owner. */
+  onSalesCommand: ((name: string, arg: string) => Promise<string>) | null = null;
   /** Set by the builder bridge: a builder task was just created, make its issue now instead of at the next poll. */
   onBuilderTask: (() => Promise<unknown>) | null = null;
   private jobs: Cron[] = [];
@@ -193,7 +195,7 @@ export class Director {
     switch (name) {
       case 'start':
       case 'help':
-        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/builders: задачи строителям (issue)\n/skip: отменить ожидание правки');
+        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/kp <лид или описание>: КП, смета, договор\n/referral <клиент> -> <лид>, /referrals, /paid <id>: рекомендации\n/builders: задачи строителям (issue)\n/skip: отменить ожидание правки');
       case 'status':
         return this.say(this.statusText());
       case 'tasks':
@@ -213,6 +215,11 @@ export class Director {
         this.hq.setDeptStatus(dept, name === 'pause' ? 'paused' : 'active');
         return this.say(name === 'pause' ? `Отдел ${dept} на паузе: новые задачи не берёт, повторные пробуждения не идут.` : `Отдел ${dept} снова работает.`);
       }
+      case 'kp':
+      case 'referral':
+      case 'referrals':
+      case 'paid':
+        return this.say(this.onSalesCommand ? await this.onSalesCommand(name, arg) : 'Отдел продаж не подключён.');
       case 'reply':
         return this.salesReply(Number(arg.trim().replace(/^#/, '')), undefined);
       case 'skip':
