@@ -21,6 +21,7 @@ import { MonitoringWorker } from '@fir/worker-monitoring';
 import { Reporter, type TopicSender } from './reporter.js';
 import { TopicManager } from './topics.js';
 import { createWebhook } from './webhook.js';
+import { cachedOffice } from './office.js';
 import { BuilderBridge, RestGithubClient } from './bridge.js';
 
 const cfg = loadConfig();
@@ -184,6 +185,8 @@ const webhook = cfg.leadWebhookToken
       ({ name, contact, service, budget, message, estimate, locale, slot, source }) =>
         Promise.resolve(sales.createLeadTask({ name, contact, service, budget, message, estimate, locale, slot, source }, service)),
       cfg.leadWebhookToken,
+      Date.now,
+      cfg.officeToken ? { token: cfg.officeToken, get: cachedOffice(hq) } : undefined,
     ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort }))
   : null;
 if (!webhook) log('warn', 'LEAD_WEBHOOK_TOKEN is not set, POST /lead is disabled');

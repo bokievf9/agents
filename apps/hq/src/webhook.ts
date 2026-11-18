@@ -52,12 +52,22 @@ export type WebLeadInput = z.output<typeof webLeadSchema>;
  * `POST /lead` (header `x-lead-token`) and `GET /health`. Listens inside the hq container; compose publishes it on
  * 127.0.0.1 only (firtech.pro on the same host posts here). `onLead` creates the Sales task and returns its id.
  */
-export function createWebhook(onLead: (lead: WebLeadInput) => Promise<number>, token: string, now: () => number = Date.now): Server {
+export function createWebhook(
+  onLead: (lead: WebLeadInput) => Promise<number>,
+  token: string,
+  now: () => number = Date.now,
+  /** `GET /office` (header `x-office-token`); without it the route answers 404. */
+  office?: { token: string; get: () => unknown },
+): Server {
   const hits: number[] = [];
   return createServer((req, res) => {
     void (async () => {
       try {
         if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ok: true });
+        if (req.method === 'GET' && req.url === '/office' && office) {
+          if (!tokenOk(req.headers['x-office-token'] as string | undefined, office.token)) return json(res, 401, { ok: false, error: 'unauthorized' });
+          return json(res, 200, office.get());
+        }
         if (req.method !== 'POST' || req.url !== '/lead') return json(res, 404, { ok: false });
         if (!tokenOk(req.headers['x-lead-token'] as string | undefined, token)) return json(res, 401, { ok: false, error: 'unauthorized' });
         // Coarse global limit: the form is low traffic, a flood means abuse.

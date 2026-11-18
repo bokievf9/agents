@@ -208,7 +208,7 @@ id задачи HQ, контекст (описание, последние ко�
 
 ## Переменные
 См. `.env.example`: `HQ_BOT_TOKEN`, `OWNER_TELEGRAM_ID`, `TZ`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_FAST/SMART`;
-необязательные `MARKETING_BOT_TOKEN`, `SALES_BOT_TOKEN`, `LEAD_WEBHOOK_TOKEN`, `WEBHOOK_PORT`, `BATCH_SIZE`, `SLOT_HOURS`,
+необязательные `MARKETING_BOT_TOKEN`, `SALES_BOT_TOKEN`, `LEAD_WEBHOOK_TOKEN`, `OFFICE_TOKEN`, `WEBHOOK_PORT`, `BATCH_SIZE`, `SLOT_HOURS`,
 `REPLY_LEVEL`, `SALES_BUDGET_USD`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
 id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`; сопровождение: `SUPPORT_BOT_TOKEN`, `MONITOR_URLS`, `MONITOR_DOCKER`, `OMNIROUTE_HEALTH_URL`,
 `FIXED_COSTS_USD_MONTH`, `SUPPORT_BUDGET_USD`; производство и бэк-офис: `PRODUCTION_BOT_TOKEN`, `BACKOFFICE_BOT_TOKEN`, `PRODUCTION_BUDGET_USD`, `BACKOFFICE_BUDGET_USD`, `KNOWLEDGE_DIR`; мост: `GITHUB_TOKEN`, `GITHUB_REPO`, `BUILDER_POLL_MINUTES`.
@@ -225,6 +225,14 @@ id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING
    отчёт через `Reporter`). Тип одобрения регистрирует голова (`hq.registerKind`).
 4. `src/index.ts`: создать голову, добавить в `HeartbeatWorker` (по `agent.id`), при боте отдела добавить отправителя в `senders`.
 5. Тесты по образцу `tests/marketing.test.ts` (`MemoryMessenger`, `MockLlm`, `:memory:`).
+
+## Живой офис (`GET /office`)
+`src/office.ts`, маршрут в `src/webhook.ts` (тот же сервер и порт `WEBHOOK_PORT`, что и `POST /lead`). Заголовок `x-office-token`
+должен совпасть с `OFFICE_TOKEN` (сравнение за постоянное время; 401 иначе; без `OFFICE_TOKEN` маршрут отвечает 404). Ответ: JSON по схеме
+`officeSchema` (экспорт из `src/office.ts`, контракт `../../../docs/office-api.md`), кэш 5 с. Без данных клиентов: заголовки задач
+продаж, производства, поддержки и бэк-офиса маскируются («Лид #id», «Sales: задача #id»; исключение: рутины), в ленте только коды действий и id.
+firtech.pro на том же хосте читает его через `/api/admin/office` (`HQ_OFFICE_URL`, `HQ_OFFICE_TOKEN`), порт наружу не публикуется.
+Статус агента: paused, offline (есть задача в работе, но нет следов жизни 10 мин), working, waiting, blocked, sleeping (тихие часы или 23:00-07:00 по TZ), idle.
 
 ## Запуск
 `pnpm --filter hq dev` (`.env.local`). Docker: `apps/hq/Dockerfile`, сервис `hq` в `compose.yaml` (единственный порт `127.0.0.1:8787` для webhook лидов, `read_only`,
