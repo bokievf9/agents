@@ -23,10 +23,22 @@ export class Reporter {
     const groupId = typeof this.groupId === 'function' ? this.groupId() : this.groupId;
     const thread = (typeof this.topics === 'function' ? this.topics() : this.topics)[dept];
     if (groupId === undefined || !send || thread === undefined) return false;
+    const body = text.slice(0, 3900);
     try {
-      await send(groupId, thread, text.slice(0, 3900));
+      await send(groupId, thread, body);
       return true;
     } catch (e) {
+      // A department bot that is not in the group ("chat not found"): the Director's bot posts instead.
+      if (this.fallback && send !== this.fallback) {
+        try {
+          await this.fallback(groupId, thread, body);
+          log('warn', 'report posted by the Director bot, department bot failed', { dept, err: errMsg(e) });
+          return true;
+        } catch (e2) {
+          log('warn', 'report to topic failed', { dept, err: errMsg(e2) });
+          return false;
+        }
+      }
       log('warn', 'report to topic failed', { dept, err: errMsg(e) });
       return false;
     }

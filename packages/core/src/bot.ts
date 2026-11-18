@@ -9,15 +9,37 @@ export function createBot(token: string): Bot {
   return bot;
 }
 
+/** Telegram refuses texts over 4096 characters; long ones go out in parts (split at newlines), buttons on the last part. */
+export const TG_MAX = 4000;
+export function splitForTelegram(text: string, max = TG_MAX): string[] {
+  if (text.length <= max) return [text];
+  const parts: string[] = [];
+  let rest = text;
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf('\n', max);
+    if (cut < max / 2) cut = max;
+    parts.push(rest.slice(0, cut));
+    rest = rest.slice(cut).replace(/^\n+/, '');
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
+
 export function grammyMessenger(bot: Bot): Messenger {
   const sendMessage = async (chatId: number, text: string, buttons?: { text: string; data: string }[][]): Promise<number> => {
-    const m = await bot.api.sendMessage(chatId, text, {
-      ...(buttons
-        ? { reply_markup: { inline_keyboard: buttons.map((row) => row.map((b) => ({ text: b.text, callback_data: b.data }))) } }
-        : {}),
-      link_preview_options: { is_disabled: true },
-    });
-    return m.message_id;
+    const parts = splitForTelegram(text);
+    let id = 0;
+    for (let i = 0; i < parts.length; i++) {
+      const last = i === parts.length - 1;
+      const m = await bot.api.sendMessage(chatId, parts[i] ?? '', {
+        ...(buttons && last
+          ? { reply_markup: { inline_keyboard: buttons.map((row) => row.map((b) => ({ text: b.text, callback_data: b.data }))) } }
+          : {}),
+        link_preview_options: { is_disabled: true },
+      });
+      id = m.message_id;
+    }
+    return id;
   };
   return {
     async send(chatId, text, buttons) {
@@ -26,7 +48,7 @@ export function grammyMessenger(bot: Bot): Messenger {
     sendMessage,
     async edit(chatId, messageId, text) {
       try {
-        await bot.api.editMessageText(chatId, messageId, text, { link_preview_options: { is_disabled: true } });
+        await bot.api.editMessageText(chatId, messageId, text.length > 4096 ? `${text.slice(0, 4090)}…` : text, { link_preview_options: { is_disabled: true } });
       } catch (e) {
         if (!/message is not modified/i.test(errMsg(e))) throw e;
       }
