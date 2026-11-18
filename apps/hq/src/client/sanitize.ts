@@ -99,8 +99,8 @@ export function linksOnly(text: string): boolean {
  * windows, which only makes the bot more generous for a moment. Counts only, never texts.
  */
 export class RateLimiter {
-  private readonly hits = new Map<number, number[]>();
-  private readonly warned = new Set<number>();
+  private readonly hits = new Map<number | string, number[]>();
+  private readonly warned = new Set<number | string>();
   private day = '';
   private llmCalls = 0;
 
@@ -112,7 +112,7 @@ export class RateLimiter {
   ) {}
 
   /** 'ok', 'warn' (first message over the limit: answer once) or 'drop' (stay silent). */
-  hit(chatId: number): 'ok' | 'warn' | 'drop' {
+  hit(chatId: number | string): 'ok' | 'warn' | 'drop' {
     const t = this.now();
     const list = (this.hits.get(chatId) ?? []).filter((x) => x > t - 3600_000);
     list.push(t);

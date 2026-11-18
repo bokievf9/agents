@@ -242,9 +242,9 @@ export class SupportHead {
    * A known client wrote to the public bot: a ticket task with the chat id, so the approved answer goes back to the chat.
    * Returns the task id. The owner is not asked anything here; the answer follows the usual levels and the SLA alert.
    */
-  async clientTicket(client: string, text: string, chatId: number): Promise<number> {
+  async clientTicket(client: string, text: string, chatId?: number): Promise<number> {
     const name = client.replace(/:/g, ' ').trim().slice(0, 80) || 'клиент';
-    const t = this.hq.createTask({ title: `Тикет из бота: ${name.slice(0, 60)}`, dept: SUPPORT, assigneeId: SUPPORT_HEAD_ID, creator: 'routine', meta: { action: 'ticket', args: `${name}: ${text}`, chatId } });
+    const t = this.hq.createTask({ title: `Тикет из бота: ${name.slice(0, 60)}`, dept: SUPPORT, assigneeId: SUPPORT_HEAD_ID, creator: 'routine', meta: { action: 'ticket', args: `${name}: ${text}`, ...(chatId !== undefined ? { chatId } : {}) } });
     if (!this.hq.claim(t.id, SUPPORT_HEAD_ID)) return t.id;
     try {
       await this.finish(t.id, await this.ownerAction(this.hq.task(t.id)!, 'ticket'), false);

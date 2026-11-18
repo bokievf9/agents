@@ -1,11 +1,10 @@
-import { errMsg, formatSlot, log, tryComplete, type Button, type Db, type LlmClient } from '@fir/core';
-import { isPriceQuestion } from '@fir/worker-lead-intake';
+import { errMsg, formatSlot, log, type Button, type Db, type LlmClient } from '@fir/core';
 import { ClientBlockedError, type ClientChannel } from './channel.js';
-import { systemPrompt, TEAM_MARK } from './prompt.js';
-import { inWindow, linksOnly, RateLimiter, sanitizeAnswer } from './sanitize.js';
+import { inWindow, linksOnly, RateLimiter } from './sanitize.js';
+import { clip, freeAnswer, GREETING, intakeRecord, TurnHistory } from './shared.js';
 import { ChatStore, maskUsername, textHash, type Chat, type Draft } from './store.js';
 import {
-  BUDGETS, budgetButtons, DEADLINES, deadlineButtons, esc, menuButtons, NEEDS, needButtons, SERVICE, T, type Budget, type Deadline, type Lang, type Need,
+  BUDGETS, budgetButtons, DEADLINES, deadlineButtons, esc, menuButtons, NEEDS, needButtons, T, type Budget, type Deadline, type Lang, type Need,
 } from './texts.js';
 
 /** What the engine needs from Telegram; the grammy bot implements it, tests keep everything in memory. */
@@ -31,7 +30,7 @@ export interface ClientSinks {
   /** Same as `POST /lead`: a Sales task with `meta.lead`. Returns the task id. */
   createLead(lead: Record<string, unknown>, service: string): number;
   /** A ticket task for a known client, with the chat id. Returns the task id. */
-  createTicket(client: string, text: string, chatId: number): Promise<number>;
+  createTicket(client: string, text: string, chatId?: number): Promise<number>;
   /** The client's name when the company name or invoice number is known to Support or billing. */
   findClient(query: string): string | null;
   /** The call slots offered to the lead of a task (for a «1» / «2» answer). */
@@ -57,11 +56,6 @@ export interface ClientEngineDeps {
   ownerFallback?: (text: string) => Promise<void>;
 }
 
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s.trim());
-const HISTORY_TURNS = 6;
-const HISTORY_TTL = 30 * 60_000;
-const GREETING = /^(привет[а-яё]*|здравствуй[а-яё]*|здрасьте|добр[а-яё]+\s+(день|утро|вечер)|салам[а-яё]*|ассалом[а-яё]*|hi|hello|hey|good (morning|afternoon|evening))[\s!.,)]*$/i;
-
 /**
  * The public client bot («лицо компании»): welcome and menu, a 3-step project intake that becomes a Sales lead, «я уже
  * клиент» that becomes a Support ticket, «позвать человека» that hands the chat to the owner, and a free conversation
@@ -73,12 +67,13 @@ export class ClientEngine implements ClientChannel {
   readonly store: ChatStore;
   readonly limiter: RateLimiter;
   private sinks: ClientSinks | undefined;
-  private readonly history = new Map<number, { at: number; turns: { role: 'user' | 'assistant'; content: string }[] }>();
+  private readonly history: TurnHistory<number>;
 
   constructor(private readonly d: ClientEngineDeps) {
     this.store = new ChatStore(d.db, d.now);
     this.limiter = new RateLimiter(d.perHour ?? 20, d.dailyCap ?? 300, d.now, d.tz);
     this.sinks = d.sinks;
+    this.history = new TurnHistory(d.now);
   }
 
   connect(sinks: ClientSinks): void {
@@ -279,25 +274,15 @@ export class ClientEngine implements ClientChannel {
   private async finishIntake(chat: Chat, from: From, patch: Draft, messageId?: number): Promise<void> {
     const d: Draft = { ...chat.draft, ...patch };
     const t = T[chat.lang];
-    const ru = T.ru;
-    const needShown = d.need ? t.needLabel[d.need] : clip(d.needText ?? '', 60);
-    const deadlineShown = d.deadline ? t.deadlineLabel[d.deadline] : d.deadlineText ?? '';
-    const budgetShown = d.budget ? t.budget[d.budget] : d.budgetText ?? '';
+    const rec = intakeRecord(d, chat.lang, 'Заявка из клиентского Telegram-бота.');
     const night = this.isNight();
-    const done = `${t.done(needShown, deadlineShown, budgetShown)}${night ? `\n${t.doneNight}` : ''}`;
+    const done = `${t.done(rec.shown.need, rec.shown.deadline, rec.shown.budget)}${night ? `\n${t.doneNight}` : ''}`;
     if (messageId !== undefined) await this.edit(chat.chatId, messageId, done);
     else {
       await this.dropCard(chat);
       await this.say(chat.chatId, done);
     }
-    const message = [
-      d.needText ? `Задача (словами клиента): ${d.needText}` : `Нужно: ${ru.needLabel[d.need ?? 'other']}`,
-      `Срок: ${d.deadline ? ru.deadlineLabel[d.deadline] : d.deadlineText || 'не указан'}`,
-      'Заявка из клиентского Telegram-бота.',
-    ].join('\n');
-    const budget = d.budget ? (d.budget === 'unknown' ? '' : ru.budget[d.budget]) : d.budgetText ?? '';
-    const masked = `проект: ${d.need ? ru.needLabel[d.need] : 'своими словами'}, ${d.deadline ? ru.deadlineLabel[d.deadline] : 'срок словами'}, ${d.budget ? ru.budget[d.budget] : 'бюджет словами'}`;
-    await this.createLead(chat, from, { message, budget, service: SERVICE[d.need ?? 'other'] }, masked);
+    await this.createLead(chat, from, { message: rec.message, budget: rec.budget, service: rec.service }, rec.masked);
   }
 
   /** The lead goes to Sales exactly like a website form lead, with the chat id so replies come back here. */
@@ -387,30 +372,26 @@ export class ClientEngine implements ClientChannel {
 
   private async answer(chat: Chat, text: string): Promise<void> {
     const t = T[chat.lang];
-    if (isPriceQuestion(text)) {
-      await this.say(chat.chatId, t.priceAnswer, this.discussButton(chat.lang));
-      return;
+    const r = await freeAnswer(
+      { llm: this.d.llm, instructions: this.d.instructions, gate: this.limiter, night: this.isNight() }, chat.lang, text, this.turns(chat.chatId),
+      () => this.d.transport.typing(chat.chatId).catch(() => undefined),
+    );
+    switch (r.kind) {
+      case 'price':
+        await this.say(chat.chatId, t.priceAnswer, this.discussButton(chat.lang));
+        return;
+      case 'night':
+        await this.say(chat.chatId, t.night, this.discussButton(chat.lang));
+        return this.forward(chat, text, 'Сообщение ночью');
+      case 'fallback':
+        return this.fallback(chat, text);
+      default:
     }
-    if (this.isNight()) {
-      await this.say(chat.chatId, t.night, this.discussButton(chat.lang));
-      return this.forward(chat, text, 'Сообщение ночью');
-    }
-    if (!this.d.llm.enabled || !this.limiter.llmAllowed()) return this.fallback(chat, text);
-    await this.d.transport.typing(chat.chatId).catch(() => undefined);
-    this.limiter.llmUsed();
-    const raw = await tryComplete(this.d.llm, {
-      tier: 'sonnet', maxTokens: 400, system: systemPrompt(this.d.instructions, chat.lang),
-      messages: [...this.turns(chat.chatId), { role: 'user', content: text }],
-    });
-    if (!raw?.trim()) return this.fallback(chat, text);
-    const team = raw.includes(TEAM_MARK);
-    const clean = sanitizeAnswer(raw.split(TEAM_MARK).join(' '), t.priceNote);
-    if (clean.text.length < 2) return this.fallback(chat, text);
-    await this.say(chat.chatId, esc(clean.text));
+    await this.say(chat.chatId, esc(r.text));
     this.remember(chat.chatId, 'user', text);
-    this.remember(chat.chatId, 'assistant', clean.text);
-    log('info', 'client bot answer', { chatId: chat.chatId, removed: clean.removed, team, llmToday: this.limiter.llmToday });
-    if (team || clean.removed > 0) await this.forward(chat, text, team ? 'Нужен человек (вопрос к команде)' : 'Вопрос о цене или сроках');
+    this.remember(chat.chatId, 'assistant', r.text);
+    log('info', 'client bot answer', { chatId: chat.chatId, removed: r.removed, team: r.team, llmToday: this.limiter.llmToday });
+    if (r.team || r.removed > 0) await this.forward(chat, text, r.team ? 'Нужен человек (вопрос к команде)' : 'Вопрос о цене или сроках');
   }
 
   private async fallback(chat: Chat, text: string): Promise<void> {
@@ -418,22 +399,12 @@ export class ClientEngine implements ClientChannel {
     await this.forward(chat, text, 'Сообщение без ответа модели');
   }
 
-  private turns(chatId: number): { role: 'user' | 'assistant'; content: string }[] {
-    const h = this.history.get(chatId);
-    if (!h || h.at < this.d.now() - HISTORY_TTL) return [];
-    const turns = h.turns.slice(-HISTORY_TURNS);
-    while (turns.length && turns[0]!.role !== 'user') turns.shift();
-    // Strict alternation: a delivered head reply right after the bot's answer would put two assistant turns in a row.
-    return turns.filter((x, i) => i === 0 || x.role !== turns[i - 1]!.role);
+  private turns(chatId: number) {
+    return this.history.turns(chatId);
   }
 
-  /** In memory only (never in the database or logs), 30 minutes: the model sees the last few turns. */
   private remember(chatId: number, role: 'user' | 'assistant', content: string): void {
-    const now = this.d.now();
-    const h = this.history.get(chatId);
-    const turns = h && h.at >= now - HISTORY_TTL ? h.turns : [];
-    turns.push({ role, content: clip(content, 800) });
-    this.history.set(chatId, { at: now, turns: turns.slice(-HISTORY_TURNS) });
+    this.history.remember(chatId, role, content);
   }
 
   /** Links only, or the same text a third time in a row. */

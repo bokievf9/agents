@@ -25,6 +25,8 @@ import { cachedOffice } from './office.js';
 import { Drill } from './drill.js';
 import { BuilderBridge, RestGithubClient } from './bridge.js';
 import { ClientBot } from './client/bot.js';
+import { RateLimiter } from './client/sanitize.js';
+import { WebChatEngine } from './client/web.js';
 import { FALLBACK_INSTRUCTIONS } from './client/prompt.js';
 import { clientSinks } from './client/sinks.js';
 
@@ -213,16 +215,24 @@ for (const dept of hq.departments()) {
 }
 
 // POST /lead from firtech.pro (same host): a Sales task per lead. No token, no server.
-const webhook = cfg.leadWebhookToken
+// POST /chat (website chat): the same conversation engine as the client bot, its LLM daily cap shared with the Telegram counter.
+const chatGate = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz);
+const webChat = cfg.webChatToken
+  ? new WebChatEngine({ db, now: hq.now, tz: () => hq.tz, llm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate })
+  : null;
+webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix }));
+
+const webhook = cfg.leadWebhookToken || cfg.webChatToken
   ? createWebhook(
       ({ name, contact, service, budget, message, estimate, locale, slot, source }) =>
         Promise.resolve(sales.createLeadTask({ name, contact, service, budget, message, estimate, locale, slot, source }, service)),
       cfg.leadWebhookToken,
       Date.now,
       cfg.officeToken ? { token: cfg.officeToken, get: cachedOffice(hq) } : undefined,
-    ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort }))
+      webChat && cfg.webChatToken ? { token: cfg.webChatToken, handle: (r, ip) => webChat.handle(r, ip) } : undefined,
+    ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort, lead: Boolean(cfg.leadWebhookToken), chat: Boolean(webChat) }))
   : null;
-if (!webhook) log('warn', 'LEAD_WEBHOOK_TOKEN is not set, POST /lead is disabled');
+if (!webhook) log('warn', 'LEAD_WEBHOOK_TOKEN and WEB_CHAT_TOKEN are not set, POST /lead and POST /chat are disabled');
 
 const stop = () => {
   webhook?.close();

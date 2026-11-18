@@ -33,6 +33,8 @@ export interface Config extends BaseConfig {
   /** Shared secret of `POST /lead` (header `x-lead-token`); without it the webhook server does not start. */
   leadWebhookToken: string | undefined;
   webhookPort: number;
+  /** Secret of `POST /chat` (header `x-chat-token`); falls back to `LEAD_WEBHOOK_TOKEN`. */
+  webChatToken: string | undefined;
   /** Shared secret of `GET /office` (header `x-office-token`); without it the route answers 404. */
   officeToken: string | undefined;
   /** New Scout cards per day. */
@@ -122,6 +124,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     salesBotToken: optional(env, 'SALES_BOT_TOKEN'),
     leadWebhookToken: optional(env, 'LEAD_WEBHOOK_TOKEN'),
     officeToken: optional(env, 'OFFICE_TOKEN'),
+    webChatToken: optional(env, 'WEB_CHAT_TOKEN') ?? optional(env, 'LEAD_WEBHOOK_TOKEN'),
     webhookPort: Math.round(num(env, 'WEBHOOK_PORT', 8787, 1, 65_535)),
     batchSize: Math.round(num(env, 'BATCH_SIZE', 10, 1, 100)),
     slotHours: [hours[0]!, hours[1]!],

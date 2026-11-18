@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { z } from 'zod';
 import { errMsg, log } from '@fir/core';
+import { chatSchema, type ChatOutcome, type ChatRequest } from './client/web.js';
 
 /** Same fields as the firtech.pro form (`../firtech/src/lib/lead.ts` leadSchema); `estimate` is the builder's leadSummary. */
 export const webLeadSchema = z.object({
@@ -54,10 +55,13 @@ export type WebLeadInput = z.output<typeof webLeadSchema>;
  */
 export function createWebhook(
   onLead: (lead: WebLeadInput) => Promise<number>,
-  token: string,
+  /** Without it `POST /lead` answers 404 (the server may run for `/chat` only). */
+  token: string | undefined,
   now: () => number = Date.now,
   /** `GET /office` (header `x-office-token`); without it the route answers 404. */
   office?: { token: string; get: () => unknown },
+  /** `POST /chat` (header `x-chat-token`), the website version of the client bot; `ip` is the first `x-forwarded-for`, else the socket. */
+  chat?: { token: string; handle: (req: ChatRequest, ip: string) => Promise<ChatOutcome> },
 ): Server {
   const hits: number[] = [];
   return createServer((req, res) => {
@@ -68,7 +72,27 @@ export function createWebhook(
           if (!tokenOk(req.headers['x-office-token'] as string | undefined, office.token)) return json(res, 401, { ok: false, error: 'unauthorized' });
           return json(res, 200, office.get());
         }
-        if (req.method !== 'POST' || req.url !== '/lead') return json(res, 404, { ok: false });
+        if (req.method === 'POST' && req.url === '/chat') {
+          if (!chat) return json(res, 503, { ok: false, error: 'unavailable' });
+          if (!tokenOk(req.headers['x-chat-token'] as string | undefined, chat.token)) return json(res, 401, { ok: false, error: 'unauthorized' });
+          const raw = await readBody(req);
+          if (raw === null) return json(res, 413, { ok: false, error: 'too_large' });
+          let data: unknown = null;
+          try {
+            data = JSON.parse(raw);
+          } catch {
+            /* falls through to invalid */
+          }
+          const parsed = chatSchema.safeParse(data);
+          if (!parsed.success) return json(res, 400, { ok: false, error: 'invalid' });
+          const fwd = req.headers['x-forwarded-for'];
+          const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+          const out = await chat.handle(parsed.data, ip);
+          if (out.kind === 'rate_limited') return json(res, 429, { ok: false, error: 'rate_limited' });
+          if (out.kind === 'unavailable') return json(res, 503, { ok: false, error: 'unavailable' });
+          return json(res, 200, out.body);
+        }
+        if (req.method !== 'POST' || req.url !== '/lead' || !token) return json(res, 404, { ok: false });
         if (!tokenOk(req.headers['x-lead-token'] as string | undefined, token)) return json(res, 401, { ok: false, error: 'unauthorized' });
         // Coarse global limit: the form is low traffic, a flood means abuse.
         const t = now();

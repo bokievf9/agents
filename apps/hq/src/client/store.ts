@@ -18,6 +18,12 @@ export interface Draft {
   /** «Я уже клиент»: the client name found in Support or billing, or null when not found. */
   client?: string | null;
   clientQuery?: string;
+  /** Web chat: the client's question, kept until the contact step creates the ticket or lead. */
+  question?: string;
+  /** Web chat: the page the visitor wrote from. */
+  page?: string;
+  /** Web chat: what the contact step finishes. */
+  pending?: 'intake' | 'client';
 }
 
 /** Per chat only: id, username, language, state, last activity and a short masked summary (no message texts). */
