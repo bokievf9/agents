@@ -76,6 +76,8 @@ export class Director {
   onSalesReply: ((id: number, text?: string) => Promise<string>) | null = null;
   /** Set by the Sales head: /kp, /referral, /referrals, /paid go through as they are. Returns what to tell the owner. */
   onSalesCommand: ((name: string, arg: string) => Promise<string>) | null = null;
+  /** Set by the Support head: `/ticket`, `/tickets`, `/client`, `/invoice`, `/paid`, `/onboard`... (generic passthrough). */
+  onSupportCommand: ((name: string, args: string) => Promise<string>) | null = null;
   /** Set by the builder bridge: a builder task was just created, make its issue now instead of at the next poll. */
   onBuilderTask: (() => Promise<unknown>) | null = null;
   private jobs: Cron[] = [];
@@ -195,7 +197,7 @@ export class Director {
     switch (name) {
       case 'start':
       case 'help':
-        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/kp <лид или описание>: КП, смета, договор\n/referral <клиент> -> <лид>, /referrals, /paid <id>: рекомендации\n/builders: задачи строителям (issue)\n/skip: отменить ожидание правки');
+        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/kp <лид или описание>: КП, смета, договор\n/referral <клиент> -> <лид>, /referrals, /paid <id>: рекомендации\n/builders: задачи строителям (issue)\nСопровождение: /ticket клиент: вопрос, /tickets, /client, /clients, /invoice клиент сумма за_что, /invoices, /sub, /onboard клиент\n/paid <номер счёта FT-2026-001 или id рекомендации>: оплата счёта (сопровождение) или выплата за рекомендацию (продажи)\n/skip: отменить ожидание правки');
       case 'status':
         return this.say(this.statusText());
       case 'tasks':
@@ -218,10 +220,14 @@ export class Director {
       case 'kp':
       case 'referral':
       case 'referrals':
-      case 'paid':
+        return this.say(this.onSalesCommand ? await this.onSalesCommand(name, arg) : 'Отдел продаж не подключён.');
+      case 'paid': // an invoice number (FT-2026-001, 2026-001) goes to Support, anything else is a referral id (Sales)
+        if (/^#?(?:[A-Za-z]+-)?\d{4}-\d+$/.test(arg.trim())) return this.say(this.onSupportCommand ? await this.onSupportCommand(name, arg) : 'Отдел сопровождения не подключён.');
         return this.say(this.onSalesCommand ? await this.onSalesCommand(name, arg) : 'Отдел продаж не подключён.');
       case 'reply':
         return this.salesReply(Number(arg.trim().replace(/^#/, '')), undefined);
+      case 'ticket': case 'tickets': case 'client': case 'clients': case 'invoice': case 'invoices': case 'sub': case 'onboard':
+        return this.say(this.onSupportCommand ? await this.onSupportCommand(name, arg) : 'Отдел сопровождения не подключён.');
       case 'skip':
         for (const e of this.editors.values()) e.cancel();
         return this.say('Ок, ничего не жду.');

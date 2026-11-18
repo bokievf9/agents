@@ -8,10 +8,13 @@ import { Director } from './director.js';
 import { HEAD_ID, MARKETING, MarketingHead } from './heads/marketing.js';
 import { HEAD_ID as SALES_HEAD_ID, parseCopy, SALES, SalesHead, seedSales } from './heads/sales.js';
 import { seedOrg } from './org.js';
-import { SUPPORT, SUPPORT_HEAD_ID, SupportHead, seedSupport } from './heads/support.js';
+import { SUPPORT, SUPPORT_COMMANDS, SUPPORT_HEAD_ID, SupportHead, seedSupport } from './heads/support.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { BillingWorker } from '@fir/worker-billing';
+import { CustomerSupportWorker } from '@fir/worker-customer-support';
 import { FinanceWorker } from '@fir/worker-finance';
+import { OnboardingWorker } from '@fir/worker-onboarding';
 import { MonitoringWorker } from '@fir/worker-monitoring';
 import { Reporter, type TopicSender } from './reporter.js';
 import { createWebhook } from './webhook.js';
@@ -54,7 +57,11 @@ const marketing = new MarketingHead({
 director.editors.set('content_item', marketing);
 const support = new SupportHead({
   hq, llm, reporter, monitor: new MonitoringWorker(cfg.monitor), finance: new FinanceWorker({ fixedCosts: cfg.fixedCostsUsdMonth }),
+  cs: new CustomerSupportWorker({ slaHours: cfg.supportSlaHours }),
+  billing: new BillingWorker({ prefix: cfg.invoicePrefix, paymentDetails: cfg.paymentDetails }),
+  onboarding: new OnboardingWorker(), messenger, ownerId: cfg.ownerId,
 });
+director.onSupportCommand = (name, args) => support.onCommand(name, args);
 const sales = new SalesHead({
   hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel,
   referralReward: cfg.referralReward, prepaymentPercent: cfg.prepaymentPercent, kpValidDays: cfg.kpValidDays,
@@ -106,10 +113,10 @@ bot.on('callback_query:data', async (ctx, next) => {
 installApprovals(bot, queue, cfg.ownerId);
 
 const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
-for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders']) {
+for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', ...SUPPORT_COMMANDS]) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
 }
-for (const name of ['kp', 'referral', 'referrals', 'paid']) {
+for (const name of ['kp', 'referral', 'referrals']) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
 }
 // A free-text message goes through the LLM: run it in the background so buttons stay responsive.
