@@ -2,7 +2,7 @@ import { ApprovalQueue, MemoryMessenger, MockLlm, OffLlm, openDb, type LlmClient
 import { Hq } from '@fir/hq';
 import { fileURLToPath } from 'node:url';
 import { Director } from '../src/director.js';
-import { MarketingHead } from '../src/heads/marketing.js';
+import { MarketingHead, type Integrations } from '../src/heads/marketing.js';
 import { seedOrg } from '../src/org.js';
 import { Reporter, type TopicSender } from '../src/reporter.js';
 
@@ -52,7 +52,7 @@ export function routedLlm(r: Replies = {}): MockLlm {
   });
 }
 
-export function world(opts: { llm?: LlmClient; groupTopics?: boolean; budget?: number } = {}) {
+export function world(opts: { llm?: LlmClient; groupTopics?: boolean; budget?: number; integrations?: Integrations } = {}) {
   const clock = { t: NOW };
   const db = openDb(':memory:');
   const messenger = new MemoryMessenger();
@@ -67,7 +67,7 @@ export function world(opts: { llm?: LlmClient; groupTopics?: boolean; budget?: n
     ? new Reporter(-1001, { marketing: 7, general: 2 }, new Map([['marketing', send], ['general', send]]))
     : new Reporter(undefined, {}, new Map());
   const director = new Director({ hq, llm, messenger, queue, ownerId: OWNER, reporter });
-  const marketing = new MarketingHead({ hq, llm, queue, messenger, ownerId: OWNER, reporter, rng: () => 0.1 });
+  const marketing = new MarketingHead({ hq, llm, queue, messenger, ownerId: OWNER, reporter, rng: () => 0.1, ...(opts.integrations ? { integrations: opts.integrations } : {}) });
   director.editors.set('content_item', marketing);
   /** The owner presses a decision the way the Telegram glue does. */
   const decide = async (action: 'approve' | 'edit' | 'reject', approvalId: number) => {

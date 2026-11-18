@@ -14,6 +14,10 @@ COPY packages/workers/monitoring/package.json packages/workers/monitoring/
 COPY packages/workers/finance/package.json packages/workers/finance/
 COPY packages/workers/lead-intake/package.json packages/workers/lead-intake/
 COPY packages/workers/prospector/package.json packages/workers/prospector/
+COPY packages/workers/trend-scout/package.json packages/workers/trend-scout/
+COPY packages/workers/publisher/package.json packages/workers/publisher/
+COPY packages/workers/seo/package.json packages/workers/seo/
+COPY packages/workers/analyst/package.json packages/workers/analyst/
 COPY apps/hq/package.json apps/hq/
 RUN pnpm install --frozen-lockfile
 COPY packages/core packages/core

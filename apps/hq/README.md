@@ -78,6 +78,16 @@
   первого запуска нового `hq`; контейнеры старых сервисов `docker compose up -d --remove-orphans` уберёт сам. Telegram-диалог
   с клиентами (публичный бот) не переехал: заявки приходят только с формы сайта. `SALES_BOT_TOKEN` теперь токен бота отдела
   (раньше `TELEGRAM_BOT_TOKEN` у lead-intake, `PROSPECTOR_BOT_TOKEN` у Разведчика), `LEAD_WEBHOOK_TOKEN` и порт те же.
+### Остальные исполнители отдела (этап 1, текст, без платных API)
+| Исполнитель | Рутина | Что делает | Документ |
+|---|---|---|---|
+| Трендвотчер | 08:30 ежедневно, вс 20:00 итог недели | 5 хуков и форматов дня из Google Trends и YouTube, отдаёт их Контент-мейкеру | `packages/workers/trend-scout/README.md` |
+| Публикатор | 09:00 «что публикуем сегодня» | пакеты публикации по платформам, кнопка «Опубликовано» (ручная публикация) | `packages/workers/publisher/README.md` |
+| SEO | пн 11:00 | проверка сайта и llms.txt, до 5 правок в пачку одобрения, `builder` для кода | `packages/workers/seo/README.md` |
+| Аналитик | пн 08:00 | отчёт из данных HQ: 5 чисел и 3 рекомендации | `packages/workers/analyst/README.md` |
+Задачи трендов, SEO и отчёта голова запускает напрямую (без чек-листа контента); предложения SEO идут в очередь одобрений
+(`seo_proposal`, уровень 0). Кнопка `pb:<id>` («Опубликовано») обрабатывается в `src/index.ts` и пишет `published_at`.
+Все источники необязательны: без ключа источник выключен.
 
 ## Инструкции агентов
 `instructions/director.md`, `instructions/marketing-head.md` и `instructions/sales-head.md` (русский) загружаются в таблицу `agents` один раз при первом
@@ -90,6 +100,8 @@
 `REPLY_LEVEL`, `SALES_BUDGET_USD`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
 id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`; сопровождение: `SUPPORT_BOT_TOKEN`, `MONITOR_URLS`, `MONITOR_DOCKER`, `OMNIROUTE_HEALTH_URL`,
 `FIXED_COSTS_USD_MONTH`, `SUPPORT_BUDGET_USD`.
+необязательные `YOUTUBE_API_KEY`, `YOUTUBE_CHANNEL_ID`, `TRENDS_REGIONS` (по умолчанию `KZ,UZ,RU`), `GSC_SERVICE_ACCOUNT_JSON`, `GSC_SITE_URL`, `SITE_URL` (по умолчанию `https://firtech.pro`), `MARKETING_BOT_TOKEN`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
+id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`.
 
 ## Как добавить отдел
 1. Исполнители: `packages/workers/<имя>` (контракт в `packages/hq/README.md`).

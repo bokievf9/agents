@@ -180,12 +180,15 @@ describe('Director: commands, summary, batch, alerts', () => {
 });
 
 describe('org and config', () => {
-  it('seedOrg creates director, head, worker and two routines once; edits survive a second start', () => {
+  it('seedOrg creates director, head, workers and routines once; edits survive a second start', () => {
     const w = world();
-    expect(w.hq.agents().map((a) => a.id)).toEqual(['director', 'marketing-head', 'content-maker']);
+    expect(w.hq.agents().map((a) => a.id)).toEqual(['director', 'marketing-head', 'analyst', 'content-maker', 'publisher', 'seo', 'trend-scout']);
     expect(w.hq.agent('director')!.instructions).toContain('Директор Fir Tech');
     expect(w.hq.agent('marketing-head')).toMatchObject({ bot: 'MARKETING_BOT_TOKEN', bossId: 'director' });
-    expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([['marketing-weekly-pack', '0 9 * * 1'], ['marketing-daily-today', '0 9 * * *']]);
+    expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([
+      ['marketing-weekly-pack', '0 9 * * 1'], ['marketing-daily-today', '0 9 * * *'], ['marketing-trends-daily', '30 8 * * *'],
+      ['marketing-trends-weekly', '0 20 * * 0'], ['marketing-analyst-weekly', '0 8 * * 1'], ['marketing-seo-weekly', '0 11 * * 1'],
+    ]);
     w.hq.setInstructions('marketing-head', 'edited');
     w.hq.scheduleRoutine({ ...w.hq.routineByName('marketing-daily-today')!, cron: '0 10 * * *' });
     seedOrg(w.hq, { instructionsDir, marketingBudgetUsd: 0 });
@@ -198,6 +201,8 @@ describe('org and config', () => {
     const c = loadConfig({ ...base, HQ_GROUP_ID: '-100123', HQ_TOPICS: '{"general":2,"marketing":3}', MARKETING_BOT_TOKEN: 'm' });
     expect(c).toMatchObject({ botToken: 't', ownerId: 1, groupId: -100123, topics: { general: 2, marketing: 3 }, marketingBotToken: 'm', clipsPerWeek: 7, carouselsPerWeek: 0.5 });
     expect(loadConfig(base).groupId).toBeUndefined();
+    expect(loadConfig(base)).toMatchObject({ trendsRegions: ['KZ', 'UZ', 'RU'], siteUrl: 'https://firtech.pro', youtubeApiKey: undefined, gscSiteUrl: undefined });
+    expect(loadConfig({ ...base, TRENDS_REGIONS: 'kz, uz ,bad', SITE_URL: 'https://example.com/' })).toMatchObject({ trendsRegions: ['KZ', 'UZ'], siteUrl: 'https://example.com' });
     expect(() => loadConfig({ OWNER_TELEGRAM_ID: '1' })).toThrow(/HQ_BOT_TOKEN/);
     expect(() => loadConfig({ ...base, HQ_TOPICS: 'nope' })).toThrow(/HQ_TOPICS/);
     expect(() => loadConfig({ ...base, HQ_GROUP_ID: 'abc' })).toThrow(/HQ_GROUP_ID/);

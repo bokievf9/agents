@@ -35,6 +35,13 @@ export interface Config extends BaseConfig {
   replyLevel: 0 | 1;
   /** Monthly limit of the Sales department in USD (0: none). Used only when the head is first created. */
   salesBudgetUsd: number;
+  /** Optional Marketing sources; each is off without its key. */
+  youtubeApiKey: string | undefined;
+  youtubeChannelId: string | undefined;
+  trendsRegions: string[];
+  gscServiceAccountJson: string | undefined;
+  gscSiteUrl: string | undefined;
+  siteUrl: string;
 }
 
 function num(env: NodeJS.ProcessEnv, key: string, def: number, min: number, max: number): number {
@@ -85,6 +92,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     slotHours: [hours[0]!, hours[1]!],
     replyLevel: num(env, 'REPLY_LEVEL', 1, 0, 1) === 0 ? 0 : 1,
     salesBudgetUsd: num(env, 'SALES_BUDGET_USD', 0, 0, 100_000),
+    youtubeApiKey: optional(env, 'YOUTUBE_API_KEY'),
+    youtubeChannelId: optional(env, 'YOUTUBE_CHANNEL_ID'),
+    trendsRegions: (optional(env, 'TRENDS_REGIONS') ?? 'KZ,UZ,RU').split(',').map((r) => r.trim().toUpperCase()).filter((r) => /^[A-Z]{2}$/.test(r)),
+    gscServiceAccountJson: optional(env, 'GSC_SERVICE_ACCOUNT_JSON'),
+    gscSiteUrl: optional(env, 'GSC_SITE_URL'),
+    siteUrl: (optional(env, 'SITE_URL') ?? 'https://firtech.pro').replace(/\/$/, ''),
   };
 }
 

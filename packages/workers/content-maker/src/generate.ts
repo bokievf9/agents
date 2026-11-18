@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tryJson, type LlmClient } from '@fir/core';
+import { tryJson, type Db, type LlmClient } from '@fir/core';
 import { DIRECTIONS, priceLine } from './directions.js';
 import { carouselSchema, clipSchema, renderCarousel, renderClip, titleOf, type ItemType } from './format.js';
 import { estimateSeconds, lintText } from './lint.js';
@@ -26,7 +26,22 @@ export interface GenSpec {
   comment?: string;
   /** Text of the rejected earlier version. */
   previous?: string;
+  /** Latest niche trends (hooks and formats) as inspiration; empty or absent: none. */
+  trends?: TrendHint[];
 }
+
+/** One trend from the Trend scout, reduced to what a script needs. */
+export interface TrendHint {
+  hook: string;
+  format: string;
+  why: string;
+  /** Direction id the scout suggested, if any. */
+  direction?: string;
+}
+
+/** Where the content-maker gets fresh trends. The safe default is none. */
+export type TrendsProvider = (ctx: { db: Db; now: () => number }) => TrendHint[];
+export const noTrends: TrendsProvider = () => [];
 
 export interface Generated {
   text: string;
@@ -43,6 +58,13 @@ function userPrompt(p: Prompts, spec: GenSpec, fix?: { text: string; issues: str
   const dir = DIRECTIONS.find((d) => d.id === spec.topic.directionId);
   const extra: string[] = [];
   if (spec.comment) extra.push(`Прошлый вариант отклонён. Комментарий владельца: ${spec.comment}\nУчти его и напиши заново.`);
+  if (spec.trends && spec.trends.length > 0) {
+    extra.push(
+      `Свежие тренды ниши (только вдохновение для темы и формы; не копируй чужие тексты и названия, не упоминай источники):\n${spec.trends
+        .map((t) => `- хук: ${t.hook}; формат: ${t.format}; почему растёт: ${t.why}`)
+        .join('\n')}`,
+    );
+  }
   if (spec.previous) extra.push(`Отклонённый вариант (не повторяй его):\n${spec.previous}`);
   if (fix) extra.push(`В черновике найдены нарушения правил: ${fix.issues.join('; ')}. Исправь их и верни полный JSON.\nЧерновик:\n${fix.text}`);
   return fill(spec.type === 'clip' ? p.clip : p.carousel, {
