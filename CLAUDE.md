@@ -12,7 +12,7 @@ Node 22, TypeScript ESM (NodeNext), pnpm 12 workspaces. `grammy` (long polling),
 
 ## Проверки
 `pnpm -r typecheck && pnpm lint && pnpm -r test && pnpm -r build`. Запуск головы локально:
-`pnpm --filter lead-intake dev` (берёт `apps/lead-intake/.env.local`, пример `.env.example` рядом).
+`pnpm --filter hq dev` (берёт `apps/hq/.env.local`, пример `.env.example` рядом).
 Внутри монорепо `@fir/core` подключается из исходников через условие экспорта `source` (tsx, vitest, typecheck);
 сборка и образ используют `dist`, поэтому `pnpm -r build` собирает ядро первым.
 
@@ -62,20 +62,13 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 5. CI: скопировать job образа и деплоя из `.github/workflows/ci.yml`, добавить сервис в `compose.yaml`.
 6. Дописать агента в этот файл.
 
-## apps/lead-intake: Приёмщик лидов
-Источники: Telegram-бот (публичный, отвечает всем клиентам; команды `/leads`, `/trust`, `/level` и кнопки только
-владельцу) и `POST /lead` (заголовок `x-lead-token` = `LEAD_WEBHOOK_TOKEN`, поля как у формы
-`../firtech/src/app/api/lead/route.ts`, плюс `estimate` из `leadSummary`; без токена сервер webhook не стартует).
-- `agent.ts`: ответ сразу на языке клиента (кириллица: русский, иначе английский), не больше трёх вопросов (бизнес,
-  задача, срок), два слота звонка (следующие рабочие дни, `SLOT_HOURS` в `TZ`), карточка владельцу
-  (ниша, задача, срок, контакт, оценка горячий / тёплый / холодный), экспорт в `data/leads.jsonl`.
-  Клиент молчит 24 часа: ежедневная задача 10:00 всё равно шлёт карточку с тем, что известно.
-- Типы одобрений: `client_reply` (вопросы, дежурные ответы; старт на уровне `REPLY_LEVEL`, по умолчанию 1 по брифу)
-  и `price_quote` (`locked`, всегда уровень 0). Вопрос о цене: клиенту сразу «уточняю с командой», владельцу
-  предложение с черновиком; черновик с `[цена]` / `[срок]` не уходит клиенту, пока владелец не вставит цифры.
-- Антиспам: `RATE_LIMIT_MESSAGES` на чат за `RATE_LIMIT_WINDOW_MIN`, боты игнорируются, группы игнорируются.
-- LLM здесь только разметка полей (Haiku/fast, `tryJson`) и черновик ответа про цену (Sonnet/smart). Оценка лида
-  считается правилами (`text.ts: scoreLead`), поэтому одинакова с LLM и без него.
+## Продажи: Приёмщик лидов и Разведчик (исполнители под головой Продаж, этап 2 HQ)
+Бывшие `apps/lead-intake` и `apps/prospector` теперь `packages/workers/lead-intake` и `packages/workers/prospector` (`run(task, ctx)`,
+без бота и крона, таблицы `li_*` и `pr_*` в SQLite HQ). Голова: `apps/hq/src/heads/sales.ts` (бот `SALES_BOT_TOKEN`, он же
+@firtech_leads_bot), webhook `POST /lead` (`x-lead-token` = `LEAD_WEBHOOK_TOKEN`, порт `WEBHOOK_PORT`) в `apps/hq/src/webhook.ts`
+создаёт задачу отдела на лид. Рутины: карточки Разведчика 10:00, дожимы 10:05. Первый ответ лиду уровень 1, всё с ценой уровень 0
+(`locked`); бизнесам в холодную пишет владелец вручную. Подробно: `apps/hq/README.md`, README пакетов. Telegram-диалог с клиентами
+старого lead-intake не переехал.
 
 ## apps/polly: Polly, учитель языков (этап 1)
 Личный агент владельца (бриф `../docs/brief-polly.md`). Отдельный бот (`POLLY_BOT_TOKEN`, не `TELEGRAM_BOT_TOKEN` лидов),
@@ -96,16 +89,6 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 без бота и крона в `packages/workers/*` (`run(task, ctx)`): `content-maker` (бывший `apps/content-maker`). `apps/hq`: один процесс,
 бот Директора (`HQ_BOT_TOKEN`), голова Маркетинга (`src/heads/marketing.ts`), инструкции агентов `apps/hq/instructions/*.md`.
 Образ `agents-hq`, сервис `hq` (данные `/opt/fir-agents/data/hq`). Подробно: `packages/hq/README.md`, `apps/hq/README.md`.
-`prospector` переезжает под Продажи на этапе 2, пока отдельный сервис.
-
-## apps/prospector: Разведчик (этап 1)
-Бот отдела продаж (`PROSPECTOR_BOT_TOKEN`), только `OWNER_TELEGRAM_ID`. Ничего не отправляет бизнесам: владелец шлёт сам,
-агент готовит. База в SQLite (`pnpm --filter prospector run import <csv>`, дедуп по название + город), пакет в 10:00 Ташкента
-(`BATCH_CRON`, `BATCH_SIZE`), карточка с кнопками «Скопировать / Править / Пропустить / Отправлено», дожимы через 3 и 7 дней,
-`/reply <id>` и черновик ответа. Статусы new → proposed → sent → replied / no_reply / skipped. Свои кнопки и правка (не
-очередь `ApprovalQueue`: действие «наружу» делает человек). Цены в `src/offers.ts` копируют `directions.ts`; модель их не
-придумывает, ответы без цифр (`[цена]`). Подробно: `apps/prospector/README.md`. Образ `agents-prospector`, сервис `prospector`
-(данные `/opt/fir-agents/data/prospector`, `TZ=Asia/Tashkent`).
 
 ## Данные и секреты
 `.env*` и `data/` не коммитятся (в `data/` контакты клиентов). Секреты: `.env.local` (dev), `/opt/fir-agents/.env`
@@ -117,25 +100,25 @@ LLM в компании ходит не напрямую в Anthropic, а чер
   `LLM_BASE_URL=http://omniroute:20128`. Данные OmniRoute: `/opt/fir-agents/data/omniroute`. Секреты: `/opt/fir-agents/omniroute.env`
   (JWT_SECRET, API_KEY_SECRET, STORAGE_ENCRYPTION_KEY, STORAGE_ENCRYPTION_KEY_VERSION, MACHINE_ID_SALT, INITIAL_PASSWORD,
   REQUIRE_API_KEY=true), скопированы из локального OmniRoute владельца, чтобы перенести его storage.sqlite.
-- `apps/lead-intake/Dockerfile` собирается из корня репо (`-f apps/lead-intake/Dockerfile .`): не root, `tini`,
+- `apps/hq/Dockerfile` собирается из корня репо (`-f apps/hq/Dockerfile .`): не root, `tini`,
   `pnpm deploy --prod`. На Mac Docker нет, образ локально не собирали, его соберёт CI.
 - `compose.yaml` (ставится в `/opt/fir-agents` скриптом bootstrap, root-owned, из CI не принимается):
-  - `lead-intake`: `read_only`, `cap_drop ALL`, `no-new-privileges`, 512 МБ, 0.5 CPU, `pids_limit`, логи json-file
-    10 МБ x 5, единственный порт `127.0.0.1:8787` (webhook, за nginx позже), `LLM_BASE_URL=http://omniroute:20128`.
+  - `hq`: `read_only`, `cap_drop ALL`, `no-new-privileges`, 512 МБ, 0.5 CPU, `pids_limit`, логи json-file
+    10 МБ x 5, единственный порт `127.0.0.1:8787` (webhook лидов, за nginx позже), `LLM_BASE_URL=http://omniroute:20128`.
   - `omniroute`: образ `diegosouzapw/omniroute`, только `agents-net`, портов наружу нет, `REQUIRE_API_KEY=true`,
     данные `/opt/fir-agents/data/omniroute`, лимит 1.5 ГБ. Секреты шлюза в `/opt/fir-agents/omniroute.env`
     (`.env` агента шлюзу не отдаём); `LLM_API_KEY` в `.env` агента = ключ, выпущенный в OmniRoute. Образ и имена
     его переменных (`PORT`, `DATA_DIR`, секреты) сверить с документацией OmniRoute при первом запуске; `:latest`
     закрепить на версию. Без `read_only`, пока не проверено, что образ так работает.
   - Плейсхолдеры `__AGENTS_UID__/__AGENTS_GID__` подставляет bootstrap.
-  - `TZ` задаётся в compose по сервисам (polly `Asia/Kuala_Lumpur`, lead-intake `Asia/Tashkent`) и перекрывает `TZ` из общего `/opt/fir-agents/.env`.
+  - `TZ` задаётся в compose по сервисам (polly `Asia/Kuala_Lumpur`, hq `Asia/Tashkent`) и перекрывает `TZ` из общего `/opt/fir-agents/.env`.
 - `deploy/bootstrap-vps.sh` (один раз, root на VPS: `sudo bash bootstrap-vps.sh "<ssh-ed25519 публичный ключ>"`):
   пользователь `agents`, дом `/opt/fir-agents`, данные `agents`-owned, всё решающее (compose, `bin/deploy.sh`,
   `authorized_keys`) root-owned. Ключ деплоя с `command="/opt/fir-agents/bin/deploy.sh",restrict`.
   `deploy/deploy.sh`: forced command, stdin = GHCR user и токен, `docker compose pull && up -d --remove-orphans`.
   Образцы: `../dono/deploy/`. Компоуз на VPS обновляется только повторным запуском bootstrap (изменение compose.yaml
   само не доезжает, образы обновляет deploy.sh).
-- CI (`.github/workflows/ci.yml`): проверки на каждый push и PR, образы в GHCR (`agents-lead-intake`, `agents-polly`) только с `main`,
+- CI (`.github/workflows/ci.yml`): проверки на каждый push и PR, образы в GHCR (`agents-hq`, `agents-polly`) только с `main`,
   деплой-job только при переменной репо `DEPLOY_ENABLED=true`; секреты `AGENTS_SSH_KEY`, `VPS_HOST`,
   `VPS_KNOWN_HOSTS` в Environment `production` (ограничен веткой main). Пока `DEPLOY_ENABLED` не выставлен, деплоя нет.
 - Не пушить без решения владельца: репо на GitHub ещё не создан.

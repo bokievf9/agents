@@ -1,4 +1,4 @@
-# apps/hq: Директор и головы отделов (этап 1: Маркетинг)
+# apps/hq: Директор и головы отделов (этапы 1-2: Маркетинг, Продажи)
 
 Один процесс, один контейнер, одна SQLite (`$DATA_DIR/hq.db`). Спека: `../../../docs/architecture-hq.md`, ядро:
 `packages/hq/README.md`. Dono и Polly остаются отдельными ботами.
@@ -36,14 +36,43 @@
 `packages/workers/content-maker`. Правка карточки по частям (сценарий, Instagram, TikTok, Shorts) работает через
 `ApprovalEditor` головы. Отклонённый материал закрывает задачу; переделку владелец заказывает новой задачей.
 
+## Продажи (`src/heads/sales.ts`)
+Бот отдела `SALES_BOT_TOKEN` (это @firtech_leads_bot) необязателен: без него отчёты только в журнал и утреннюю сводку. Бот
+ничего не слушает, только пишет в тему «sales» группы HQ. Исполнители: `packages/workers/lead-intake` (Приёмщик лидов) и
+`packages/workers/prospector` (Разведчик), таблицы `li_*` и `pr_*` в общей SQLite.
+- **Лид с сайта.** `POST /lead` (`src/webhook.ts`, порт `WEBHOOK_PORT`, заголовок `x-lead-token` = `LEAD_WEBHOOK_TOKEN`, поля формы
+  firtech.pro плюс необязательный `source`) создаёт задачу отдела (`meta.lead`) и будит голову. Без токена сервер не стартует.
+  Приёмщик ставит температуру правилами, достаёт нишу и срок (LLM, strict JSON, без LLM эвристики), берёт слот из формы или
+  предлагает два ближайших рабочих дня в `SLOT_HOURS`, пишет карточку и черновик первого ответа. Голова проверяет ответ по
+  чек-листу (один раз возвращает), ответ уходит одобрением `lead_reply` (старт на `REPLY_LEVEL`, по умолчанию 1: после
+  одобрения готовый текст и контакт приходят владельцу, отправляет он сам), вопрос о цене отдельным `lead_price`
+  (`locked`, всегда уровень 0, с метками [цена] / [срок] до правки). Горячий лид дополнительно алертом через Директора.
+- **Карточки Разведчика.** Рутина `sales-daily-cards` 10:00 (`BATCH_SIZE` новых бизнесов по приоритету ниш) и `sales-followups`
+  10:05 (дожимы через 3 и 7 дней после «Отправлено», через 10 дней статус «без ответа»). Каждая карточка это дочерняя задача и
+  одно одобрение (`prospect_first/followup/reply`, все `locked`: «Отправлено» только фиксирует, что владелец отправил сам) с
+  кнопками «Скопировать» (голый текст отдельным сообщением), «Править», «Пропустить», «Отправлено».
+  Чтобы карточки пришли в то же утро, поставьте `approval_time` позже 10:05 (через Директора) или сдвиньте рутину.
+- **Ответ бизнеса.** `/reply <id>` или обычная фраза («Cambridge ответили: ...», интент `sales_reply` Директора): статус
+  `replied`, дальше владелец пересылает текст ответа, Разведчик готовит черновик с двумя слотами (11:00 и 15:00), цен модель не
+  называет. Задачу владельца вроде «покажи воронку Разведчика» голова разбирает LLM (`batch` / `followups` / `stats` / `none`).
+- **База Разведчика.** Загрузка CSV: `pnpm --filter hq run import-prospects <csv>` (dev) или в контейнере
+  `docker compose exec hq node dist/import-prospects.js /app/data/prospects.csv` (файл положить в `/opt/fir-agents/data/hq`).
+  Повторный запуск безопасен (дедуп по «название + город»).
+- **Перенос со старых сервисов.** Сервисы `lead-intake` и `prospector`, их образы и CI-задачи удалены. Данные не переносим
+  (ценных данных пока нет): на сервере `/opt/fir-agents/data/lead-intake` и `/opt/fir-agents/data/prospector` можно удалить после
+  первого запуска нового `hq`; контейнеры старых сервисов `docker compose up -d --remove-orphans` уберёт сам. Telegram-диалог
+  с клиентами (публичный бот) не переехал: заявки приходят только с формы сайта. `SALES_BOT_TOKEN` теперь токен бота отдела
+  (раньше `TELEGRAM_BOT_TOKEN` у lead-intake, `PROSPECTOR_BOT_TOKEN` у Разведчика), `LEAD_WEBHOOK_TOKEN` и порт те же.
+
 ## Инструкции агентов
-`instructions/director.md` и `instructions/marketing-head.md` (русский) загружаются в таблицу `agents` один раз при первом
+`instructions/director.md`, `instructions/marketing-head.md` и `instructions/sales-head.md` (русский) загружаются в таблицу `agents` один раз при первом
 старте (`ensureAgent`). Дальше правда в базе: меняются через Директора (кнопка) или `hq import`. Чек-лист проверки
 материалов лежит в инструкции головы маркетинга.
 
 ## Переменные
 См. `.env.example`: `HQ_BOT_TOKEN`, `OWNER_TELEGRAM_ID`, `TZ`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_FAST/SMART`;
-необязательные `MARKETING_BOT_TOKEN`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
+необязательные `MARKETING_BOT_TOKEN`, `SALES_BOT_TOKEN`, `LEAD_WEBHOOK_TOKEN`, `WEBHOOK_PORT`, `BATCH_SIZE`, `SLOT_HOURS`,
+`REPLY_LEVEL`, `SALES_BUDGET_USD`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
 id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`.
 
 ## Как добавить отдел
@@ -56,6 +85,6 @@ id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING
 5. Тесты по образцу `tests/marketing.test.ts` (`MemoryMessenger`, `MockLlm`, `:memory:`).
 
 ## Запуск
-`pnpm --filter hq dev` (`.env.local`). Docker: `apps/hq/Dockerfile`, сервис `hq` в `compose.yaml` (без портов, `read_only`,
+`pnpm --filter hq dev` (`.env.local`). Docker: `apps/hq/Dockerfile`, сервис `hq` в `compose.yaml` (единственный порт `127.0.0.1:8787` для webhook лидов, `read_only`,
 данные `/opt/fir-agents/data/hq`), образ `agents-hq` в CI. Экспорт оргструктуры:
 `docker compose exec hq node node_modules/@fir/hq/dist/cli.js export`.

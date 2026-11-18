@@ -3,36 +3,6 @@
 # Installed by deploy/bootstrap-vps.sh into /opt/fir-agents. Not deployed yet: there is no server. __AGENTS_UID__/__AGENTS_GID__ are filled in by the bootstrap script.
 name: fir-agents
 services:
-  lead-intake:
-    image: ghcr.io/bokievf9/agents-lead-intake:latest
-    restart: unless-stopped
-    user: "__AGENTS_UID__:__AGENTS_GID__"
-    env_file: .env
-    environment:
-      DATA_DIR: /app/data
-      WEBHOOK_PORT: "8787"
-      LLM_BASE_URL: http://omniroute:20128
-      TZ: Asia/Tashkent
-    volumes:
-      - /opt/fir-agents/data/lead-intake:/app/data
-    # The only published port: the form webhook, loopback only; nginx proxies to it later.
-    ports:
-      - "127.0.0.1:8787:8787"
-    networks: [agents-net]
-    read_only: true
-    tmpfs:
-      - /tmp:size=64m,mode=1777
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    mem_limit: 512m
-    cpus: 0.5
-    pids_limit: 128
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-        max-file: "5"
   # Polly: personal language teacher (stage 1, text). No published ports: it only polls Telegram.
   # POLLY_BOT_TOKEN and OWNER_TELEGRAM_ID come from .env; the lesson content is baked into the image.
   polly:
@@ -61,9 +31,10 @@ services:
       options:
         max-size: 10m
         max-file: "5"
-  # HQ: the Director bot plus all department heads in one process and one SQLite (docs/architecture-hq.md, stage 1:
-  # Marketing). No published ports: it only polls Telegram. HQ_BOT_TOKEN, OWNER_TELEGRAM_ID, optionally
-  # MARKETING_BOT_TOKEN, HQ_GROUP_ID, HQ_TOPICS come from .env; the instructions and prompts are baked into the image.
+  # HQ: the Director bot plus all department heads in one process and one SQLite (docs/architecture-hq.md, stages 1-2:
+  # Marketing, Sales). HQ_BOT_TOKEN, OWNER_TELEGRAM_ID, optionally MARKETING_BOT_TOKEN, SALES_BOT_TOKEN, LEAD_WEBHOOK_TOKEN,
+  # HQ_GROUP_ID, HQ_TOPICS come from .env; the instructions and prompts are baked into the image.
+  # The only published port: the lead webhook (POST /lead from firtech.pro on the same host), loopback only.
   hq:
     image: ghcr.io/bokievf9/agents-hq:latest
     restart: unless-stopped
@@ -75,6 +46,8 @@ services:
       TZ: Asia/Tashkent
     volumes:
       - /opt/fir-agents/data/hq:/app/data
+    ports:
+      - "127.0.0.1:8787:8787"
     networks: [agents-net]
     read_only: true
     tmpfs:
@@ -82,7 +55,7 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
-    mem_limit: 384m
+    mem_limit: 512m
     cpus: 0.5
     pids_limit: 128
     logging:
@@ -91,7 +64,7 @@ services:
         max-size: 10m
         max-file: "5"
   # LLM gateway: internal network only, no published ports. Secrets (JWT_SECRET, API_KEY_SECRET, provider keys)
-  # live in /opt/fir-agents/omniroute.env; lead-intake authenticates with LLM_API_KEY from .env.
+  # live in /opt/fir-agents/omniroute.env; the agents authenticate with LLM_API_KEY from .env.
   # Not read_only: the image is not verified for it yet (tighten after the first run on the server).
   omniroute:
     image: diegosouzapw/omniroute:latest
@@ -123,38 +96,6 @@ services:
       options:
         max-size: 10m
         max-file: "5"
-  # Prospector: the Scout of the sales department (stage 1: prepares first messages, the owner sends them by hand).
-  # No published ports: it only polls Telegram. PROSPECTOR_BOT_TOKEN and OWNER_TELEGRAM_ID come from .env;
-  # load the base once: docker compose run --rm prospector node dist/import-cli.js <csv inside the data dir>.
-  prospector:
-    image: ghcr.io/bokievf9/agents-prospector:latest
-    restart: unless-stopped
-    user: "__AGENTS_UID__:__AGENTS_GID__"
-    env_file: .env
-    environment:
-      DATA_DIR: /app/data
-      LLM_BASE_URL: http://omniroute:20128
-      TZ: Asia/Tashkent
-    volumes:
-      - /opt/fir-agents/data/prospector:/app/data
-    networks: [agents-net]
-    read_only: true
-    tmpfs:
-      - /tmp:size=64m,mode=1777
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    mem_limit: 256m
-    cpus: 0.25
-    pids_limit: 64
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-        max-file: "5"
-  # LLM gateway: internal network only, no published ports. Secrets (JWT_SECRET, API_KEY_SECRET, provider keys)
-  # live in /opt/fir-agents/omniroute.env; lead-intake authenticates with LLM_API_KEY from .env.
-  # Not read_only: the image is not verified for it yet (tighten after the first run on the server).
 
 networks:
   agents-net:

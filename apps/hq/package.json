@@ -8,12 +8,15 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "import-prospects": "tsx --conditions=source --env-file-if-exists=.env.local src/import-prospects.ts"
   },
   "dependencies": {
     "@fir/core": "workspace:*",
     "@fir/hq": "workspace:*",
     "@fir/worker-content-maker": "workspace:*",
+    "@fir/worker-lead-intake": "workspace:*",
+    "@fir/worker-prospector": "workspace:*",
     "better-sqlite3": "^13.2.0",
     "croner": "^11.0.1",
     "grammy": "^1.46.0",

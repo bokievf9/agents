@@ -2,7 +2,6 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { z } from 'zod';
 import { errMsg, log } from '@fir/core';
-import type { LeadAgent } from './agent.js';
 
 /** Same fields as the firtech.pro form (`../firtech/src/lib/lead.ts` leadSchema); `estimate` is the builder's leadSummary. */
 export const webLeadSchema = z.object({
@@ -47,8 +46,13 @@ function readBody(req: IncomingMessage): Promise<string | null> {
   });
 }
 
-/** `POST /lead` (header `x-lead-token`) and `GET /health`. Sits behind nginx; the port is not public. */
-export function createWebhook(agent: LeadAgent, token: string, now: () => number = Date.now): Server {
+export type WebLeadInput = z.output<typeof webLeadSchema>;
+
+/**
+ * `POST /lead` (header `x-lead-token`) and `GET /health`. Listens inside the hq container; compose publishes it on
+ * 127.0.0.1 only (firtech.pro on the same host posts here). `onLead` creates the Sales task and returns its id.
+ */
+export function createWebhook(onLead: (lead: WebLeadInput) => Promise<number>, token: string, now: () => number = Date.now): Server {
   const hits: number[] = [];
   return createServer((req, res) => {
     void (async () => {
@@ -73,7 +77,7 @@ export function createWebhook(agent: LeadAgent, token: string, now: () => number
         if (!parsed.success) return json(res, 400, { ok: false, error: 'invalid' });
         const lead = parsed.data;
         if (lead.website) return json(res, 200, { ok: true }); // honeypot: bots get a normal answer, nothing is stored
-        const id = await agent.onWebLead(lead);
+        const id = await onLead(lead);
         json(res, 200, { ok: true, id });
       } catch (e) {
         log('error', 'webhook failed', { err: errMsg(e) });

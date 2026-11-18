@@ -1,85 +1,60 @@
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
-import { MockLlm } from '@fir/core';
-import { createWebhook, tokenOk } from '../src/webhook.js';
-import { CLIENT, OWNER, setup } from './helpers.js';
-
-describe('with an LLM (mock)', () => {
-  it('uses the model extraction, retries garbage, and drafts the price text with placeholders', async () => {
-    let extractCalls = 0;
-    const llm = new MockLlm((req) => {
-      if (req.tier === 'haiku') {
-        extractCalls++;
-        return extractCalls === 1 ? 'не знаю' : '{"niche":"стоматология","task":"бот для записи","deadline":"до конца месяца"}';
-      }
-      return 'Стоимость: [price], срок: [term].';
-    });
-    const { messenger, queue, say } = setup({ llm });
-    await say('Здравствуйте! Мы стоматология, нужен бот записи до конца месяца. Сколько стоит?');
-    expect(extractCalls).toBe(2);
-    expect(messenger.to(OWNER).some((t) => t.includes('ТЁПЛЫЙ') || t.includes('ГОРЯЧИЙ'))).toBe(true);
-    const price = queue.pending()[0]!;
-    expect(price.payload.text).toContain('[price]');
-    expect(messenger.to(CLIENT).some((t) => t.includes('['))).toBe(false);
-  });
-
-  it('falls back to heuristics when the model keeps returning garbage', async () => {
-    const { messenger, say } = setup({ llm: new MockLlm(() => 'nothing useful') });
-    await say('Нужен сайт для кафе, срочно');
-    expect(messenger.to(CLIENT).length).toBeGreaterThan(0);
-  });
-});
+import { createWebhook, tokenOk, type WebLeadInput } from '../src/webhook.js';
+import { salesWorld } from './sales-helpers.js';
 
 describe('POST /lead', () => {
   async function start() {
-    const ctx = setup();
-    const server = createWebhook(ctx.agent, 'secret-token');
+    const w = salesWorld();
+    const received: WebLeadInput[] = [];
+    const server = createWebhook((lead) => {
+      received.push(lead);
+      return Promise.resolve(w.sales.createLeadTask({ name: lead.name, contact: lead.contact, service: lead.service, message: lead.message, source: lead.source }, lead.service));
+    }, 'secret-token');
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    return { ...ctx, server, url };
+    return { ...w, received, server, url };
   }
   const body = { name: 'Dilnoza', contact: '@dilnoza', service: 'bots', message: 'Нужен бот для салона, срочно', locale: 'ru' };
   const post = (url: string, token: string | null, b: unknown) =>
     fetch(`${url}/lead`, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { 'x-lead-token': token } : {}) }, body: JSON.stringify(b) });
 
-  it('checks the token, validates, stores and sends a card to the owner', async () => {
-    const { server, url, messenger, leadsFile } = await start();
+  it('checks the token, validates, and creates a Sales task per lead (the head wakes)', async () => {
+    const { server, url, hq, received } = await start();
     try {
       expect((await post(url, null, body)).status).toBe(401);
       expect((await post(url, 'wrong', body)).status).toBe(401);
       expect((await post(url, 'secret-token', { name: '' })).status).toBe(400);
+      expect(hq.tasks({ dept: 'sales' })).toHaveLength(0);
       const ok = await post(url, 'secret-token', body);
       expect(ok.status).toBe(200);
-      expect(await ok.json()).toEqual({ ok: true, id: 1 });
-      const card = messenger.to(OWNER)[0]!;
-      expect(card).toContain('форма firtech.pro');
-      expect(card).toContain('Контакт: @dilnoza');
-      expect(card).toContain('связаться вручную');
-      expect((await import('node:fs')).readFileSync(leadsFile, 'utf8')).toContain('@dilnoza');
+      const res = (await ok.json()) as { ok: boolean; id: number };
+      expect(res.ok).toBe(true);
+      const t = hq.task(res.id)!;
+      expect(t).toMatchObject({ dept: 'sales', status: 'inbox', meta: { action: 'lead', lead: { contact: '@dilnoza' } } });
+      expect(hq.pendingHeartbeats()).toBe(1);
       // honeypot: normal answer, nothing stored
       const bot = await post(url, 'secret-token', { ...body, website: 'http://spam' });
       expect(bot.status).toBe(200);
-      expect(messenger.to(OWNER)).toHaveLength(1);
+      expect(received).toHaveLength(1);
       expect((await fetch(`${url}/health`)).status).toBe(200);
+      expect((await fetch(`${url}/nope`)).status).toBe(404);
     } finally {
       server.close();
     }
   });
 
-  it('accepts an optional source tag and puts it on the card and in the export', async () => {
-    const { server, url, messenger, leadsFile } = await start();
+  it('accepts an optional source tag and rejects a bad one', async () => {
+    const { server, url, received } = await start();
     try {
       expect((await post(url, 'secret-token', { ...body, source: 'Bad Tag!' })).status).toBe(400);
       expect((await post(url, 'secret-token', { ...body, source: 'x'.repeat(41) })).status).toBe(400);
       expect((await post(url, 'secret-token', { ...body, source: 'instagram_bio' })).status).toBe(200);
-      expect(messenger.to(OWNER)[0]).toContain('Метка источника: instagram_bio');
-      const line = JSON.parse((await import('node:fs')).readFileSync(leadsFile, 'utf8').trim()) as { origin: string };
-      expect(line.origin).toBe('instagram_bio');
-      // without the field the lead still works and has no tag
+      expect(received[0]!.source).toBe('instagram_bio');
       expect((await post(url, 'secret-token', body)).status).toBe(200);
-      expect(messenger.to(OWNER)[1]).not.toContain('Метка источника');
+      expect(received[1]!.source).toBe('');
     } finally {
       server.close();
     }
