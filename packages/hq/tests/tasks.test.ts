@@ -96,4 +96,14 @@ describe('agents and settings', () => {
     clock.t = Date.UTC(2026, 10, 18, 20, 0); // 01:00 Tashkent
     expect(hq.isQuiet()).toBe(true);
   });
+
+  it('reports lists head reports since a time', () => {
+    const { hq, clock } = setup();
+    const t = hq.createTask({ title: 'A', dept: 'marketing', creator: 'owner' });
+    hq.addEvent(t.id, 'report', 'marketing-head', 'old');
+    clock.t += 3_600_000;
+    hq.addEvent(t.id, 'report', 'marketing-head', 'new');
+    hq.addEvent(t.id, 'comment', 'marketing-head', 'not a report');
+    expect(hq.reports(clock.t - 1000)).toEqual([{ dept: 'marketing', taskId: t.id, body: 'new', at: clock.t }]);
+  });
 });

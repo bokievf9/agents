@@ -61,6 +61,35 @@ services:
       options:
         max-size: 10m
         max-file: "5"
+  # HQ: the Director bot plus all department heads in one process and one SQLite (docs/architecture-hq.md, stage 1:
+  # Marketing). No published ports: it only polls Telegram. HQ_BOT_TOKEN, OWNER_TELEGRAM_ID, optionally
+  # MARKETING_BOT_TOKEN, HQ_GROUP_ID, HQ_TOPICS come from .env; the instructions and prompts are baked into the image.
+  hq:
+    image: ghcr.io/bokievf9/agents-hq:latest
+    restart: unless-stopped
+    user: "__AGENTS_UID__:__AGENTS_GID__"
+    env_file: .env
+    environment:
+      DATA_DIR: /app/data
+      LLM_BASE_URL: http://omniroute:20128
+      TZ: Asia/Tashkent
+    volumes:
+      - /opt/fir-agents/data/hq:/app/data
+    networks: [agents-net]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
   # LLM gateway: internal network only, no published ports. Secrets (JWT_SECRET, API_KEY_SECRET, provider keys)
   # live in /opt/fir-agents/omniroute.env; lead-intake authenticates with LLM_API_KEY from .env.
   # Not read_only: the image is not verified for it yet (tighten after the first run on the server).

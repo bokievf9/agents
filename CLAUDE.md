@@ -1,6 +1,7 @@
 # fir-agents
 
-Монорепо исполнителей Fir Tech: общее тело `packages/core` и «головы» в `apps/<агент>`. Компания и роли:
+Монорепо исполнителей Fir Tech: общее тело `packages/core`, ядро компании `packages/hq`, исполнители `packages/workers/*`
+и процессы в `apps/<агент>` (`apps/hq`: Директор и головы отделов). Компания и роли:
 `../COMPANY.md`, бриф фазы 0: `../docs/brief-agents-core.md`. Правила workspace (git как `bokievf9`, без
 `Co-Authored-By`, секреты не печатать, ветки, merge после проверок) в `../CLAUDE.md`.
 Образец ядра: `../dono/` (Dono переедет на ядро позже; пока его код не трогаем).
@@ -88,6 +89,14 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 - Голос (Whisper, edge-tts), испанский, турецкий, связь с Dono: этапы 2 и 3. Голосовые пока лежат в `voice_queue`.
 - Запуск: `pnpm --filter polly dev` (`apps/polly/.env.local`). Docker: `apps/polly/Dockerfile`, сервис `polly` в
   `compose.yaml` (без портов, `read_only`, данные `/opt/fir-agents/data/polly`), образ `agents-polly` в CI.
+
+## packages/hq, packages/workers, apps/hq: HQ (этап 1, 2026-11-19)
+Спека `../docs/architecture-hq.md`. `packages/hq` (`@fir/hq`): SQLite-ядро (агенты, задачи с атомарным `claim`, журнал, одобрения через
+очередь ядра, рутины, heartbeat раз в 30 с, расходы с лимитом отдела, activity, settings, `hq export/import` YAML). Исполнители
+без бота и крона в `packages/workers/*` (`run(task, ctx)`): `content-maker` (бывший `apps/content-maker`). `apps/hq`: один процесс,
+бот Директора (`HQ_BOT_TOKEN`), голова Маркетинга (`src/heads/marketing.ts`), инструкции агентов `apps/hq/instructions/*.md`.
+Образ `agents-hq`, сервис `hq` (данные `/opt/fir-agents/data/hq`). Подробно: `packages/hq/README.md`, `apps/hq/README.md`.
+`prospector` переезжает под Продажи на этапе 2, пока отдельный сервис.
 
 ## apps/prospector: Разведчик (этап 1)
 Бот отдела продаж (`PROSPECTOR_BOT_TOKEN`), только `OWNER_TELEGRAM_ID`. Ничего не отправляет бизнесам: владелец шлёт сам,

@@ -561,6 +561,13 @@ export class Hq {
       .all(sinceMs) as { dept: string; usd: number; i: number; o: number }[]).map((r) => ({ dept: r.dept, usd: r.usd, inputTokens: r.i, outputTokens: r.o }));
   }
 
+  /** Head reports (task events of kind "report") since a time, oldest first. */
+  reports(sinceMs: number): { dept: string; taskId: number; body: string; at: number }[] {
+    return (this.db
+      .prepare("SELECT t.dept dept, e.task_id task_id, e.body body, e.at at FROM task_events e JOIN tasks t ON t.id = e.task_id WHERE e.kind = 'report' AND e.at >= ? ORDER BY e.id")
+      .all(sinceMs) as { dept: string; task_id: number; body: string; at: number }[]).map((r) => ({ dept: r.dept, taskId: r.task_id, body: r.body, at: r.at }));
+  }
+
   // ---- activity and alerts ----
   /** Audit line. `detail` is a short note: ids and counts, never client text. */
   log(agentId: string | null, action: string, objectType?: string, objectId?: string, detail?: string): void {
