@@ -14,6 +14,8 @@ if ! command -v docker >/dev/null; then
 fi
 docker compose version >/dev/null 2>&1 || { echo "docker compose v2 plugin is missing; install it and re-run" >&2; exit 1; }
 systemctl enable --now docker   # containers come back after reboot (restart: unless-stopped)
+# Shared LLM network: OmniRoute joins it, Dono (separate compose project) reaches http://omniroute:20128 through it.
+docker network inspect fir-llm >/dev/null 2>&1 || docker network create fir-llm
 
 if ! id agents >/dev/null 2>&1; then
   useradd --home-dir /opt/fir-agents --create-home --shell /bin/bash --comment "Fir agents runtime" agents

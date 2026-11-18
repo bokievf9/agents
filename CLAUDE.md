@@ -94,6 +94,11 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 (сервер, 600). Секреты с `$` в `.env` брать в одинарные кавычки (compose раскрывает `$`).
 
 ## Docker и деплой (сервера пока нет)
+- Сервер: 201.79.122.133 (firtech-sg-1), `/opt/fir-agents`, пользователь `agents` uid 1002. Внешняя docker-сеть `fir-llm`
+  (создаёт bootstrap, deploy.sh создаст при отсутствии) общая с Dono: omniroute в `agents-net` и `fir-llm`, Dono ходит на
+  `LLM_BASE_URL=http://omniroute:20128`. Данные OmniRoute: `/opt/fir-agents/data/omniroute`. Секреты: `/opt/fir-agents/omniroute.env`
+  (JWT_SECRET, API_KEY_SECRET, STORAGE_ENCRYPTION_KEY, STORAGE_ENCRYPTION_KEY_VERSION, MACHINE_ID_SALT, INITIAL_PASSWORD,
+  REQUIRE_API_KEY=true), скопированы из локального OmniRoute владельца, чтобы перенести его storage.sqlite.
 - `apps/lead-intake/Dockerfile` собирается из корня репо (`-f apps/lead-intake/Dockerfile .`): не root, `tini`,
   `pnpm deploy --prod`. На Mac Docker нет, образ локально не собирали, его соберёт CI.
 - `compose.yaml` (ставится в `/opt/fir-agents` скриптом bootstrap, root-owned, из CI не принимается):

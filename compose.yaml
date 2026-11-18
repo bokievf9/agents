@@ -77,7 +77,8 @@ services:
       - /opt/fir-agents/data/omniroute:/app/data
     expose:
       - "20128"
-    networks: [agents-net]
+    # fir-llm: external network shared with the Dono compose project (LLM_BASE_URL=http://omniroute:20128).
+    networks: [agents-net, fir-llm]
     tmpfs:
       - /tmp:size=64m,mode=1777
     cap_drop: [ALL]
@@ -94,3 +95,6 @@ services:
 networks:
   agents-net:
     driver: bridge
+  # Created by deploy/bootstrap-vps.sh; shared with Dono (/opt/dono/compose.yaml). Compose only attaches.
+  fir-llm:
+    external: true

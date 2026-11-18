@@ -12,6 +12,8 @@ read -r ghcr_token
 trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
 
 printf '%s' "$ghcr_token" | docker login ghcr.io -u "$ghcr_user" --password-stdin >/dev/null
+# fir-llm is an external network created by bootstrap; this is a no-op when it exists.
+docker network inspect fir-llm >/dev/null 2>&1 || docker network create fir-llm >/dev/null
 docker compose pull
 docker compose up -d --remove-orphans
 docker image prune -f --filter label=app=lead-intake >/dev/null
