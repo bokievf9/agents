@@ -84,6 +84,8 @@ export class Director {
   onTopicsCommand: (() => Promise<string>) | null = null;
   /** Set by the builder bridge: a builder task was just created, make its issue now instead of at the next poll. */
   onBuilderTask: (() => Promise<unknown>) | null = null;
+  /** Set by the drill: `/drill [dept|report|clear]`. Returns the reply. */
+  onDrillCommand: ((arg: string) => Promise<string>) | null = null;
   /** Commands of the Production and Back Office heads (`/project`, `/doc`...): name -> handler returning the reply. */
   readonly commands = new Map<string, { dept: 'production' | 'backoffice'; run: (arg: string) => Promise<string> }>();
   /** Extra lines of the morning summary from heads (overdue milestones, pending documents); null: nothing to say. */
@@ -141,7 +143,7 @@ export class Director {
     const queued = hq.queuedApprovals().length;
     const waiting = this.d.queue.pending().length;
     out.push(queued + waiting > 0 ? `Ждёт одобрения: ${queued + waiting} (в пачке в ${hq.setting('approval_time')} или /approve).` : 'На одобрении ничего нет.');
-    const blocked = hq.tasks({ status: 'blocked', limit: 10 });
+    const blocked = hq.tasks({ status: 'blocked', limit: 30 }).filter((t) => !t.tags.includes('drill')).slice(0, 10);
     if (blocked.length) out.push(`Заблокировано:\n${blocked.map((t) => `- #${t.id} ${t.dept}: ${oneLine(t.title, 80)}${t.tags.includes('builder') ? ' (нужен строитель)' : ''}`).join('\n')}`);
     const builders = openBuilderTasks(hq).filter((t) => t.status === 'blocked');
     if (builders.length) out.push(`Открытых builder-issue: ${builders.filter((t) => t.meta.issue).length}, ждут создания issue: ${builders.filter((t) => !t.meta.issue).length}. Список: /builders.`);
@@ -209,7 +211,7 @@ export class Director {
     switch (name) {
       case 'start':
       case 'help':
-        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/kp <лид или описание>: КП, смета, договор\n/referral <клиент> -> <лид>, /referrals: рекомендации\n/builders: задачи строителям (issue), /builder <id>: отдать задачу строителям\n/topics: создать темы в группе HQ\nСопровождение: /ticket клиент: вопрос, /tickets, /client, /clients, /invoice клиент сумма за_что, /invoices, /sub, /onboard клиент\n/paid <номер счёта FT-2026-001 или id рекомендации>: оплата счёта (сопровождение) или выплата за рекомендацию (продажи)\nПроизводство: /project, /pstatus, /target, /mdone\nДокументы и знания: /doc, /lesson, /kb\n/skip: отменить ожидание правки');
+        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/kp <лид или описание>: КП, смета, договор\n/referral <клиент> -> <лид>, /referrals: рекомендации\n/builders: задачи строителям (issue), /builder <id>: отдать задачу строителям\n/topics: создать темы в группе HQ\nСопровождение: /ticket клиент: вопрос, /tickets, /client, /clients, /invoice клиент сумма за_что, /invoices, /sub, /onboard клиент\n/paid <номер счёта FT-2026-001 или id рекомендации>: оплата счёта (сопровождение) или выплата за рекомендацию (продажи)\nПроизводство: /project, /pstatus, /target, /mdone\nДокументы и знания: /doc, /lesson, /kb\n/drill [отдел|report|clear]: учения, тестовое задание каждому исполнителю\n/skip: отменить ожидание правки');
       case 'status':
         return this.say(this.statusText());
       case 'tasks':
@@ -250,6 +252,8 @@ export class Director {
         return this.salesReply(Number(arg.trim().replace(/^#/, '')), undefined);
       case 'ticket': case 'tickets': case 'client': case 'clients': case 'invoice': case 'invoices': case 'sub': case 'onboard':
         return this.say(this.onSupportCommand ? await this.onSupportCommand(name, arg) : 'Отдел сопровождения не подключён.');
+      case 'drill':
+        return this.say(this.onDrillCommand ? await this.onDrillCommand(arg) : 'Учения не подключены.');
       case 'topics':
         return this.say(this.onTopicsCommand ? await this.onTopicsCommand() : 'Группа HQ не подключена.');
       case 'skip':

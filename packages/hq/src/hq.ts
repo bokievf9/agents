@@ -95,6 +95,8 @@ export interface TaskFilter {
   parentId?: number;
   limit?: number;
   open?: boolean;
+  /** Only tasks carrying this tag. */
+  tag?: string;
 }
 
 /**
@@ -221,6 +223,7 @@ export class Hq {
       args.push(...list);
     }
     if (f.open) where.push("status NOT IN ('done','rejected')");
+    if (f.tag) { where.push("(',' || tags || ',') LIKE ?"); args.push(`%,${f.tag},%`); }
     const sql = `SELECT * FROM tasks ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY priority DESC, id ASC LIMIT ?`;
     return (this.db.prepare(sql).all(...args, f.limit ?? 200) as TaskRow[]).map(toTask);
   }
@@ -290,6 +293,22 @@ export class Hq {
     this.addEvent(taskId, 'error', actor, reason);
     this.move(taskId, 'blocked', actor, reason.slice(0, 100));
     this.log(actor, 'task_blocked', 'task', String(taskId));
+  }
+
+  /** Adds tags to a task (keeps the ones it has, no duplicates). */
+  addTags(taskId: number, tags: string[]): void {
+    const t = this.task(taskId);
+    if (!t) throw new Error(`Unknown task ${taskId}`);
+    const all = [...new Set([...t.tags, ...tags])];
+    this.db.prepare('UPDATE tasks SET tags = ? WHERE id = ?').run(all.join(','), taskId);
+  }
+
+  /** Removes a task with its journal and approval links (used by the drill cleanup; real tasks are never deleted). */
+  deleteTask(taskId: number): void {
+    this.db.transaction(() => {
+      for (const table of ['task_events', 'task_approvals']) this.db.prepare(`DELETE FROM ${table} WHERE task_id = ?`).run(taskId);
+      this.db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+    })();
   }
 
   setMeta(taskId: number, patch: Record<string, unknown>): void {
@@ -595,7 +614,7 @@ export class Hq {
   /** Head reports (task events of kind "report") since a time, oldest first. */
   reports(sinceMs: number): { dept: string; taskId: number; body: string; at: number }[] {
     return (this.db
-      .prepare("SELECT t.dept dept, e.task_id task_id, e.body body, e.at at FROM task_events e JOIN tasks t ON t.id = e.task_id WHERE e.kind = 'report' AND e.at >= ? ORDER BY e.id")
+      .prepare("SELECT t.dept dept, e.task_id task_id, e.body body, e.at at FROM task_events e JOIN tasks t ON t.id = e.task_id WHERE e.kind = 'report' AND e.at >= ? AND (',' || t.tags || ',') NOT LIKE '%,drill,%' ORDER BY e.id")
       .all(sinceMs) as { dept: string; task_id: number; body: string; at: number }[]).map((r) => ({ dept: r.dept, taskId: r.task_id, body: r.body, at: r.at }));
   }
 

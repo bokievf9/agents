@@ -84,7 +84,7 @@ export function aggregate(db: Db, from: string, to: string, nowMs: number, tz: s
   }
   const leadCount = (a: number, b: number): number => {
     const rows = db.prepare("SELECT tags, meta, title FROM tasks WHERE dept = 'sales' AND parent_id IS NULL AND created_at >= ? AND created_at < ?").all(a, b) as { tags: string; meta: string; title: string }[];
-    return rows.filter((r) => r.tags.split(',').includes('lead') || /"action":"lead"/.test(r.meta) || /^лид(?![\p{L}])/iu.test(r.title)).length;
+    return rows.filter((r) => !r.tags.split(',').includes('drill')).filter((r) => r.tags.split(',').includes('lead') || /"action":"lead"/.test(r.meta) || /^лид(?![\p{L}])/iu.test(r.title)).length;
   };
   let funnel: Record<string, number> | null = null;
   for (const t of FUNNEL_TABLES) {

@@ -22,6 +22,7 @@ import { Reporter, type TopicSender } from './reporter.js';
 import { TopicManager } from './topics.js';
 import { createWebhook } from './webhook.js';
 import { cachedOffice } from './office.js';
+import { Drill } from './drill.js';
 import { BuilderBridge, RestGithubClient } from './bridge.js';
 
 const cfg = loadConfig();
@@ -83,6 +84,15 @@ const production = new ProductionHead({ hq, llm, queue, messenger, ownerId: cfg.
 const backoffice = new BackofficeHead({ hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, knowledgeDir: cfg.knowledgeDir });
 for (const name of ['project', 'pstatus', 'target', 'mdone']) director.commands.set(name, { dept: 'production', run: (arg) => production.command(name, arg) });
 for (const name of ['doc', 'lesson', 'kb']) director.commands.set(name, { dept: 'backoffice', run: (arg) => backoffice.command(name, arg) });
+const drill = new Drill({
+  hq, queue, messenger, ownerId: cfg.ownerId, reporter,
+  monitor: async () => {
+    const events = await support.monitorTick();
+    return events.length ? `проверки выполнены, событий: ${events.length}` : 'проверки выполнены, всё в норме';
+  },
+  kb: (query) => backoffice.command('kb', query),
+});
+director.onDrillCommand = (arg) => drill.command(arg);
 director.onTopicsCommand = async () => (await topicManager.ensure()).text;
 director.summaryLines.push(() => topicManager.summaryNote(), () => production.overdueLine(), () => backoffice.pendingLine());
 
@@ -143,7 +153,7 @@ bot.on('callback_query:data', async (ctx, next) => {
 installApprovals(bot, queue, cfg.ownerId);
 
 const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
-for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', 'builder', 'topics', ...SUPPORT_COMMANDS, ...director.commands.keys()]) {
+for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', 'builder', 'topics', 'drill', ...SUPPORT_COMMANDS, ...director.commands.keys()]) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
 }
 for (const name of ['kp', 'referral', 'referrals']) {
@@ -172,6 +182,7 @@ director.onBuilderTask = () => bridge.syncNew();
 bridge.start();
 director.start();
 support.start();
+drill.start();
 void topicManager.ensure().then((r) => log('info', 'topics checked', { state: r.state, created: r.created }));
 // Wake every head once at start: tasks that waited while the process was down.
 for (const dept of hq.departments()) {
@@ -197,6 +208,7 @@ const stop = () => {
   bridge.stop();
   director.stop();
   support.stop();
+  drill.stop();
   routineJobs.forEach((j) => j.stop());
   void bot.stop().finally(() => process.exit(0));
 };
