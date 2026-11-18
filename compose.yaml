@@ -61,6 +61,35 @@ services:
       options:
         max-size: 10m
         max-file: "5"
+  # Prospector: the Scout of the sales department (stage 1: prepares first messages, the owner sends them by hand).
+  # No published ports: it only polls Telegram. PROSPECTOR_BOT_TOKEN and OWNER_TELEGRAM_ID come from .env;
+  # load the base once: docker compose run --rm prospector node dist/import-cli.js <csv inside the data dir>.
+  prospector:
+    image: ghcr.io/bokievf9/agents-prospector:latest
+    restart: unless-stopped
+    user: "__AGENTS_UID__:__AGENTS_GID__"
+    env_file: .env
+    environment:
+      DATA_DIR: /app/data
+      LLM_BASE_URL: http://omniroute:20128
+      TZ: Asia/Tashkent
+    volumes:
+      - /opt/fir-agents/data/prospector:/app/data
+    networks: [agents-net]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.25
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
   # LLM gateway: internal network only, no published ports. Secrets (JWT_SECRET, API_KEY_SECRET, provider keys)
   # live in /opt/fir-agents/omniroute.env; lead-intake authenticates with LLM_API_KEY from .env.
   # Not read_only: the image is not verified for it yet (tighten after the first run on the server).

@@ -89,6 +89,15 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 - Запуск: `pnpm --filter polly dev` (`apps/polly/.env.local`). Docker: `apps/polly/Dockerfile`, сервис `polly` в
   `compose.yaml` (без портов, `read_only`, данные `/opt/fir-agents/data/polly`), образ `agents-polly` в CI.
 
+## apps/prospector: Разведчик (этап 1)
+Бот отдела продаж (`PROSPECTOR_BOT_TOKEN`), только `OWNER_TELEGRAM_ID`. Ничего не отправляет бизнесам: владелец шлёт сам,
+агент готовит. База в SQLite (`pnpm --filter prospector run import <csv>`, дедуп по название + город), пакет в 10:00 Ташкента
+(`BATCH_CRON`, `BATCH_SIZE`), карточка с кнопками «Скопировать / Править / Пропустить / Отправлено», дожимы через 3 и 7 дней,
+`/reply <id>` и черновик ответа. Статусы new → proposed → sent → replied / no_reply / skipped. Свои кнопки и правка (не
+очередь `ApprovalQueue`: действие «наружу» делает человек). Цены в `src/offers.ts` копируют `directions.ts`; модель их не
+придумывает, ответы без цифр (`[цена]`). Подробно: `apps/prospector/README.md`. Образ `agents-prospector`, сервис `prospector`
+(данные `/opt/fir-agents/data/prospector`, `TZ=Asia/Tashkent`).
+
 ## Данные и секреты
 `.env*` и `data/` не коммитятся (в `data/` контакты клиентов). Секреты: `.env.local` (dev), `/opt/fir-agents/.env`
 (сервер, 600). Секреты с `$` в `.env` брать в одинарные кавычки (compose раскрывает `$`).
