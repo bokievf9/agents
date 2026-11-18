@@ -301,6 +301,9 @@ const stop = () => {
   support.stop();
   drill.stop();
   routineJobs.forEach((j) => j.stop());
+  // Exit fast: a long poll in flight would hold the process (and Telegram's update slot) for up to 30 s, which is the
+  // gap the owner sees on every deploy. Once the process is gone Telegram frees the slot for the new container at once.
+  setTimeout(() => process.exit(0), 1500).unref();
   void Promise.all([bot.stop(), clientBot?.stop()]).finally(() => process.exit(0));
 };
 process.on('SIGTERM', stop);
