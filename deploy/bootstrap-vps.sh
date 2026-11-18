@@ -27,7 +27,7 @@ AGENTS_UID="$(id -u agents)"; AGENTS_GID="$(id -g agents)"
 
 # Writable by agents: only data. Everything that decides what runs (compose, deploy script, authorized_keys)
 # is root-owned, so neither the container nor a process running as agents can widen its own access.
-install -d -o agents -g agents -m 700 /opt/fir-agents /opt/fir-agents/data /opt/fir-agents/data/lead-intake /opt/fir-agents/data/polly /opt/fir-agents/data/content-maker /opt/fir-agents/data/omniroute
+install -d -o agents -g agents -m 700 /opt/fir-agents /opt/fir-agents/data /opt/fir-agents/data/lead-intake /opt/fir-agents/data/polly /opt/fir-agents/data/content-maker /opt/fir-agents/data/prospector /opt/fir-agents/data/omniroute
 install -d -o root -g root -m 755 /opt/fir-agents/bin /opt/fir-agents/.ssh
 install -o root -g root -m 755 "$HERE/deploy.sh" /opt/fir-agents/bin/deploy.sh
 sed -e "s/__AGENTS_UID__/$AGENTS_UID/" -e "s/__AGENTS_GID__/$AGENTS_GID/" "$HERE/../compose.yaml" > /opt/fir-agents/compose.yaml
