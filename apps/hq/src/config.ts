@@ -22,6 +22,19 @@ export interface Config extends BaseConfig {
   monitor: MonitorConfig;
   fixedCostsUsdMonth: Record<string, number>;
   supportBudgetUsd: number;
+  /** Sales bot token (@firtech_leads_bot). Without it the Sales head is silent (no group posts). */
+  salesBotToken: string | undefined;
+  /** Shared secret of `POST /lead` (header `x-lead-token`); without it the webhook server does not start. */
+  leadWebhookToken: string | undefined;
+  webhookPort: number;
+  /** New Scout cards per day. */
+  batchSize: number;
+  /** Call slots offered to leads, local times in the HQ timezone. */
+  slotHours: [string, string];
+  /** Initial trust level of the first reply to a lead (prices are locked at 0 anyway). */
+  replyLevel: 0 | 1;
+  /** Monthly limit of the Sales department in USD (0: none). Used only when the head is first created. */
+  salesBudgetUsd: number;
 }
 
 function num(env: NodeJS.ProcessEnv, key: string, def: number, min: number, max: number): number {
@@ -49,6 +62,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       throw new Error('HQ_TOPICS must be JSON like {"general":2,"marketing":3}');
     }
   }
+  const hours = (optional(env, 'SLOT_HOURS') ?? '11:00,15:00').split(',').map((h) => h.trim());
+  if (hours.length !== 2 || !hours.every((h) => /^([01]?\d|2[0-3]):[0-5]\d$/.test(h))) throw new Error('SLOT_HOURS must be "HH:mm,HH:mm"');
   return {
     ...base,
     dbFile: `${base.dataDir}/hq.db`,
@@ -63,6 +78,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     monitor: loadMonitorConfig(env, base.dataDir),
     fixedCostsUsdMonth: parseFixedCosts(optional(env, 'FIXED_COSTS_USD_MONTH')),
     supportBudgetUsd: num(env, 'SUPPORT_BUDGET_USD', 0, 0, 100_000),
+    salesBotToken: optional(env, 'SALES_BOT_TOKEN'),
+    leadWebhookToken: optional(env, 'LEAD_WEBHOOK_TOKEN'),
+    webhookPort: Math.round(num(env, 'WEBHOOK_PORT', 8787, 1, 65_535)),
+    batchSize: Math.round(num(env, 'BATCH_SIZE', 10, 1, 100)),
+    slotHours: [hours[0]!, hours[1]!],
+    replyLevel: num(env, 'REPLY_LEVEL', 1, 0, 1) === 0 ? 0 : 1,
+    salesBudgetUsd: num(env, 'SALES_BUDGET_USD', 0, 0, 100_000),
   };
 }
 

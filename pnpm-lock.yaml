@@ -212,31 +212,15 @@ importers:
       '@fir/worker-finance':
         specifier: workspace:*
         version: link:../../packages/workers/finance
+      '@fir/worker-lead-intake':
+        specifier: workspace:*
+        version: link:../../packages/workers/lead-intake
       '@fir/worker-monitoring':
         specifier: workspace:*
         version: link:../../packages/workers/monitoring
-      better-sqlite3:
-        specifier: ^13.2.0
-        version: 13.2.0
-      croner:
-        specifier: ^11.0.1
-        version: 11.0.1
-      grammy:
-        specifier: ^1.46.0
-        version: 1.46.0
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@types/better-sqlite3':
-        specifier: ^9.6.0
-        version: 9.6.0
-
-  apps/lead-intake:
-    dependencies:
-      '@fir/core':
+      '@fir/worker-prospector':
         specifier: workspace:*
-        version: link:../../packages/core
+        version: link:../../packages/workers/prospector
       better-sqlite3:
         specifier: ^13.2.0
         version: 13.2.0
@@ -271,28 +255,6 @@ importers:
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
-      zod:
-        specifier: ^4.6.7
-        version: 4.6.7
-    devDependencies:
-      '@types/better-sqlite3':
-        specifier: ^9.6.0
-        version: 9.6.0
-
-  apps/prospector:
-    dependencies:
-      '@fir/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      better-sqlite3:
-        specifier: ^13.2.0
-        version: 13.2.0
-      croner:
-        specifier: ^11.0.1
-        version: 11.0.1
-      grammy:
-        specifier: ^1.46.0
-        version: 1.46.0
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -383,7 +345,45 @@ importers:
         specifier: ^13.2.0
         version: 13.2.0
 
+  packages/workers/lead-intake:
+    dependencies:
+      '@fir/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@fir/hq':
+        specifier: workspace:*
+        version: link:../../hq
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^9.6.0
+        version: 9.6.0
+      better-sqlite3:
+        specifier: ^13.2.0
+        version: 13.2.0
+
   packages/workers/monitoring:
+    dependencies:
+      '@fir/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@fir/hq':
+        specifier: workspace:*
+        version: link:../../hq
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^9.6.0
+        version: 9.6.0
+      better-sqlite3:
+        specifier: ^13.2.0
+        version: 13.2.0
+
+  packages/workers/prospector:
     dependencies:
       '@fir/core':
         specifier: workspace:*

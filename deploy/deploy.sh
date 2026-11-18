@@ -16,5 +16,5 @@ printf '%s' "$ghcr_token" | docker login ghcr.io -u "$ghcr_user" --password-stdi
 docker network inspect fir-llm >/dev/null 2>&1 || docker network create fir-llm >/dev/null
 docker compose pull
 docker compose up -d --remove-orphans
-docker image prune -f --filter label=app=lead-intake >/dev/null
+docker image prune -f --filter label=app=hq >/dev/null
 docker compose ps

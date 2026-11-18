@@ -26,33 +26,6 @@ jobs:
       - run: pnpm -r test
       - run: pnpm -r build
 
-  image-lead-intake:
-    if: github.ref == 'refs/heads/main'
-    needs: check
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: apps/lead-intake/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/agents-lead-intake:latest
-            ghcr.io/${{ github.repository_owner }}/agents-lead-intake:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
   image-polly:
     if: github.ref == 'refs/heads/main'
     needs: check
@@ -107,44 +80,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  image-prospector:
-    if: github.ref == 'refs/heads/main'
-    needs: check
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: apps/prospector/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/agents-prospector:latest
-            ghcr.io/${{ github.repository_owner }}/agents-prospector:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  deploy-lead-intake:
+  deploy:
     # Enabled once the VPS is bootstrapped (deploy/bootstrap-vps.sh, forced-command key, as in Dono):
     # set repository variable DEPLOY_ENABLED=true. Secrets AGENTS_SSH_KEY, VPS_HOST, VPS_KNOWN_HOSTS
     # live in the `production` Environment, not in repo secrets.
     if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
-    needs: image-lead-intake
+    needs: [image-hq, image-polly]
     runs-on: ubuntu-latest
     # Secrets live in the `production` environment, restricted to the main branch.
     environment: production
     concurrency:
-      group: deploy-lead-intake
+      group: deploy
       cancel-in-progress: false
     permissions:
       contents: read

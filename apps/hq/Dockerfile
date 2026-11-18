@@ -12,6 +12,8 @@ COPY packages/hq/package.json packages/hq/
 COPY packages/workers/content-maker/package.json packages/workers/content-maker/
 COPY packages/workers/monitoring/package.json packages/workers/monitoring/
 COPY packages/workers/finance/package.json packages/workers/finance/
+COPY packages/workers/lead-intake/package.json packages/workers/lead-intake/
+COPY packages/workers/prospector/package.json packages/workers/prospector/
 COPY apps/hq/package.json apps/hq/
 RUN pnpm install --frozen-lockfile
 COPY packages/core packages/core

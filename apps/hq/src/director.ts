@@ -35,6 +35,7 @@ const intentSchema = z.discriminatedUnion('type', [
     agent_id: z.string().optional(),
     text: z.string().max(500).optional(),
   }),
+  z.object({ type: z.literal('sales_reply'), id: z.coerce.number().int().positive(), text: z.string().max(2000).optional() }),
   z.object({ type: z.literal('builder'), title: z.string().min(1).max(200), body: z.string().max(2000).optional() }),
   z.object({ type: z.literal('unknown'), question: z.string().max(300).optional() }),
 ]);
@@ -70,6 +71,8 @@ const oneLine = (s: string, n = 160) => s.replace(/\s+/g, ' ').trim().slice(0, n
  */
 export class Director {
   readonly editors = new Map<string, ApprovalEditor>();
+  /** Set by the Sales head: a business answered (`/reply <id>` or free text). Returns what to tell the owner. */
+  onSalesReply: ((id: number, text?: string) => Promise<string>) | null = null;
   private jobs: Cron[] = [];
   private readonly llm: LlmClient;
 
@@ -185,7 +188,7 @@ export class Director {
     switch (name) {
       case 'start':
       case 'help':
-        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/skip: отменить ожидание правки');
+        return this.say('Директор Fir Tech. Пишите задачи обычным текстом, я передам отделу.\n/status: сводка по отделам\n/tasks [отдел]: открытые задачи\n/approve: пачка на одобрение\n/costs: расходы за месяц\n/org: оргструктура\n/pause <отдел>, /resume <отдел>\n/reply <id>: бизнес ответил (продажи)\n/skip: отменить ожидание правки');
       case 'status':
         return this.say(this.statusText());
       case 'tasks':
@@ -203,6 +206,8 @@ export class Director {
         this.hq.setDeptStatus(dept, name === 'pause' ? 'paused' : 'active');
         return this.say(name === 'pause' ? `Отдел ${dept} на паузе: новые задачи не берёт, повторные пробуждения не идут.` : `Отдел ${dept} снова работает.`);
       }
+      case 'reply':
+        return this.salesReply(Number(arg.trim().replace(/^#/, '')), undefined);
       case 'skip':
         for (const e of this.editors.values()) e.cancel();
         return this.say('Ок, ничего не жду.');
@@ -220,6 +225,8 @@ export class Director {
         return this.createTask(intent);
       case 'status':
         return this.say(intent.dept ? this.tasksText(intent.dept.toLowerCase()) : this.statusText());
+      case 'sales_reply':
+        return this.salesReply(intent.id, intent.text);
       case 'builder':
         return this.createBuilder(intent.title, intent.body ?? text);
       case 'rule':
@@ -237,6 +244,7 @@ export class Director {
 {"type":"task","title":"...","dept":"<отдел>","body":"...","priority":0-2,"due":"YYYY-MM-DD или null"}
 {"type":"status","dept":"<отдел или null>"}
 {"type":"rule","target":"setting","key":"<настройка>","value":"..."} или {"type":"rule","target":"instructions","agent_id":"<агент>","text":"<новое правило одной строкой>"}
+{"type":"sales_reply","id":<номер бизнеса из карточки Разведчика>,"text":"<текст ответа бизнеса, если он есть в сообщении>"} (бизнес ответил на наше сообщение)
 {"type":"builder","title":"...","body":"..."} (нужен новый инструмент, бот или интеграция, которых нет)
 {"type":"unknown","question":"<что переспросить>"}
 Ответ: только JSON-объект.`;
@@ -256,6 +264,12 @@ export class Director {
     const t = this.hq.createTask({ title: i.title, body: i.body ?? '', dept, creator: 'owner', priority: i.priority, dueAt });
     this.hq.wake(head.id, 'task');
     return this.say(`Задача #${t.id} отделу ${dept}: «${oneLine(t.title, 100)}»${i.priority > 0 ? ', приоритет выше обычного' : ''}. Голова возьмёт её при ближайшем пробуждении (до 30 секунд).`);
+  }
+
+  private async salesReply(id: number, text: string | undefined): Promise<void> {
+    if (!this.onSalesReply) return this.say('Отдел продаж не подключён.');
+    if (!Number.isInteger(id) || id <= 0) return this.say('Формат: /reply <id>, номер из карточки (#12).');
+    return this.say(await this.onSalesReply(id, text));
   }
 
   private async createBuilder(title: string, body: string): Promise<void> {

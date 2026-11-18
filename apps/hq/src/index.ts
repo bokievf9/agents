@@ -6,6 +6,7 @@ import { HeartbeatWorker, Hq, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
 import { Director } from './director.js';
 import { HEAD_ID, MARKETING, MarketingHead } from './heads/marketing.js';
+import { HEAD_ID as SALES_HEAD_ID, parseCopy, SALES, SalesHead, seedSales } from './heads/sales.js';
 import { seedOrg } from './org.js';
 import { SUPPORT, SUPPORT_HEAD_ID, SupportHead, seedSupport } from './heads/support.js';
 import { readFileSync } from 'node:fs';
@@ -13,6 +14,7 @@ import { join } from 'node:path';
 import { FinanceWorker } from '@fir/worker-finance';
 import { MonitoringWorker } from '@fir/worker-monitoring';
 import { Reporter, type TopicSender } from './reporter.js';
+import { createWebhook } from './webhook.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
@@ -21,6 +23,7 @@ const hq = new Hq(db);
 if (!db.prepare("SELECT 1 FROM settings WHERE key = 'tz'").get()) hq.setSetting('tz', cfg.tz);
 seedOrg(hq, cfg);
 seedSupport(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'utf8').trim());
+seedSales(hq, cfg);
 
 const bot = createBot(cfg.botToken);
 const messenger = grammyMessenger(bot);
@@ -36,6 +39,7 @@ const topicSender = (api: Api): TopicSender => async (chatId, threadId, text) =>
 senders.set('general', topicSender(bot.api));
 if (cfg.marketingBotToken) senders.set(MARKETING, topicSender(new Api(cfg.marketingBotToken)));
 if (cfg.supportBotToken) senders.set(SUPPORT, topicSender(new Api(cfg.supportBotToken)));
+if (cfg.salesBotToken) senders.set(SALES, topicSender(new Api(cfg.salesBotToken)));
 const reporter = new Reporter(cfg.groupId, cfg.topics, senders);
 
 const director = new Director({ hq, llm, messenger, queue, ownerId: cfg.ownerId, reporter });
@@ -46,10 +50,22 @@ director.editors.set('content_item', marketing);
 const support = new SupportHead({
   hq, llm, reporter, monitor: new MonitoringWorker(cfg.monitor), finance: new FinanceWorker({ fixedCosts: cfg.fixedCostsUsdMonth }),
 });
+const sales = new SalesHead({
+  hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel,
+});
+director.onSalesReply = (id, text) => sales.startReply(id, text);
+director.editors.set('sales:reply', sales); // the owner's text after /reply <id>
 
 // Only the owner in a private chat; everyone else is ignored silently.
 bot.use(async (ctx, next) => {
   if (ctx.from?.id === cfg.ownerId && ctx.chat?.type === 'private') await next();
+});
+
+// «Скопировать» on a Scout card: the plain draft as its own message.
+bot.on('callback_query:data', async (ctx, next) => {
+  const copyId = parseCopy(ctx.callbackQuery.data);
+  if (copyId === null) return next();
+  await ctx.answerCallbackQuery({ text: await sales.onCopy(copyId) });
 });
 
 // "Править" on a content item asks which part to edit; other kinds use the core's whole-text edit.
@@ -78,7 +94,7 @@ bot.on('callback_query:data', async (ctx, next) => {
 installApprovals(bot, queue, cfg.ownerId);
 
 const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
-for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'skip']) {
+for (const name of ['start', 'help', 'status', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip']) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
 }
 // A free-text message goes through the LLM: run it in the background so buttons stay responsive.
@@ -90,6 +106,7 @@ bot.on('message:text', (ctx) => {
 const heartbeats = new HeartbeatWorker(hq, async (agent) => {
   if (agent.id === HEAD_ID) await marketing.onHeartbeat();
   if (agent.id === SUPPORT_HEAD_ID) await support.onHeartbeat();
+  if (agent.id === SALES_HEAD_ID) await sales.onHeartbeat();
 });
 heartbeats.start();
 const routineJobs = startRoutines(hq);
@@ -101,7 +118,18 @@ for (const dept of hq.departments()) {
   if (head) hq.wake(head.id, 'schedule');
 }
 
+// POST /lead from firtech.pro (same host): a Sales task per lead. No token, no server.
+const webhook = cfg.leadWebhookToken
+  ? createWebhook(
+      ({ name, contact, service, budget, message, estimate, locale, slot, source }) =>
+        Promise.resolve(sales.createLeadTask({ name, contact, service, budget, message, estimate, locale, slot, source }, service)),
+      cfg.leadWebhookToken,
+    ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort }))
+  : null;
+if (!webhook) log('warn', 'LEAD_WEBHOOK_TOKEN is not set, POST /lead is disabled');
+
 const stop = () => {
+  webhook?.close();
   heartbeats.stop();
   director.stop();
   support.stop();
@@ -111,7 +139,7 @@ const stop = () => {
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
 
-log('info', 'hq starting', { tz: hq.tz, departments: hq.departments(), group: cfg.groupId !== undefined, marketingBot: Boolean(cfg.marketingBotToken), supportBot: Boolean(cfg.supportBotToken) });
+log('info', 'hq starting', { tz: hq.tz, departments: hq.departments(), group: cfg.groupId !== undefined, marketingBot: Boolean(cfg.marketingBotToken), supportBot: Boolean(cfg.supportBotToken), salesBot: Boolean(cfg.salesBotToken) });
 startPolling(bot).catch((e) => {
   log('error', 'bot stopped', { err: errMsg(e) });
   process.exit(1);
