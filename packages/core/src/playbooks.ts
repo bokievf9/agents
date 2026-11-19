@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -107,4 +107,43 @@ export function playbookExcerpt(role: PlaybookRole, max: number = EXCERPT_MAX, d
 export function withPlaybook(system: string, role: PlaybookRole, dir?: string): string {
   const ex = playbookExcerpt(role, EXCERPT_MAX, dir);
   return ex ? `${system}\n\n${ex}` : system;
+}
+
+/** The skills a playbook was condensed from: the names after «навыки» in its «Источники» line (parentheses dropped). */
+export function playbookSources(text: string): string[] {
+  const line = text.split('\n').find((l) => l.startsWith('Источники'));
+  if (!line) return [];
+  const at = line.indexOf('навыки');
+  const after = at < 0 ? '' : line.slice(at + 'навыки'.length);
+  return after
+    .replace(/\([^)]*\)/g, ' ')
+    .split(/[,.]|\s+и\s+/)
+    .map((x) => x.trim())
+    .filter((x) => /^[a-z][a-z0-9-]*$/.test(x));
+}
+
+export interface PlaybookInfo {
+  role: PlaybookRole;
+  /** The file's mtime, ISO. */
+  updatedAt: string;
+  lines: number;
+  sourceSkills: string[];
+}
+
+/** One entry per playbook file that exists (role order); empty when there is no knowledge folder. Used by `GET /admin/company`. */
+export function listPlaybooks(dir?: string): PlaybookInfo[] {
+  const root = knowledgeDir(dir);
+  if (!root) return [];
+  const out: PlaybookInfo[] = [];
+  for (const role of PLAYBOOK_ROLES) {
+    const file = join(root, 'playbooks', `${role}.md`);
+    try {
+      const mtime = statSync(file).mtime;
+      const text = readFileSync(file, 'utf8').trim();
+      out.push({ role, updatedAt: mtime.toISOString(), lines: text ? text.split('\n').length : 0, sourceSkills: playbookSources(text) });
+    } catch {
+      /* a missing file is not listed */
+    }
+  }
+  return out;
 }

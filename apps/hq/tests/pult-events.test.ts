@@ -135,7 +135,10 @@ describe('GET /admin/metrics/week', () => {
       funnel: { leads: 0, qualified: 0, proposals: 0, contracts: 0, paid: 0, projects: 0 }, money: { invoicedUsd: 0, paidUsd: 0 },
     };
     expect(r.json).toMatchObject(zero);
-    expect(r.json.prevWeek).toEqual({ week: '2026-W46', ...zero });
+    expect(r.json.days).toHaveLength(7);
+    for (const d of r.json.days) expect(d).toMatchObject({ blog: { hits: 0 }, leads: 0, site: zero.site });
+    expect(r.json.prevWeek).toMatchObject({ week: '2026-W46', ...zero });
+    expect(r.json.prevWeek.days.map((d: any) => d.date)[0]).toBe('2026-11-09');
     expect((await p.call('POST', '/admin/metrics/week', {})).status).toBe(404);
   });
 
@@ -187,6 +190,16 @@ describe('GET /admin/metrics/week', () => {
     expect(r.status).toBe(200);
     expect(r.json.site).toEqual({ chat_open: 6, builder_done: 0, estimate_pdf: 0, lead_sent: 3, audit_sent: 0, ref_click: 0, cabinet_signup: 0, pay_view: 1, blog_view: 7 });
     expect(r.json.blog).toEqual({ hits: 8, published: 1 });
+    // the daily series: seven days Mon..Sun, the same keys as the totals, summing up to them
+    expect(r.json.days).toHaveLength(7);
+    expect(r.json.days.map((d: any) => d.date)).toEqual(['2026-11-16', '2026-11-17', '2026-11-18', '2026-11-19', '2026-11-20', '2026-11-21', '2026-11-22']);
+    expect(Object.keys(r.json.days[0]).sort()).toEqual(['blog', 'date', 'leads', 'site']);
+    expect(Object.keys(r.json.days[0].site).sort()).toEqual([...EVENT_NAMES].sort());
+    expect(r.json.days[2].site).toMatchObject({ chat_open: 4, lead_sent: 3 });
+    expect(r.json.days[3].site.chat_open).toBe(2);
+    expect(r.json.days.map((d: any) => d.blog.hits)).toEqual([0, 5, 0, 3, 0, 0, 0]);
+    expect(r.json.days.map((d: any) => d.leads)).toEqual([0, 0, 3, 0, 0, 0, 0]);
+    expect(r.json.days.reduce((a: number, d: any) => a + d.site.chat_open, 0)).toBe(r.json.site.chat_open);
     expect(r.json.youtube).toEqual({ shorts: 2, views: 700, subscribers: 112, delta: 12 });
     expect(r.json.funnel).toEqual({ leads: 3, qualified: 2, proposals: 1, contracts: 1, paid: 1, projects: 1 });
     expect(r.json.money).toEqual({ invoicedUsd: 230.5, paidUsd: 150 });

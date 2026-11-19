@@ -227,8 +227,30 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
 
   // ---- tickets ----
   interface TicketRow { id: number; client_id: number | null; client_name: string; contact: string; text: string; status: string; money: number; alerted: number; created_at: number; answered_at: number | null; source?: string | null; answer?: string | null }
-  const ticketView = (t: TicketRow) => ({
-    id: t.id, clientName: t.client_name, contact: t.contact, text: cap(t.text), status: t.status, money: t.money === 1, slaAlerted: t.alerted === 1,
+  /**
+   * The id a ticket's client has in `/admin/clients`: the cabinet id when the contact is a cabinet client's email or handle (or the name is
+   * the one a cabinet client carries there), else `c:<lowercased name>`.
+   */
+  function clientResolver() {
+    const byEmail = new Map<string, number>();
+    const byHandle = new Map<string, number>();
+    const byName = new Map<string, number>();
+    if (has('cab_clients')) {
+      for (const c of all<{ id: number; email: string; name: string; telegram: string }>('SELECT id, email, name, telegram FROM cab_clients ORDER BY id')) {
+        byEmail.set(c.email.trim().toLowerCase(), c.id);
+        if (handleKey(c.telegram)) byHandle.set(handleKey(c.telegram), c.id);
+        // like the clients list: the first cabinet client carrying a name owns it
+        const key = (c.name || c.email).trim().toLowerCase();
+        if (!byName.has(key)) byName.set(key, c.id);
+      }
+    }
+    return (name: string, contact: string): string => {
+      const id = byEmail.get(contact.trim().toLowerCase()) ?? (handleKey(contact) ? byHandle.get(handleKey(contact)) : undefined) ?? byName.get(name.trim().toLowerCase());
+      return id !== undefined ? String(id) : `c:${name.trim().toLowerCase()}`;
+    };
+  }
+  const ticketView = (t: TicketRow, resolve: (name: string, contact: string) => string = clientResolver()) => ({
+    id: t.id, clientId: resolve(t.client_name, t.contact), clientName: t.client_name, contact: t.contact, text: cap(t.text), status: t.status, money: t.money === 1, slaAlerted: t.alerted === 1,
     answer: t.answer ? cap(t.answer) : null, note: note('ticket', t.id), createdAt: iso(t.created_at), answeredAt: iso(t.answered_at),
   });
   function tickets(method: string, id: number | null, query: URLSearchParams, body: unknown): CrmReply {
@@ -238,8 +260,9 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       const p = page(query);
       const status = query.get('status');
       if (status && !statuses.includes(status as 'open')) return fail(400, 'invalid_status', { allowed: statuses });
+      const resolve = clientResolver();
       const r = idPage<TicketRow>('cs_tickets', p, ['client_name', 'contact', 'text'], status ? [{ sql: 'status = ?', params: [status] }] : []);
-      return ok({ available: true, statuses, items: r.items.map(ticketView), nextCursor: r.nextCursor });
+      return ok({ available: true, statuses, items: r.items.map((x) => ticketView(x, resolve)), nextCursor: r.nextCursor });
     }
     if (method === 'POST' && id !== null) {
       const row = one<TicketRow>('SELECT * FROM cs_tickets WHERE id = ?', id);
@@ -450,9 +473,10 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     });
     const invoices = newest(docs.filter((d) => d.source === 'billing').map(docView));
     const documentsOut = newest(docs.filter((d) => d.source !== 'billing').map(docView));
+    const ownResolve = clientResolver();
     const ticketsOut = has('cs_tickets')
       ? newest(all<TicketRow>('SELECT * FROM cs_tickets ORDER BY id DESC').filter((x) => contactIs(x.contact) || (x.source === 'cabinet' && x.contact.toLowerCase() === c.email) || (mineName(x.client_name) && x.contact === '')).map((x) => {
-          const view: Omit<ReturnType<typeof ticketView>, 'note'> & { note?: string } = ticketView(x);
+          const view: Omit<ReturnType<typeof ticketView>, 'note'> & { note?: string } = ticketView(x, ownResolve);
           delete view.note;
           return view;
         }))
@@ -595,7 +619,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       return r ? projectView(r) : undefined;
     },
     projectsWhere: (where: string, params: unknown[] = []) => whereRows<ProjRow>('pm_projects', where, params).map(projectView),
-    ticketsWhere: (where: string, params: unknown[] = []) => whereRows<TicketRow>('cs_tickets', where, params).map(ticketView),
+    ticketsWhere: (where: string, params: unknown[] = []) => (() => { const resolve = clientResolver(); return whereRows<TicketRow>('cs_tickets', where, params).map((x) => ticketView(x, resolve)); })(),
     referralsWhere: (where: string, params: unknown[] = []) => whereRows<RefRow>('rf_referrals', where, params).map(refView),
     docs: () => allDocs(),
     docView,

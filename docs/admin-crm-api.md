@@ -71,7 +71,7 @@ Read-mostly представления над таблицами исполни�
 Курсор здесь смещение; порядок: последнее касание, новые первыми.
 
 ## GET /admin/crm/tickets
-Обращения клиентов (`cs_tickets`). Параметры: `limit`, `cursor`, `q` (клиент, контакт, текст), `status` (`open`, `answered`).
+Обращения клиентов (`cs_tickets`). У каждого `clientId`: тот же идентификатор, что у ряда `/admin/crm/clients` (`"<id кабинета>"`, если контакт обращения совпал с email или Telegram-ником клиента кабинета или имя принадлежит такому клиенту, иначе `"c:<имя в нижнем регистре>"`); он же в `tickets` у `GET /admin/crm/clients/:id` и `GET /admin/clients/by-email`. Параметры: `limit`, `cursor`, `q` (клиент, контакт, текст), `status` (`open`, `answered`).
 ```json
 { "ok": true, "available": true, "statuses": ["open","answered"], "nextCursor": null,
   "items": [{ "id": 3, "clientName": "Алиса", "contact": "@alice", "text": "не работает бот", "status": "open", "money": false, "slaAlerted": false,
@@ -312,6 +312,7 @@ Upsert по email в `cab_clients` (повторный вызов обновля
   "money": { "invoicedUsd": 0, "paidUsd": 0 },
   "prevWeek": { "week": "2026-W46", "site": {}, "blog": {}, "youtube": {}, "funnel": {}, "money": {} } }
 ```
+`days`: ровно семь суток недели (понедельник первым): `[ { "date": "2026-11-16", "site": { ...те же девять имён... }, "blog": { "hits": 0 }, "leads": 0 } ]`. `site` по дням из `site_events`, `blog.hits` из `cm_kv` `blog_hits:<дата>`, `leads` = лиды `li_leads`, пришедшие в эти сутки (по часам компании); пустой день: нули. Суммы `site` и `blog.hits` по дням равны недельным. `days` есть и в `prevWeek`.
 `prevWeek` повторяет те же ключи за предыдущую неделю (плюс `week`). Нет данных: нули, не `null`. Неделя считается по часам компании (понедельник 00:00 .. воскресенье 24:00).
 - `site`: сумма `site_events` за дни недели, все девять имён всегда есть.
 - `blog`: `hits` = обращения к публичному `/blog` (`cm_kv` `blog_hits:<дата>`) и `published` = статьи, одобренные и опубликованные за неделю: функция `aggregate` Аналитика, как в его недельном отчёте.
@@ -326,16 +327,18 @@ Upsert по email в `cab_clients` (повторный вызов обновля
   "routines": [ { "name": "marketing-weekly-pack", "dept": "marketing", "title": "...", "cron": "0 6 * * 1", "tz": "Asia/Kuala_Lumpur", "enabled": true, "lastRunAt": null, "lastStatus": null, "nextRunAt": "..." } ],
   "costs": { "byDept": { "marketing": { "todayUsd": 0, "monthUsd": 0, "limitUsd": 0 } }, "byDay": [ { "date": "2026-11-18", "usd": 0 } ] },
   "trust": [ { "kind": "content_item", "level": 0, "locked": false, "approvals": 0 } ],
-  "playbooks": [],
+  "playbooks": [ { "role": "seo", "updatedAt": "2026-11-20T09:00:00.000Z", "lines": 48, "sourceSkills": ["seo-audit", "ai-seo"] } ],
   "workers": [ { "id": "content-maker", "dept": "marketing", "title": "Контент-мейкер", "state": "idle" } ],
   "tools": [ { "name": "web.search", "departments": ["marketing", "sales", "director"], "configured": true, "callsToday": 4, "errorsToday": 0, "limits": { "timeoutMs": 8000, "minGapMs": 1000, "cacheTtlMs": 3600000, "maxResults": 10 }, "env": ["BRAVE_SEARCH_KEY"] } ] }
 ```
 - `routines`: все рутины. `tz` = зона, в которой идёт cron (часы владельца или компании), `lastStatus` = статус задачи последнего запуска (`null`, пока не запускалась), `nextRunAt` = следующий запуск по cron в этой зоне (`null` у выключенной).
 - `costs.byDept`: по каждому отделу траты сегодня и в месяце (USD) и месячный лимит (`0` = без лимита); `byDay` = последние 30 суток по часам компании, все дни есть, старые первыми.
 - `trust`: уровни доверия по типам одобрений; `locked` = деньги, цены, документы (не растёт сам), `approvals` = сколько раз владелец одобрил (или тип отработал сам на уровне 1).
-- `playbooks`: **пока всегда `[]`** (в этом клоне нет `loadPlaybook` пакета знаний; место помечено TODO в `pult-company.ts`). Форма по контракту `{ role, updatedAt, lines }`.
+- `playbooks`: плейбуки ремесла (`knowledge/playbooks/*.md`, по порядку ролей, только существующие файлы): `role` (`content-maker`, `publisher`, `trend-scout`, `seo`, `analyst`, `sales`, `renderer-builder`), `updatedAt` = время изменения файла (ISO), `lines` = число строк, `sourceSkills` = навыки из строки «Источники» файла. Целиком текст отдаёт `GET /admin/company/playbooks/:role`.
 - `tools` (2026-11-20, сайт покажет позже): инструменты агентов (`docs/tools.md`): отделы с правом вызова, `configured` (есть ключи и адаптеры; значений ключей нет), вызовы и ошибки за сегодня по часам компании, лимиты, имена env-ключей.
 - `workers`: исполнители со статусом офиса (`working|waiting|blocked|idle|sleeping|paused|offline`, как на странице офиса).
+
+`GET /admin/company/playbooks/:role` → `{ "ok": true, "role": "seo", "text": "# Плейбук: ...\n..." }`: весь markdown плейбука, чтобы панель «Компания» показала его. Неизвестная роль или нет файла: 404 `not_found`.
 
 `POST /admin/company/routines/:name` тело `{ "enabled": true|false }` → `{ ok, item }` (рутина как в списке). Выключение запоминается как правка владельца: следующий старт не включает рутину обратно. После переключения HQ перезапускает cron-задачи.
 `POST /admin/company/routines/:name/run` → `{ ok, taskId }`: `Hq.runRoutine`, задача и пробуждение головы как у обычного срабатывания. Выключенная: 409 `not_started` + `reason: "disabled"`; прошлая задача рутины ещё идёт (политика `skip`): 409 `not_started` + `reason: "busy"`.

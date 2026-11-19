@@ -85,6 +85,18 @@ export class SiteEvents {
     }
     return out;
   }
+
+  /** Event counts per day (`YYYY-MM-DD`) and name for the days `from`..`to`; only days that have rows. */
+  byDay(from: string, to: string): Map<string, Record<EventName, number>> {
+    const out = new Map<string, Record<EventName, number>>();
+    for (const r of this.db.prepare('SELECT day, name, SUM(count) n FROM site_events WHERE day >= ? AND day <= ? GROUP BY day, name').all(from, to) as { day: string; name: string; n: number }[]) {
+      if (!EVENT_NAMES.includes(r.name as EventName)) continue;
+      const row = out.get(r.day) ?? (Object.fromEntries(EVENT_NAMES.map((n) => [n, 0])) as Record<EventName, number>);
+      row[r.name as EventName] = r.n;
+      out.set(r.day, row);
+    }
+    return out;
+  }
 }
 
 /** The body of `POST /events`: `'ok'` stored, `'invalid'` not on the whitelist (the webhook answers 400). */
@@ -138,8 +150,19 @@ export function createMetrics(db: Db, now: () => number, tz: () => string, event
     const issuedAt = has('bl_invoices') && hasCol('bl_invoices', 'issued_at') ? 'COALESCE(issued_at, created_at)' : 'created_at';
     const invoicedUsd = has('bl_invoices') ? num(`SELECT COALESCE(SUM(amount_usd), 0) n FROM bl_invoices WHERE status IN ('issued', 'paid') AND ${issuedAt} >= ? AND ${issuedAt} < ?`, fromMs, toMs) : 0;
     const paidUsd = has('bl_invoices') ? num("SELECT COALESCE(SUM(amount_usd), 0) n FROM bl_invoices WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?", fromMs, toMs) : 0;
+    // the seven days of the week: site events, blog hits (cm_kv) and leads, zeros when empty
+    const hasKv = has('cm_kv');
+    const siteDays = events.byDay(r.from, r.to);
+    const emptySite = Object.fromEntries(EVENT_NAMES.map((n) => [n, 0])) as Record<EventName, number>;
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const date = new Date(Date.parse(`${r.from}T00:00:00Z`) + i * 86_400_000).toISOString().slice(0, 10);
+      const hits = hasKv ? Number((db.prepare('SELECT value FROM cm_kv WHERE key = ?').get(`blog_hits:${date}`) as { value: string } | undefined)?.value ?? 0) || 0 : 0;
+      const dayLeads = has('li_leads') ? num('SELECT COUNT(*) n FROM li_leads WHERE created_at >= ? AND created_at < ?', fromMs + i * 86_400_000, fromMs + (i + 1) * 86_400_000) : 0;
+      return { date, site: siteDays.get(date) ?? { ...emptySite }, blog: { hits }, leads: dayLeads };
+    });
     return {
       week,
+      days,
       site: events.totals(r.from, r.to),
       blog: { hits: base.articles?.hits ?? 0, published: base.articles?.published ?? 0 },
       youtube: { shorts, views, subscribers, delta },

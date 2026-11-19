@@ -1,5 +1,5 @@
 import { Cron } from 'croner';
-import { toolCatalog, zonedParts, zonedToMs, type ApprovalQueue } from '@fir/core';
+import { isPlaybookRole, listPlaybooks, loadPlaybook, toolCatalog, zonedParts, zonedToMs, type ApprovalQueue } from '@fir/core';
 import type { Hq, Routine } from '@fir/hq';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
@@ -80,8 +80,8 @@ export function createCompany(d: PultCompanyDeps) {
       routines: hq.routines().map(routineView),
       costs: costs(),
       trust: queue.trustTable().map((k) => trustView(k.kind)),
-      // TODO(playbooks): fill from the knowledge package (`loadPlaybook`, role, updatedAt, line count) when another builder adds it; empty until then
-      playbooks: [] as { role: string; updatedAt: string | null; lines: number }[],
+      // the craft playbooks (knowledge/playbooks/*.md): role, file mtime, line count and the skills they were condensed from
+      playbooks: listPlaybooks(d.tools?.config.knowledgeDir),
       workers: office.departments.flatMap((dep) => dep.workers.map((w) => ({ id: w.id, dept: dep.id, title: w.title, state: w.status }))),
       // the agents' toolbox (docs/tools.md): rights by department, set up or not (never a key), today's calls and errors, limits
       tools: toolCatalog({
@@ -91,6 +91,13 @@ export function createCompany(d: PultCompanyDeps) {
         ownerId: 1,
       }).map((t) => ({ name: t.name, departments: t.departments, configured: t.configured, callsToday: t.callsToday, errorsToday: t.errorsToday, limits: t.limits, env: t.env })),
     });
+  }
+
+  /** `GET /admin/company/playbooks/:role`: the whole markdown, for the Company panel. */
+  function playbook(role: string): AdminReply {
+    if (!isPlaybookRole(role)) return fail(404, 'not_found');
+    const text = loadPlaybook(role, d.tools?.config.knowledgeDir);
+    return text ? ok({ role, text }) : fail(404, 'not_found');
   }
 
   function toggle(name: string, body: unknown): AdminReply {
@@ -122,7 +129,7 @@ export function createCompany(d: PultCompanyDeps) {
     return ok({ item: trustView(kind) });
   }
 
-  return { get, toggle, run, trust };
+  return { get, playbook, toggle, run, trust };
 }
 
 const round = (n: number) => Math.round(n * 1e6) / 1e6;

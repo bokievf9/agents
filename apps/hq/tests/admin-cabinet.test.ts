@@ -159,6 +159,10 @@ describe('cabinet: GET /admin/clients/by-email', () => {
     expect(r.json.tickets).toHaveLength(1);
     expect(r.json.tickets[0]).toMatchObject({ text: 'вопрос Алисы', answer: null });
     expect(r.json.tickets[0]).not.toHaveProperty('note');
+    // the ticket carries the client's id of /admin/clients (cabinet id by the handle in its contact)
+    const list = (await call('GET', '/admin/crm/clients')).json.items as any[];
+    expect(r.json.tickets[0].clientId).toBe(list.find((c) => c.name === 'Алиса').id);
+    expect((await call('GET', '/admin/crm/tickets')).json.items.map((x: any) => [x.clientName, x.clientId])).toEqual([['Боб', 'c:боб'], ['Алиса', r.json.tickets[0].clientId]]);
     expect(r.json.referrals.map((x: any) => x.referred)).toEqual(['Карим']);
     expect(r.json.referralSlug).toMatch(/^c[a-z0-9]{1,30}$/);
     const text = JSON.stringify(r.json);

@@ -66,6 +66,7 @@ export function createPult(d: PultDeps) {
       } catch {
         return fail(404, 'not_found');
       }
+      if (method === 'GET' && kind === 'playbooks' && name && seg.length === 3) return company.playbook(name);
       if (method === 'POST' && kind === 'routines' && name) {
         if (seg.length === 3) return company.toggle(name, body);
         if (seg.length === 4 && act === 'run') return company.run(name);

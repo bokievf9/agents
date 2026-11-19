@@ -10,6 +10,18 @@ import { appTools } from '../src/tools.js';
 
 const DAY = 86_400_000;
 
+describe('GET /admin/company/playbooks/:role', () => {
+  it('the whole markdown of a role; unknown role or missing file is 404', async () => {
+    const p = pultWorld();
+    const r = await p.call('GET', '/admin/company/playbooks/seo');
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ ok: true, role: 'seo' });
+    expect(r.json.text).toContain('## Правила');
+    expect((await p.call('GET', '/admin/company/playbooks/nope')).status).toBe(404);
+    expect((await p.call('POST', '/admin/company/playbooks/seo', {})).status).toBe(404);
+  });
+});
+
 describe('GET /admin/company', () => {
   it('tools: every tool with departments, set-up state (never a key), today\'s calls and errors, limits', async () => {
     const plain = pultWorld();
@@ -52,7 +64,13 @@ describe('GET /admin/company', () => {
     expect(j.routines.length).toBeGreaterThan(5);
     for (const x of j.routines) expect(Object.keys(x).sort()).toEqual(['cron', 'dept', 'enabled', 'lastRunAt', 'lastStatus', 'name', 'nextRunAt', 'title', 'tz']);
     expect(Object.keys(j.costs).sort()).toEqual(['byDay', 'byDept']);
-    expect(j.playbooks).toEqual([]);
+    expect(j.playbooks.map((x: any) => x.role)).toEqual(['content-maker', 'publisher', 'trend-scout', 'seo', 'analyst', 'sales', 'renderer-builder']);
+    for (const x of j.playbooks) {
+      expect(Object.keys(x).sort()).toEqual(['lines', 'role', 'sourceSkills', 'updatedAt']);
+      expect(x.lines).toBeGreaterThan(10);
+      expect(Number.isNaN(Date.parse(x.updatedAt))).toBe(false);
+    }
+    expect(j.playbooks.find((x: any) => x.role === 'seo').sourceSkills).toEqual(['seo-audit', 'ai-seo', 'programmatic-seo', 'schema', 'site-architecture']);
     expect(j.trust.length).toBeGreaterThan(3);
     for (const t of j.trust) expect(Object.keys(t).sort()).toEqual(['approvals', 'kind', 'level', 'locked']);
     expect(j.workers.length).toBeGreaterThan(10);
