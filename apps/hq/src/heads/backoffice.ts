@@ -6,6 +6,8 @@ import {
 import { exportPlan, KbStore, KnowledgeWorker, parseLesson, playbookTitles, searchKb, searchText } from '@fir/worker-knowledge';
 import { fmtDate, PmStore } from '@fir/worker-project-manager';
 import type { Reporter } from '../reporter.js';
+import { makeBackup, MAX_SEND_BYTES } from '../backup.js';
+import { cleanRenders } from '../housekeeping.js';
 
 export const BACKOFFICE = 'backoffice';
 export const BACKOFFICE_HEAD_ID = 'backoffice-head';
@@ -42,6 +44,15 @@ export interface BackofficeDeps {
   knowledgeDir?: string | undefined;
   /** Tests may replace the documents worker (another templates folder). */
   documents?: Worker;
+  /** Nightly housekeeping (routines `backoffice-backup-daily` and `backoffice-renders-cleanup`); without them those tasks say so and end. */
+  ops?: {
+    dataDir: string;
+    rendersDir: string;
+    /** age public key for the backup archive; unset: the archive is sent unencrypted and the message says so. */
+    ageRecipient?: string | undefined;
+    /** Tests inject the process runner for tar and age. */
+    exec?: (cmd: string, args: string[]) => Promise<unknown>;
+  };
 }
 
 interface Staged {
@@ -169,8 +180,11 @@ export class BackofficeHead {
 
   private async handle(task: Task): Promise<void> {
     if (!this.hq.claim(task.id, BACKOFFICE_HEAD_ID)) return;
-    if (this.hq.overBudget(BACKOFFICE)) return void this.hq.block(task.id, BACKOFFICE_HEAD_ID, 'Лимит расходов отдела исчерпан');
     const action = task.meta.action;
+    // housekeeping makes no LLM calls: the department's money limit does not stop it
+    if (action === 'backup') return this.backup(task);
+    if (action === 'renders_cleanup') return this.rendersCleanup(task);
+    if (this.hq.overBudget(BACKOFFICE)) return void this.hq.block(task.id, BACKOFFICE_HEAD_ID, 'Лимит расходов отдела исчерпан');
     if (action === 'lessons_export') return this.exportLessons(task);
     if (action === 'doc') {
       const staged: Staged[] = [];
@@ -185,6 +199,48 @@ export class BackofficeHead {
     }
     this.hq.block(task.id, BACKOFFICE_HEAD_ID, `Бэк-офис умеет: документы (/doc ${DOC_TYPES.join('|')}), уроки (/lesson), поиск (/kb)`);
     await this.report(task.id, `Задача #${task.id} «${oneLine(task.title, 80)}» не для бэк-офиса: умею документы и базу знаний.`);
+  }
+
+  /**
+   * Night routine: a consistent copy of hq.db (and any other SQLite file in the data dir), tar.gz without renders, age-encrypted
+   * when BACKUP_AGE_RECIPIENT is set, sent to the owner as a document through the Director bot; seven copies stay in
+   * DATA_DIR/backups. Over 49 MB (Telegram's bot limit) it is not sent: the owner is alerted and the copy stays on the server.
+   */
+  private async backup(task: Task): Promise<void> {
+    const ops = this.d.ops;
+    if (!ops) return void this.hq.complete(task.id, BACKOFFICE_HEAD_ID, 'Резервное копирование не подключено (нет каталога данных).');
+    let r;
+    try {
+      r = await makeBackup({ dataDir: ops.dataDir, now: this.hq.now, ageRecipient: ops.ageRecipient, ...(ops.exec ? { exec: ops.exec } : {}) });
+    } catch (e) {
+      this.hq.block(task.id, BACKOFFICE_HEAD_ID, `Бэкап не сделан: ${errMsg(e)}`.slice(0, 300));
+      return void (await this.hq.alert(`Резервная копия не сделана: ${errMsg(e).slice(0, 200)}. Задача #${task.id}.`));
+    }
+    const mb = (r.bytes / 1_048_576).toFixed(1);
+    const note = r.encrypted ? 'зашифрована age' : 'НЕ зашифрована (BACKUP_AGE_RECIPIENT не задан, в архиве базы с клиентами: храните в закрытом чате)';
+    let sent = false;
+    if (r.bytes > MAX_SEND_BYTES) {
+      await this.hq.alert(`Резервная копия ${mb} МБ больше лимита Telegram (50 МБ), в чат не отправлена: лежит на сервере в data/backups (хранится 7 копий). Нужно внешнее хранилище.`);
+    } else if (!this.d.messenger.sendDocument) {
+      await this.hq.alert('Резервная копия сделана, но этот канал не умеет отправлять файлы: лежит на сервере в data/backups.');
+    } else {
+      try {
+        await this.d.messenger.sendDocument(this.d.ownerId, r.file, `Резервная копия HQ: ${r.databases.join(', ')}, ${mb} МБ, ${note}.`);
+        sent = true;
+      } catch (e) {
+        await this.hq.alert(`Резервная копия сделана (${mb} МБ), но не отправилась в Telegram: ${errMsg(e).slice(0, 150)}. Лежит на сервере в data/backups.`);
+      }
+    }
+    const text = `Резервная копия: ${r.databases.length} баз, ${mb} МБ, ${r.encrypted ? 'age' : 'без шифрования'}, ${sent ? 'отправлена владельцу' : 'не отправлена'}; старых удалено: ${r.removed.length}.`;
+    this.hq.complete(task.id, BACKOFFICE_HEAD_ID, text);
+  }
+
+  /** Night routine: render folders of items published or rejected more than 14 days ago are deleted. */
+  private async rendersCleanup(task: Task): Promise<void> {
+    const ops = this.d.ops;
+    if (!ops) return void this.hq.complete(task.id, BACKOFFICE_HEAD_ID, 'Очистка рендеров не подключена.');
+    const removed = cleanRenders({ db: this.hq.db, rendersDir: ops.rendersDir, now: this.hq.now() });
+    this.hq.complete(task.id, BACKOFFICE_HEAD_ID, `Рендеры: удалено папок ${removed.length}${removed.length ? ` (${removed.slice(0, 20).join(', ')})` : ''}.`);
   }
 
   /** Sunday routine: unexported lessons become one builder task; no lessons, no task. */

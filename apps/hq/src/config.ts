@@ -88,6 +88,8 @@ export interface Config extends BaseConfig {
   /** Client messages per chat per hour, and LLM answers per day for all chats. */
   clientRatePerHour: number;
   clientLlmDailyCap: number;
+  /** age public key (`age1...`) for the nightly backup sent to the owner; unset: sent unencrypted (the message says so). */
+  backupAgeRecipient: string | undefined;
 }
 
 function num(env: NodeJS.ProcessEnv, key: string, def: number, min: number, max: number): number {
@@ -172,9 +174,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     clientQuietHours: quietWindow(optional(env, 'CLIENT_QUIET_HOURS') ?? '22:00-08:00'),
     clientRatePerHour: Math.round(num(env, 'CLIENT_RATE_PER_HOUR', 20, 1, 1000)),
     clientLlmDailyCap: Math.round(num(env, 'CLIENT_LLM_DAILY_CAP', 300, 0, 100_000)),
+    backupAgeRecipient: backupRecipient(optional(env, 'BACKUP_AGE_RECIPIENT')),
     pricesUrl: optional(env, 'PRICES_URL') ?? DEFAULT_PRICES_URL,
     siteUrl: (optional(env, 'SITE_URL') ?? 'https://firtech.pro').replace(/\/$/, ''),
   };
+}
+
+/** An age public key (`age1` + bech32 characters), or undefined. A wrong value fails at start, not at three in the morning. */
+function backupRecipient(v: string | undefined): string | undefined {
+  if (v === undefined) return undefined;
+  if (!/^age1[0-9a-z]{50,}$/.test(v)) throw new Error('BACKUP_AGE_RECIPIENT must be an age public key (age1...), made with `age-keygen`');
+  return v;
 }
 
 /** "HH:mm-HH:mm" (or empty: never quiet), validated. */

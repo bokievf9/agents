@@ -2,7 +2,7 @@ import { ApprovalQueue, MemoryMessenger, MockLlm, openDb } from '@fir/core';
 import { Hq } from '@fir/hq';
 import { KbStore } from '@fir/worker-knowledge';
 import { PmStore } from '@fir/worker-project-manager';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -139,5 +139,59 @@ describe('Back Office head', () => {
     w.hq.runRoutine('backoffice-lessons-weekly');
     await w.head.onHeartbeat();
     expect(w.hq.tasks({ status: 'blocked' })).toHaveLength(1);
+  });
+});
+
+describe('Back Office housekeeping routines', () => {
+  const run = async (w: ReturnType<typeof world>, action: string) => {
+    const t = w.hq.createTask({ title: action, dept: 'backoffice', creator: 'routine', meta: { action } });
+    w.hq.wake('backoffice-head', 'schedule');
+    await w.head.onHeartbeat();
+    return w.hq.task(t.id)!;
+  };
+  const withOps = (ageRecipient?: string, exec?: (cmd: string, args: string[]) => Promise<unknown>) => {
+    const dir = mkdtempSync(join(tmpdir(), 'fir-ops-'));
+    const hq = openDb(join(dir, 'hq.db'));
+    hq.exec('CREATE TABLE t (x)');
+    hq.close();
+    const w = world();
+    const head = new BackofficeHead({
+      hq: w.hq, llm: new MockLlm(() => ''), queue: w.queue, messenger: w.messenger, ownerId: OWNER, reporter: new Reporter(undefined, {}, new Map()),
+      ops: { dataDir: dir, rendersDir: join(dir, 'renders'), ageRecipient, ...(exec ? { exec } : {}) },
+    });
+    return { ...w, head, dir };
+  };
+
+  it('backup: the archive goes to the owner as a document and says it is not encrypted without a key', async () => {
+    const w = withOps();
+    const t = await run(w, 'backup');
+    expect(t.status).toBe('done');
+    expect(w.messenger.documents).toHaveLength(1);
+    expect(w.messenger.documents[0]).toMatchObject({ chatId: OWNER });
+    expect(w.messenger.documents[0]!.file).toMatch(/hq-backup-.*\.tar\.gz$/);
+    expect(w.messenger.documents[0]!.caption).toContain('НЕ зашифрована');
+  });
+
+  it('backup too large for Telegram: not sent, the owner is alerted, the copy stays on the server', async () => {
+    const w = withOps(undefined, async (cmd, args) => {
+      if (cmd === 'tar') {
+        writeFileSync(args[1]!, '');
+        truncateSync(args[1]!, 60 * 1024 * 1024); // sparse 60 MB
+      }
+    });
+    const alerts: string[] = [];
+    w.hq.onAlert((a) => void alerts.push(a));
+    const t = await run(w, 'backup');
+    expect(t.status).toBe('done');
+    expect(t.result).toContain('не отправлена');
+    expect(w.messenger.documents).toHaveLength(0);
+    expect(alerts.join(' ')).toContain('больше лимита Telegram');
+  });
+
+  it('renders cleanup runs without an LLM and reports what it removed', async () => {
+    const w = withOps();
+    const t = await run(w, 'renders_cleanup');
+    expect(t.status).toBe('done');
+    expect(t.result).toContain('удалено папок 0');
   });
 });
