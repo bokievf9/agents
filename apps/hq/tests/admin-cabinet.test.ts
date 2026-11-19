@@ -220,10 +220,10 @@ describe('cabinet: POST /admin/clients/:id/tickets', () => {
 });
 
 describe('cabinet: rate limit is the shared admin one', () => {
-  it('600 requests per 10 minutes also count cabinet calls', async () => {
+  it('6000 requests per 10 minutes also count cabinet calls', async () => {
     const { admin } = setup();
     const req = { method: 'GET', path: '/admin/clients/by-email', query: new URLSearchParams('email=a%40b.co'), body: null };
-    for (let i = 0; i < 600; i++) expect((await admin.handle(req)).status).toBe(404);
+    for (let i = 0; i < 6000; i++) expect((await admin.handle(req)).status).toBe(404);
     expect((await admin.handle(req)).status).toBe(429);
   });
 });
