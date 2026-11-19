@@ -8,6 +8,7 @@ import { OnboardingWorker, obStoreFor, parseOnboardArgs } from '@fir/worker-onbo
 import type { Cron } from 'croner';
 import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
 import type { Reporter } from '../reporter.js';
+import { toolsFor, type AppTools } from '../tools.js';
 
 export const SUPPORT = 'support';
 export const SUPPORT_HEAD_ID = 'support-head';
@@ -54,6 +55,8 @@ export function seedSupport(hq: Hq, cfg: SupportSeedConfig, readInstructions: (f
 
 export interface SupportDeps {
   hq: Hq;
+  /** Adapters and keys of the agents' toolbox (`docs/tools.md`, `src/tools.ts`); absent (tests): a toolbox without keys. */
+  tools?: AppTools | undefined;
   llm: LlmClient;
   reporter: Reporter;
   monitor: MonitoringWorker;
@@ -154,10 +157,12 @@ export class SupportHead {
   }
 
   private ctx(task: Task): WorkerCtx {
+    const llm = meterLlm(this.d.llm, this.hq, { agentId: SUPPORT_HEAD_ID, taskId: task.id });
     return {
-      llm: meterLlm(this.d.llm, this.hq, { agentId: SUPPORT_HEAD_ID, taskId: task.id }), db: this.hq.db, tz: this.hq.tz, now: this.hq.now,
+      llm, db: this.hq.db, tz: this.hq.tz, now: this.hq.now,
       requestApproval: (kind, payload, summary) => this.hq.requestApproval(task.id, SUPPORT_HEAD_ID, kind, payload, summary),
       log: (action, detail) => this.hq.log(SUPPORT_HEAD_ID, action, 'task', String(task.id), detail),
+      tools: toolsFor(this.hq, this.d.tools, { agentId: SUPPORT_HEAD_ID, dept: SUPPORT, taskId: task.id, llm, messenger: this.d.messenger, ownerId: this.d.ownerId }),
     };
   }
 

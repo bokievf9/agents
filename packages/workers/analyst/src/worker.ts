@@ -1,8 +1,6 @@
-import { GOOGLE_HOSTS, errMsg, log, migrate, safeGetJson, tryJson, withPlaybook, zonedParts, type Db } from '@fir/core';
-import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
+import { GOOGLE_HOSTS, errMsg, log, migrate, safeGetJson, tryJson, withPlaybook, zonedParts, type Db, type Tools } from '@fir/core';
+import { toolsOf, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import { z } from 'zod';
-
-export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
 
 const DAY = 86_400_000;
 const SCHEMA = `
@@ -19,7 +17,6 @@ CREATE TABLE IF NOT EXISTS an_snapshots (
 export interface AnalystOptions {
   youtubeApiKey?: string | undefined;
   youtubeChannelId?: string | undefined;
-  fetch?: FetchFn;
   /** Owner access (refresh-token flow): channel stats of the channel behind the token and per-video stats of the week's Shorts. */
   oauth?: { accessToken(): Promise<string> };
   /** Instagram insights line for the week (the window in epoch ms and the HQ day); wired by the Marketing head when the Graph API is set up. */
@@ -59,11 +56,12 @@ const hasColumn = (db: Db, table: string, col: string): boolean => (db.prepare(`
 /** Sales tables the prospector may use; the first that exists with a `status` column becomes the funnel. */
 export const FUNNEL_TABLES = ['pr_prospects', 'prospects', 'pr_cards'];
 
-export async function fetchYoutubeStats(fetchFn: FetchFn, key: string, channelId: string): Promise<YtStats> {
+/** Channel statistics by API key, through the toolbox (Google hosts only, pinned DNS, retries on 5xx). */
+export async function fetchYoutubeStats(tools: Tools, key: string, channelId: string): Promise<YtStats> {
   const url = `https://www.googleapis.com/youtube/v3/channels?part=statistics&id=${encodeURIComponent(channelId)}&key=${encodeURIComponent(key)}`;
-  const res = await fetchFn(url, { signal: AbortSignal.timeout(10_000) });
-  if (!res.ok) throw new Error(`YouTube HTTP ${res.status}`);
-  const s = ((await res.json()) as { items?: { statistics?: { subscriberCount?: string; viewCount?: string; videoCount?: string } }[] }).items?.[0]?.statistics;
+  const res = await tools.web.getJson(url, { hosts: GOOGLE_HOSTS, timeoutMs: 10_000 });
+  if (!res.ok) throw new Error(`YouTube HTTP ${res.status ?? res.error}`);
+  const s = ((res.value) as { items?: { statistics?: { subscriberCount?: string; viewCount?: string; videoCount?: string } }[] }).items?.[0]?.statistics;
   if (!s) throw new Error('YouTube: канал не найден (проверьте YOUTUBE_CHANNEL_ID)');
   return { subscribers: Number(s.subscriberCount ?? 0), views: Number(s.viewCount ?? 0), videos: Number(s.videoCount ?? 0) };
 }
@@ -205,11 +203,9 @@ export function fallbackRecommendations(n: WeekNumbers): string[] {
  */
 export class AnalystWorker implements Worker {
   readonly id = 'analyst';
-  private readonly fetchFn: FetchFn;
 
-  constructor(private readonly opts: AnalystOptions = {}) {
-    this.fetchFn = opts.fetch ?? ((url, init) => fetch(url, init));
-  }
+  /** The API-key path goes through `ctx.tools`; the owner's OAuth path keeps `safeGetJson` (or the injected `get`). */
+  constructor(private readonly opts: AnalystOptions = {}) {}
 
   async run(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
     if (task.meta.action !== 'report') return { ok: false, result: '', error: `Неизвестное действие: ${String(task.meta.action)}` };
@@ -231,7 +227,7 @@ export class AnalystWorker implements Worker {
     }
     if (!yt && this.opts.youtubeApiKey && this.opts.youtubeChannelId) {
       try {
-        yt = await fetchYoutubeStats(this.fetchFn, this.opts.youtubeApiKey, this.opts.youtubeChannelId);
+        yt = await fetchYoutubeStats(toolsOf(ctx, 'marketing', this.id), this.opts.youtubeApiKey, this.opts.youtubeChannelId);
       } catch (e) {
         note = `YouTube: ${errMsg(e).replace(this.opts.youtubeApiKey, '***')}`;
         log('warn', 'analyst: youtube failed', { err: note });

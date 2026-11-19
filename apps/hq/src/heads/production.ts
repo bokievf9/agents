@@ -7,6 +7,7 @@ import {
 } from '@fir/worker-project-manager';
 import { branchRef, REVIEW_LABEL, ReviewerWorker, reviewRequest } from '@fir/worker-reviewer';
 import type { Reporter } from '../reporter.js';
+import { toolsFor, type AppTools } from '../tools.js';
 
 export const PRODUCTION = 'production';
 export const PRODUCTION_HEAD_ID = 'production-head';
@@ -34,6 +35,8 @@ export function seedProduction(hq: Hq, cfg: ProductionSeedConfig, readInstructio
 
 export interface ProductionDeps {
   hq: Hq;
+  /** Adapters and keys of the agents' toolbox (`docs/tools.md`, `src/tools.ts`); absent (tests): a toolbox without keys. */
+  tools?: AppTools | undefined;
   llm: LlmClient;
   queue: ApprovalQueue;
   messenger: Messenger;
@@ -192,10 +195,12 @@ export class ProductionHead {
   }
 
   private ctx(task: Task, staged: Staged[], actor: string): WorkerCtx {
+    const llm = this.llmFor(actor, task.id);
     return {
-      llm: this.llmFor(actor, task.id), db: this.hq.db, tz: this.hq.tz, now: this.hq.now,
+      llm, db: this.hq.db, tz: this.hq.tz, now: this.hq.now,
       requestApproval: (kind, payload, summary) => Promise.resolve(staged.push({ kind, payload, summary }) - 1),
       log: (action, detail) => this.hq.log(actor, action, 'task', String(task.id), detail),
+      tools: toolsFor(this.hq, this.d.tools, { agentId: actor, dept: PRODUCTION, taskId: task.id, llm, messenger: this.d.messenger, ownerId: this.d.ownerId }),
     };
   }
 

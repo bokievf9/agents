@@ -17,6 +17,7 @@ import { ClientBlockedError, type ClientChannel } from '../client/channel.js';
 import type { ApprovalEditor } from '../editor.js';
 import type { LostLeads } from '../lost-leads.js';
 import type { Reporter } from '../reporter.js';
+import { toolsFor, type AppTools } from '../tools.js';
 
 export const MARKETING = 'marketing';
 /**
@@ -30,6 +31,8 @@ const WORKER_ID = 'content-maker';
 
 export interface MarketingDeps {
   hq: Hq;
+  /** Adapters and keys of the agents' toolbox (`docs/tools.md`, `src/tools.ts`); absent (tests): a toolbox without keys. */
+  tools?: AppTools | undefined;
   llm: LlmClient;
   queue: ApprovalQueue;
   messenger: Messenger;
@@ -150,10 +153,20 @@ export class MarketingHead implements ApprovalEditor {
   /** Video render jobs (shared SQLite, the `renderer` service claims them). */
   readonly renderQueue: RenderQueue;
 
+  /** The toolbox adapters of the workers' runs: the app's, or (tests, scripts) one built from the integrations with their fake network. */
+  private readonly appTools: AppTools;
+
   constructor(private readonly d: MarketingDeps) {
     const i = d.integrations ?? {};
     const net = i.fetch ? { fetch: i.fetch } : {};
-    this.trendScout = d.trendScout ?? new TrendScoutWorker({ youtubeApiKey: i.youtubeApiKey, regions: i.trendsRegions ?? ['KZ', 'UZ', 'RU'], ...net });
+    this.appTools = d.tools ?? {
+      config: {
+        gscServiceAccountJson: i.gscServiceAccountJson, gscSiteUrl: i.gscSiteUrl, youtubeApiKey: i.youtubeApiKey, youtubeChannelId: i.youtubeChannelId,
+        ytOauthClientJson: i.ytOauthClientJson, ytRefreshToken: i.ytRefreshToken, mediaSecret: i.mediaSecret, mediaBase: i.igPublicBase, rendersDir: d.rendersDir,
+      },
+      ...(i.fetch ? { fetch: i.fetch, sleep: () => Promise.resolve() } : {}),
+    };
+    this.trendScout = d.trendScout ?? new TrendScoutWorker({ youtubeApiKey: i.youtubeApiKey, regions: i.trendsRegions ?? ['KZ', 'UZ', 'RU'] });
     this.renderQueue = new RenderQueue(d.hq.db, d.hq.now);
     const yt = youtubeAuth(i);
     const pstore = new PublishStore(d.hq.db);
@@ -168,8 +181,9 @@ export class MarketingHead implements ApprovalEditor {
       render: (itemId) => this.renderedClip(itemId), renderNote: (itemId) => this.reelNote(itemId),
       ...(posters.length ? { posters } : {}),
     });
-    this.seo = d.seo ?? new SeoWorker({ ...(i.siteUrl ? { siteUrl: i.siteUrl } : {}), gscServiceAccountJson: i.gscServiceAccountJson, gscSiteUrl: i.gscSiteUrl, ...net });
-    this.analyst = d.analyst ?? new AnalystWorker({ youtubeApiKey: i.youtubeApiKey, youtubeChannelId: i.youtubeChannelId, ...(yt ? { oauth: yt } : {}), ...(ig && i.igUserId ? { instagramLine: (w: { fromMs: number; toMs: number; day: string }) => instagramWeekLine({ api: ig, userId: i.igUserId!, store: pstore }, w) } : {}), ...net });
+    // the site check and Search Console go through `ctx.tools`; `fetch` here is only the free audit's network (tests)
+    this.seo = d.seo ?? new SeoWorker({ ...(i.siteUrl ? { siteUrl: i.siteUrl } : {}), ...net });
+    this.analyst = d.analyst ?? new AnalystWorker({ youtubeApiKey: i.youtubeApiKey, youtubeChannelId: i.youtubeChannelId, ...(yt ? { oauth: yt } : {}), ...(ig && i.igUserId ? { instagramLine: (w: { fromMs: number; toMs: number; day: string }) => instagramWeekLine({ api: ig, userId: i.igUserId!, store: pstore }, w) } : {}) });
     this.worker =
       d.worker ??
       new ContentMakerWorker({
@@ -621,10 +635,12 @@ export class MarketingHead implements ApprovalEditor {
 
   // ---- worker run, review, one rework, approval ----
   private ctx(task: Task, staged: { kind: string; payload: Record<string, unknown>; summary: string }[], actor: string): WorkerCtx {
+    const llm = this.llmFor(actor, task.id);
     return {
-      llm: this.llmFor(actor, task.id), db: this.hq.db, tz: this.hq.tz, now: this.hq.now,
+      llm, db: this.hq.db, tz: this.hq.tz, now: this.hq.now,
       requestApproval: (kind, payload, summary) => Promise.resolve(staged.push({ kind, payload, summary }) - 1),
       log: (action, detail) => this.hq.log(actor, action, 'task', String(task.id), detail),
+      tools: toolsFor(this.hq, this.appTools, { agentId: actor, dept: MARKETING, taskId: task.id, llm, messenger: this.d.messenger, ownerId: this.d.ownerId }),
     };
   }
 

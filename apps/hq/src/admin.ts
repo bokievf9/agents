@@ -10,6 +10,7 @@ import type { MarketingHead } from './heads/marketing.js';
 import { buildOffice } from './office.js';
 import type { OwnerChannel } from './presence.js';
 import { mask } from './progress.js';
+import type { AppTools } from './tools.js';
 
 /** The owner's private control API (`/admin/*`): the website workplace. Contract and routes: README «Admin API и присутствие». */
 export interface AdminDeps {
@@ -34,6 +35,8 @@ export interface AdminDeps {
   rendersDir?: string;
   /** A routine was switched on or off from the workplace: the app restarts its cron jobs. */
   onRoutinesChange?: () => void;
+  /** The agents' toolbox adapters and keys: `GET /admin/company` lists the tools with their state. */
+  tools?: AppTools;
 }
 
 export interface AdminRequest {
@@ -79,7 +82,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));
   const pult = createPult({
     hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply,
-    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange,
+    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange, tools: d.tools,
   });
 
   const maxTaskId = () => (hq.db.prepare('SELECT COALESCE(MAX(id), 0) m FROM tasks').get() as { m: number }).m;

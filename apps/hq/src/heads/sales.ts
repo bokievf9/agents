@@ -24,6 +24,7 @@ import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
 import type { ApprovalEditor } from '../editor.js';
 import type { LostLeads } from '../lost-leads.js';
 import type { Reporter } from '../reporter.js';
+import { toolsFor, type AppTools } from '../tools.js';
 
 export const SALES = 'sales';
 export const HEAD_ID = 'sales-head';
@@ -36,6 +37,8 @@ const AWAIT_KEY = 'sales_await_reply';
 
 export interface SalesDeps {
   hq: Hq;
+  /** Adapters and keys of the agents' toolbox (`docs/tools.md`, `src/tools.ts`); absent (tests): a toolbox without keys. */
+  tools?: AppTools | undefined;
   llm: LlmClient;
   queue: ApprovalQueue;
   messenger: Messenger;
@@ -327,10 +330,12 @@ export class SalesHead implements ApprovalEditor {
 
   // ---- worker run, review (leads), approvals ----
   private ctx(task: Task, staged: Staged[], actor: string): WorkerCtx {
+    const llm = this.llmFor(actor, task.id);
     return {
-      llm: this.llmFor(actor, task.id), db: this.hq.db, tz: this.hq.tz, now: this.hq.now,
+      llm, db: this.hq.db, tz: this.hq.tz, now: this.hq.now,
       requestApproval: (kind, payload, summary) => Promise.resolve(staged.push({ kind, payload, summary }) - 1),
       log: (action, detail) => this.hq.log(actor, action, 'task', String(task.id), detail),
+      tools: toolsFor(this.hq, this.d.tools, { agentId: actor, dept: SALES, taskId: task.id, llm, messenger: this.d.messenger, ownerId: this.d.ownerId }),
     };
   }
 

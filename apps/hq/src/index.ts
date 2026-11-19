@@ -44,6 +44,7 @@ import { clientSinks } from './client/sinks.js';
 import { gatewayGate } from './client/shared.js';
 import { DIRECTOR_COMMANDS, DIRECTOR_PROFILE, deptBotMenu, menuCommand } from './tg.js';
 import { COMMAND_NAMES, routedTo } from './commands.js';
+import { appTools } from './tools.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
@@ -109,6 +110,8 @@ for (const [dept, token] of [[MARKETING, cfg.marketingBotToken], [SUPPORT, cfg.s
 const reporter = new Reporter(() => topicManager.groupId(), () => topicManager.topics(), senders, topicSender(bot.api));
 
 const director = new Director({ hq, llm, messenger, queue, ownerId: cfg.ownerId, reporter });
+// The agents' toolbox (docs/tools.md): keys from the config and the app's adapters; every head gives each worker run its own `ctx.tools`.
+const tools = appTools(hq, llm, cfg);
 
 // The public client bot (@firtech_bot): only with CLIENT_BOT_TOKEN. The heads deliver approved client texts through it.
 const readClientInstructions = (): string => {
@@ -128,7 +131,7 @@ const clientBot = cfg.clientBotToken
     })
   : null;
 const marketing = new MarketingHead({
-  hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, clipsPerWeek: cfg.clipsPerWeek, carouselsPerWeek: cfg.carouselsPerWeek,
+  hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter, clipsPerWeek: cfg.clipsPerWeek, carouselsPerWeek: cfg.carouselsPerWeek,
   postsPerWeek: cfg.postsPerWeek, storiesPerWeek: cfg.storiesPerWeek, rendersDir: cfg.rendersDir, renderReels: cfg.renderReels,
   ...(clientBot ? { audit: clientBot.engine } : {}), lost,
   integrations: {
@@ -151,14 +154,14 @@ const payWatch = new PaymentWatcher({
   tolerancePct: cfg.payTolerancePct,
 });
 const support = new SupportHead({
-  hq, llm, reporter, monitor, finance: new FinanceWorker({ fixedCosts: cfg.fixedCostsUsdMonth }),
+  hq, tools, llm, reporter, monitor, finance: new FinanceWorker({ fixedCosts: cfg.fixedCostsUsdMonth }),
   cs: new CustomerSupportWorker({ slaHours: cfg.supportSlaHours }),
   billing, payWatch,
   onboarding: new OnboardingWorker(), messenger, ownerId: cfg.ownerId, ...(clientBot ? { client: clientBot } : {}),
 });
 director.onSupportCommand = (name, args) => support.onCommand(name, args);
 const sales = new SalesHead({
-  hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel,
+  hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel,
   referralReward: cfg.referralReward, prepaymentPercent: cfg.prepaymentPercent, kpValidDays: cfg.kpValidDays,
   ...(clientBot ? { client: clientBot } : {}), lost,
 });
@@ -167,11 +170,11 @@ clientBot?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoiceP
 director.onSalesReply = (id, text) => sales.startReply(id, text);
 director.onSalesCommand = (name, arg) => sales.salesCommand(name, arg);
 director.editors.set('sales:reply', sales); // the owner's text after /reply <id>
-const production = new ProductionHead({ hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter });
+const production = new ProductionHead({ hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter });
 // The first payment of a КП starts the project (reserved by the approved КП) and asks the referral payout; `/paid` and later the on-chain check land here.
 support.onPaid = async (inv) => [...production.onInvoicePaid(inv), ...(await sales.onInvoicePaid(inv))];
 const backoffice = new BackofficeHead({
-  hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, knowledgeDir: cfg.knowledgeDir,
+  hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter, knowledgeDir: cfg.knowledgeDir,
   ops: { dataDir: cfg.dataDir, rendersDir: cfg.rendersDir, ageRecipient: cfg.backupAgeRecipient },
 });
 for (const name of routedTo('production')) director.commands.set(name, { dept: 'production', run: (arg) => production.command(name, arg) });
@@ -369,7 +372,7 @@ webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePre
 
 const admin = cfg.adminToken
   ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: botCommands, drill: (arg) => drill.command(arg), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),
-      billing, marketing, rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
+      billing, marketing, tools, rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
     })
   : null;
 // Presence: the site pings while it is open; without pings the owner counts as away and a digest goes to Telegram.

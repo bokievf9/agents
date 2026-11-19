@@ -44,7 +44,7 @@ describe('GET /admin/content', () => {
     expect(all).toHaveLength(17);
     expect(r.json.summary).toMatchObject({ pending: 17, approved: 0, published: 0, rendering: 0 });
     for (const it of all) {
-      expect(Object.keys(it).sort()).toEqual(['approvalId', 'caption', 'error', 'files', 'hook', 'id', 'igCaption', 'kind', 'platform', 'publishedOn', 'publishedUrl', 'sourceSlug', 'status', 'title']);
+      expect(Object.keys(it).sort()).toEqual(['approvalId', 'caption', 'error', 'files', 'hook', 'id', 'igCaption', 'kind', 'macQueued', 'platform', 'publishedOn', 'publishedUrl', 'sourceSlug', 'status', 'title']);
       expect(['clip', 'post', 'carousel', 'story']).toContain(it.kind);
       expect(it.status).toBe('pending');
       expect(it.files).toEqual([]);

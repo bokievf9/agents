@@ -1,5 +1,5 @@
 import { Cron } from 'croner';
-import { zonedParts, zonedToMs, type ApprovalQueue } from '@fir/core';
+import { toolCatalog, zonedParts, zonedToMs, type ApprovalQueue } from '@fir/core';
 import type { Hq, Routine } from '@fir/hq';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
@@ -7,6 +7,7 @@ import type { Director } from './director.js';
 import { buildOffice } from './office.js';
 import { fail, ok } from './pult-crm.js';
 import { todayIn } from './pult-week.js';
+import type { AppTools } from './tools.js';
 
 /** `GET /admin/company` and its three writes (routines on/off, run now, trust level). Contract: `docs/admin-crm-api.md` («Пульт v3»). */
 export interface PultCompanyDeps {
@@ -16,6 +17,8 @@ export interface PultCompanyDeps {
   now: () => number;
   /** The routine list or a switch changed: the app restarts its cron jobs (`director.onTimingChange`). */
   onRoutinesChange?: (() => void) | undefined;
+  /** The agents' toolbox adapters and keys: decides `configured` of each tool. */
+  tools?: AppTools | undefined;
 }
 
 const DAY = 86_400_000;
@@ -80,6 +83,13 @@ export function createCompany(d: PultCompanyDeps) {
       // TODO(playbooks): fill from the knowledge package (`loadPlaybook`, role, updatedAt, line count) when another builder adds it; empty until then
       playbooks: [] as { role: string; updatedAt: string | null; lines: number }[],
       workers: office.departments.flatMap((dep) => dep.workers.map((w) => ({ id: w.id, dept: dep.id, title: w.title, state: w.status }))),
+      // the agents' toolbox (docs/tools.md): rights by department, set up or not (never a key), today's calls and errors, limits
+      tools: toolCatalog({
+        journal: hq, db, now, tz: hq.tz, config: d.tools?.config ?? {}, ...(d.tools?.renderPng ? { renderPng: d.tools.renderPng } : {}), ...(d.tools?.crm ? { crm: d.tools.crm } : {}), ...(d.tools?.llm ? { llm: d.tools.llm } : {}),
+        // the heads always pass their bot to `telegram.*`; the listing says so through a stand-in
+        messenger: { send: () => Promise.resolve(), sendMessage: () => Promise.resolve(0), edit: () => Promise.resolve(), editButtons: () => Promise.resolve(), sendDocument: () => Promise.resolve(), sendPhotos: () => Promise.resolve() },
+        ownerId: 1,
+      }).map((t) => ({ name: t.name, departments: t.departments, configured: t.configured, callsToday: t.callsToday, errorsToday: t.errorsToday, limits: t.limits, env: t.env })),
     });
   }
 

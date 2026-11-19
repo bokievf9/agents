@@ -2,6 +2,7 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createTools } from '@fir/core';
 import { storeFor } from '@fir/worker-content-maker';
 import { describe, expect, it } from 'vitest';
 import { pultWorld, type PultWorld } from './pult-helpers.js';
@@ -88,5 +89,24 @@ describe('the Mac helper reports through POST /admin/content/:id', () => {
     const texts = p.w.messenger.sent.map((m) => m.text);
     expect(texts.some((t) => t.includes('Instagram с Мака: опубликовано 1, ошибок 1.'))).toBe(true);
     expect(texts.some((t) => t.includes('Instagram с Мака не получилось (кнопка «Поделиться» не найдена). Публикуйте вручную.'))).toBe(true);
+  });
+
+  it('the queue an agent fills (tools.mac.poster.enqueue): ?queued=1 lists it, the report settles it', async () => {
+    const { p, day } = await monday();
+    const post = day.find((d) => d.kind === 'post');
+    const tools = createTools({ agentId: 'publisher', dept: 'marketing', db: p.w.db, journal: p.w.hq, now: p.w.hq.now });
+    expect(await tools.mac.poster.enqueue(post.id, 'instagram')).toMatchObject({ ok: true, value: { already: false } });
+    let r = await p.call('GET', `/admin/content?week=${WEEK}&queued=1`);
+    const listed = r.json.days.flatMap((d: any) => d.items);
+    expect(listed.map((i: any) => i.id)).toEqual([post.id]);
+    expect(listed[0].macQueued).toEqual(['instagram']);
+    expect(r.json.queuedItems.map((i: any) => i.id)).toEqual([post.id]);
+    expect((await p.call('GET', '/admin/content?week=2026-W47&queued=1')).json.queuedItems.map((i: any) => i.id)).toEqual([post.id]); // any week
+    expect((await p.call('GET', `/admin/content?week=${WEEK}`)).json.days.flatMap((d: any) => d.items).length).toBeGreaterThan(1);
+    await p.call('POST', `/admin/content/${post.id}`, { action: 'published', platform: 'instagram', url: 'https://www.instagram.com/p/Q1/' });
+    r = await p.call('GET', `/admin/content?week=${WEEK}&queued=1`);
+    expect(r.json.queuedItems).toEqual([]);
+    expect(p.w.db.prepare("SELECT status FROM mac_queue WHERE item_id = ?").get(post.id)).toEqual({ status: 'done' });
+    expect(p.w.db.prepare("SELECT COUNT(*) n FROM activity WHERE action = 'tool:mac.poster.enqueue'").get()).toEqual({ n: 1 });
   });
 });

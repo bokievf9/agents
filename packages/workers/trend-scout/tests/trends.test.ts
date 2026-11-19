@@ -1,4 +1,4 @@
-import { MockLlm, OffLlm, openDb, type LlmClient, type LlmRequest } from '@fir/core';
+import { HostQueue, MockLlm, OffLlm, createTools, openDb, type LlmClient, type LlmRequest, type ToolFetch } from '@fir/core';
 import type { Task, WorkerCtx } from '@fir/hq';
 import { describe, expect, it } from 'vitest';
 import { parseTrendsRss } from '../src/sources.js';
@@ -32,10 +32,12 @@ function fakeFetch(opts: { youtube?: 'ok' | 'fail'; trends?: 'ok' | 'fail' } = {
   return { fn, calls };
 }
 
-function setup(llm: LlmClient, scout: TrendScoutWorker) {
+function setup(llm: LlmClient, scout: TrendScoutWorker, fetch: ToolFetch = fakeFetch().fn) {
   const db = openDb(':memory:');
   const clock = { t: NOW };
-  const ctx: WorkerCtx = { llm, db, tz: 'Asia/Tashkent', now: () => clock.t, requestApproval: () => Promise.resolve(0), log: () => undefined };
+  // the network is the toolbox's: the fake fetch goes into createTools, no DNS, no real waits
+  const tools = createTools({ agentId: 'trend-scout', dept: 'marketing', db, now: () => clock.t, fetch, sleep: () => Promise.resolve(), queue: new HostQueue(() => clock.t, () => Promise.resolve()) });
+  const ctx: WorkerCtx = { llm, db, tz: 'Asia/Tashkent', now: () => clock.t, requestApproval: () => Promise.resolve(0), log: () => undefined, tools };
   const task = (meta: Record<string, unknown>): Task => ({
     id: 1, title: 't', body: '', dept: 'marketing', assigneeId: null, creator: 'routine', parentId: null, status: 'running', priority: 0,
     dueAt: null, result: null, costUsd: 0, meta, tags: [], routineId: null, createdAt: 0, updatedAt: 0,
@@ -59,8 +61,8 @@ describe('parseTrendsRss', () => {
 describe('Trend scout: daily', () => {
   it('collects Google Trends and YouTube, asks the model for five items, stores them with the source link', async () => {
     const { fn, calls } = fakeFetch();
-    const scout = new TrendScoutWorker({ youtubeApiKey: 'KEY123', regions: ['KZ', 'UZ'], fetch: fn });
-    const t = setup(pickLlm([pick(1), pick(3, { direction: 'content' }), pick(2, { direction: null }), pick(99), pick(1)]), scout);
+    const scout = new TrendScoutWorker({ youtubeApiKey: 'KEY123', regions: ['KZ', 'UZ'] });
+    const t = setup(pickLlm([pick(1), pick(3, { direction: 'content' }), pick(2, { direction: null }), pick(99), pick(1)]), scout, fn);
     const res = await t.scoutRun({ action: 'trends' });
     expect(res.ok).toBe(true);
     const items = trendStoreFor(t.ctx).latest('2026-11-19');
@@ -77,7 +79,7 @@ describe('Trend scout: daily', () => {
 
   it('without a YouTube key only Google Trends is read; the note says so', async () => {
     const { fn, calls } = fakeFetch();
-    const t = setup(pickLlm([pick(1)]), new TrendScoutWorker({ regions: ['KZ'], fetch: fn }));
+    const t = setup(pickLlm([pick(1)]), new TrendScoutWorker({ regions: ['KZ'] }), fn);
     const res = await t.scoutRun({ action: 'trends' });
     expect(res.ok).toBe(true);
     expect(calls.some((u) => u.includes('googleapis.com'))).toBe(false);
@@ -87,7 +89,7 @@ describe('Trend scout: daily', () => {
 
   it('a failing source is a note, not a crash, and the API key never appears in the text', async () => {
     const { fn } = fakeFetch({ youtube: 'fail' });
-    const t = setup(pickLlm([pick(1)]), new TrendScoutWorker({ youtubeApiKey: 'SECRETKEY', regions: ['RU'], fetch: fn }));
+    const t = setup(pickLlm([pick(1)]), new TrendScoutWorker({ youtubeApiKey: 'SECRETKEY', regions: ['RU'] }), fn);
     const res = await t.scoutRun({ action: 'trends' });
     expect(res.ok).toBe(true);
     expect(res.result).toContain('YouTube: HTTP 403');
@@ -96,17 +98,17 @@ describe('Trend scout: daily', () => {
 
   it('no data at all, LLM off, empty regions and garbage answers fail cleanly', async () => {
     const down = fakeFetch({ trends: 'fail' }).fn;
-    expect((await setup(pickLlm([pick(1)]), new TrendScoutWorker({ regions: ['KZ'], fetch: down })).scoutRun({ action: 'trends' })).error).toContain('Источники не дали данных');
-    expect((await setup(new OffLlm(), new TrendScoutWorker({ regions: ['KZ'], fetch: fakeFetch().fn })).scoutRun({ action: 'trends' })).error).toContain('LLM off');
-    expect((await setup(pickLlm([pick(1)]), new TrendScoutWorker({ regions: [], fetch: fakeFetch().fn })).scoutRun({ action: 'trends' })).ok).toBe(false);
-    expect((await setup(new MockLlm(() => 'не json'), new TrendScoutWorker({ regions: ['KZ'], fetch: fakeFetch().fn })).scoutRun({ action: 'trends' })).error).toContain('не дала валидный');
-    expect((await setup(pickLlm([pick(1)]), new TrendScoutWorker({ regions: ['KZ'], fetch: fakeFetch().fn })).scoutRun({ action: 'wat' })).ok).toBe(false);
+    expect((await setup(pickLlm([pick(1)]), new TrendScoutWorker({ regions: ['KZ'] }), down).scoutRun({ action: 'trends' })).error).toContain('Источники не дали данных');
+    expect((await setup(new OffLlm(), new TrendScoutWorker({ regions: ['KZ'] }), fakeFetch().fn).scoutRun({ action: 'trends' })).error).toContain('LLM off');
+    expect((await setup(pickLlm([pick(1)]), new TrendScoutWorker({ regions: [] }), fakeFetch().fn).scoutRun({ action: 'trends' })).ok).toBe(false);
+    expect((await setup(new MockLlm(() => 'не json'), new TrendScoutWorker({ regions: ['KZ'] }), fakeFetch().fn).scoutRun({ action: 'trends' })).error).toContain('не дала валидный');
+    expect((await setup(pickLlm([pick(1)]), new TrendScoutWorker({ regions: ['KZ'] }), fakeFetch().fn).scoutRun({ action: 'wat' })).ok).toBe(false);
   });
 
   it('a second run the same day reuses the stored items unless forced', async () => {
     const { fn, calls } = fakeFetch();
     const llm = pickLlm([pick(1)]);
-    const t = setup(llm, new TrendScoutWorker({ regions: ['KZ'], fetch: fn }));
+    const t = setup(llm, new TrendScoutWorker({ regions: ['KZ'] }), fn);
     await t.scoutRun({ action: 'trends' });
     const n = calls.length;
     const again = await t.scoutRun({ action: 'trends' });
@@ -119,7 +121,7 @@ describe('Trend scout: daily', () => {
 
 describe('Trend scout: weekly and the content-maker hook', () => {
   it('latestTrendHints returns the newest day (not older than a week) in the shape the content-maker takes', async () => {
-    const t = setup(pickLlm([pick(1), pick(2, { direction: null })]), new TrendScoutWorker({ regions: ['KZ'], fetch: fakeFetch().fn }));
+    const t = setup(pickLlm([pick(1), pick(2, { direction: null })]), new TrendScoutWorker({ regions: ['KZ'] }), fakeFetch().fn);
     await t.scoutRun({ action: 'trends' });
     expect(latestTrendHints(t.ctx)).toEqual([
       { hook: 'Хук номер 1', format: 'клип 30 с с субтитрами', why: 'быстро растёт охват', direction: 'admin' },
@@ -130,13 +132,13 @@ describe('Trend scout: weekly and the content-maker hook', () => {
   });
 
   it('the Sunday digest summarizes the stored week; an empty week says so; the model off falls back to the list', async () => {
-    const t = setup(pickLlm([pick(1)]), new TrendScoutWorker({ regions: ['KZ'], fetch: fakeFetch().fn }));
+    const t = setup(pickLlm([pick(1)]), new TrendScoutWorker({ regions: ['KZ'] }), fakeFetch().fn);
     expect((await t.scoutRun({ action: 'trends_weekly' })).result).toContain('данных нет');
     await t.scoutRun({ action: 'trends' });
     const weekly = await t.scoutRun({ action: 'trends_weekly' });
     expect(weekly.result).toContain('Тренды ниши за неделю 2026-11-13 - 2026-11-19');
     expect(weekly.result).toContain('- Растут ролики про агентов');
-    const off = setup(new OffLlm(), new TrendScoutWorker({ regions: ['KZ'], fetch: fakeFetch().fn }));
+    const off = setup(new OffLlm(), new TrendScoutWorker({ regions: ['KZ'] }), fakeFetch().fn);
     trendStoreFor(off.ctx).saveDay('2026-11-18', [{ hook: 'Хук', format: 'формат', why: 'почему', source: 'youtube', url: 'u', direction: null }]);
     expect((await off.scoutRun({ action: 'trends_weekly' })).result).toContain('- Хук (формат)');
   });

@@ -8,6 +8,7 @@ import { fmtDate, PmStore } from '@fir/worker-project-manager';
 import type { Reporter } from '../reporter.js';
 import { makeBackup, MAX_SEND_BYTES } from '../backup.js';
 import { cleanRenders } from '../housekeeping.js';
+import { toolsFor, type AppTools } from '../tools.js';
 
 export const BACKOFFICE = 'backoffice';
 export const BACKOFFICE_HEAD_ID = 'backoffice-head';
@@ -35,6 +36,8 @@ export function seedBackoffice(hq: Hq, cfg: BackofficeSeedConfig, readInstructio
 
 export interface BackofficeDeps {
   hq: Hq;
+  /** Adapters and keys of the agents' toolbox (`docs/tools.md`, `src/tools.ts`); absent (tests): a toolbox without keys. */
+  tools?: AppTools | undefined;
   llm: LlmClient;
   queue: ApprovalQueue;
   messenger: Messenger;
@@ -173,10 +176,12 @@ export class BackofficeHead {
   }
 
   private ctx(task: Task, staged: Staged[], actor: string): WorkerCtx {
+    const llm = this.llmFor(actor, task.id);
     return {
-      llm: this.llmFor(actor, task.id), db: this.hq.db, tz: this.hq.tz, now: this.hq.now,
+      llm, db: this.hq.db, tz: this.hq.tz, now: this.hq.now,
       requestApproval: (kind, payload, summary) => Promise.resolve(staged.push({ kind, payload, summary }) - 1),
       log: (action, detail) => this.hq.log(actor, action, 'task', String(task.id), detail),
+      tools: toolsFor(this.hq, this.d.tools, { agentId: actor, dept: BACKOFFICE, taskId: task.id, llm, messenger: this.d.messenger, ownerId: this.d.ownerId }),
     };
   }
 

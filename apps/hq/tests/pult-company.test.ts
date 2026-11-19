@@ -5,10 +5,41 @@ import { seedOrg } from '../src/org.js';
 import { AGENT_STATUSES } from '../src/office.js';
 import { instructionsDir } from './helpers.js';
 import { pultWorld, serve } from './pult-helpers.js';
+import { TOOL_POLICY, createTools } from '@fir/core';
+import { appTools } from '../src/tools.js';
 
 const DAY = 86_400_000;
 
 describe('GET /admin/company', () => {
+  it('tools: every tool with departments, set-up state (never a key), today\'s calls and errors, limits', async () => {
+    const plain = pultWorld();
+    const none = (await plain.call('GET', '/admin/company')).json.tools as any[];
+    expect(none).toHaveLength(TOOL_POLICY.length);
+    for (const t of none) expect(Object.keys(t).sort()).toEqual(['callsToday', 'configured', 'departments', 'env', 'errorsToday', 'limits', 'name']);
+    expect(none.find((t) => t.name === 'email.send').configured).toBe(false);
+
+    const app = appTools(plain.w.hq, { enabled: true, complete: () => Promise.resolve('') }, {
+      dataDir: '/tmp/x', rendersDir: '/tmp/x/renders', knowledgeDir: undefined, mediaSecret: 'm', igPublicBase: 'https://hq.example/media', braveSearchKey: 'BRAVE-SECRET', resendApiKey: 'RESEND-SECRET',
+      emailFrom: 'a@b.co', gscServiceAccountJson: undefined, gscSiteUrl: undefined, youtubeApiKey: undefined, youtubeChannelId: undefined, ytOauthClientJson: undefined, ytRefreshToken: undefined, trongridApiKey: undefined, toncenterApiKey: undefined,
+    });
+    const p = pultWorld({ admin: { tools: app } });
+    const t = createTools({ agentId: 'content-maker', dept: 'marketing', journal: p.w.hq, db: p.w.db, now: p.w.hq.now, tz: p.w.hq.tz });
+    await t.media.qr('x'); // not allowed for marketing: one call, one error
+    await t.cache.set('k', 1, 1000);
+    const r = await p.call('GET', '/admin/company');
+    const by = Object.fromEntries((r.json.tools as any[]).map((x) => [x.name, x]));
+    expect(by['media.qr']).toMatchObject({ callsToday: 1, errorsToday: 1, departments: ['sales', 'support', 'backoffice'] });
+    expect(by['cache.set']).toMatchObject({ callsToday: 1, errorsToday: 0 });
+    expect(by['email.send'].configured).toBe(true);
+    expect(by['files.url'].configured).toBe(true);
+    expect(by['llm.json'].configured).toBe(true);
+    expect(by['media.png'].configured).toBe(true);
+    expect(by['crm.leads'].configured).toBe(true);
+    expect(by['google.searchConsole'].configured).toBe(false);
+    expect(by['web.search'].limits).toMatchObject({ minGapMs: 1000, cacheTtlMs: 3_600_000 });
+    expect(JSON.stringify(r.json)).not.toMatch(/BRAVE-SECRET|RESEND-SECRET/);
+  });
+
   it('401 without the token; routines, costs, trust, playbooks and workers in the contract shape', async () => {
     const p = pultWorld();
     const s = await serve(p);

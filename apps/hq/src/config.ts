@@ -94,6 +94,10 @@ export interface Config extends BaseConfig {
   trendsRegions: string[];
   gscServiceAccountJson: string | undefined;
   gscSiteUrl: string | undefined;
+  /** Agent tools (`docs/tools.md`): Brave Search API key (else DuckDuckGo HTML), Resend key and sender for `email.send`. All optional. */
+  braveSearchKey: string | undefined;
+  resendApiKey: string | undefined;
+  emailFrom: string | undefined;
   siteUrl: string;
   /** The site's price list (`GET`, JSON): the single source of every price the agents name. Fetched at start and every 6 hours. */
   pricesUrl: string;
@@ -200,6 +204,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     trendsRegions: (optional(env, 'TRENDS_REGIONS') ?? 'KZ,UZ,RU').split(',').map((r) => r.trim().toUpperCase()).filter((r) => /^[A-Z]{2}$/.test(r)),
     gscServiceAccountJson: optional(env, 'GSC_SERVICE_ACCOUNT_JSON'),
     gscSiteUrl: optional(env, 'GSC_SITE_URL'),
+    braveSearchKey: optional(env, 'BRAVE_SEARCH_KEY'),
+    resendApiKey: optional(env, 'RESEND_API_KEY'),
+    emailFrom: optional(env, 'RESEND_FROM') ?? 'Fir Tech <hello@firtech.pro>',
     githubToken: optional(env, 'GITHUB_TOKEN'),
     githubRepo: optional(env, 'GITHUB_REPO') ?? 'bokievf9/agents',
     builderPollMinutes: Math.round(num(env, 'BUILDER_POLL_MINUTES', 10, 1, 59)),

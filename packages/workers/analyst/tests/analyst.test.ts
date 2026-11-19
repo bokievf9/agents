@@ -1,7 +1,7 @@
-import { MockLlm, OffLlm, openDb, type LlmClient } from '@fir/core';
+import { MockLlm, OffLlm, createTools, openDb, type LlmClient, type ToolFetch } from '@fir/core';
 import { Hq, type Task, type WorkerCtx } from '@fir/hq';
 import { describe, expect, it } from 'vitest';
-import { AnalystWorker, aggregate, weekVideoIds, youtubeWeekLine, fallbackRecommendations, numbersText, type FetchFn } from '../src/index.js';
+import { AnalystWorker, aggregate, weekVideoIds, youtubeWeekLine, fallbackRecommendations, numbersText } from '../src/index.js';
 
 const DAY = 86_400_000;
 // Mon 2026-11-23 08:00 Tashkent. The report covers Mon 16.11 - Sun 22.11.
@@ -23,7 +23,10 @@ function world(llm: LlmClient = new OffLlm()) {
   return { db, hq, clock, ready, posted, ctx, task };
 }
 
-function ytFetch(subs: number, status = 200): FetchFn {
+/** The context with a toolbox whose network is the fake (no DNS, no waits). */
+const net = (w: { ctx: WorkerCtx }, fetch: ToolFetch): WorkerCtx => ({ ...w.ctx, tools: createTools({ agentId: 'analyst', dept: 'marketing', fetch, sleep: () => Promise.resolve() }) });
+
+function ytFetch(subs: number, status = 200): ToolFetch {
   return () => Promise.resolve(status === 200 ? Response.json({ items: [{ statistics: { subscriberCount: String(subs), viewCount: '5000', videoCount: '12' } }] }) : new Response('x', { status }));
 }
 
@@ -94,7 +97,7 @@ describe('Analyst report', () => {
   it('one RU report: header with the week, five numbers, three recommendations from the model, stage 2 note', async () => {
     const w = world(new MockLlm(() => JSON.stringify({ recommendations: ['Первая рекомендация', 'Вторая рекомендация', 'Третья рекомендация'] })));
     w.ready('instagram', '2026-11-17');
-    const res = await new AnalystWorker({ youtubeApiKey: 'K', youtubeChannelId: 'UC1', fetch: ytFetch(120) }).run(w.task, w.ctx);
+    const res = await new AnalystWorker({ youtubeApiKey: 'K', youtubeChannelId: 'UC1' }).run(w.task, net(w, ytFetch(120)));
     expect(res.ok).toBe(true);
     expect(res.result).toContain('Недельный отчёт маркетинга, 16.11 - 22.11');
     expect(res.result).toContain('1. Одобрено материалов на неделю (платформ): 1');
@@ -105,10 +108,10 @@ describe('Analyst report', () => {
 
   it('subscriber growth comes from the previous snapshot', async () => {
     const w = world();
-    const worker = new AnalystWorker({ youtubeApiKey: 'K', youtubeChannelId: 'UC1', fetch: ytFetch(100) });
-    await worker.run(w.task, w.ctx);
+    const worker = new AnalystWorker({ youtubeApiKey: 'K', youtubeChannelId: 'UC1' });
+    await worker.run(w.task, net(w, ytFetch(100)));
     w.clock.t = NOW + 7 * DAY;
-    const next = await new AnalystWorker({ youtubeApiKey: 'K', youtubeChannelId: 'UC1', fetch: ytFetch(130) }).run(w.task, w.ctx);
+    const next = await new AnalystWorker({ youtubeApiKey: 'K', youtubeChannelId: 'UC1' }).run(w.task, net(w, ytFetch(130)));
     expect(next.result).toContain('130 (+30 за неделю)');
   });
 
@@ -124,7 +127,7 @@ describe('Analyst report', () => {
 
   it('a YouTube failure is a note: the report still comes, the key is not in it', async () => {
     const w = world();
-    const res = await new AnalystWorker({ youtubeApiKey: 'SECRETK', youtubeChannelId: 'UC1', fetch: ytFetch(0, 403) }).run(w.task, w.ctx);
+    const res = await new AnalystWorker({ youtubeApiKey: 'SECRETK', youtubeChannelId: 'UC1' }).run(w.task, net(w, ytFetch(0, 403)));
     expect(res.ok).toBe(true);
     expect(res.result).toContain('YouTube: YouTube HTTP 403');
     expect(res.result).not.toContain('SECRETK');
@@ -163,7 +166,7 @@ describe('YouTube with the owner token', () => {
 
   it('without a refresh token the API-key path works as before and adds no week line', async () => {
     const w = world();
-    const res = await new AnalystWorker({ youtubeApiKey: 'K', youtubeChannelId: 'UC1', fetch: ytFetch(30) }).run(w.task, w.ctx);
+    const res = await new AnalystWorker({ youtubeApiKey: 'K', youtubeChannelId: 'UC1' }).run(w.task, net(w, ytFetch(30)));
     expect(res.result).toContain('Подписчики YouTube: 30');
     expect(res.result).not.toContain('YouTube за неделю');
   });

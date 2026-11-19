@@ -1,6 +1,6 @@
 import { closeSync, existsSync, openSync, readSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
-import type { ApprovalQueue } from '@fir/core';
+import { macQueued, macSettle, type ApprovalQueue } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import { PublishStore, captionOf } from '@fir/worker-publisher';
 import { RenderQueue, SIZES, shortReason, kitScopeOf, splitKit, splitPlatforms, storeFor, type ArticleRow, type ContentStore, type Item, type ReadyRow } from '@fir/worker-content-maker';
@@ -96,7 +96,7 @@ export function createPultContent(d: PultContentDeps) {
     return [caption, hashtags.join(' ')].filter(Boolean).join('\n\n');
   }
 
-  function itemView(item: Item) {
+  function itemView(item: Item, queued: Map<number, string[]> = macQueued(db)) {
     const s = store();
     const rows = s.rowsOfItem(item.id);
     const files = filesOf(item, rows);
@@ -124,6 +124,8 @@ export function createPultContent(d: PultContentDeps) {
       publishedUrl: posts.find((x) => x.url)?.url ?? null, error: err ? String(err).slice(0, 300) : null, plannedDate: item.plannedDate,
       // for the Mac helper: which platforms are already out, and the Instagram caption ready to paste (caption, blank line, hashtags)
       publishedOn: rows.filter((r) => r.status === 'published').map((r) => r.platform), igCaption: igCaption(rows),
+      // platforms an agent queued for the Mac helper (`tools.mac.poster.enqueue`), still open
+      macQueued: queued.get(item.id) ?? [],
     };
   }
 
@@ -143,9 +145,12 @@ export function createPultContent(d: PultContentDeps) {
     const range = weekRange(week);
     if (!range) return fail(400, 'invalid', { hint: 'week=YYYY-Www' });
     const s = store();
+    const queued = macQueued(db);
+    // `?queued=1`: only what agents queued for the Mac helper (articles never are); `queuedItems` adds the queued items of other weeks
+    const onlyQueued = query.get('queued') === '1';
     const items = (db.prepare('SELECT id FROM cm_items WHERE planned_date >= ? AND planned_date <= ? ORDER BY planned_date, id').all(range.from, range.to) as { id: number }[])
-      .map((r) => s.item(r.id)!).map(itemView);
-    const articles = s.articles().map(articleView).filter((a) => a.plannedDate >= range.from && a.plannedDate <= range.to);
+      .map((r) => s.item(r.id)!).map((it) => itemView(it, queued)).filter((x) => !onlyQueued || x.macQueued.length > 0);
+    const articles = onlyQueued ? [] : s.articles().map(articleView).filter((a) => a.plannedDate >= range.from && a.plannedDate <= range.to);
     const all = [...items, ...articles];
     const days: { date: string; items: Omit<(typeof all)[number], 'plannedDate'>[] }[] = [];
     for (let i = 0; i < 7; i++) {
@@ -159,6 +164,7 @@ export function createPultContent(d: PultContentDeps) {
     const n = (f: (x: { status: Status }) => boolean) => all.filter(f).length;
     return ok({
       week, days,
+      ...(onlyQueued ? { queuedItems: [...queued.keys()].map((id) => s.item(id)).filter((it): it is Item => Boolean(it)).map((it) => itemView(it, queued)) } : {}),
       summary: { pending: n((x) => x.status === 'pending'), approved: n((x) => ['approved', 'rendering', 'ready'].includes(x.status)), published: n((x) => x.status === 'published'), rendering: n((x) => x.status === 'rendering') },
     });
   }
@@ -227,6 +233,7 @@ export function createPultContent(d: PultContentDeps) {
         const pstore = new PublishStore(db);
         for (const r of mine) if (pstore.recordExternal(r.id, id, r.platform, MAC, now(), { url })) hq.log('mac-poster', 'published_url', 'content_ready', String(r.id), url);
       }
+      macSettle(db, id, platform, 'done', now());
       return view();
     }
     if (action === 'failed') {
@@ -238,6 +245,7 @@ export function createPultContent(d: PultContentDeps) {
       const pstore = new PublishStore(db);
       const reason = note!.slice(0, 300);
       for (const r of mine) if (r.status === 'ready' && pstore.recordExternal(r.id, id, r.platform, MAC, now(), { error: reason })) hq.log('mac-poster', 'publish_failed', 'content_ready', String(r.id), reason);
+      macSettle(db, id, platform, 'failed', now());
       return view();
     }
     // rerender

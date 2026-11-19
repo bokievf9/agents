@@ -1,7 +1,7 @@
-import { errMsg, log, migrate } from '@fir/core';
-import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
+import { errMsg, log, migrate, type Tools } from '@fir/core';
+import { toolsOf, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import { checkLlms, checkPage, checkServices, pageFacts, type Finding, type PageFacts } from './checks.js';
-import { fetchGsc, gscText } from './gsc.js';
+import { gscText } from './gsc.js';
 import { AUDIT_KIND, auditText, collectFacts, composeFindings, defaultNet, hostOfUrl, type AuditLocale, type AuditPayload } from './audit.js';
 
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
@@ -23,9 +23,7 @@ CREATE TABLE IF NOT EXISTS seo_seen (
 export interface SeoOptions {
   /** Default https://firtech.pro */
   siteUrl?: string;
-  gscServiceAccountJson?: string | undefined;
-  /** Search Console property: `sc-domain:firtech.pro` or `https://firtech.pro/`. */
-  gscSiteUrl?: string | undefined;
+  /** The free audit's network only (tests, an egress proxy); the site check goes through `ctx.tools`, Search Console through `tools.google.searchConsole`. */
   fetch?: FetchFn;
   /** Resolver of the public-address guard for `audit` (tests); with an injected `fetch` and no resolver the guard is off. */
   auditLookup?: (host: string) => Promise<string[]>;
@@ -33,7 +31,7 @@ export interface SeoOptions {
 
 export type SeoProposalPayload = { key: string; page: string; title: string; change: string; needsBuilder: boolean };
 
-const get = async (fetchFn: FetchFn, url: string) => fetchFn(url, { signal: AbortSignal.timeout(10_000), headers: { 'user-agent': 'FirTechSeoCheck/1.0 (+https://firtech.pro)' } });
+const UA = { 'user-agent': 'FirTechSeoCheck/1.0 (+https://firtech.pro)' };
 
 /** Sitemap `<loc>` entries on the site's own host, capped. */
 export function sitemapUrls(xml: string, host: string): string[] {
@@ -59,27 +57,22 @@ const isHome = (url: string) => /^\/(ru|en)?\/?$/.test(new URL(url).pathname);
  */
 export class SeoWorker implements Worker {
   readonly id = 'seo';
-  private readonly fetchFn: FetchFn;
   private readonly site: string;
 
   constructor(private readonly opts: SeoOptions = {}) {
-    this.fetchFn = opts.fetch ?? ((url, init) => fetch(url, init));
     this.site = (opts.siteUrl ?? 'https://firtech.pro').replace(/\/$/, '');
   }
 
-  get gscEnabled(): boolean {
-    return Boolean(this.opts.gscServiceAccountJson && this.opts.gscSiteUrl);
+  /** Our own site only: the check never leaves this host (redirects included). */
+  private get hosts(): string[] {
+    return [new URL(this.site).hostname];
   }
 
-  private async pages(): Promise<{ urls: string[]; note: string }> {
-    try {
-      const res = await get(this.fetchFn, `${this.site}/sitemap.xml`);
-      if (res.ok) {
-        const urls = sitemapUrls(await res.text(), new URL(this.site).host);
-        if (urls.length > 0) return { urls, note: `sitemap: ${urls.length} страниц` };
-      }
-    } catch {
-      /* fall through to the fixed list */
+  private async pages(tools: Tools): Promise<{ urls: string[]; note: string }> {
+    const res = await tools.web.getText(`${this.site}/sitemap.xml`, { hosts: this.hosts, headers: UA, timeoutMs: 10_000 });
+    if (res.ok) {
+      const urls = sitemapUrls(res.value.text, new URL(this.site).host);
+      if (urls.length > 0) return { urls, note: `sitemap: ${urls.length} страниц` };
     }
     return { urls: FALLBACK_PATHS.map((p) => `${this.site}${p}`), note: 'sitemap нет, проверены /, /ru, /en' };
   }
@@ -120,19 +113,20 @@ export class SeoWorker implements Worker {
 
   private async check(ctx: WorkerCtx): Promise<WorkerResult> {
     migrate(ctx.db, SCHEMA);
-    const { urls, note } = await this.pages();
+    const tools = toolsOf(ctx, 'marketing', this.id);
+    const { urls, note } = await this.pages(tools);
     const facts: PageFacts[] = [];
     const findings: Finding[] = [];
     const failed: string[] = [];
     for (const url of urls) {
       try {
-        const res = await get(this.fetchFn, url);
+        const res = await tools.web.getText(url, { hosts: this.hosts, headers: UA, timeoutMs: 10_000 });
         if (!res.ok) {
-          failed.push(`${url}: HTTP ${res.status}`);
-          findings.push({ key: `page_down:${new URL(url).pathname}`, severity: 3, page: url, problem: `страница отдаёт HTTP ${res.status}`, change: `Починить ${url}: вернуть 200 или убрать из sitemap.`, needsBuilder: true });
+          failed.push(`${url}: ${res.status ? `HTTP ${res.status}` : res.error}`);
+          if (res.status) findings.push({ key: `page_down:${new URL(url).pathname}`, severity: 3, page: url, problem: `страница отдаёт HTTP ${res.status}`, change: `Починить ${url}: вернуть 200 или убрать из sitemap.`, needsBuilder: true });
           continue;
         }
-        const f = pageFacts(url, await res.text());
+        const f = pageFacts(url, res.value.text);
         facts.push(f);
         findings.push(...checkPage(f, { home: isHome(url) }));
       } catch (e) {
@@ -142,22 +136,16 @@ export class SeoWorker implements Worker {
     if (facts.length === 0) return { ok: false, result: '', error: `Сайт не отдал ни одной страницы. ${failed.join('; ')}` };
 
     let llms: { status: number; text: string; lastModified: string | null } | null = null;
-    try {
-      const res = await get(this.fetchFn, `${this.site}/llms.txt`);
-      llms = { status: res.status, text: res.ok ? await res.text() : '', lastModified: res.headers.get('last-modified') };
-    } catch {
-      /* treated as missing */
-    }
+    const lr = await tools.web.getText(`${this.site}/llms.txt`, { hosts: this.hosts, headers: UA, timeoutMs: 10_000 });
+    if (lr.ok) llms = { status: lr.value.status, text: lr.value.text, lastModified: lr.value.lastModified };
+    else if (lr.status) llms = { status: lr.status, text: '', lastModified: null }; // a transport failure counts as missing
     findings.push(...checkLlms(llms, this.site, ctx.now()));
     findings.push(...checkServices([...facts.map((f) => f.text), llms?.text ?? ''].join(' ')));
 
     let gsc = '';
-    if (this.gscEnabled) {
-      try {
-        gsc = gscText(await fetchGsc(this.fetchFn, this.opts.gscServiceAccountJson!, this.opts.gscSiteUrl!, ctx.now()));
-      } catch (e) {
-        gsc = `Search Console: ошибка (${errMsg(e).slice(0, 120)})`;
-      }
+    if (tools.configured('google.searchConsole')) {
+      const r = await tools.google.searchConsole();
+      gsc = r.ok ? gscText(r.value) : `Search Console: ошибка (${r.message.slice(0, 120)})`;
     }
 
     const seen = new Map((ctx.db.prepare('SELECT key, proposed_at FROM seo_seen').all() as { key: string; proposed_at: number }[]).map((r) => [r.key, r.proposed_at]));

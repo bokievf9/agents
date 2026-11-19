@@ -8,6 +8,7 @@ import type { Director } from './director.js';
 import type { OwnerChannel } from './presence.js';
 import type { MarketingHead } from './heads/marketing.js';
 import { createCompany } from './pult-company.js';
+import type { AppTools } from './tools.js';
 import { createPultContent } from './pult-content.js';
 import { createMetrics, SiteEvents } from './pult-events.js';
 import { createHub } from './pult-hub.js';
@@ -35,6 +36,8 @@ export interface PultDeps {
   decide: (approvalId: number, action: 'approve' | 'reject') => Promise<unknown>;
   /** The routines changed (switch): the app restarts its cron jobs. */
   onRoutinesChange?: (() => void) | undefined;
+  /** The agents' toolbox adapters and keys (the `tools` list of `GET /admin/company`). */
+  tools?: AppTools | undefined;
 }
 
 export function createPult(d: PultDeps) {

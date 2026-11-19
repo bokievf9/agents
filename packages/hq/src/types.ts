@@ -1,4 +1,4 @@
-import type { Db, LlmClient, Payload } from '@fir/core';
+import type { Db, LlmClient, Payload, Tools } from '@fir/core';
 
 export type Role = 'director' | 'head' | 'worker';
 export type AgentStatus = 'active' | 'paused';
@@ -126,6 +126,11 @@ export interface WorkerCtx {
   requestApproval(kind: string, payload: Payload, summary: string): Promise<number>;
   /** Journal line (action + short detail, no client text). */
   log(action: string, detail?: string): void;
+  /**
+   * The agent's toolbox (`docs/tools.md`): web, files, media, data, channels, with the department's rights, the journal and limits.
+   * Every head sets it; optional only so hand-built test contexts still compile (`toolsOf(ctx, dept)` gives a journal-less one).
+   */
+  tools?: Tools;
 }
 
 export interface WorkerResult {

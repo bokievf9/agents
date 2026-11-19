@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { MockLlm, openDb, type Payload } from '@fir/core';
+import { HostQueue, MockLlm, createTools, openDb, type Payload, type ToolsConfig } from '@fir/core';
 import type { Task, WorkerCtx } from '@fir/hq';
 import { describe, expect, it } from 'vitest';
 import { LLMS_MAX_AGE_DAYS, MAX_PROPOSALS, SeoWorker, checkLlms, checkPage, checkServices, pageFacts, sitemapUrls, type FetchFn } from '../src/index.js';
@@ -80,13 +80,15 @@ function site(pages: Record<string, { status?: number; body?: string; headers?: 
   return { fn, calls };
 }
 
-function setup(worker: SeoWorker) {
+function setup(worker: SeoWorker, fetch: FetchFn = site({}).fn, config: ToolsConfig = {}) {
   const db = openDb(':memory:');
   const clock = { t: NOW };
   const staged: { kind: string; payload: Payload; summary: string }[] = [];
+  // the site check goes through the toolbox: the fake site is its network (no DNS, no waits)
+  const tools = createTools({ agentId: 'seo', dept: 'marketing', db, now: () => clock.t, fetch: (u, i) => fetch(u, i), config, sleep: () => Promise.resolve(), queue: new HostQueue(() => clock.t, () => Promise.resolve()) });
   const ctx: WorkerCtx = {
     llm: new MockLlm(() => ''), db, tz: 'Asia/Tashkent', now: () => clock.t,
-    requestApproval: (kind, payload, summary) => Promise.resolve(staged.push({ kind, payload, summary }) - 1), log: () => undefined,
+    requestApproval: (kind, payload, summary) => Promise.resolve(staged.push({ kind, payload, summary }) - 1), log: () => undefined, tools,
   };
   const task = { id: 1, title: 't', body: '', dept: 'marketing', assigneeId: null, creator: 'routine', parentId: null, status: 'running', priority: 0, dueAt: null, result: null, costUsd: 0, meta: { action: 'seo' }, tags: [], routineId: null, createdAt: 0, updatedAt: 0 } as Task;
   return { ctx, clock, staged, run: () => worker.run(task, ctx) };
@@ -95,7 +97,7 @@ function setup(worker: SeoWorker) {
 describe('SEO worker', () => {
   it('without a sitemap checks /, /ru, /en and llms.txt; proposes at most five, worst first, through the approval kind', async () => {
     const s = site({ '/': { body: BAD }, '/ru': { body: BAD }, '/en': { body: BAD } });
-    const t = setup(new SeoWorker({ fetch: s.fn }));
+    const t = setup(new SeoWorker(), s.fn);
     const res = await t.run();
     expect(res.ok).toBe(true);
     expect(s.calls).toContain('https://firtech.pro/llms.txt');
@@ -113,7 +115,7 @@ describe('SEO worker', () => {
       '/sitemap.xml': { body: '<urlset><url><loc>https://firtech.pro/ru</loc></url></urlset>' },
       '/ru': { body: GOOD }, '/llms.txt': { body: `Fir Tech. ${'Услуги. '.repeat(40)}`, headers: { 'last-modified': new Date(NOW - 5 * DAY).toUTCString() } },
     });
-    const t = setup(new SeoWorker({ fetch: s.fn }));
+    const t = setup(new SeoWorker(), s.fn);
     const res = await t.run();
     expect(res.ok).toBe(true);
     expect(t.staged).toEqual([]);
@@ -123,7 +125,7 @@ describe('SEO worker', () => {
 
   it('the same problems are not proposed again for four weeks, then they are', async () => {
     const s = site({ '/': { body: BAD }, '/ru': { body: BAD }, '/en': { body: BAD } });
-    const t = setup(new SeoWorker({ fetch: s.fn }));
+    const t = setup(new SeoWorker(), s.fn);
     await t.run();
     const first = t.staged.map((x) => x.payload.key);
     await t.run();
@@ -136,16 +138,16 @@ describe('SEO worker', () => {
   });
 
   it('a down site is reported as an error; a broken inner page is a severity 3 finding', async () => {
-    expect((await setup(new SeoWorker({ fetch: site({}).fn })).run()).error).toContain('не отдал ни одной страницы');
+    expect((await setup(new SeoWorker(), site({}).fn).run()).error).toContain('не отдал ни одной страницы');
     const s = site({ '/': { body: GOOD }, '/ru': { status: 500 }, '/en': { body: GOOD } });
-    const t = setup(new SeoWorker({ fetch: s.fn }));
+    const t = setup(new SeoWorker(), s.fn);
     await t.run();
     expect(t.staged.some((x) => x.payload.key === 'page_down:/ru')).toBe(true);
   });
 
   it('Search Console is off by default and read only with both settings; the key signs a JWT, no secret in the result', async () => {
-    const off = new SeoWorker({ fetch: site({ '/': { body: GOOD } }).fn });
-    expect(off.gscEnabled).toBe(false);
+    const off = await setup(new SeoWorker(), site({ '/': { body: GOOD } }).fn).run();
+    expect(off.result).not.toContain('Search Console');
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
     const json = JSON.stringify({ client_email: 'seo@proj.iam.gserviceaccount.com', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) });
     const calls: { url: string; body?: string }[] = [];
@@ -158,9 +160,7 @@ describe('SEO worker', () => {
       }
       return site({ '/': { body: GOOD } }).fn(url);
     };
-    const on = new SeoWorker({ fetch: fn, gscServiceAccountJson: json, gscSiteUrl: 'sc-domain:firtech.pro' });
-    expect(on.gscEnabled).toBe(true);
-    const res = await setup(on).run();
+    const res = await setup(new SeoWorker(), fn, { gscServiceAccountJson: json, gscSiteUrl: 'sc-domain:firtech.pro' }).run();
     expect(res.result).toContain('бот для записи: 12 кликов, 300 показов, позиция 8.5');
     const tokenCall = calls.find((c) => c.url.startsWith('https://oauth2'))!;
     expect(tokenCall.body).toContain('grant_type=urn');

@@ -1,4 +1,4 @@
-import { MockLlm, type LlmRequest } from '@fir/core';
+import { MockLlm, dayIn, type LlmRequest } from '@fir/core';
 import { storeFor } from '@fir/worker-content-maker';
 import { describe, expect, it } from 'vitest';
 import { OWNER, clipJson, openPack, routedLlm, world } from './helpers.js';
@@ -39,6 +39,10 @@ describe('Marketing: new routines through the head', () => {
     expect(rep.body).toContain('Агент отвечает ночью');
     expect(rep.body).not.toContain('Источник:');
     expect(w.messenger.sent).toHaveLength(0);
+    // the scout's network went through its toolbox: one journal line per tool call, on the task, by the worker, counted for the day
+    const calls = w.db.prepare("SELECT agent_id a, object_id o, detail d FROM activity WHERE action = 'tool:google.trends'").all() as { a: string; o: string; d: string }[];
+    expect(calls).toEqual([{ a: 'trend-scout', o: String(t.id), d: expect.stringMatching(/^ok \d+ms$/) }]);
+    expect(JSON.parse(w.hq.setting(`tools.stats.${dayIn(w.hq.now(), w.hq.tz)}`) || '{}')['google.trends']).toMatchObject({ calls: 1, errors: 0 });
     // the content-maker now reads the trends: a topic task carries them into the prompt
     const prompts: string[] = [];
     const w2 = world({ llm: fullLlm((r) => (r.messages[0]!.content.includes('Свежие тренды') ? (prompts.push(r.messages[0]!.content), clipJson()) : null)), integrations: { trendsRegions: ['KZ'], fetch: fetchStub() } });

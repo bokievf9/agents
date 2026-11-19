@@ -1,7 +1,7 @@
 import { errMsg, log, tryJson, withPlaybook, zonedParts } from '@fir/core';
-import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
+import { toolsOf, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import { z } from 'zod';
-import { fetchGoogleTrends, fetchYoutube, type Candidate, type FetchFn } from './sources.js';
+import { fetchGoogleTrends, fetchYoutube, type Candidate } from './sources.js';
 import { TrendStore, type NewTrendItem, type TrendItem } from './store.js';
 
 /** The eight service directions (ids as in directions.ts of the site and the content-maker). */
@@ -12,7 +12,6 @@ export interface TrendScoutOptions {
   youtubeApiKey?: string | undefined;
   /** Region codes for Google Trends and YouTube charts; empty: both sources off. */
   regions?: string[];
-  fetch?: FetchFn;
 }
 
 const pickSchema = z.object({
@@ -66,11 +65,9 @@ export function formatItems(items: TrendItem[] | NewTrendItem[]): string {
  */
 export class TrendScoutWorker implements Worker {
   readonly id = 'trend-scout';
-  private readonly fetchFn: FetchFn;
 
-  constructor(private readonly opts: TrendScoutOptions = {}) {
-    this.fetchFn = opts.fetch ?? ((url, init) => fetch(url, init));
-  }
+  /** Network goes through `ctx.tools` (Google hosts only, pinned DNS, per-host queue, journal); tests inject a fake fetch there. */
+  constructor(private readonly opts: TrendScoutOptions = {}) {}
 
   /** Source names that are on, for the report. */
   get sources(): string[] {
@@ -95,12 +92,13 @@ export class TrendScoutWorker implements Worker {
     const items: Candidate[] = [];
     const notes: string[] = [];
     if (regions.length === 0) return { items, notes: ['Регионы не заданы (TRENDS_REGIONS пуст): источники выключены.'] };
-    const g = await fetchGoogleTrends(this.fetchFn, regions);
+    const tools = toolsOf(ctx, 'marketing', this.id);
+    const g = await fetchGoogleTrends(tools, regions);
     items.push(...g.items);
     notes.push(...g.errors);
     if (this.opts.youtubeApiKey) {
       try {
-        items.push(...(await fetchYoutube(this.fetchFn, this.opts.youtubeApiKey, regions, ctx.now())));
+        items.push(...(await fetchYoutube(tools, this.opts.youtubeApiKey, regions, ctx.now())));
       } catch (e) {
         notes.push(`YouTube: ${errMsg(e).replace(this.opts.youtubeApiKey, '***')}`);
       }
