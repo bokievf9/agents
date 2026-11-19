@@ -233,7 +233,8 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 { "ok": true, "week": "2026-W48",
   "days": [ { "date": "2026-11-23", "items": [ { "id": 41, "kind": "clip|post|carousel|story|article", "platform": "instagram|blog", "status": "draft|pending|approved|rendering|ready|published|rejected",
     "title": "...", "hook": "...", "caption": { "instagram": "", "tiktok": "", "shorts": "", "dzen": "" },
-    "files": [ { "path": "41/1.png", "type": "png", "w": 1080, "h": 1350 } ], "sourceSlug": null, "approvalId": 91, "publishedUrl": null, "error": null } ] } ],
+    "files": [ { "path": "41/1.png", "type": "png", "w": 1080, "h": 1350 } ], "sourceSlug": null, "approvalId": 91, "publishedUrl": null, "error": null,
+    "publishedOn": ["instagram"], "igCaption": "подпись\n\n#теги" } ] } ],
   "summary": { "pending": 3, "approved": 2, "published": 1, "rendering": 1 } }
 ```
 - Всегда 7 дней (пн..вс), пустой день `items: []`. Строки: `cm_items` (рилс `clip`, пост, карусель, история; профильный пакет идёт как `post`) и статьи блога `cm_articles` (`kind: "article"`, `platform: "blog"`).
@@ -241,12 +242,15 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 - `status`: `draft` (пишется или модель ничего не дала, причина в `error`), `pending` (ждёт владельца), `approved` (одобрен, файлов ещё нет), `rendering` (рилс в очереди или в работе у рендерера), `ready` (есть PNG или `reel.mp4`), `published` (все платформы отмечены), `rejected`. Статья: `pending`, `published` (одобренная публикуется сразу), `rejected`.
 - `caption`: подписи платформ из строк `cm_ready` одобренного материала, пока не одобрен из текста материала; `dzen` всегда пустая строка (такой платформы нет). `hook` только у рилса.
 - `files[].path` относительно `DATA_DIR/renders`, отдаётся через `GET /admin/files/<path>`; `w` и `h` читаются из заголовка PNG, у видео 1080x1920. `approvalId`: номер одобрения ядра, когда карточка владельцу уже отправлена (иначе `null`; решать можно и без неё).
-- `publishedUrl`: адрес YouTube из `pb_posts.url`, у статьи `/blog/<slug>`.
+- `publishedUrl`: адрес YouTube или Instagram из `pb_posts.url`, у статьи `/blog/<slug>`.
+- `publishedOn`: платформы, строки которых уже отмечены опубликованными (у статьи `[]`). `igCaption`: подпись Instagram для вставки (текст, пустая строка, хештеги), пока не одобрен `""`. Оба поля для помощника на Маке (`packages/mac-poster`).
 
-`POST /admin/content/:itemId` тело `{ "action": "approve|reject|revise|published|rerender", "note"?: string (1..4000), "platform"?: "instagram|tiktok|shorts" }` → `{ ok, item }` (строка как в списке). Лишние поля и неизвестное действие 400 `invalid` + `allowed`, неизвестный id 404.
+`POST /admin/content/:itemId` тело `{ "action": "approve|reject|revise|published|rerender|failed", "note"?: string (1..4000), "platform"?: "instagram|tiktok|shorts", "url"?: "https://..." }` → `{ ok, item }` (строка как в списке). Лишние поля и неизвестное действие 400 `invalid` + `allowed`, неизвестный id 404.
 - `approve` и `reject` решают то же одобрение, что кнопки Telegram-карточки (`queue.handle`, затем задача и карточка в Telegram закрываются; элемент пакета недели, который ещё не рассылался карточкой, открывается как в «Посмотреть по одному»). Повтор того же решения безопасен: очередь забирает одобрение один раз, второй записи в журнале решений нет. Обратное решение 409 `already_decided`, материал не ждёт владельца (черновик) 409 `not_pending`. У `reject` `note` сохраняется комментарием материала.
 - `revise` требует `note`: для материала это новый текст одной части («Править» в Telegram): подписи платформы `platform` или, без `platform`, сценария/слайдов; карточка остаётся `pending`, счётчик чистых одобрений сбрасывается. Для статьи `note` это замечание: карточка закрывается, статья пишется заново. Не ждёт решения: 409 `not_pending`.
 - `published`: помечает опубликованными готовые строки платформ (кнопка «Опубликовано»), все или одну `platform`; повтор безопасен; до одобрения 409 `not_ready`; нет такой платформы у материала 400 + `allowed`. Для статьи 409 `not_applicable`.
+- `published` с `url` (только `https://`, до 500 символов, нужен `platform`): так отчитывается помощник на Маке. Строка помечается `pb_posts.via = 'mac'`, адрес сохраняется один раз (повтор не меняет), в журнале `mac-poster published` и `published_url`. `url` с другим действием 400.
+- `failed` (нужны `platform` и `note`, причина до 300 символов): помощник на Маке не смог опубликовать. Строка остаётся `ready` (ручная карточка в Telegram остаётся, в ней причина), причина видна в `error`, в журнале `mac-poster publish_failed` (повтор той же причины без новой записи). До одобрения 409 `not_ready`. Утренняя сводка Публикатора пишет «Instagram с Мака: опубликовано N, ошибок M» за последние 24 часа.
 - `rerender`: рилс ставится в очередь рендера (как `/render`), у поста, карусели и истории PNG рисуются заново. Нельзя (не одобрен, рендер выключен, не нарисовалось): 409 `cannot_rerender` + `reason`.
 - Без головы Маркетинга `revise`, `published`, `rerender` дают 503 `unavailable`.
 

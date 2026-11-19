@@ -734,10 +734,14 @@ export class MarketingHead implements ApprovalEditor {
       return { alerts: [] as string[], commentsLine: '', newComments: 0 };
     }) : { alerts: [] as string[], commentsLine: '', newComments: 0 };
     for (const a of igRun.alerts) await this.d.messenger.send(this.d.ownerId, a).catch((e: unknown) => log('warn', 'instagram alert not delivered', { err: errMsg(e) }));
+    // the owner's Mac helper (packages/mac-poster) reports through POST /admin/content/:id; the last 24 hours on one line
+    const pstore = new PublishStore(this.hq.db);
+    const mac = pstore.externalStats('mac', this.hq.now() - 86_400_000, this.hq.now() + 1);
+    const macLine = mac.published || mac.failed ? `Instagram с Мака: опубликовано ${mac.published}, ошибок ${mac.failed}.` : '';
     let sent = 0;
-    if (groups.length || posted.length || igRun.commentsLine || pendingNote || quotaNote) {
+    if (groups.length || posted.length || igRun.commentsLine || pendingNote || quotaNote || macLine) {
       try {
-        await this.d.messenger.send(this.d.ownerId, [groups.length ? dayHeader(groups) : '', ...posted.map(autoLine), quotaNote, pendingNote, igRun.commentsLine].filter(Boolean).join('\n'));
+        await this.d.messenger.send(this.d.ownerId, [groups.length ? dayHeader(groups) : '', macLine, ...posted.map(autoLine), quotaNote, pendingNote, igRun.commentsLine].filter(Boolean).join('\n'));
       } catch (e) {
         log('warn', 'publish header not delivered', { err: errMsg(e) });
       }
@@ -777,7 +781,9 @@ export class MarketingHead implements ApprovalEditor {
         const fail = failed.get(g[0]!.itemId);
         const why = fail?.error;
         if (fail && why) note += fail.platform === 'instagram' ? `\n\nInstagram: автопубликация не удалась (${why}). Публикуйте вручную.` : `\n\nYouTube: автозагрузка не удалась (${why}). Публикуйте Shorts вручную.`;
-        if (!textSent || why) await this.d.messenger.send(this.d.ownerId, `${renderItemMessage(g, publishDay(tctx), { videoSent })}${note}`.slice(0, 4000), publishedButtons(g));
+        const macWhy = g.filter((p) => p.platform === 'instagram').map((p) => pstore.externalError(p.readyId, 'mac')).find(Boolean);
+        if (macWhy) note += `\n\nInstagram с Мака не получилось (${macWhy}). Публикуйте вручную.`;
+        if (!textSent || why || macWhy) await this.d.messenger.send(this.d.ownerId, `${renderItemMessage(g, publishDay(tctx), { videoSent })}${note}`.slice(0, 4000), publishedButtons(g));
         this.publisher.markSent(tctx, g);
         sent++;
       } catch (e) {
@@ -791,9 +797,9 @@ export class MarketingHead implements ApprovalEditor {
   }
 
   /** «Опубликовано» pressed: records the publication. Returns the callback toast. */
-  onPublished(readyId: number): string {
+  onPublished(readyId: number, actor = 'owner'): string {
     const r = this.publisher.markPublished({ db: this.hq.db, now: this.hq.now }, readyId);
-    if (r.ok) this.hq.log('owner', 'published', 'content_ready', String(readyId));
+    if (r.ok) this.hq.log(actor, 'published', 'content_ready', String(readyId));
     return r.text;
   }
 
