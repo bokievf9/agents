@@ -63,3 +63,46 @@ describe('syncRoutines', () => {
     expect(hq.routineByName('legacy')!.cron).toBe('0 2 * * *');
   });
 });
+
+describe('the clock of a routine (company or owner)', () => {
+  it('defaults to the company clock; the sync moves a routine to the owner clock and the other way', () => {
+    const { hq } = setup();
+    hq.syncRoutines('marketing', [def]);
+    expect(hq.routineByName('weekly-pack')!.tz).toBe('company');
+    expect(hq.routineTz(hq.routineByName('weekly-pack')!)).toBe('Asia/Dushanbe');
+    expect(hq.syncRoutines('marketing', [{ ...def, tz: 'owner' }]).updated).toEqual(['weekly-pack']);
+    expect(hq.routineTz(hq.routineByName('weekly-pack')!)).toBe('Asia/Kuala_Lumpur');
+    expect(hq.syncRoutines('marketing', [{ ...def, tz: 'owner' }]).updated).toEqual([]); // nothing changed, nothing rewritten
+    expect(hq.syncRoutines('marketing', [def]).updated).toEqual(['weekly-pack']);
+    expect(hq.routineByName('weekly-pack')!.tz).toBe('company');
+  });
+
+  it('an old database gains the column without losing its routines', () => {
+    const { hq } = setup();
+    hq.db.exec('DROP TABLE routines');
+    hq.db.exec(`CREATE TABLE routines (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, cron TEXT NOT NULL, dept TEXT NOT NULL, assignee_id TEXT, title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '', meta TEXT NOT NULL DEFAULT '{}', priority INTEGER NOT NULL DEFAULT 0, overlap TEXT NOT NULL DEFAULT 'skip', enabled INTEGER NOT NULL DEFAULT 1,
+      last_run_at INTEGER, last_task_id INTEGER)`);
+    hq.db.exec("INSERT INTO routines (name, cron, dept, title) VALUES ('old', '0 1 * * *', 'marketing', 'Старая')");
+    const again = new (hq.constructor as new (db: typeof hq.db) => typeof hq)(hq.db);
+    expect(again.routineByName('old')).toMatchObject({ cron: '0 1 * * *', tz: 'company' });
+  });
+});
+
+describe('held proposals (a weekly pack stands for its items)', () => {
+  it('an old database gains the held column; held proposals leave the batch until the pack opens them', async () => {
+    const { hq } = setup();
+    hq.db.exec('DROP TABLE task_approvals');
+    hq.db.exec(`CREATE TABLE task_approvals (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, approval_id INTEGER, dept TEXT NOT NULL, kind TEXT NOT NULL,
+      payload TEXT NOT NULL, summary TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued','asked','executed','rejected','failed')), created_at INTEGER NOT NULL)`);
+    hq.db.exec("INSERT INTO task_approvals (task_id, dept, kind, payload, summary, created_at) VALUES (1, 'marketing', 'x', '{}', 's', 1)");
+    const again = new (hq.constructor as new (db: typeof hq.db) => typeof hq)(hq.db);
+    expect(again.queuedApprovals()).toHaveLength(1);
+    expect(again.queuedApprovals()[0]).toMatchObject({ held: false, state: 'queued' });
+    expect(again.holdApprovals([1])).toBe(1);
+    expect(again.queuedApprovals()).toHaveLength(0);
+    expect(again.heldApprovals()).toHaveLength(1);
+    expect(again.heldApprovals([2])).toHaveLength(0);
+    expect(again.holdApprovals([1])).toBe(1); // idempotent
+  });
+});

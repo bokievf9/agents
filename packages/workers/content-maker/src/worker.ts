@@ -153,10 +153,13 @@ export class ContentMakerWorker implements Worker {
     this.trends = opts.trends ?? noTrends;
   }
 
-  /** The approval kind to register in the HQ (never promoted to level 1: every item needs the owner's button). */
+  /**
+   * The approval kind to register in the HQ. Content is not money (owner decision 2026-11-19): it is not `locked`, so «Одобрить все
+   * обычные» takes it, but `keepManual` keeps the counter from promoting it to level 1: every item still needs the owner.
+   */
   kindSpec(ctx: Pick<WorkerCtx, 'db' | 'now'>, isEdited: (approvalId: number) => boolean): KindSpec {
     return {
-      initialLevel: 0, locked: true,
+      initialLevel: 0, keepManual: true,
       execute: async (payload, approvalId) => {
         const store = storeFor(ctx);
         onApproved(store, payload, isEdited(approvalId));

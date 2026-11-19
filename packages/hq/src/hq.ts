@@ -16,12 +16,22 @@ const TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   rejected: [],
 };
 
+/**
+ * Two clocks (owner decision 2026-11-19). `tz` is the company's: the market (Asia/Dushanbe), client bot hours, booking slots,
+ * publishing times, deadlines. `owner_tz` is the owner's own (Asia/Kuala_Lumpur): the morning summary, the approval batch,
+ * the weekly digest, alerts and quiet hours. `summary_time`, `approval_time`, `digest_time` and `quiet_hours` are read in `owner_tz`.
+ * Quiet hours are empty here (so tests do not depend on the wall clock); `seedTiming` in the app writes 23:00-08:00 on first start.
+ */
 export const DEFAULT_SETTINGS: Record<string, string> = {
-  tz: 'Asia/Tashkent',
+  tz: 'Asia/Dushanbe',
+  owner_tz: 'Asia/Kuala_Lumpur',
   summary_time: '08:00',
-  approval_time: '10:00',
+  approval_time: '09:00',
+  digest_time: '08:30',
   quiet_hours: '',
 };
+/** The quiet hours the app starts with (the owner's night, in `owner_tz`). */
+export const DEFAULT_QUIET_HOURS = '23:00-08:00';
 
 interface TaskRow {
   id: number; title: string; body: string; dept: string; assignee_id: string | null; creator: Creator; parent_id: number | null;
@@ -46,21 +56,21 @@ const toAgent = (r: AgentRow): Agent => ({
 
 interface RoutineRow {
   id: number; name: string; cron: string; dept: string; assignee_id: string | null; title: string; body: string; meta: string;
-  priority: number; overlap: Routine['overlap']; enabled: number; last_run_at: number | null; last_task_id: number | null;
+  priority: number; overlap: Routine['overlap']; enabled: number; tz: string | null; last_run_at: number | null; last_task_id: number | null;
 }
 const toRoutine = (r: RoutineRow): Routine => ({
   id: r.id, name: r.name, cron: r.cron, dept: r.dept, assigneeId: r.assignee_id, title: r.title, body: r.body,
   meta: JSON.parse(r.meta) as Record<string, unknown>, priority: r.priority, overlap: r.overlap, enabled: r.enabled === 1,
-  lastRunAt: r.last_run_at, lastTaskId: r.last_task_id,
+  tz: r.tz === 'owner' ? 'owner' : 'company', lastRunAt: r.last_run_at, lastTaskId: r.last_task_id,
 });
 
 interface LinkRow {
   id: number; task_id: number; approval_id: number | null; dept: string; kind: string; payload: string; summary: string;
-  state: ApprovalState; created_at: number;
+  state: ApprovalState; held: number; created_at: number;
 }
 const toLink = (r: LinkRow): TaskApproval => ({
   id: r.id, taskId: r.task_id, approvalId: r.approval_id, dept: r.dept, kind: r.kind, payload: JSON.parse(r.payload) as Payload,
-  summary: r.summary, state: r.state, createdAt: r.created_at,
+  summary: r.summary, state: r.state, held: r.held === 1, createdAt: r.created_at,
 });
 
 export interface CostInput {
@@ -111,6 +121,11 @@ export class Hq {
     const rcols = db.prepare('PRAGMA table_info(routines)').all() as { name: string }[];
     if (!rcols.some((c) => c.name === 'source')) db.exec('ALTER TABLE routines ADD COLUMN source TEXT');
     if (!rcols.some((c) => c.name === 'edited_by_owner')) db.exec('ALTER TABLE routines ADD COLUMN edited_by_owner INTEGER NOT NULL DEFAULT 0');
+    // which clock a routine runs on (company or owner), see `Routine.tz`
+    if (!rcols.some((c) => c.name === 'tz')) db.exec("ALTER TABLE routines ADD COLUMN tz TEXT NOT NULL DEFAULT 'company'");
+    // a proposal that belongs to a weekly pack is held back from the batch (see `TaskApproval.held`)
+    const acols = db.prepare('PRAGMA table_info(task_approvals)').all() as { name: string }[];
+    if (!acols.some((c) => c.name === 'held')) db.exec('ALTER TABLE task_approvals ADD COLUMN held INTEGER NOT NULL DEFAULT 0');
     this.now = opts.now ?? Date.now;
     const seed = db.prepare('INSERT OR IGNORE INTO prices (prefix, in_usd, out_usd) VALUES (?, ?, ?)');
     for (const [prefix, p] of Object.entries(DEFAULT_PRICES)) seed.run(prefix, p.in, p.out);
@@ -453,8 +468,54 @@ export class Hq {
     return r ? toLink(r) : undefined;
   }
 
+  /** Proposals that wait for the next batch (the ones held back for a weekly pack's card are not here, see `heldApprovals`). */
   queuedApprovals(): TaskApproval[] {
-    return (this.db.prepare("SELECT * FROM task_approvals WHERE state = 'queued' ORDER BY dept, id").all() as LinkRow[]).map(toLink);
+    return (this.db.prepare("SELECT * FROM task_approvals WHERE state = 'queued' AND held = 0 ORDER BY dept, id").all() as LinkRow[]).map(toLink);
+  }
+
+  /** Queued proposals held back for a pack's card, of the given tasks (all of them when none is given). */
+  heldApprovals(taskIds?: number[]): TaskApproval[] {
+    const rows = this.db.prepare("SELECT * FROM task_approvals WHERE state = 'queued' AND held = 1 ORDER BY id").all() as LinkRow[];
+    return rows.map(toLink).filter((l) => !taskIds || taskIds.includes(l.taskId));
+  }
+
+  /** Holds queued proposals back from the batch: a pack's card stands for them (nothing is sent to the owner for them). */
+  holdApprovals(linkIds: number[]): number {
+    let n = 0;
+    for (const id of linkIds) n += this.db.prepare("UPDATE task_approvals SET held = 1 WHERE id = ? AND state = 'queued'").run(id).changes;
+    return n;
+  }
+
+  /** The owner opens a pack: its held proposals go out one by one, each as its own card, at once. Returns how many reached Telegram. */
+  async releaseHeld(linkIds: number[]): Promise<number> {
+    let sent = 0;
+    for (const id of linkIds) {
+      this.db.prepare("UPDATE task_approvals SET held = 0 WHERE id = ? AND state = 'queued'").run(id);
+      if (await this.askOne(id, '')) sent++;
+    }
+    this.reconcileApprovals();
+    return sent;
+  }
+
+  /**
+   * The owner decides a held proposal through its pack. Makes its core approval row without sending a card and returns the id
+   * (the caller runs `queue.handle('approve', id)`); the link becomes `asked`, so `reconcileApprovals` follows the outcome.
+   */
+  openHeld(linkId: number): number | null {
+    const l = this.approvalLink(linkId);
+    if (!l || l.state !== 'queued' || !l.held) return null;
+    const id = this.q().open(l.kind, l.payload, l.summary);
+    this.db.prepare("UPDATE task_approvals SET approval_id = ?, state = 'asked', held = 0 WHERE id = ?").run(id, linkId);
+    return id;
+  }
+
+  /** The owner rejects a held proposal through its pack: the link is closed as rejected and the task follows. */
+  rejectHeld(linkId: number): boolean {
+    const l = this.approvalLink(linkId);
+    if (!l || l.state !== 'queued' || !l.held) return false;
+    this.db.prepare("UPDATE task_approvals SET state = 'rejected', held = 0 WHERE id = ?").run(linkId);
+    this.settleLink(this.db.prepare('SELECT * FROM task_approvals WHERE id = ?').get(linkId) as LinkRow, 'rejected', false);
+    return true;
   }
 
   /**
@@ -515,23 +576,28 @@ export class Hq {
       const status = this.q().get(row.approval_id!)?.status;
       const next: ApprovalState | null = status === 'executed' ? 'executed' : status === 'rejected' ? 'rejected' : status === 'failed' ? 'failed' : null;
       if (!next) continue;
-      this.db.prepare('UPDATE task_approvals SET state = ? WHERE id = ?').run(next, row.id);
-      this.log('owner', 'approval_decided', 'task', String(row.task_id), next);
+      this.settleLink(row, next, true);
       changed++;
-      for (const sink of this.decisionSinks) sink(this.approvalLink(row.id)!, next);
-      const open = this.db.prepare("SELECT COUNT(*) c FROM task_approvals WHERE task_id = ? AND state IN ('queued','asked')").get(row.task_id) as { c: number };
-      const t = this.task(row.task_id);
-      if (!t || TERMINAL.includes(t.status)) continue;
-      this.addEvent(row.task_id, 'approval', 'owner', `${row.kind}: ${next}`);
-      if (next === 'failed') this.block(row.task_id, 'owner', `approval ${row.kind} failed to execute`);
-      else if (open.c === 0) {
-        const all = this.db.prepare('SELECT state FROM task_approvals WHERE task_id = ?').all(row.task_id) as { state: ApprovalState }[];
-        const anyOk = all.some((a) => a.state === 'executed');
-        this.move(row.task_id, anyOk ? 'done' : 'rejected', 'owner');
-        this.log('owner', anyOk ? 'approved' : 'rejected', 'task', String(row.task_id));
-      }
     }
     return changed;
+  }
+
+  /** One link reached its outcome: sinks hear it, the task follows (done when something was approved and nothing is open, rejected, or blocked on failure). */
+  private settleLink(row: LinkRow, next: ApprovalState, write: boolean): void {
+    if (write) this.db.prepare('UPDATE task_approvals SET state = ? WHERE id = ?').run(next, row.id);
+    this.log('owner', 'approval_decided', 'task', String(row.task_id), next);
+    for (const sink of this.decisionSinks) sink(this.approvalLink(row.id)!, next);
+    const open = this.db.prepare("SELECT COUNT(*) c FROM task_approvals WHERE task_id = ? AND state IN ('queued','asked')").get(row.task_id) as { c: number };
+    const t = this.task(row.task_id);
+    if (!t || TERMINAL.includes(t.status)) return;
+    this.addEvent(row.task_id, 'approval', 'owner', `${row.kind}: ${next}`);
+    if (next === 'failed') this.block(row.task_id, 'owner', `approval ${row.kind} failed to execute`);
+    else if (open.c === 0) {
+      const all = this.db.prepare('SELECT state FROM task_approvals WHERE task_id = ?').all(row.task_id) as { state: ApprovalState }[];
+      const anyOk = all.some((a) => a.state === 'executed');
+      this.move(row.task_id, anyOk ? 'done' : 'rejected', 'owner');
+      this.log('owner', anyOk ? 'approved' : 'rejected', 'task', String(row.task_id));
+    }
   }
 
   // ---- routines ----
@@ -548,14 +614,15 @@ export class Hq {
   private upsertRoutine(r: NewRoutine): Routine {
     this.db
       .prepare(
-        `INSERT INTO routines (name, cron, dept, assignee_id, title, body, meta, priority, overlap, enabled)
-         VALUES (@name, @cron, @dept, @assignee, @title, @body, @meta, @priority, @overlap, @enabled)
+        `INSERT INTO routines (name, cron, dept, assignee_id, title, body, meta, priority, overlap, enabled, tz)
+         VALUES (@name, @cron, @dept, @assignee, @title, @body, @meta, @priority, @overlap, @enabled, @tz)
          ON CONFLICT(name) DO UPDATE SET cron=excluded.cron, dept=excluded.dept, assignee_id=excluded.assignee_id, title=excluded.title,
-           body=excluded.body, meta=excluded.meta, priority=excluded.priority, overlap=excluded.overlap, enabled=excluded.enabled`,
+           body=excluded.body, meta=excluded.meta, priority=excluded.priority, overlap=excluded.overlap, enabled=excluded.enabled, tz=excluded.tz`,
       )
       .run({
         name: r.name, cron: r.cron, dept: r.dept, assignee: r.assigneeId ?? null, title: r.title, body: r.body ?? '',
         meta: JSON.stringify(r.meta ?? {}), priority: r.priority ?? 0, overlap: r.overlap ?? 'skip', enabled: r.enabled === false ? 0 : 1,
+        tz: r.tz === 'owner' ? 'owner' : 'company',
       });
     return this.routineByName(r.name)!;
   }
@@ -581,14 +648,14 @@ export class Hq {
       for (const d of defs) {
         const cur = this.routineByName(d.name);
         const edited = cur ? (this.db.prepare('SELECT edited_by_owner e FROM routines WHERE name = ?').get(d.name) as { e: number }).e === 1 : false;
-        const next = { cron: d.cron, dept: d.dept, title: d.title, body: d.body ?? '', meta: d.meta ?? {}, priority: d.priority ?? 0, overlap: d.overlap ?? 'skip', enabled: d.enabled !== false, assigneeId: d.assigneeId ?? null };
+        const next = { cron: d.cron, dept: d.dept, title: d.title, body: d.body ?? '', meta: d.meta ?? {}, priority: d.priority ?? 0, overlap: d.overlap ?? 'skip', enabled: d.enabled !== false, assigneeId: d.assigneeId ?? null, tz: d.tz === 'owner' ? 'owner' : 'company' };
         if (!cur) {
           this.upsertRoutine(d);
           out.created.push(d.name);
         } else if (!edited) {
           const same = cur.cron === next.cron && cur.dept === next.dept && cur.title === next.title && cur.body === next.body
             && JSON.stringify(cur.meta) === JSON.stringify(next.meta) && cur.priority === next.priority && cur.overlap === next.overlap
-            && cur.enabled === next.enabled && cur.assigneeId === next.assigneeId;
+            && cur.enabled === next.enabled && cur.assigneeId === next.assigneeId && cur.tz === next.tz;
           if (!same) {
             this.upsertRoutine(d);
             out.updated.push(d.name);
@@ -699,15 +766,26 @@ export class Hq {
     return { ...DEFAULT_SETTINGS, ...Object.fromEntries(rows.map((r) => [r.key, r.value] as const)) };
   }
 
+  /** The company's timezone: the market, the clients, publishing times. */
   get tz(): string {
     return this.setting('tz');
   }
 
-  /** True inside the "quiet hours" window (setting `quiet_hours`, "23:00-07:00" in the HQ timezone). */
+  /** The owner's timezone: what is addressed to him (summary, batch, digest, alerts, quiet hours) is read on this clock. */
+  get ownerTz(): string {
+    return this.setting('owner_tz') || DEFAULT_SETTINGS.owner_tz!;
+  }
+
+  /** The timezone a routine's cron runs in. */
+  routineTz(r: Pick<Routine, 'tz'>): string {
+    return r.tz === 'owner' ? this.ownerTz : this.tz;
+  }
+
+  /** True inside the "quiet hours" window (setting `quiet_hours`, "23:00-08:00" in the owner's timezone). */
   isQuiet(at = this.now()): boolean {
     const m = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/.exec(this.setting('quiet_hours'));
     if (!m) return false;
-    const p = zonedParts(at, this.tz);
+    const p = zonedParts(at, this.ownerTz);
     const cur = p.h * 60 + p.mi;
     const from = Number(m[1]) * 60 + Number(m[2]);
     const to = Number(m[3]) * 60 + Number(m[4]);

@@ -27,6 +27,7 @@ const routineSchema = z.strictObject({
   priority: z.number().int().default(0),
   overlap: z.enum(['skip', 'allow']).default('skip'),
   enabled: z.boolean().default(true),
+  tz: z.enum(['company', 'owner']).default('company'),
 });
 
 const orgSchema = z.strictObject({
@@ -37,7 +38,7 @@ const orgSchema = z.strictObject({
 });
 
 /** Only these settings travel with an exported company (never alert markers or anything token-like). */
-export const EXPORTED_SETTINGS = ['tz', 'summary_time', 'approval_time', 'quiet_hours'];
+export const EXPORTED_SETTINGS = ['tz', 'owner_tz', 'summary_time', 'approval_time', 'digest_time', 'quiet_hours'];
 
 /** The company as a template: org, instructions, routines, settings. No secrets, no tasks, no costs. */
 export function exportOrg(hq: Hq): string {
@@ -51,7 +52,7 @@ export function exportOrg(hq: Hq): string {
     })),
     routines: hq.routines().map((r) => ({
       name: r.name, cron: r.cron, dept: r.dept, assignee_id: r.assigneeId, title: r.title, body: r.body, meta: r.meta,
-      priority: r.priority, overlap: r.overlap, enabled: r.enabled,
+      priority: r.priority, overlap: r.overlap, enabled: r.enabled, tz: r.tz,
     })),
   }, { lineWidth: 0 });
 }
@@ -70,7 +71,7 @@ export function importOrg(hq: Hq, yamlText: string): { agents: number; routines:
     for (const r of org.routines) {
       hq.scheduleRoutine({
         name: r.name, cron: r.cron, dept: r.dept, assigneeId: r.assignee_id, title: r.title, body: r.body, meta: r.meta,
-        priority: r.priority, overlap: r.overlap, enabled: r.enabled,
+        priority: r.priority, overlap: r.overlap, enabled: r.enabled, tz: r.tz,
       });
     }
     for (const [k, v] of Object.entries(org.settings)) hq.setSetting(k, v);

@@ -43,7 +43,9 @@ services:
     environment:
       DATA_DIR: /app/data
       LLM_BASE_URL: http://omniroute:20128
-      TZ: Asia/Tashkent
+      # two clocks: TZ is the company (market, clients, publishing), OWNER_TZ the owner (summary, batch, digest, quiet hours); both only seed the settings on first start
+      TZ: Asia/Dushanbe
+      OWNER_TZ: Asia/Kuala_Lumpur
     volumes:
       - /opt/fir-agents/data/hq:/app/data
       # Docker check of the Support head (MONITOR_DOCKER=true). OFF: the docker socket is root-equivalent on the host,
@@ -86,7 +88,7 @@ services:
       DATA_DIR: /app/data
       RENDERER_POLL_SECONDS: "20"
       PIPER_VOICE: ru_RU-denis-medium
-      TZ: Asia/Tashkent
+      TZ: Asia/Dushanbe
     volumes:
       - /opt/fir-agents/data/hq:/app/data
     network_mode: none

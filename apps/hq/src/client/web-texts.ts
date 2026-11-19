@@ -27,6 +27,8 @@ interface WebTexts {
   price: string;
   night: string;
   fallback: string;
+  /** The model is down: scripted, asks for a contact so the request is not lost, never an error. */
+  down: string;
   cap: string;
 }
 
@@ -50,6 +52,7 @@ const RU: WebTexts = {
   },
   night: 'Сейчас у нас ночь, человек ответит утром. Если хотите, оставьте заявку: это три коротких вопроса и контакт.',
   fallback: 'На этот вопрос лучше ответит команда. Оставьте заявку: три коротких вопроса и контакт, и мы вернёмся с ответом.',
+  down: 'Принял, менеджер ответит в рабочее время. Оставьте контакт (Telegram @username, телефон или email), и мы напишем вам первыми.',
   cap: 'Чтобы ответить по существу, нужно знать вашу задачу. Оставьте заявку: три коротких вопроса и контакт, и команда вернётся с предложением.',
 };
 
@@ -73,6 +76,7 @@ const EN: WebTexts = {
   },
   night: 'It is night here now, a person will answer in the morning. If you like, leave a request: three short questions and a contact.',
   fallback: 'The team can answer this better. Leave a request: three short questions and a contact, and we will come back with an answer.',
+  down: 'Got it, a manager will reply during business hours. Leave a contact (Telegram @username, phone or email) and we will write to you first.',
   cap: 'To answer properly we need to know your task. Leave a request: three short questions and a contact, and the team will come back with a proposal.',
 };
 

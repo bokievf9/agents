@@ -12,7 +12,7 @@ describe('Director: owner messages', () => {
     await w.director.onText('сделай ролик про барбершоп');
     const t = w.hq.tasks({ dept: 'marketing' })[0]!;
     expect(t).toMatchObject({ title: 'Ролик про барбершоп', creator: 'owner', priority: 2, status: 'inbox' });
-    expect(t.dueAt).toBe(Date.UTC(2026, 10, 25, 18, 59)); // 23:59 Tashkent
+    expect(t.dueAt).toBe(Date.UTC(2026, 10, 25, 15, 59)); // 23:59 on the owner's clock (Kuala Lumpur, UTC+8)
     expect(w.hq.pendingHeartbeats()).toBe(1);
     const live = w.messenger.last()!;
     expect(live.text).toContain(`#${t.id} Маркетинг: «Ролик про барбершоп»`);
@@ -75,7 +75,7 @@ describe('Director: rule changes need the button', () => {
     await w.director.onText('a');
     const seq = Number(/rl:(\d+):n/.exec(w.messenger.last()!.buttons![0]![1]!.data)![1]);
     expect(await w.director.onRuleButton(seq, false)).toBe('Отменено');
-    expect(w.hq.tz).toBe('Asia/Tashkent');
+    expect(w.hq.tz).toBe('Asia/Dushanbe');
     const before = w.messenger.sent.length;
     await w.director.onText('b');
     await w.director.onText('c');
@@ -156,7 +156,7 @@ describe('Director: commands, summary, batch, alerts', () => {
     const w = world();
     await w.hq.alert('диск почти полон');
     expect(w.messenger.last()!.text).toBe('Алерт: диск почти полон');
-    w.hq.setSetting('quiet_hours', '11:00-14:00');
+    w.hq.setSetting('quiet_hours', '14:00-16:00'); // the owner's clock: the test clock is 15:00 in Kuala Lumpur
     const n = w.messenger.sent.length;
     await w.hq.alert('ночью упал сервис');
     expect(w.messenger.sent).toHaveLength(n);
@@ -190,8 +190,8 @@ describe('org and config', () => {
     expect(w.hq.agent('director')!.instructions).toContain('Директор Fir Tech');
     expect(w.hq.agent('marketing-head')).toMatchObject({ bot: 'MARKETING_BOT_TOKEN', bossId: 'director' });
     expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([
-      ['marketing-weekly-pack', '0 9 * * 1'], ['marketing-daily-today', '0 9 * * *'], ['marketing-trends-daily', '30 8 * * *'],
-      ['marketing-trends-weekly', '0 20 * * 0'], ['marketing-analyst-weekly', '0 8 * * 1'], ['marketing-article-weekly', '0 10 * * 2'], ['marketing-seo-weekly', '0 11 * * 1'],
+      ['marketing-weekly-pack', '0 6 * * 1'], ['marketing-daily-today', '0 9 * * *'], ['marketing-trends-daily', '30 7 * * *'],
+      ['marketing-trends-weekly', '0 20 * * 0'], ['marketing-analyst-weekly', '0 7 * * 1'], ['marketing-article-weekly', '0 7 * * 2'], ['marketing-seo-weekly', '30 7 * * 1'],
     ]);
     w.hq.setInstructions('marketing-head', 'edited');
     w.hq.scheduleRoutine({ ...w.hq.routineByName('marketing-daily-today')!, cron: '0 10 * * *' });

@@ -466,14 +466,17 @@ describe('free conversation', () => {
     expect(buttonTexts(m.buttons)).toContain('💬 Обсудить проект');
   });
 
-  it('the [[team]] marker is stripped and the question goes to the owner; LLM failure falls back to «передал команде»', async () => {
+  it('the [[team]] marker is stripped and the question goes to the owner; LLM failure answers with the scripted «принял, менеджер ответит»', async () => {
     const w = world({ answer: (req) => (req.messages.at(-1)!.content.includes('договор') ? 'Уточню у команды и вернусь здесь.\n[[team]]' : '') });
     await w.engine.onText(ME, 'Можно изменить договор?');
     expect(w.transport.last(CLIENT)!.html).toBe('Уточню у команды и вернусь здесь.');
     expect(w.transport.last(OWNER)!.html).toContain('Нужен человек');
     await w.engine.onText(ME, 'Ещё вопрос про интеграцию');
-    expect(w.transport.last(CLIENT)!.html).toContain('Передал команде');
-    expect(w.transport.last(OWNER)!.html).toContain('интеграцию');
+    expect(w.transport.last(CLIENT)!.html).toContain('Менеджер ответит в рабочее время');
+    // and the question is not lost: it became a lead record that Sales and the owner see
+    expect(w.leadTasks()).toHaveLength(1);
+    expect(JSON.stringify(w.leadTasks()[0]!.meta.lead)).toContain('интеграцию');
+    expect(w.transport.sent.some((m) => m.chatId === OWNER && m.html.includes('Заявка в клиентском боте'))).toBe(true);
   });
 
   it('LLM off: template plus «передал команде»', async () => {

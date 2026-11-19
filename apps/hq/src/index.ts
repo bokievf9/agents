@@ -5,12 +5,13 @@ import {
 import { HeartbeatWorker, Hq, meterLlm, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
 import { Director } from './director.js';
+import { seedTiming } from './timing.js';
 import { HEAD_ID, MARKETING, MarketingHead } from './heads/marketing.js';
 import { HEAD_ID as SALES_HEAD_ID, parseCopy, SALES, SalesHead, seedSales } from './heads/sales.js';
 import { seedOrg } from './org.js';
 import { PRODUCTION, PRODUCTION_HEAD_ID, ProductionHead, seedProduction } from './heads/production.js';
 import { BACKOFFICE, BACKOFFICE_HEAD_ID, BackofficeHead, seedBackoffice } from './heads/backoffice.js';
-import { SUPPORT, SUPPORT_COMMANDS, SUPPORT_HEAD_ID, SupportHead, seedSupport } from './heads/support.js';
+import { SUPPORT, SUPPORT_HEAD_ID, SupportHead, seedSupport } from './heads/support.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BillingWorker } from '@fir/worker-billing';
@@ -27,17 +28,22 @@ import { createAdmin } from './admin.js';
 import { OwnerChannel } from './presence.js';
 import { cachedOffice } from './office.js';
 import { Drill } from './drill.js';
+import { guardedLead, LostLeads } from './lost-leads.js';
 import { BuilderBridge, RestGithubClient } from './bridge.js';
 import { ClientBot } from './client/bot.js';
 import { RateLimiter } from './client/sanitize.js';
 import { WebChatEngine } from './client/web.js';
 import { FALLBACK_INSTRUCTIONS } from './client/prompt.js';
 import { clientSinks } from './client/sinks.js';
+import { gatewayGate } from './client/shared.js';
 import { DIRECTOR_COMMANDS, DIRECTOR_PROFILE, deptBotMenu, menuCommand } from './tg.js';
+import { COMMAND_NAMES, routedTo } from './commands.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
 const hq = new Hq(db);
+// Requests accepted from visitors that fail before the owner sees them: `lost_lead` rows and one summary alert an hour.
+const lost = new LostLeads(hq);
 // Prices come from one place: the site's price list (fetched now and every 6 hours, the last good copy is kept in the
 // database, a bundled snapshot is the last resort). Workers and the client bot read `getPrices()` when they need a number.
 const pricesRefresh = startPricesRefresh({ url: cfg.pricesUrl, store: { get: (k) => hq.setting(k) || undefined, set: (k, v) => hq.setSetting(k, v) } });
@@ -46,8 +52,8 @@ log('info', 'prices loaded', { source: pricesLoaded.source, updatedAt: pricesLoa
 // A restart or a deploy cuts off the tasks that were running: they go back to the head's queue.
 const recovered = hq.recoverInterrupted();
 if (recovered.length) log('warn', 'interrupted tasks put back to assigned', { count: recovered.length });
-// The timezone of the departments is a setting; the first start takes it from TZ.
-if (!db.prepare("SELECT 1 FROM settings WHERE key = 'tz'").get()) hq.setSetting('tz', cfg.tz);
+// Two clocks, both settings (the first start takes them from TZ and OWNER_TZ): the company's for the market, the owner's for what reaches him.
+seedTiming(hq, cfg);
 seedOrg(hq, cfg);
 seedSupport(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'utf8').trim());
 seedSales(hq, cfg);
@@ -75,6 +81,7 @@ const llm = new GatewayWatch(createLlm(cfg.llm), {
 // The public client bot and the website chat are the biggest spend and had no meter: every call now lands in `costs` (agent
 // `client-bot`, department sales; a customer is waiting, so the money limit alerts but never silences it). The daily call cap
 // lives in HQ settings, so a deploy does not reset it.
+const gatewayDown = gatewayGate(() => llm.down, Date.now); // visitors get the scripted answer while the gateway is down; one call a minute probes it
 const clientLlm = meterLlm(llm, hq, { agentId: 'client-bot', urgent: true });
 const counter = { get: (k: string) => hq.setting(k) || undefined, set: (k: string, v: string) => hq.setSetting(k, v) };
 
@@ -111,12 +118,13 @@ const clientBot = cfg.clientBotToken
       token: cfg.clientBotToken, db, now: hq.now, tz: () => hq.tz, llm: clientLlm, counter, ownerId: cfg.ownerId, instructions: readClientInstructions(),
       quietHours: cfg.clientQuietHours, perHour: cfg.clientRatePerHour, dailyCap: cfg.clientLlmDailyCap,
       ownerFallback: (text) => messenger.send(cfg.ownerId, text),
+      onLost: (source, reason, info) => lost.record(source, reason, info), gatewayDown,
     })
   : null;
 const marketing = new MarketingHead({
   hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, clipsPerWeek: cfg.clipsPerWeek, carouselsPerWeek: cfg.carouselsPerWeek,
   postsPerWeek: cfg.postsPerWeek, storiesPerWeek: cfg.storiesPerWeek, rendersDir: cfg.rendersDir, renderReels: cfg.renderReels,
-  ...(clientBot ? { audit: clientBot.engine } : {}),
+  ...(clientBot ? { audit: clientBot.engine } : {}), lost,
   integrations: {
     youtubeApiKey: cfg.youtubeApiKey, youtubeChannelId: cfg.youtubeChannelId, trendsRegions: cfg.trendsRegions,
     gscServiceAccountJson: cfg.gscServiceAccountJson, gscSiteUrl: cfg.gscSiteUrl, siteUrl: cfg.siteUrl,
@@ -124,7 +132,8 @@ const marketing = new MarketingHead({
 });
 director.editors.set('content_item', marketing);
 director.editors.set('article', marketing); // «Править» on an article = a remark, the article is written again
-for (const name of ['profile', 'article', 'render']) director.commands.set(name, { dept: 'marketing', run: (arg) => marketing.command(name, arg) });
+director.onPackButton = (op, id, at) => marketing.onPackButton(op, id, at); // the weekly pack's card: «Посмотреть по одному», previews
+for (const name of routedTo('marketing')) director.commands.set(name, { dept: 'marketing', run: (arg) => marketing.command(name, arg) });
 const monitor = new MonitoringWorker(cfg.monitor);
 if (clientBot) monitor.watchBot(clientBot.probe()); // getMe, polling errors and silence of @firtech_bot go to the checks and to /status
 const support = new SupportHead({
@@ -137,7 +146,7 @@ director.onSupportCommand = (name, args) => support.onCommand(name, args);
 const sales = new SalesHead({
   hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel,
   referralReward: cfg.referralReward, prepaymentPercent: cfg.prepaymentPercent, kpValidDays: cfg.kpValidDays,
-  ...(clientBot ? { client: clientBot } : {}),
+  ...(clientBot ? { client: clientBot } : {}), lost,
 });
 const auditGate = new AuditGate(hq.now);
 clientBot?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix, audit: { marketing, gate: auditGate } }));
@@ -145,12 +154,14 @@ director.onSalesReply = (id, text) => sales.startReply(id, text);
 director.onSalesCommand = (name, arg) => sales.salesCommand(name, arg);
 director.editors.set('sales:reply', sales); // the owner's text after /reply <id>
 const production = new ProductionHead({ hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter });
+// The first payment of a КП starts the project (reserved by the approved КП) and asks the referral payout; `/paid` and later the on-chain check land here.
+support.onPaid = async (inv) => [...production.onInvoicePaid(inv), ...(await sales.onInvoicePaid(inv))];
 const backoffice = new BackofficeHead({
   hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, knowledgeDir: cfg.knowledgeDir,
   ops: { dataDir: cfg.dataDir, rendersDir: cfg.rendersDir, ageRecipient: cfg.backupAgeRecipient },
 });
-for (const name of ['project', 'pstatus', 'target', 'mdone']) director.commands.set(name, { dept: 'production', run: (arg) => production.command(name, arg) });
-for (const name of ['doc', 'lesson', 'kb']) director.commands.set(name, { dept: 'backoffice', run: (arg) => backoffice.command(name, arg) });
+for (const name of routedTo('production')) director.commands.set(name, { dept: 'production', run: (arg) => production.command(name, arg) });
+for (const name of routedTo('backoffice')) director.commands.set(name, { dept: 'backoffice', run: (arg) => backoffice.command(name, arg) });
 const drill = new Drill({
   hq, queue, messenger, ownerId: cfg.ownerId, reporter,
   monitor: async () => {
@@ -161,7 +172,7 @@ const drill = new Drill({
 });
 director.onDrillCommand = (arg) => drill.command(arg);
 director.onTopicsCommand = async () => (await topicManager.ensure()).text;
-director.summaryLines.push(() => topicManager.summaryNote(), () => production.overdueLine(), () => backoffice.pendingLine());
+director.summaryLines.push(() => topicManager.summaryNote(), () => production.overdueLine(), () => backoffice.pendingLine(), () => lost.summaryLine());
 
 // Group service messages: the basic group became a supergroup (new id), or a topic was created by hand.
 bot.on('message', async (ctx, next) => {
@@ -246,7 +257,8 @@ bot.on('callback_query:data', async (ctx) => {
   await ctx.answerCallbackQuery({ text: 'Устарело' }).catch(() => undefined);
 });
 
-const botCommands = ['start', 'help', 'status', 'depts', 'tasks', 'approve', 'costs', 'org', 'level', 'pause', 'resume', 'reply', 'skip', 'builders', 'builder', 'topics', 'drill', 'retry', 'desk', 'away', ...SUPPORT_COMMANDS, ...director.commands.keys(), 'kp', 'referral', 'referrals'];
+// every command of the one list (`commands.ts`): the same names feed /help, the menu and these handlers
+const botCommands = COMMAND_NAMES;
 const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
 for (const name of botCommands) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
@@ -291,7 +303,13 @@ const beat = () => {
 beat();
 const beatTimer = setInterval(beat, 30_000);
 beatTimer.unref();
-const routineJobs = startRoutines(hq);
+let routineJobs = startRoutines(hq);
+// A clock or a time changed through the Director: the routines and the heads' own crons follow it at once (no restart needed).
+director.onTimingChange = () => {
+  routineJobs.forEach((j) => j.stop());
+  routineJobs = startRoutines(hq);
+  support.start();
+};
 const bridge = new BuilderBridge({
   hq, pollMinutes: cfg.builderPollMinutes,
   github: cfg.githubToken ? new RestGithubClient(cfg.githubToken, cfg.githubRepo) : null,
@@ -306,6 +324,13 @@ drill.start();
 const dueTick = async () => {
   await clientBot?.engine.demo.tick().catch((e) => log('warn', 'demo reminders failed', { err: errMsg(e) }));
   await marketing.auditWatch().catch((e) => log('warn', 'audit watch failed', { err: errMsg(e) }));
+  // leads nobody took for 15 minutes are recorded, and the lost requests of the last hour become one alert
+  try {
+    lost.watchStale();
+    await lost.flush();
+  } catch (e) {
+    log('warn', 'lost leads watch failed', { err: errMsg(e) });
+  }
 };
 void dueTick();
 const dueTimer = setInterval(() => void dueTick(), 30_000);
@@ -321,7 +346,10 @@ for (const dept of hq.departments()) {
 // POST /chat (website chat): the same conversation engine as the client bot, its LLM daily cap shared with the Telegram counter.
 const chatGate = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
 const webChat = cfg.webChatToken
-  ? new WebChatEngine({ db, now: hq.now, tz: () => hq.tz, llm: clientLlm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate })
+  ? new WebChatEngine({
+      db, now: hq.now, tz: () => hq.tz, llm: clientLlm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate,
+      onLost: (source, reason, info) => lost.record(source, reason, info), gatewayDown,
+    })
   : null;
 webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix }));
 
@@ -334,8 +362,9 @@ presenceTimer.unref();
 
 const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
   ? createWebhook(
-      ({ name, contact, service, budget, message, estimate, locale, slot, source, telegramSent }) =>
-        Promise.resolve(sales.createLeadTask({ name, contact, service, budget, message, estimate, locale, slot, source, ...(telegramSent ? { telegramSent: true } : {}) }, service)),
+      // the form gets its error when the task cannot be made, but the person's contact is kept for the owner (guardedLead)
+      guardedLead(lost, ({ name, contact, service, budget, message, estimate, locale, slot, source, telegramSent }) =>
+        sales.createLeadTask({ name, contact, service, budget, message, estimate, locale, slot, source, ...(telegramSent ? { telegramSent: true } : {}) }, service)),
       cfg.leadWebhookToken,
       Date.now,
       cfg.officeToken ? { token: cfg.officeToken, get: cachedOffice(hq) } : undefined,

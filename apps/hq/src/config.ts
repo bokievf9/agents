@@ -202,3 +202,12 @@ export function dailyCron(time: string): string {
   new Cron(pattern, { paused: true });
   return pattern;
 }
+
+/** "HH:MM" on one weekday (0 Sunday, 1 Monday...) to a cron pattern, validated. */
+export function weeklyCron(time: string, dow: number): string {
+  const daily = dailyCron(time);
+  const [min, hour] = daily.split(' ');
+  const pattern = `${min} ${hour} * * ${dow}`;
+  new Cron(pattern, { paused: true });
+  return pattern;
+}

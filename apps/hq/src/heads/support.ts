@@ -1,6 +1,6 @@
 import { errMsg, log, schedule, zonedParts, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type WorkerCtx } from '@fir/hq';
-import { BillingWorker, parseInvoiceArgs, parseSubArgs } from '@fir/worker-billing';
+import { BillingWorker, parseInvoiceArgs, parseSubArgs, type Invoice } from '@fir/worker-billing';
 import { CustomerSupportWorker, csStoreFor, parseClientArgs, parseTicketArgs, type TicketDelivery } from '@fir/worker-customer-support';
 import { FinanceWorker } from '@fir/worker-finance';
 import { MonitoringWorker, type MonEvent } from '@fir/worker-monitoring';
@@ -38,9 +38,10 @@ export function seedSupport(hq: Hq, cfg: SupportSeedConfig, readInstructions: (f
   hq.ensureAgent({ id: 'billing', dept: SUPPORT, role: 'worker', title: 'Биллинг', bossId: SUPPORT_HEAD_ID });
   hq.ensureAgent({ id: 'onboarding', dept: SUPPORT, role: 'worker', title: 'Онбординг', bossId: SUPPORT_HEAD_ID });
   const routines = [
-    { name: 'support-daily', cron: '50 7 * * *', dept: SUPPORT, title: 'Финансы и аптайм за сутки', meta: { action: 'daily' } },
-    { name: 'support-weekly', cron: '0 20 * * 0', dept: SUPPORT, title: 'Отчёт по расходам за месяц', meta: { action: 'weekly' } },
-    { name: 'support-billing', cron: '30 9 * * *', dept: SUPPORT, title: 'Счета, напоминания об оплате, онбординг', meta: { action: 'billing' } },
+    // all three land in the owner's morning (summary 08:00, batch 09:00 on his clock), so they run on his clock
+    { name: 'support-daily', cron: '40 7 * * *', tz: 'owner' as const, dept: SUPPORT, title: 'Финансы и аптайм за сутки', meta: { action: 'daily' } },
+    { name: 'support-weekly', cron: '0 20 * * 0', tz: 'owner' as const, dept: SUPPORT, title: 'Отчёт по расходам за месяц', meta: { action: 'weekly' } },
+    { name: 'support-billing', cron: '30 7 * * *', tz: 'owner' as const, dept: SUPPORT, title: 'Счета, напоминания об оплате, онбординг', meta: { action: 'billing' } },
   ];
   hq.syncRoutines('support', routines);
 }
@@ -62,8 +63,9 @@ export interface SupportDeps {
   client?: ClientChannel;
 }
 
-type Action = 'monitor_add' | 'daily' | 'weekly' | 'status' | 'none' | 'ticket' | 'billing' | 'invoice' | 'paid' | 'onboard' | 'sub' | 'client';
-const OWNER_ACTIONS: Action[] = ['ticket', 'billing', 'invoice', 'paid', 'onboard', 'sub', 'client'];
+type Action = 'monitor_add' | 'daily' | 'weekly' | 'status' | 'none' | 'ticket' | 'billing' | 'invoice' | 'kp_invoice' | 'paid' | 'onboard' | 'sub' | 'client';
+/** `kp_invoice` is made by the Sales chain (an approved КП): the invoice for the prepayment, linked to the lead, the pack and the reserved project. */
+const OWNER_ACTIONS: Action[] = ['ticket', 'billing', 'invoice', 'kp_invoice', 'paid', 'onboard', 'sub', 'client'];
 
 const MONITOR_URL_RE = /https?:\/\/[^\s<>"')]+/i;
 
@@ -91,6 +93,11 @@ export function guessAction(task: Task): Action {
 export class SupportHead {
   private jobs: Cron[] = [];
   private checking = false;
+  /**
+   * Set by the app: an invoice was marked paid (`/paid`, later the on-chain check). Production starts the reserved project and Sales asks the
+   * referral payout; the returned lines are added to the owner's answer. Only a FIRST payment of a new project starts anything.
+   */
+  onPaid: ((invoice: Invoice) => Promise<string[]>) | null = null;
   private readonly cs: CustomerSupportWorker;
   private readonly billing: BillingWorker;
   private readonly onboarding: OnboardingWorker;
@@ -322,6 +329,20 @@ export class SupportHead {
         const inv = await this.billing.createInvoice(ctx, { client: i.client, amountUsd: i.amountUsd, what: i.what, dueDate: i.dueDate, method: i.method, newProject: i.newProject });
         return `Счёт ${inv.number} для ${inv.client}, $${inv.amountUsd}, до ${inv.dueDate}: текст на утверждении (уровень 0, деньги). Одобрите в /approve, я пришлю текст для отправки клиенту.`;
       }
+      case 'kp_invoice': {
+        const m = task.meta;
+        const amountUsd = Number(m.amountUsd);
+        if (!(amountUsd > 0) || typeof m.client !== 'string' || !m.client) {
+          this.hq.block(task.id, SUPPORT_HEAD_ID, 'В задаче нет клиента или суммы предоплаты');
+          return 'Счёт по КП не создан: нет клиента или суммы.';
+        }
+        const link = {
+          leadId: Number(m.leadId) || null, packId: Number(m.packId) || null, projectId: Number(m.projectId) || null, totalUsd: Number(m.totalUsd) || null,
+          ...(typeof m.chain === 'string' ? { chain: m.chain } : {}),
+        };
+        const inv = await this.billing.createInvoice(ctx, { client: m.client, amountUsd, what: typeof m.what === 'string' ? m.what : 'Предоплата по КП', newProject: true, link });
+        return `Счёт ${inv.number} для ${inv.client}, $${inv.amountUsd}, по утверждённому КП: текст на утверждении (деньги, одна карточка).`;
+      }
       case 'sub': {
         const s = parseSubArgs(args)!;
         const sub = this.billing.store(ctx).addSubscription({ client: s.client, plan: s.plan, amountUsd: s.amountUsd, period: s.period, nextDue: s.nextDue, method: s.method });
@@ -334,6 +355,16 @@ export class SupportHead {
         if (r.already) return `Счёт ${inv.number} уже отмечен оплаченным.`;
         let text = `Счёт ${inv.number} (${inv.client}, $${inv.amountUsd}) оплачен. Выручка попадёт в отчёты Финансиста.`;
         if (r.nextDue) text += ` Следующая оплата по подписке: ${r.nextDue}.`;
+        // the first payment of a КП: Production starts the reserved project, Sales asks the referral payout (a failure here never undoes the payment)
+        if (this.onPaid) {
+          try {
+            const started = await this.onPaid(inv);
+            if (started.length) text += `\n${started.join('\n')}`;
+          } catch (e) {
+            log('error', 'paid hook failed', { invoice: inv.number, err: errMsg(e) });
+            text += '\nОплата отмечена, но следующие шаги (проект, выплата) не запустились: подробности в журнале, повторите /project вручную.';
+          }
+        }
         if (inv.newProject) text += `\n\n${await this.startOnboarding(ctx, inv.client, inv.what, inv.number)}`;
         return text;
       }

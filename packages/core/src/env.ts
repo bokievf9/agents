@@ -22,7 +22,10 @@ export function intEnv(env: NodeJS.ProcessEnv, key: string, fallback: number): n
 export interface BaseConfig {
   botToken: string;
   ownerId: number;
+  /** The company's timezone (market, clients, publishing): `TZ`, default Asia/Dushanbe. */
   tz: string;
+  /** The owner's own timezone: digests, approval batch, alerts, quiet hours. `OWNER_TZ`, default Asia/Kuala_Lumpur. */
+  ownerTz: string;
   dataDir: string;
   /** Approvals in a row without edits before a kind moves from level 0 to level 1. */
   trustThreshold: number;
@@ -45,12 +48,15 @@ export interface LlmEnv {
 export function loadBaseConfig(env: NodeJS.ProcessEnv = process.env): BaseConfig {
   const ownerId = Number(required(env, 'OWNER_TELEGRAM_ID'));
   if (!Number.isSafeInteger(ownerId)) throw new Error('OWNER_TELEGRAM_ID must be a number');
-  const tz = optional(env, 'TZ') ?? 'Asia/Tashkent';
+  const tz = optional(env, 'TZ') ?? 'Asia/Dushanbe';
   new Intl.DateTimeFormat('en-US', { timeZone: tz }); // throws on a bad zone
+  const ownerTz = optional(env, 'OWNER_TZ') ?? 'Asia/Kuala_Lumpur';
+  new Intl.DateTimeFormat('en-US', { timeZone: ownerTz }); // throws on a bad zone
   return {
     botToken: required(env, 'TELEGRAM_BOT_TOKEN'),
     ownerId,
     tz,
+    ownerTz,
     dataDir: resolve(optional(env, 'DATA_DIR') ?? './data'),
     trustThreshold: intEnv(env, 'TRUST_THRESHOLD', 20),
     llm: {

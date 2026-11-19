@@ -51,6 +51,8 @@ interface Texts {
   priceAnswer: string;
   night: string;
   fallback: string;
+  /** The model is down: scripted, never an error. */
+  gatewayDown: string;
   textOnly: string;
   slow: string;
   slotPicked(slot: string): string;
@@ -105,6 +107,7 @@ const RU: Texts = {
   },
   night: '<b>Сообщение у команды</b>\nСейчас у нас ночь, человек ответит утром, здесь же. Если хотите, оставьте заявку: это три коротких вопроса.',
   fallback: '<b>Передал команде</b>\nОтвечу точнее, когда уточню у коллег. Ответ придёт сюда, в этот чат.',
+  gatewayDown: '<b>Принял</b>\nМенеджер ответит в рабочее время. Ответ придёт сюда, в этот чат.',
   textOnly: 'Пока читаю только текст. Напишите, пожалуйста, словами.',
   slow: 'Сообщений много, я передал разговор команде. Человек ответит здесь.',
   slotPicked: (slot) => `<b>Записал звонок</b>\n${esc(slot)}. Подтвердим время здесь, в этом чате.`,
@@ -147,6 +150,7 @@ const EN: Texts = {
   },
   night: '<b>Message is with the team</b>\nIt is night here now, a person will answer in the morning, right here. If you like, leave a request: it is three short questions.',
   fallback: '<b>Passed to the team</b>\nI will answer more precisely once I check with my colleagues. The answer will arrive here, in this chat.',
+  gatewayDown: '<b>Got it</b>\nA manager will reply during business hours. The answer will arrive here, in this chat.',
   textOnly: 'For now I only read text. Please write it in words.',
   slow: 'That is a lot of messages, so I passed the conversation to the team. A person will answer here.',
   slotPicked: (slot) => `<b>Call noted</b>\n${esc(slot)}. We will confirm the time here, in this chat.`,

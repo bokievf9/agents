@@ -83,14 +83,36 @@ export const STICKY_WORKING_MS = 60_000;
 const ACTIVITY_LIMIT = 50;
 const SENSITIVE_DEPTS = new Set(['sales', 'support', 'production', 'backoffice']);
 
+/** A domain, an email, a phone number or an @username inside a title: a client or a business can be read from it. */
+const CLIENT_DATA = [
+  /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/, // email
+  /(?:^|[\s(«"'])@[A-Za-z0-9_]{3,}/, // @username
+  /\+?\d[\d\s().-]{6,}\d/, // phone
+  /(?:^|[^\w.-])(?:https?:\/\/)?(?:[a-z0-9-]{2,}\.)+[a-z]{2,}(?=$|[^\w-])/i, // domain
+];
+export const containsClientData = (title: string): boolean => CLIENT_DATA.some((re) => re.test(title));
+
+/** The generic title of work that is about a client (what the public page shows instead of the real one), by what the task does. */
+const GENERIC_BY_ACTION: Record<string, string> = {
+  audit: 'Аудит сайта', lead: 'Заявка', ticket: 'Тикет клиента', project: 'Проект клиента', client_status: 'Проект клиента',
+  doc: 'Документ клиенту', kp: 'КП клиенту', reply: 'Ответ бизнесу', invoice: 'Счёт клиенту', referral_reward: 'Награда за рекомендацию',
+};
+const GENERIC_BY_DEPT: Record<string, string> = { marketing: 'Задача маркетинга', sales: 'Заявка', support: 'Тикет клиента', production: 'Проект клиента', backoffice: 'Документ клиенту' };
+
 /**
- * Title shown on the page. Tasks of the client-facing departments carry client or business names in titles
- * ("Проект: <client>", "Ответ бизнесу #3 <name>"), so there only routine titles survive; a website lead is «Лид #id».
+ * Title shown on the PUBLIC page (`GET /office`). Tasks of the client-facing departments carry client or business names in titles
+ * ("Проект: <client>", "Ответ бизнесу #3 <name>"), so there only routine titles survive; a website lead is «Лид #id». Any task about a
+ * client (an audit «Аудит: example.com», a ticket) or with a domain, name, phone, @username or email in its title shows the generic
+ * title of its kind («Аудит сайта», «Заявка», «Тикет клиента», «Проект клиента»). The admin office (`GET /admin/office`) keeps the real titles.
  */
 export function publicTitle(t: Pick<Task, 'id' | 'title' | 'dept' | 'routineId' | 'meta'>, leadId?: number): string {
   if (t.meta.action === 'lead') return `Лид #${leadId ?? t.id}`;
-  if (!SENSITIVE_DEPTS.has(t.dept) || t.routineId !== null) return t.title;
-  return `${DEPT_TITLES[t.dept] ?? t.dept}: задача #${t.id}`;
+  const action = typeof t.meta.action === 'string' ? t.meta.action : '';
+  const generic = GENERIC_BY_ACTION[action] ?? GENERIC_BY_DEPT[t.dept] ?? 'Задача';
+  // tasks of the client-facing departments and any task about a client: the generic title of its kind (routine titles are ours and stay)
+  if (t.routineId === null && (SENSITIVE_DEPTS.has(t.dept) || action in GENERIC_BY_ACTION || containsClientData(t.title))) return generic;
+  if (t.routineId !== null && containsClientData(t.title)) return generic;
+  return t.title;
 }
 
 /** Activity values stay machine-like: a code, an id. Anything else (contacts, free text) is dropped. */
@@ -151,7 +173,8 @@ export function noticeFrom(text: string | undefined): string {
 }
 
 /** Reads everything the page needs from the HQ database. Worker tables (mon_*, li_*, pr_*) may not exist yet: they count as empty. */
-export function buildOffice(hq: Hq, now: number = hq.now(), uptimeSec: number = process.uptime()): OfficeData {
+export function buildOffice(hq: Hq, now: number = hq.now(), uptimeSec: number = process.uptime(), opts: { maskClientData?: boolean } = {}): OfficeData {
+  const mask = opts.maskClientData !== false; // the public page masks; the admin office asks for the real titles
   const db = hq.db;
   const tz = hq.tz;
   const q = <T = Row>(sql: string, ...args: unknown[]): T[] => {
@@ -182,7 +205,7 @@ export function buildOffice(hq: Hq, now: number = hq.now(), uptimeSec: number = 
   };
   const leadIds = new Map(q<{ task_id: number; id: number }>('SELECT task_id, id FROM li_leads').map((r) => [r.task_id, r.id] as const));
   const titleOf = (r: (typeof taskRows)[number]) =>
-    publicTitle({ id: r.id, title: r.title, dept: r.dept, routineId: r.routine_id, meta: parseMeta(r.meta) }, leadIds.get(r.id));
+    mask ? publicTitle({ id: r.id, title: r.title, dept: r.dept, routineId: r.routine_id, meta: parseMeta(r.meta) }, leadIds.get(r.id)) : r.title;
 
   const counts: Record<string, number> = { inbox: 0, assigned: 0, running: 0, review: 0, approval: 0, blocked: 0, done: 0, rejected: 0 };
   for (const t of taskRows) counts[t.status] = (counts[t.status] ?? 0) + 1;
@@ -299,9 +322,9 @@ export function buildOffice(hq: Hq, now: number = hq.now(), uptimeSec: number = 
   const summaryRow = q<{ text: string }>("SELECT text FROM owner_inbox WHERE kind = 'summary' ORDER BY id DESC LIMIT 1")[0];
 
   // routines (summary times belong to the Director)
-  const nextOf = (pattern: string, after = now): number | null => {
+  const nextOf = (pattern: string, after = now, zone = tz): number | null => {
     try {
-      return new Cron(pattern, { timezone: tz, paused: true }).nextRun(new Date(after))?.getTime() ?? null;
+      return new Cron(pattern, { timezone: zone, paused: true }).nextRun(new Date(after))?.getTime() ?? null;
     } catch {
       return null;
     }
@@ -312,10 +335,11 @@ export function buildOffice(hq: Hq, now: number = hq.now(), uptimeSec: number = 
   })();
   let lastSummary: number | null = null;
   if (summaryPattern) {
-    let t = nextOf(summaryPattern, now - 26 * 3_600_000);
+    // the summary is the owner's: it runs on his clock
+    let t = nextOf(summaryPattern, now - 26 * 3_600_000, hq.ownerTz);
     while (t !== null && t <= now) {
       lastSummary = t;
-      t = nextOf(summaryPattern, t);
+      t = nextOf(summaryPattern, t, hq.ownerTz);
     }
   }
   const director = hq.agent('director');
@@ -370,7 +394,7 @@ export function buildOffice(hq: Hq, now: number = hq.now(), uptimeSec: number = 
       title: director?.title ?? 'Director',
       status: directorView ? (directorView.status === 'idle' && pendingApprovals > 0 ? 'waiting' : directorView.status) : sleeping ? 'sleeping' : 'idle',
       lastSummaryAt: iso(lastSummary),
-      nextSummaryAt: summaryPattern ? iso(nextOf(summaryPattern)) : null,
+      nextSummaryAt: summaryPattern ? iso(nextOf(summaryPattern, now, hq.ownerTz)) : null,
       thinking: hq.thinking('director'),
       pendingApprovals,
       openBuilderIssues,
@@ -388,7 +412,7 @@ export function buildOffice(hq: Hq, now: number = hq.now(), uptimeSec: number = 
       tokensToday: sum('SELECT SUM(input_tokens + output_tokens) s FROM costs WHERE at >= ?', dayStart),
     },
     routines: hq.routines().filter((r) => r.enabled).map((r) => ({
-      name: r.name, dept: r.dept, cron: r.cron, nextRunAt: iso(nextOf(r.cron)), lastRunAt: iso(r.lastRunAt),
+      name: r.name, dept: r.dept, cron: r.cron, nextRunAt: iso(nextOf(r.cron, now, hq.routineTz(r))), lastRunAt: iso(r.lastRunAt),
     })),
     health: {
       firtech: {

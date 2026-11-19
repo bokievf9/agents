@@ -58,7 +58,9 @@ export class DocumentsWorker implements Worker {
     const text = fillTemplate(template, data);
     store.setStatus(row.id, 'pending', text);
     const open = openPlaceholders(text);
-    await ctx.requestApproval(KIND_DOC, { text, docId: row.id }, `${DOC_RU[type]}, ${docKey}, версия ${row.version}. Незаполнено: ${open.length ? open.join(', ') : 'нет'}.\n\n${text}`);
+    // the sales chain (КП → договор → счёт 50%): the cards name each other
+    const chain = typeof task.meta.chain === 'string' && task.meta.chain ? `${task.meta.chain}\n` : '';
+    await ctx.requestApproval(KIND_DOC, { text, docId: row.id }, `${chain}${DOC_RU[type]}, ${docKey}, версия ${row.version}. Незаполнено: ${open.length ? open.join(', ') : 'нет'}.\n\n${text}`);
     ctx.log('doc_drafted', `${type} v${row.version}`);
     return { ok: true, result: `${DOC_RU[type]} для «${docKey}», версия ${row.version}: ждёт одобрения, незаполненных мест ${open.length}.` };
   }

@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { createAdmin } from '../src/admin.js';
 import { createWebhook } from '../src/webhook.js';
-import { OWNER, routedLlm, world } from './helpers.js';
+import { OWNER, openPack, routedLlm, world } from './helpers.js';
 
 const J = JSON.stringify;
 const TOKEN = 'admin-secret';
@@ -106,7 +106,7 @@ describe('admin API', () => {
       expect((await call('GET', '/admin/state', undefined, 'nope')).status).toBe(401);
       const ok = await call('GET', '/admin/state');
       expect(ok.status).toBe(200);
-      expect(ok.json).toMatchObject({ ok: true, presence: { mode: 'away', effective: 'away', lastPingAt: null, awayAfterMin: 20 }, tasksOpen: 0, approvalsPending: 0, tz: 'Asia/Tashkent' });
+      expect(ok.json).toMatchObject({ ok: true, presence: { mode: 'away', effective: 'away', lastPingAt: null, awayAfterMin: 20 }, tasksOpen: 0, approvalsPending: 0, tz: 'Asia/Dushanbe', ownerTz: 'Asia/Kuala_Lumpur' });
       expect((await call('GET', '/admin/nothing')).status).toBe(404);
     } finally {
       server.close();
@@ -266,7 +266,8 @@ describe('approvals through the API', () => {
     await desk(w);
     w.hq.runRoutine('marketing-weekly-pack');
     await w.marketing.onHeartbeat();
-    expect(await w.director.sendApprovalBatch(false)).toBe(8);
+    expect(await w.director.sendApprovalBatch(false)).toBe(1); // the pack's one card
+    expect(await openPack(w)).toBe(1); // «Посмотреть по одному»: the 8 items' own cards
     return { w, server, call };
   }
 
@@ -275,13 +276,13 @@ describe('approvals through the API', () => {
     try {
       expect(w.messenger.sent).toHaveLength(0);
       const cards = w.channel!.list({ limit: 200 }).filter((i) => i.kind === 'approval');
-      expect(cards).toHaveLength(8);
+      expect(cards).toHaveLength(9); // the pack's card and the 8 items
       expect(cards[0]!.approvalId).not.toBeNull();
 
       const list = (await call('GET', '/admin/approvals')).json.items;
       expect(list).toHaveLength(8);
       const first = list[0];
-      expect(first).toMatchObject({ kind: 'content_item', dept: 'marketing', level: 0, locked: true, taskId: expect.any(Number) });
+      expect(first).toMatchObject({ kind: 'content_item', dept: 'marketing', level: 0, locked: false, taskId: expect.any(Number) });
       expect(first.parts.length).toBeGreaterThan(0);
       expect((await call('POST', `/admin/approvals/${first.id}`, { action: 'nope' })).status).toBe(400);
 
@@ -295,7 +296,7 @@ describe('approvals through the API', () => {
       expect(after.text).toContain('Совсем новый текст');
       expect(w.queue.get(first.id)!.edited).toBe(true);
       expect(w.messenger.sent).toHaveLength(0); // the re-asked card is not sent anywhere
-      expect(w.channel!.list({ limit: 200 }).filter((i) => i.kind === 'approval')).toHaveLength(8);
+      expect(w.channel!.list({ limit: 200 }).filter((i) => i.kind === 'approval')).toHaveLength(9);
 
       const a = await call('POST', `/admin/approvals/${first.id}`, { action: 'approve' });
       expect(a.json).toMatchObject({ ok: true, status: 'executed' });
@@ -335,6 +336,25 @@ describe('approvals through the API', () => {
       await call('POST', '/admin/presence', { mode: 'away' });
       expect(w.messenger.sent).toHaveLength(1);
       expect(w.messenger.sent[0]!.text).toContain('7 одобрений');
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe('the admin office keeps the real task titles', () => {
+  it('GET /admin/office shows «Аудит: example.com»; the public office masks it; the token is required', async () => {
+    const w = world({ presence: true });
+    const { server, call } = await start(w);
+    try {
+      const t = w.hq.createTask({ title: 'Аудит: example.com', dept: 'marketing', creator: 'head', meta: { action: 'audit' } });
+      const admin = await call('GET', '/admin/office');
+      expect(admin.status).toBe(200);
+      expect(admin.json.tasks.recent.find((x: any) => x.id === t.id).title).toBe('Аудит: example.com');
+      expect(admin.json.tz).toBe('Asia/Dushanbe');
+      const { buildOffice } = await import('../src/office.js');
+      expect(buildOffice(w.hq, w.clock.t).tasks.recent.find((x) => x.id === t.id)!.title).toBe('Аудит сайта');
+      expect((await call('GET', '/admin/office', undefined, null)).status).toBe(401);
     } finally {
       server.close();
     }

@@ -63,6 +63,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
       builderIssues: openBuilderTasks(hq).length,
       quietHours: hq.isQuiet(),
       tz: hq.tz,
+      ownerTz: hq.ownerTz,
       generatedAt: iso(now()),
     };
   }
@@ -170,6 +171,8 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
         list.sort((x, y) => y.updatedAt - x.updatedAt || y.id - x.id);
         return ok({ items: list.slice(0, limit).map(taskView) });
       }
+      case 'GET office': // the office with the real task titles (the public `/office` masks client data)
+        return ok(buildOffice(hq, hq.now(), undefined, { maskClientData: false }));
       case 'GET departments': {
         const office = buildOffice(hq, hq.now());
         return ok({

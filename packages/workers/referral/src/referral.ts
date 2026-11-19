@@ -1,8 +1,10 @@
 import { type KindSpec, type Payload } from '@fir/core';
 import type { ApprovalState, Task, TaskApproval, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
-import { DAY, ReferralStore, STATUSES, STATUS_RU, type Referral } from './store.js';
+import { DAY, PAYOUT_PERCENT, ReferralStore, STATUSES, STATUS_RU, type Referral } from './store.js';
 
 export const KIND_REWARD = 'referral_reward';
+/** The payout to the referrer (10% of the first confirmed estimate, USD): money, locked. Approving means the owner paid it. */
+export const KIND_PAYOUT = 'referral_payout';
 /** Default reward (env `REFERRAL_REWARD`): one month of support free. */
 export const DEFAULT_REWARD = 'месяц сопровождения бесплатно';
 
@@ -34,14 +36,30 @@ export function referrerFromSource(source: string): string | null {
 
 export const describe = (r: Referral): string => `#${r.id} ${r.referrer} привёл(а) ${r.referred}`;
 
+/** 10% of the estimate total, in USD cents precision. */
+export const payoutAmount = (totalUsd: number): number => Math.round(totalUsd * PAYOUT_PERCENT) / 100;
+
+const usd = (n: number): string => `$${Number.isInteger(n) ? n : n.toFixed(2)}`;
+const ddmm = (ms: number): string => {
+  const d = new Date(ms);
+  return `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+};
+
 export function statsText(store: ReferralStore): string {
   const s = store.stats();
   if (s.total === 0) return 'Рекомендаций пока нет. Записать: /referral <клиент> -> <новый лид>.';
-  const open = store.all().filter((r) => r.status !== 'rewarded');
+  const payouts = store.pendingPayouts();
+  const open = store.all().filter((r) => r.status !== 'rewarded' && !payouts.includes(r));
   return [
     `Рекомендации, всего ${s.total}: ${STATUSES.filter((k) => s.byStatus[k]).map((k) => `${STATUS_RU[k]} ${s.byStatus[k]}`).join(', ')}`,
+    ...(payouts.length ? ['', `К выплате (${PAYOUT_PERCENT}% первой сметы, USDT, в течение 7 дней после оплаты клиента): ${usd(payouts.reduce((a, r) => a + (r.payoutUsd ?? 0), 0))}`, ...payouts.map((r) => `${describe(r)}: ${usd(r.payoutUsd ?? 0)}, контакт ${r.payoutContact || '-'}, ждёт с ${ddmm(r.payoutRequestedAt!)} (карточка в /approve)`)] : []),
     ...(open.length ? ['', 'Открытые:', ...open.map((r) => `${describe(r)}: ${STATUS_RU[r.status]}`)] : []),
   ].join('\n');
+}
+
+/** The owner's card of a payout: who, how much, where to send it. */
+export function payoutSummary(r: Referral, invoiceNumber: string): string {
+  return `Выплата рекомендателю ${describe(r)}: клиент оплатил первый счёт ${invoiceNumber}.\nСумма: ${usd(r.payoutUsd ?? 0)} (${PAYOUT_PERCENT}% первой сметы), USDT.\nКонтакт рекомендателя: ${r.payoutContact || '[контакт не найден: уточните]'}.\n«Утвердить» значит, что вы выплатили сами. Система денег не двигает.`;
 }
 
 /** Owner's `/paid <id>`: the referred client paid. Only a proposed referral moves; the reward is asked by the caller. */
@@ -74,10 +92,28 @@ export function kindSpecs(ctx: Pick<WorkerCtx, 'db' | 'now'>): Record<string, Ki
   };
 }
 
-/** The owner rejected the reward or it failed: the referral stays paid, a new /paid asks again. */
+/** Locked at level 0: a payout is money, only the owner's own button marks it paid (`rewarded`). */
+export function payoutKindSpecs(ctx: Pick<WorkerCtx, 'db' | 'now'>): Record<string, KindSpec> {
+  return {
+    [KIND_PAYOUT]: {
+      initialLevel: 0,
+      locked: true,
+      buttons: (id) => [[{ text: 'Отклонить', data: `ap:${id}:r` }, { text: 'Выплатил', data: `ap:${id}:a` }]],
+      execute: async (payload: Payload) => {
+        const store = storeFor(ctx);
+        const id = Number(payload.referralId);
+        if (store.get(id)?.status !== 'paid') throw new Error('payout only after the referred client paid');
+        store.transition(id, 'rewarded');
+      },
+    },
+  };
+}
+
+/** The owner rejected the reward or the payout, or it failed: the referral stays paid; a reward is asked again with /paid, a payout is cleared. */
 export function onDecision(ctx: Pick<WorkerCtx, 'db' | 'now'>, link: Pick<TaskApproval, 'kind' | 'payload'>, state: ApprovalState): void {
-  if (link.kind !== KIND_REWARD || state === 'executed') return;
-  storeFor(ctx).setRewardRequested(Number(link.payload.referralId), false);
+  if (state === 'executed') return;
+  if (link.kind === KIND_REWARD) storeFor(ctx).setRewardRequested(Number(link.payload.referralId), false);
+  if (link.kind === KIND_PAYOUT) storeFor(ctx).clearPayout(Number(link.payload.referralId));
 }
 
 /**
@@ -89,10 +125,31 @@ export class ReferralWorker implements Worker {
 
   async run(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
     if (task.meta.action !== 'reminders' && task.meta.action !== 'referral_reminders') return { ok: false, result: '', error: `Неизвестное действие: ${String(task.meta.action)}` };
-    const due = storeFor(ctx).takeReminders(ctx.now());
-    if (due.length === 0) return { ok: true, result: '' };
+    const store = storeFor(ctx);
+    const due = store.takeReminders(ctx.now());
+    const payouts = store.takePayoutReminders(ctx.now());
+    if (due.length === 0 && payouts.length === 0) return { ok: true, result: '' };
     const days = (r: Referral) => Math.floor((ctx.now() - r.createdAt) / DAY);
-    ctx.log('reminders', `due ${due.length}`);
-    return { ok: true, result: `Рекомендации ждут оплаты: ${due.map((r) => `${describe(r)} (${days(r)} дн.), когда оплатит: /paid ${r.id}`).join('; ')}.` };
+    const out: string[] = [];
+    if (due.length) out.push(`Рекомендации ждут оплаты: ${due.map((r) => `${describe(r)} (${days(r)} дн.), когда оплатит: /paid ${r.id}`).join('; ')}.`);
+    if (payouts.length) {
+      out.push(`Выплаты рекомендателям ждут 7 дней и больше: ${payouts.map((r) => `${describe(r)}, ${usd(r.payoutUsd ?? 0)}, контакт ${r.payoutContact || '-'}`).join('; ')}. Карточка в /approve.`);
+    }
+    ctx.log('reminders', `due ${due.length}, payouts ${payouts.length}`);
+    return { ok: true, result: out.join('\n') };
+  }
+
+  /**
+   * The referred client's first invoice was paid: the payout (10% of the estimate total, USD) is asked of the owner as a locked approval
+   * with the referrer's contact. Once per referral. Returns the referral, or null when there is nothing to ask (no such referral,
+   * or asked before). The caller stages the approval (`payoutSummary`, kind `KIND_PAYOUT`).
+   */
+  requestPayout(ctx: Pick<WorkerCtx, 'db' | 'now'>, a: { referralId: number; totalUsd: number; contact: string }): Referral | null {
+    const store = storeFor(ctx);
+    const r = store.get(a.referralId);
+    if (!r || r.status === 'rewarded' || r.payoutRequestedAt !== null) return null;
+    if (r.status === 'proposed') store.transition(r.id, 'paid');
+    if (!store.requestPayout(r.id, { usd: payoutAmount(a.totalUsd), contact: a.contact })) return null;
+    return store.get(r.id)!;
   }
 }

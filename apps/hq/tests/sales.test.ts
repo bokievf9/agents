@@ -11,8 +11,8 @@ describe('seed', () => {
     const w = salesWorld({ budget: 5 });
     expect(w.hq.agent('sales-head')).toMatchObject({ dept: 'sales', role: 'head', bot: 'SALES_BOT_TOKEN', budgetUsdMonth: 5, bossId: 'director' });
     expect(w.hq.agents('sales').map((a) => a.id).sort()).toEqual(['client-bot', 'lead-intake', 'presales', 'prospector', 'referral', 'sales-head']);
-    expect(w.hq.routineByName('sales-daily-cards')).toMatchObject({ cron: '0 10 * * *', dept: 'sales' });
-    expect(w.hq.routineByName('sales-followups')).toMatchObject({ cron: '5 10 * * *' });
+    expect(w.hq.routineByName('sales-daily-cards')).toMatchObject({ cron: '30 7 * * *', tz: 'owner', dept: 'sales' });
+    expect(w.hq.routineByName('sales-followups')).toMatchObject({ cron: '40 7 * * *', tz: 'owner' });
     expect(w.hq.agent('sales-head')!.instructions).toContain('Чек-лист проверки ответа лиду');
   });
 });

@@ -1,6 +1,7 @@
 import { errMsg, log, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx } from '@fir/hq';
 import { deployPlan, DeployerWorker, DeployStore, parseTarget } from '@fir/worker-deployer';
+import type { Invoice } from '@fir/worker-billing';
 import {
   fmtDate, kindSpecs as pmKinds, MILESTONE_KINDS, PmStore, ProjectManagerWorker, type Milestone, type MilestoneKind, type Project,
 } from '@fir/worker-project-manager';
@@ -28,7 +29,7 @@ export function seedProduction(hq: Hq, cfg: ProductionSeedConfig, readInstructio
   hq.ensureAgent({ id: PM_ID, dept: PRODUCTION, role: 'worker', title: 'Проектный менеджер', bossId: PRODUCTION_HEAD_ID });
   hq.ensureAgent({ id: REVIEWER_ID, dept: PRODUCTION, role: 'worker', title: 'Ревьюер', bossId: PRODUCTION_HEAD_ID });
   hq.ensureAgent({ id: DEPLOYER_ID, dept: PRODUCTION, role: 'worker', title: 'Деплойер', bossId: PRODUCTION_HEAD_ID });
-  hq.syncRoutines('production', [{ name: 'production-overdue', cron: '30 10 * * *', dept: PRODUCTION, title: 'Просроченные этапы проектов', meta: { action: 'overdue' } }]);
+  hq.syncRoutines('production', [{ name: 'production-overdue', cron: '50 7 * * *', tz: 'owner', dept: PRODUCTION, title: 'Просроченные этапы проектов', meta: { action: 'overdue' } }]);
 }
 
 export interface ProductionDeps {
@@ -102,13 +103,28 @@ export class ProductionHead {
 
   // ---- entry points: the owner's commands and the Sales signal ----
   /** A sale was approved or paid: a project task for the head. Returns the task id. Sales may call this. */
-  createProjectTask(p: { client: string; what: string; product?: string; source?: string }): number {
+  createProjectTask(p: { client: string; what: string; product?: string; source?: string; projectId?: number }): number {
     const t = this.hq.createTask({
       title: `Проект: ${p.client}`, body: p.what, dept: PRODUCTION, creator: p.source === 'sales' ? 'head' : 'owner', priority: 1,
-      meta: { action: 'project', client: p.client, what: p.what, ...(p.product ? { product: p.product } : {}), source: p.source ?? 'owner' },
+      meta: { action: 'project', client: p.client, what: p.what, ...(p.product ? { product: p.product } : {}), ...(p.projectId ? { projectId: p.projectId } : {}), source: p.source ?? 'owner' },
     });
     this.hq.wake(PRODUCTION_HEAD_ID, 'task');
     return t.id;
+  }
+
+  /**
+   * The project starts on PAYMENT, not on the КП's approval (owner decision 2026-11-19). An approved КП only reserved a `draft` project;
+   * the first invoice marked paid (`/paid`, later the on-chain check) creates the Production task for it: milestones seeded from the КП's
+   * direction, the ТЗ for the owner's approval. Returns lines for the owner; nothing when no reserved project is waiting (a second payment,
+   * a project made by `/project`).
+   */
+  onInvoicePaid(inv: Pick<Invoice, 'client' | 'projectId'>): string[] {
+    const store = this.store;
+    const p = (inv.projectId ? store.project(inv.projectId) : undefined) ?? store.reservedFor(inv.client);
+    if (!p || p.status !== 'draft' || p.packId === null || store.milestones(p.id).length > 0) return [];
+    const id = this.createProjectTask({ client: p.client, what: p.what, product: p.product, source: 'sales', projectId: p.id });
+    this.hq.log(PRODUCTION_HEAD_ID, 'project_started_on_payment', 'project', String(p.id));
+    return [`Проект #${p.id} «${p.client}» стартует по оплате (задача #${id}): этапы по КП, ТЗ придёт карточкой на одобрение.`];
   }
 
   /** `/project`, `/pstatus`, `/target`, `/mdone` through the Director. Returns the reply to the owner. */

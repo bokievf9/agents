@@ -17,7 +17,7 @@ Node 22, TypeScript ESM (NodeNext), pnpm 12 workspaces. `grammy` (long polling),
 сборка и образ используют `dist`, поэтому `pnpm -r build` собирает ядро первым.
 
 ## packages/core (`@fir/core`)
-- `env.ts`: общий конфиг (`loadBaseConfig`: токен бота, `OWNER_TELEGRAM_ID`, `TZ`, `DATA_DIR`, порог доверия, LLM).
+- `env.ts`: общий конфиг (`loadBaseConfig`: токен бота, `OWNER_TELEGRAM_ID`, `TZ` и `OWNER_TZ`, `DATA_DIR`, порог доверия, LLM).
 - `db.ts`: SQLite (WAL), `migrate()` для схемы головы. `time.ts`: часовые пояса через Intl.
 - `bot.ts`: `createBot`, `grammyMessenger`, `installApprovals` (кнопки и правка владельца), `setupBotMenu` (команды,
   описания, кнопка меню), `startPolling`. `messenger.ts`: интерфейс `Messenger` (HTML, reply-клавиатура, `edit` с кнопками,
@@ -68,7 +68,7 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 Бывшие `apps/lead-intake` и `apps/prospector` теперь `packages/workers/lead-intake` и `packages/workers/prospector` (`run(task, ctx)`,
 без бота и крона, таблицы `li_*` и `pr_*` в SQLite HQ). Голова: `apps/hq/src/heads/sales.ts` (бот `SALES_BOT_TOKEN`, он же
 @firtech_leads_bot), webhook `POST /lead` (`x-lead-token` = `LEAD_WEBHOOK_TOKEN`, порт `WEBHOOK_PORT`) в `apps/hq/src/webhook.ts`
-создаёт задачу отдела на лид. Рутины: карточки Разведчика 10:00, дожимы 10:05. Первый ответ лиду уровень 1, всё с ценой уровень 0
+создаёт задачу отдела на лид. Рутины: карточки Разведчика 07:30 и дожимы 07:40 по времени владельца. Первый ответ лиду уровень 1, всё с ценой уровень 0
 (`locked`); бизнесам в холодную пишет владелец вручную. Подробно: `apps/hq/README.md`, README пакетов.
 Публичный бот клиентов `apps/hq/src/client/` (`CLIENT_BOT_TOKEN`, @firtech_bot, только с токеном): приветствие, анкета из 3 шагов
 в лид продаж (`source: telegram`, `chatId`), «я уже клиент» в тикет, «позвать человека» (`/reply`, `/resume`), LLM-ответы через
@@ -95,7 +95,7 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 Образ `agents-hq`, сервис `hq` (данные `/opt/fir-agents/data/hq`). Подробно: `packages/hq/README.md`, `apps/hq/README.md`.
 Маркетинг на автопилоте, этап 1 (2026-11-19): пакет недели покрывает всю страницу Instagram (7 рилсов, 3 поста, 2 карусели, 5 историй;
 `POSTS_PER_WEEK`, `STORIES_PER_WEEK`), после одобрения PNG рисуются `satori` + `@resvg/resvg-js` в `DATA_DIR/renders`, Публикатор шлёт альбом
-и текст, публикует владелец вручную; `/profile` (разовый пакет настройки профиля); `/article` и рутина `marketing-article-weekly` (вт 10:00)
+и текст, публикует владелец вручную; `/profile` (разовый пакет настройки профиля); `/article` и рутина `marketing-article-weekly` (вт 07:00 по времени владельца)
 пишут статью блога RU+EN, одобренная уходит строителю issue с JSON и путём `src/content/blog/<slug>.ts`. Telegram-канала нет (владелец отказался).
 
 Видео рилсов (2026-11-19): `packages/renderer` (Remotion + Piper `ru_RU-denis-medium`), сервис `renderer` в `compose.yaml` (1,5 ГБ, без сети, общий том с `hq`),
@@ -118,6 +118,19 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 расходы считаются по реальной модели, лимит отдела 80%/100%; шлюз моделей и контейнеры под наблюдением (healthcheck, `hq.heartbeat`, `renderer.heartbeat`);
 чистый старт только скриптом `dist/fresh-start.js` (никогда `sqlite_sequence` и VACUUM под живым HQ; `hq-fresh-start.js` из scratchpad устарел и запрещён).
 
+## Процессы HQ, часть B (2026-11-19, по аудиту)
+Подробно: `apps/hq/README.md`, раздел «Процессы компании, часть B»; спека `../docs/architecture-hq.md`.
+- Два часа: `OWNER_TZ` (Куала-Лумпур, UTC+8: сводка 08:00, пачка 09:00, недельный дайджест пн 08:30, тихие часы 23:00-08:00, рутины, что падает в утро владельца, поле `routines.tz`)
+  и `TZ` (Душанбе, рынок: клиентский бот, слоты, публикации, сроки). Настройки `tz` и `owner_tz` в БД, `Hq.ownerTz`, `Hq.routineTz`, `seedTiming`.
+- Пакет недели: одна карточка `content_pack` (`task_approvals.held`, `Hq.holdApprovals/openHeld/rejectHeld`, `ApprovalQueue.open/isBulk`). `content_item` не `locked`, но `keepManual`
+  (счётчик не повышает до уровня 1). `locked` только деньги, выплаты, документы и ответы клиентам, цены, КП, ТЗ, SEO-правки.
+- Цепочка продаж: лид с услугой и бюджетом или сметой, КП само (`isQualified`) -> одобренное КП резервирует проект `draft` (`PmStore.reserve`) и ставит договор (`bo_document`) и счёт 50%
+  (`billing_invoice`, ссылка на лид, пакет, проект в `bl_invoices`) -> `/paid` (`SupportHead.onPaid`) запускает проект (`ProductionHead.onInvoicePaid`) и выплату рекомендателю
+  (`referral_payout`, 10% сметы, `locked`). Виды одобрений остались прежними (`presales_pack`, `bo_document`, `billing_invoice`).
+- Команды: один список `apps/hq/src/commands.ts` (справка, меню до 20, обработчики, маршруты), `/workers` из `apps/hq/src/workers.ts`.
+- Потерянные заявки: `apps/hq/src/lost-leads.ts` (`activity` вида `lost_lead`, таблица `lost_leads`, один алерт в час). Недоступный шлюз: посетитель получает «Принял, менеджер ответит в рабочее время»
+  (`freeAnswer`, `gatewayGate`), заявка всё равно создаётся. Публичный `/office` прячет клиентские данные в названиях задач, `/admin/office` отдаёт настоящие.
+
 ## Данные и секреты
 `.env*` и `data/` не коммитятся (в `data/` контакты клиентов). Секреты: `.env.local` (dev), `/opt/fir-agents/.env`
 (сервер, 600). Секреты с `$` в `.env` брать в одинарные кавычки (compose раскрывает `$`).
@@ -139,7 +152,8 @@ LLM в компании ходит не напрямую в Anthropic, а чер
     его переменных (`PORT`, `DATA_DIR`, секреты) сверить с документацией OmniRoute при первом запуске; `:latest`
     закрепить на версию. Без `read_only`, пока не проверено, что образ так работает.
   - Плейсхолдеры `__AGENTS_UID__/__AGENTS_GID__` подставляет bootstrap.
-  - `TZ` задаётся в compose по сервисам (polly `Asia/Kuala_Lumpur`, hq `Asia/Tashkent`) и перекрывает `TZ` из общего `/opt/fir-agents/.env`.
+  - `TZ` задаётся в compose по сервисам (polly `Asia/Kuala_Lumpur`, hq `Asia/Dushanbe`) и перекрывает `TZ` из общего `/opt/fir-agents/.env`; hq ещё получает `OWNER_TZ=Asia/Kuala_Lumpur`.
+    Обе зоны только засевают настройки `tz` и `owner_tz` при первом старте: уже работающий сервер хранит `tz=Asia/Tashkent` (то же смещение, UTC+5), менять через Директора.
 - `deploy/bootstrap-vps.sh` (один раз, root на VPS: `sudo bash bootstrap-vps.sh "<ssh-ed25519 публичный ключ>"`):
   пользователь `agents`, дом `/opt/fir-agents`, данные `agents`-owned, всё решающее (compose, `bin/deploy.sh`,
   `authorized_keys`) root-owned. Ключ деплоя с `command="/opt/fir-agents/bin/deploy.sh",restrict`.

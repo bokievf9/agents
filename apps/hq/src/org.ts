@@ -23,14 +23,16 @@ export function seedOrg(hq: Hq, cfg: Pick<Config, 'instructionsDir' | 'marketing
   hq.ensureAgent({ id: 'publisher', dept: 'marketing', role: 'worker', title: 'Публикатор', bossId: 'marketing-head' });
   hq.ensureAgent({ id: 'seo', dept: 'marketing', role: 'worker', title: 'SEO', bossId: 'marketing-head' });
   hq.ensureAgent({ id: 'analyst', dept: 'marketing', role: 'worker', title: 'Аналитик', bossId: 'marketing-head' });
+  // Clocks (owner decision 2026-11-19): what lands in the owner's morning (pack, trends, reports, SEO) is made on HIS clock, early enough
+  // for the 09:00 batch; the morning «что публикуем» follows the market's publishing time (the company's clock).
   const routines = [
-    { name: 'marketing-weekly-pack', cron: '0 9 * * 1', dept: 'marketing', title: 'Пакет недели: рилсы, посты, карусели и истории', meta: { action: 'pack' }, priority: 1 },
+    { name: 'marketing-weekly-pack', cron: '0 6 * * 1', tz: 'owner' as const, dept: 'marketing', title: 'Пакет недели: рилсы, посты, карусели и истории', meta: { action: 'pack' }, priority: 1 },
     { name: 'marketing-daily-today', cron: '0 9 * * *', dept: 'marketing', title: 'Что публикуем сегодня', meta: { action: 'daily' } },
-    { name: 'marketing-trends-daily', cron: '30 8 * * *', dept: 'marketing', title: 'Хуки и форматы дня', meta: { action: 'trends' } },
-    { name: 'marketing-trends-weekly', cron: '0 20 * * 0', dept: 'marketing', title: 'Тренды ниши за неделю', meta: { action: 'trends_weekly' } },
-    { name: 'marketing-analyst-weekly', cron: '0 8 * * 1', dept: 'marketing', title: 'Недельный отчёт маркетинга', meta: { action: 'report' } },
-    { name: 'marketing-article-weekly', cron: '0 10 * * 2', dept: 'marketing', title: 'Статья в блог сайта (ниша без статьи)', meta: { action: 'article' } },
-    { name: 'marketing-seo-weekly', cron: '0 11 * * 1', dept: 'marketing', title: 'SEO и AI-SEO проверка сайта', meta: { action: 'seo' } },
+    { name: 'marketing-trends-daily', cron: '30 7 * * *', tz: 'owner' as const, dept: 'marketing', title: 'Хуки и форматы дня', meta: { action: 'trends' } },
+    { name: 'marketing-trends-weekly', cron: '0 20 * * 0', tz: 'owner' as const, dept: 'marketing', title: 'Тренды ниши за неделю', meta: { action: 'trends_weekly' } },
+    { name: 'marketing-analyst-weekly', cron: '0 7 * * 1', tz: 'owner' as const, dept: 'marketing', title: 'Недельный отчёт маркетинга', meta: { action: 'report' } },
+    { name: 'marketing-article-weekly', cron: '0 7 * * 2', tz: 'owner' as const, dept: 'marketing', title: 'Статья в блог сайта (ниша без статьи)', meta: { action: 'article' } },
+    { name: 'marketing-seo-weekly', cron: '30 7 * * 1', tz: 'owner' as const, dept: 'marketing', title: 'SEO и AI-SEO проверка сайта', meta: { action: 'seo' } },
   ];
   hq.syncRoutines('marketing', routines);
 }

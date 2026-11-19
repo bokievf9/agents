@@ -41,6 +41,13 @@ export interface KindSpec {
   initialLevel: 0 | 1;
   /** Money, contracts, prices: never promoted to level 1 by the counter, only by the owner's own decision. */
   locked?: boolean;
+  /**
+   * Content is not money: never promoted to level 1 by the counter (every item still needs the owner), yet ordinary for
+   * «Одобрить все обычные». Unlike `locked`, which also keeps the kind out of bulk approval.
+   */
+  keepManual?: boolean;
+  /** Bulk approval even though the kind has its own buttons (a weekly pack's card: it stands for many ordinary items). */
+  bulk?: boolean;
   /** Runs only after "approve" (or at level 1). Throwing marks the approval failed. */
   execute(payload: Payload, approvalId: number): Promise<void>;
   /**
@@ -161,6 +168,12 @@ export class ApprovalQueue {
     return Boolean(this.kinds.get(kind)?.buttons);
   }
 
+  /** Ordinary: «Одобрить все обычные» may approve it (not locked, and no own buttons unless the kind says `bulk`). */
+  isBulk(kind: string): boolean {
+    const s = this.kinds.get(kind);
+    return Boolean(s) && !s!.locked && (!s!.buttons || Boolean(s!.bulk));
+  }
+
   /** The Telegram message that shows the proposal's card (the last one sent). */
   cardMessage(id: number): CardRef | undefined {
     const r = this.db.prepare('SELECT chat_id, message_id FROM approval_cards WHERE approval_id = ?').get(id) as { chat_id: number; message_id: number } | undefined;
@@ -224,15 +237,15 @@ export class ApprovalQueue {
   }
 
   /**
-   * «Одобрить все обычные»: approves every pending proposal that is not locked (money, prices) and has no own buttons
-   * (those need the owner's own action), one by one through `handle`, so trust counters and the journal stay as for a
+   * «Одобрить все обычные»: approves every pending proposal that is not locked (money, prices, client sends) and has no own buttons
+   * (those need the owner's own action; a weekly pack's card is the exception), one by one through `handle`, so trust counters and the journal stay as for a
    * button press. Each decided card is edited in place.
    */
   async approveAll(fromId: number): Promise<{ approved: number; failed: number; skipped: number }> {
     const out = { approved: 0, failed: 0, skipped: 0 };
     if (fromId !== this.ownerId) return out;
     for (const row of this.pending()) {
-      if (row.status !== 'pending' || this.isLocked(row.kind) || this.hasOwnButtons(row.kind)) {
+      if (row.status !== 'pending' || !this.isBulk(row.kind)) {
         out.skipped++;
         continue;
       }
@@ -384,6 +397,15 @@ export class ApprovalQueue {
     return true;
   }
 
+  /**
+   * A pending proposal without a card: the owner decides it through another card (a weekly pack). The caller approves or
+   * rejects it with `handle`, so the trust counter and the journal stay as for a button press. Level 1 does not apply here.
+   */
+  open(kind: string, payload: Payload, summary: string): number {
+    this.spec(kind);
+    return this.insert(kind, payload, summary, 'pending');
+  }
+
   private insert(kind: string, payload: Payload, summary: string, status: Status): number {
     const r = this.db
       .prepare('INSERT INTO approvals (kind, payload, summary, status, created_at) VALUES (?, ?, ?, ?, ?)')
@@ -453,7 +475,7 @@ export class ApprovalQueue {
   private async bumpClean(kind: string): Promise<void> {
     this.db.prepare('UPDATE trust SET streak = streak + 1 WHERE kind = ?').run(kind);
     const spec = this.spec(kind);
-    if (this.level(kind) === 0 && !spec.locked && this.streak(kind) >= this.threshold) {
+    if (this.level(kind) === 0 && !spec.locked && !spec.keepManual && this.streak(kind) >= this.threshold) {
       this.db.prepare('UPDATE trust SET level = 1 WHERE kind = ?').run(kind);
       log('info', 'trust level raised', { kind, level: 1 });
       await this.messenger.send(this.ownerId, `Тип «${kind}»: ${this.threshold} одобрений подряд без правок, перехожу на уровень 1 (делаю сам, отчитываюсь). Вернуть: /level ${kind} 0`);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OWNER, OffLlm, routedLlm, world } from './helpers.js';
+import { OWNER, OffLlm, openPack, routedLlm, world } from './helpers.js';
 import { storeFor } from '@fir/worker-content-maker';
 
 const J = JSON.stringify;
@@ -23,7 +23,9 @@ describe('Marketing head: weekly pack end to end', () => {
     expect(w.hq.task(t.id)!.result).toContain('материалов 8, на одобрение 8');
     // The head never writes to the owner: nothing in the private chat before the batch
     expect(w.messenger.sent).toHaveLength(0);
-    expect(w.hq.queuedApprovals()).toHaveLength(8);
+    // the 8 proposals are held back: ONE card stands for the pack in the batch
+    expect(w.hq.heldApprovals()).toHaveLength(8);
+    expect(w.hq.queuedApprovals().map((l) => l.kind)).toEqual(['content_pack']);
     // The report went to the department topic and into the journal
     expect(w.posted).toHaveLength(1);
     expect(w.posted[0]).toMatchObject({ chatId: -1001, threadId: 7 });
@@ -31,11 +33,18 @@ describe('Marketing head: weekly pack end to end', () => {
     // Costs of the head and worker calls were metered per department
     expect(w.hq.costSummary(0)[0]!.dept).toBe('marketing');
 
-    // The Director's batch: a header with «Одобрить все обычные», then one numbered series, each card with buttons
-    expect(await w.director.sendApprovalBatch(false)).toBe(8);
+    // The Director's batch: ONE card for the pack (all 8 items listed, three buttons)
+    expect(await w.director.sendApprovalBatch(false)).toBe(1);
+    const pack = w.messenger.sent.filter((m) => m.buttons?.flat().some((b) => /^ap:\d+:a$/.test(b.data)));
+    expect(pack).toHaveLength(1);
+    expect(pack[0]!.text).toContain('Пакет недели, материалов: 8');
+    expect(pack[0]!.text.match(/^\d+\. клип/gm)).toHaveLength(7);
+    expect(pack[0]!.buttons!.flat().map((b) => b.text)).toEqual(['✅ Одобрить пакет', '👁 Посмотреть по одному', '❌ Отклонить пакет']);
+    // «Посмотреть по одному»: the items' own cards, numbered, each with approve / edit / reject
+    w.messenger.sent.length = 0;
+    await openPack(w);
     const cards = w.messenger.sent.filter((m) => m.buttons?.flat().some((b) => /^ap:\d+:a$/.test(b.data)));
     expect(cards).toHaveLength(8);
-    expect(cards[0]!.text).toContain('[1/8] marketing');
     expect(cards[0]!.text).toContain('Пакет, материал 1 из 8');
     expect(cards.every((m) => m.chatId === OWNER && m.buttons![0]!.length === 3)).toBe(true);
 
@@ -71,6 +80,7 @@ describe('Marketing head: weekly pack end to end', () => {
     w.hq.runRoutine('marketing-weekly-pack');
     await cycle(w);
     await w.director.sendApprovalBatch(false);
+    await openPack(w);
     // approve the item planned for 2026-11-23 and look at that day
     const first = w.queue.pending()[0]!;
     await w.decide('approve', first.id);

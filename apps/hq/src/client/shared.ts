@@ -80,7 +80,8 @@ export function intakeRecord(
 
 export type FreeResult =
   | { kind: 'price' }
-  | { kind: 'fallback' }
+  /** `down`: the model did not answer in time or failed (a gateway outage), not «LLM off» or «daily cap»: the scripted «принял, менеджер ответит» goes out and the lead is still recorded. */
+  | { kind: 'fallback'; down?: boolean }
   | { kind: 'answer'; text: string; team: boolean; removed: number };
 
 export interface FreeDeps {
@@ -88,6 +89,39 @@ export interface FreeDeps {
   instructions: string;
   /** LLM budget gate (the daily cap shared by Telegram and the web chat). */
   gate: { llmAllowed(): boolean; llmUsed(): void };
+  /** True while the model gateway is known to be down: the call is not even tried (the visitor gets the scripted answer at once). */
+  gatewayDown?: () => boolean;
+  /** A visitor never waits longer than this for the model (ms, default 20 s): a slower call counts as the gateway being down. */
+  timeoutMs?: number;
+}
+
+/**
+ * «Is the gateway down?» for the visitors, with a way back: while it is down, one call a minute is let through as a probe (the gateway watch only
+ * learns that it is back from a successful call, and the visitors' calls may be the only ones).
+ */
+export function gatewayGate(isDown: () => boolean, now: () => number, probeEveryMs = 60_000): () => boolean {
+  let lastProbe = 0;
+  return () => {
+    if (!isDown()) return false;
+    if (now() - lastProbe >= probeEveryMs) {
+      lastProbe = now();
+      return false;
+    }
+    return true;
+  };
+}
+
+/** The model's answer, or null after the timeout. The late answer is dropped. */
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -96,12 +130,14 @@ export interface FreeDeps {
 export async function freeAnswer(d: FreeDeps, lang: Lang, text: string, turns: Turn[], beforeCall?: () => Promise<void>): Promise<FreeResult> {
   if (isPriceQuestion(text)) return { kind: 'price' };
   if (!d.llm.enabled || !d.gate.llmAllowed()) return { kind: 'fallback' };
+  if (d.gatewayDown?.()) return { kind: 'fallback', down: true };
   await beforeCall?.();
   d.gate.llmUsed();
-  const raw = await tryComplete(d.llm, {
-    tier: 'sonnet', maxTokens: 400, system: systemPrompt(d.instructions, lang), messages: [...turns, { role: 'user', content: text }],
-  });
-  if (!raw?.trim()) return { kind: 'fallback' };
+  const raw = await withTimeout(
+    tryComplete(d.llm, { tier: 'sonnet', maxTokens: 400, system: systemPrompt(d.instructions, lang), messages: [...turns, { role: 'user', content: text }] }),
+    d.timeoutMs ?? 20_000,
+  );
+  if (!raw?.trim()) return { kind: 'fallback', down: true };
   const team = raw.includes(TEAM_MARK);
   const clean = sanitizeAnswer(raw.split(TEAM_MARK).join(' '), T[lang].priceNote);
   if (clean.text.length < 2) return { kind: 'fallback' };

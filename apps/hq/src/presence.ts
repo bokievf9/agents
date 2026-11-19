@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { errMsg, log, migrate, stripHtml, type Button, type Db, type EditOptions, type Messenger, type ReplyKeyboard, type SendOptions } from '@fir/core';
+import { errMsg, log, migrate, stripHtml, zonedParts, type Button, type Db, type EditOptions, type Messenger, type ReplyKeyboard, type SendOptions } from '@fir/core';
 import type { Hq } from '@fir/hq';
 
 export type InboxKind = 'message' | 'approval' | 'progress' | 'alert' | 'summary' | 'reply';
@@ -91,22 +91,38 @@ export class OwnerChannel implements Messenger {
     return Number(this.d.hq.setting('presence.lastPingAt')) || null;
   }
 
+  /** The owner's calendar day (his clock, `owner_tz`): the desk mode belongs to a day. */
+  private ownerDay(): string {
+    const p = zonedParts(this.d.hq.now(), this.d.hq.ownerTz);
+    return `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;
+  }
+
+  /**
+   * At the desk only while the site pings AND the desk belongs to the owner's current day. A tab left open overnight keeps pinging,
+   * but pings in his quiet hours do not carry the desk into the next day: at his midnight the mode ends and everything goes to
+   * Telegram again (the morning ping from the open site, outside quiet hours, brings it back).
+   */
   effective(): PresenceMode {
     if (this.mode === 'away') return 'away';
     const last = this.lastPingAt;
     if (last === null || this.d.hq.now() - last >= this.awayAfterMin * 60_000) return 'away';
+    if (this.d.hq.setting('presence.deskDay') !== this.ownerDay()) return 'away';
     return 'desk';
   }
 
   async setMode(mode: PresenceMode): Promise<void> {
     this.d.hq.setSetting('presence.mode', mode);
-    // switching to the desk is itself a sign of life (the 20 minutes start now)
-    if (mode === 'desk') this.d.hq.setSetting('presence.lastPingAt', String(this.d.hq.now()));
+    // switching to the desk is itself a sign of life (the 20 minutes start now, the day is today on the owner's clock)
+    if (mode === 'desk') {
+      this.d.hq.setSetting('presence.lastPingAt', String(this.d.hq.now()));
+      this.d.hq.setSetting('presence.deskDay', this.ownerDay());
+    }
     await this.sync();
   }
 
   async ping(): Promise<void> {
     this.d.hq.setSetting('presence.lastPingAt', String(this.d.hq.now()));
+    if (!this.d.hq.isQuiet()) this.d.hq.setSetting('presence.deskDay', this.ownerDay());
     await this.sync();
   }
 

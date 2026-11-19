@@ -1,6 +1,7 @@
 import { escapeHtml, type ApprovalRow, type BotCommand, type BotMenu, type Button, type CardFormat, type ReplyKeyboard } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import type { ApprovalEditor } from './editor.js';
+import { DIRECTOR_MENU } from './commands.js';
 import { deptRu } from './progress.js';
 
 /** Telegram UX of the Director (patterns: apps/hq/docs/telegram-ux.md). */
@@ -35,29 +36,8 @@ export function menuCommand(text: string): string | null {
 }
 
 // ---- the command menu ----
-/** The owner's menu (scoped to his private chat): daily first, then by department. ≤ 20 shown. */
-export const DIRECTOR_COMMANDS: BotCommand[] = [
-  { command: 'start', description: 'Меню и кнопки внизу' },
-  { command: 'status', description: 'Сводка: кто чем занят, что ждёт вас' },
-  { command: 'approve', description: 'Одобрения: карточки с кнопками' },
-  { command: 'tasks', description: 'Задачи по страницам, с действиями' },
-  { command: 'depts', description: 'Отделы: пауза, задачи отдела' },
-  { command: 'retry', description: '<id> повторить застрявшую задачу' },
-  { command: 'desk', description: 'Я за столом: всё на сайт /admin' },
-  { command: 'away', description: 'Я в пути: всё в Telegram' },
-  { command: 'costs', description: 'Расходы за месяц по отделам' },
-  { command: 'org', description: 'Оргструктура и доверие' },
-  { command: 'level', description: '<тип|агент> <0|1>: уровень доверия' },
-  { command: 'builders', description: 'Задачи строителям (Claude Code)' },
-  { command: 'drill', description: 'Учения: проверить все отделы' },
-  { command: 'kp', description: 'Продажи: КП по лиду; /reply ответ бизнеса' },
-  { command: 'tickets', description: 'Сопровождение: тикеты, /invoices счета' },
-  { command: 'project', description: 'Производство: проект из КП' },
-  { command: 'doc', description: 'Бэк-офис: документ клиенту, /kb поиск' },
-  { command: 'profile', description: 'Маркетинг: настройка профиля Instagram' },
-  { command: 'article', description: 'Маркетинг: статья в блог, <ниша>' },
-  { command: 'help', description: 'Все команды и подсказки' },
-];
+/** The owner's menu (scoped to his private chat), made from the one command list (`commands.ts`): at most 20 shown. */
+export const DIRECTOR_COMMANDS: BotCommand[] = DIRECTOR_MENU;
 
 export const DIRECTOR_PROFILE = {
   description:
@@ -81,12 +61,15 @@ export const KIND_RU: Record<string, string> = {
   support_answer: 'Ответ клиенту', support_money: 'Деньги клиента', bo_document: 'Документ', lead_reply: 'Ответ лиду',
   lead_price: 'Цена лиду', onboarding_guide: 'Онбординг', presales_pack: 'Пакет пресейла', pm_spec: 'ТЗ проекта',
   pm_client_status: 'Статус клиенту', prospect_first: 'Первое сообщение бизнесу', prospect_followup: 'Дожим бизнеса',
-  prospect_reply: 'Ответ бизнесу', referral_reward: 'Награда за рекомендацию',
+  prospect_reply: 'Ответ бизнесу', referral_reward: 'Награда за рекомендацию', referral_payout: 'Выплата за рекомендацию',
+  content_pack: 'Контент: пакет недели', audit: 'Аудит сайта клиенту',
 };
 export const kindRu = (kind: string) => KIND_RU[kind] ?? kind;
 
 export const PREVIEW_CHARS = 500;
 const SUMMARY_CHARS = 600;
+/** Cards whose summary is the whole point (a weekly pack lists all its items): shown at the long length at once. */
+const WIDE_KINDS = new Set(['content_pack']);
 /** Telegram counts 4096 characters after parsing; keep a margin for the markup lines. */
 const FULL_CHARS = 3300;
 
@@ -113,12 +96,13 @@ export function approvalCardFormat(hq: Hq, editors: Map<string, ApprovalEditor>)
       const { prefix, summary } = split(row);
       const text = typeof row.payload.text === 'string' ? row.payload.text.trim() : '';
       const room = full ? FULL_CHARS : PREVIEW_CHARS;
-      const truncated = text.length > PREVIEW_CHARS || summary.length > SUMMARY_CHARS;
+      const summaryRoom = WIDE_KINDS.has(row.kind) ? FULL_CHARS : SUMMARY_CHARS;
+      const truncated = text.length > PREVIEW_CHARS || summary.length > summaryRoom;
       const lines = [
         `📥 ${bold(title(row))}`,
         `<i>${esc(`${prefix ? `${prefix} · ` : ''}${row.kind} (уровень ${level}, подряд ${streak})`)}${locked ? ' · 🔒 только по одной' : ''}</i>`,
         '',
-        esc(full ? cut(summary, FULL_CHARS) : cut(summary, SUMMARY_CHARS)),
+        esc(full ? cut(summary, FULL_CHARS) : cut(summary, summaryRoom)),
       ];
       if (text) lines.push('', `<b>Предлагаю отправить:</b>\n<blockquote>${esc(cut(text, Math.max(200, room - (full ? summary.length : 0))))}</blockquote>`);
       const buttons: Button[][] = [[
@@ -163,7 +147,9 @@ export type Nav =
   | { ns: 'pg'; filter: string; page: number }
   | { ns: 'tk'; id: number; op: 'o' | 'r' | 'x' | 'X' | 'j'; filter: string; page: number }
   | { ns: 'dp'; dept: string | null; op: 'o' | 'p' | 'r' | 'list' }
-  | { ns: 'ap'; op: 'all' | 'later' | 'show' | 'full' | 'short'; id?: number };
+  | { ns: 'ap'; op: 'all' | 'later' | 'show' | 'full' | 'short'; id?: number }
+  /** A weekly pack's card: `o` opens its items one by one, `v` sends the previews that exist. */
+  | { ns: 'pk'; op: 'o' | 'v'; id: number };
 
 export function parseNav(data: string): Nav | null {
   let m = /^pg:([a-z_]+):(\d{1,4})$/.exec(data);
@@ -175,6 +161,8 @@ export function parseNav(data: string): Nav | null {
   if (m) return { ns: 'dp', dept: m[1]!, op: m[2] as 'o' };
   m = /^ap:(all|later|show)$/.exec(data);
   if (m) return { ns: 'ap', op: m[1] as 'all' };
+  m = /^pk:(\d+):([ov])$/.exec(data);
+  if (m) return { ns: 'pk', op: m[2] as 'o', id: Number(m[1]) };
   m = /^ap:(\d+):([fs])$/.exec(data);
   if (m) return { ns: 'ap', op: m[2] === 'f' ? 'full' : 'short', id: Number(m[1]) };
   return null;

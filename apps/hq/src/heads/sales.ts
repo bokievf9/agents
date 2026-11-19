@@ -2,21 +2,26 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { errMsg, log, tryJson, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
-import { LeadIntakeWorker, leadStoreFor, TEMP_RU, type Delivery } from '@fir/worker-lead-intake';
+import { billingStoreFor, type Invoice } from '@fir/worker-billing';
+import { csStoreFor } from '@fir/worker-customer-support';
+import { LeadIntakeWorker, leadStoreFor, TEMP_RU, type Delivery, type Lead } from '@fir/worker-lead-intake';
+import { PmStore, type Product } from '@fir/worker-project-manager';
 import {
   COPY_PREFIX, kindSpecs as prospectKinds, markReplied, onDecision as onProspectDecision, ProspectorWorker, PROSPECT_KINDS, statsText, storeFor as prospectStoreFor,
   STATUS_RU,
 } from '@fir/worker-prospector';
 import {
-  DEFAULT_REWARD, kindSpecs as referralKinds, markPaid, onDecision as onReferralDecision, parseReferralArg, ReferralWorker, referrerFromSource, rewardSummary,
-  statsText as referralStats, storeFor as referralStoreFor, KIND_REWARD, describe as describeReferral,
+  DEFAULT_REWARD, kindSpecs as referralKinds, KIND_PAYOUT, markPaid, onDecision as onReferralDecision, parseReferralArg, payoutKindSpecs, payoutSummary, ReferralWorker,
+  referrerFromSource, rewardSummary, statsText as referralStats, storeFor as referralStoreFor, KIND_REWARD, describe as describeReferral,
 } from '@fir/worker-referral';
 import {
-  kindSpecs as presalesKinds, KIND_PACK, onDecision as onPresalesDecision, PresalesWorker, packMessages,
+  kindSpecs as presalesKinds, KIND_PACK, OFFERS, onDecision as onPresalesDecision, PresalesWorker, packMessages, storeFor as presalesStoreFor,
+  isDirectionId, type DirectionId,
 } from '@fir/worker-presales';
 import { z } from 'zod';
 import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
 import type { ApprovalEditor } from '../editor.js';
+import type { LostLeads } from '../lost-leads.js';
 import type { Reporter } from '../reporter.js';
 
 export const SALES = 'sales';
@@ -51,6 +56,8 @@ export interface SalesDeps {
   replyLevel?: 0 | 1;
   /** The public client bot: approved replies to leads that came from it go back into the client's chat. */
   client?: ClientChannel;
+  /** A lead that fails before the owner sees it is written down here (kind `lost_lead`) and summed up in an hourly alert. */
+  lost?: LostLeads;
 }
 
 type Action = 'lead' | 'batch' | 'followups' | 'reply' | 'stats' | 'kp' | 'referral_reminders' | 'none';
@@ -75,6 +82,24 @@ function guessAction(task: Task): Action {
 
 const oneLine = (s: string, n: number) => s.replace(/\s+/g, ' ').trim().slice(0, n);
 
+/** What a project of this direction is for the Production head (milestones and the ТЗ depend on it). */
+const PRODUCT_OF_DIRECTION: Record<DirectionId, Product> = {
+  admin: 'bot', receptionist: 'bot', automation: 'automation', content: 'automation', miniapp: 'app', agent: 'automation', implementation: 'automation', site: 'site',
+};
+export const productOfDirection = (direction: unknown): Product => (typeof direction === 'string' && isDirectionId(direction) ? PRODUCT_OF_DIRECTION[direction] : 'site');
+
+/**
+ * A lead is qualified when it has a service (a catalogue product counts) AND a budget or an estimate from the website's builder:
+ * then the КП is made without waiting for `/kp` (owner decision 2026-11-19). A lead without a money signal waits for the owner.
+ */
+export function isQualified(lead: Pick<Lead, 'service' | 'budget'>, raw: Record<string, unknown> = {}): boolean {
+  const service = lead.service.trim().toLowerCase();
+  const product = typeof raw.product === 'string' ? raw.product.trim() : '';
+  const hasService = (service !== '' && service !== 'unknown' && service !== 'other') || product !== '';
+  const estimate = typeof raw.estimate === 'string' ? raw.estimate.trim() : '';
+  return hasService && (lead.budget.trim() !== '' || estimate !== '');
+}
+
 /** First start: the Sales org (head, two workers) and its two daily routines. Instructions come from the file once. */
 export function seedSales(hq: Hq, cfg: { instructionsDir: string; salesBudgetUsd: number }): void {
   hq.ensureAgent({
@@ -88,9 +113,10 @@ export function seedSales(hq: Hq, cfg: { instructionsDir: string; salesBudgetUsd
   // the public client bot and the website chat: their LLM calls are metered under this agent
   hq.ensureAgent({ id: CLIENT_BOT_ID, dept: SALES, role: 'worker', title: 'Клиентский бот', bossId: HEAD_ID });
   const routines = [
-    { name: 'sales-daily-cards', cron: '0 10 * * *', dept: SALES, title: 'Карточки Разведчика на сегодня', meta: { action: 'batch' } },
-    { name: 'sales-followups', cron: '5 10 * * *', dept: SALES, title: 'Дожимы Разведчика', meta: { action: 'followups' } },
-    { name: 'sales-referral-reminders', cron: '30 9 * * *', dept: SALES, title: 'Напоминания по рекомендациям', meta: { action: 'referral_reminders' } },
+    // made on the owner's clock, early enough for his 09:00 batch
+    { name: 'sales-daily-cards', cron: '30 7 * * *', tz: 'owner' as const, dept: SALES, title: 'Карточки Разведчика на сегодня', meta: { action: 'batch' } },
+    { name: 'sales-followups', cron: '40 7 * * *', tz: 'owner' as const, dept: SALES, title: 'Дожимы Разведчика', meta: { action: 'followups' } },
+    { name: 'sales-referral-reminders', cron: '20 7 * * *', tz: 'owner' as const, dept: SALES, title: 'Напоминания по рекомендациям и выплатам', meta: { action: 'referral_reminders' } },
   ];
   hq.syncRoutines('sales', routines);
 }
@@ -117,7 +143,7 @@ export class SalesHead implements ApprovalEditor {
     this.referral = d.referral ?? new ReferralWorker();
     const base = { db: d.hq.db, now: d.hq.now };
     referralStoreFor(base, d.referralReward ?? DEFAULT_REWARD); // fixes the reward text before any worker touches the table
-    for (const [kind, spec] of Object.entries({ ...presalesKinds(base), ...referralKinds(base) })) d.hq.registerKind(kind, spec);
+    for (const [kind, spec] of Object.entries({ ...presalesKinds(base), ...referralKinds(base), ...payoutKindSpecs(base) })) d.hq.registerKind(kind, spec);
     for (const [kind, spec] of Object.entries(prospectKinds(base))) d.hq.registerKind(kind, spec);
     if (this.leads instanceof LeadIntakeWorker) {
       for (const [kind, spec] of Object.entries(this.leads.kindSpecs(base, (x) => this.deliver(x)))) d.hq.registerKind(kind, spec);
@@ -126,16 +152,71 @@ export class SalesHead implements ApprovalEditor {
     d.hq.onApprovalDecision((link, state) => onProspectDecision(base, link, state));
     d.hq.onApprovalDecision((link, state) => onPresalesDecision(base, link, state));
     d.hq.onApprovalDecision((link, state) => onReferralDecision(base, link, state));
-    // Sales -> Production: an approved КП pack becomes a project task for the Production head.
+    // The chain after an approved КП: a project is only RESERVED (it starts on the first payment), the contract and the invoice are drafted at once.
     d.hq.onApprovalDecision((link, state) => {
-      if (link.kind !== KIND_PACK || state !== 'executed') return;
-      const leadId = Number(link.payload.leadId);
-      const lead = Number.isInteger(leadId) && leadId > 0 ? leadStoreFor(base).get(leadId) : undefined;
-      const client = lead?.name || (lead ? `лид #${lead.id}` : `КП #${String(link.payload.packId)}`);
-      const what = (lead?.task || String(link.payload.direction ?? '')).trim() || 'по утверждённому КП';
-      d.hq.createTask({ title: `Проект: ${client}`, body: what, dept: 'production', creator: 'head', priority: 1, meta: { action: 'project', client, what, source: 'sales' } });
-      d.hq.wake('production-head', 'task');
+      if (link.kind === KIND_PACK && state === 'executed') this.afterKpApproved(link.taskId, link.payload);
     });
+  }
+
+  /**
+   * An approved КП (owner decision 2026-11-19): (1) a `draft` project is reserved in `pm_projects` (no milestones, no ТЗ: the project starts
+   * when the first invoice is paid); (2) Documents drafts the contract and Billing drafts the invoice for the prepayment, both locked, in
+   * one go. The three cards name each other: «КП #12 → договор → счёт 50%». A drill task never makes a real project or invoice.
+   */
+  private afterKpApproved(taskId: number, pack: Record<string, unknown>): void {
+    const hq = this.hq;
+    if (hq.task(taskId)?.tags.includes('drill')) return;
+    const base = { db: hq.db, now: hq.now };
+    const leadId = Number(pack.leadId);
+    const lead = Number.isInteger(leadId) && leadId > 0 ? leadStoreFor(base).get(leadId) : undefined;
+    const packId = Number(pack.packId);
+    const direction = typeof pack.direction === 'string' && isDirectionId(pack.direction) ? pack.direction : 'site';
+    const offer = OFFERS[direction];
+    const client = lead?.name || (lead ? `лид #${lead.id}` : `КП #${packId}`);
+    const what = (lead?.task || offer.title).trim() || 'по утверждённому КП';
+    const pct = Number(pack.prepayPercent) || this.d.prepaymentPercent || 50;
+    const totalUsd = Number(pack.totalUsd) || offer.fromUsd;
+    const prepayUsd = Number(pack.prepayUsd) || Math.round((totalUsd * pct) / 100);
+    const project = new PmStore(hq.db, hq.now).reserve({ client, what, product: productOfDirection(direction), leadId: lead?.id ?? null, packId });
+    const line = (here: 'contract' | 'invoice') =>
+      `Цепочка: КП #${packId} (утверждено) → договор${here === 'contract' ? ' (эта карточка)' : ''} → счёт ${pct}%${here === 'invoice' ? ' (эта карточка)' : ''} → проект #${project.id} стартует после оплаты`;
+    hq.createTask({
+      title: `Договор: ${client}`, dept: 'backoffice', creator: 'head', priority: 1,
+      meta: { action: 'doc', type: 'contract', client, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project.id },
+    });
+    hq.wake('backoffice-head', 'task');
+    hq.createTask({
+      title: `Счёт ${pct}%: ${client}`, dept: 'support', creator: 'head', priority: 1,
+      meta: { action: 'kp_invoice', client, amountUsd: prepayUsd, totalUsd, what: `Предоплата ${pct}% по КП #${packId}: ${offer.title}`, packId, leadId: lead?.id ?? null, projectId: project.id, chain: line('invoice') },
+    });
+    hq.wake('support-head', 'task');
+    hq.log(HEAD_ID, 'kp_chain', 'pack', String(packId), `project ${project.id}`);
+    void this.d.reporter.post(SALES, `КП #${packId} утверждено (${client}): проект #${project.id} зарезервирован, договор и счёт ${pct}% ($${prepayUsd}) готовятся и придут карточками. Проект стартует после оплаты.`);
+  }
+
+  /**
+   * The first invoice of a lead's КП was paid (called by Support after `/paid`): when the lead came with `ref:<slug>`, the payout of 10% of
+   * the estimate total in USD is asked of the owner (locked approval, the referrer's contact on the card). Returns lines for the owner.
+   */
+  async onInvoicePaid(inv: Invoice): Promise<string[]> {
+    if (inv.leadId === null) return [];
+    const base = { db: this.hq.db, now: this.hq.now };
+    if (billingStoreFor(base).paidCountForLead(inv.leadId) !== 1) return [];
+    const lead = leadStoreFor(base).get(inv.leadId);
+    const ref = lead ? referrerFromSource(lead.origin) : null;
+    if (!lead || !ref || !(this.referral instanceof ReferralWorker)) return [];
+    const { referral } = this.rstore().propose({ referrer: ref, referred: lead.name || `лид #${lead.id}`, leadId: lead.id, source: 'lead' });
+    const contact = csStoreFor(base).clientByName(ref)?.contact ?? '';
+    const asked = this.referral.requestPayout(base, { referralId: referral.id, totalUsd: inv.totalUsd ?? inv.amountUsd, contact });
+    if (!asked) return [];
+    const t = this.hq.createTask({ title: `Выплата рекомендателю #${asked.id}`, dept: SALES, assigneeId: REFERRAL_ID, creator: 'head', priority: 1, meta: { action: 'referral_payout', referralId: asked.id, invoice: inv.number } });
+    this.hq.claim(t.id, REFERRAL_ID);
+    await this.hq.requestApproval(
+      t.id, REFERRAL_ID, KIND_PAYOUT,
+      { referralId: asked.id, amountUsd: asked.payoutUsd, contact: asked.payoutContact, referrer: asked.referrer, invoice: inv.number },
+      payoutSummary(asked, inv.number),
+    );
+    return [`Рекомендатель ${asked.referrer}: выплата $${asked.payoutUsd} (10% сметы, USDT) придёт карточкой в пачке, выплатить в течение 7 дней.`];
   }
 
   private get hq(): Hq {
@@ -180,7 +261,16 @@ export class SalesHead implements ApprovalEditor {
     }
   }
 
+  /** A lead the owner will not see through the normal path (the task crashed or its worker failed): the contact is kept for the hourly alert. */
+  private lostLead(task: Task, reason: string): void {
+    if (task.meta.action !== 'lead' || task.meta.lostMarked === true || !this.d.lost) return;
+    const raw = (task.meta.lead ?? {}) as { contact?: unknown };
+    this.d.lost.record('lead', reason, { ...(typeof raw.contact === 'string' ? { contact: raw.contact } : {}), ref: `задача #${task.id}` });
+    this.hq.setMeta(task.id, { lostMarked: true });
+  }
+
   private async crash(task: Task, e: unknown): Promise<void> {
+    this.lostLead(task, `сбой обработки заявки: ${errMsg(e)}`);
     log('error', 'sales task crashed', { task: task.id, err: errMsg(e) });
     const cur = this.hq.task(task.id);
     if (cur && cur.status !== 'blocked' && cur.status !== 'done' && cur.status !== 'rejected') this.hq.block(task.id, HEAD_ID, `Сбой: ${errMsg(e)}`.slice(0, 300));
@@ -220,6 +310,9 @@ export class SalesHead implements ApprovalEditor {
       if (!res.ok) return void this.hq.block(task.id, HEAD_ID, res.error ?? 'сбой напоминаний');
       this.hq.complete(task.id, HEAD_ID, res.result || 'Напоминаний нет');
       if (res.result) await this.report(task.id, res.result);
+      // a payout that waits 7 days is money owed to a person: the owner hears it at once, not only in the summary
+      const waiting = res.result.split('\n').find((l) => l.startsWith('Выплаты рекомендателям'));
+      if (waiting) await this.hq.alert(waiting);
       return;
     }
     this.hq.setMeta(task.id, { action });
@@ -266,6 +359,7 @@ export class SalesHead implements ApprovalEditor {
     const worker = actor === LEADS_ID ? this.leads : actor === PRESALES_ID ? this.presales : this.prospector;
     const staged: Staged[] = [];
     const fail = async (error: string | undefined) => {
+      this.lostLead(this.hq.task(taskId)!, `заявка не разобрана: ${error ?? 'исполнитель не вернул результат'}`);
       this.hq.block(taskId, actor, error ?? 'исполнитель не вернул результат');
       await this.hq.alert(`Продажи: задача #${taskId} не выполнена: ${(error ?? '').slice(0, 200)}`);
     };
@@ -300,7 +394,7 @@ export class SalesHead implements ApprovalEditor {
         this.hq.claim(child.id, PROSPECTOR_ID);
         await this.hq.requestApproval(child.id, PROSPECTOR_ID, s.kind, s.payload, s.summary);
       }
-      return void (await this.report(taskId, `Разведчик: ${res.result} Карточки придут в пачке на одобрение (10:00 или /approve).`));
+      return void (await this.report(taskId, `Разведчик: ${res.result} Карточки придут в утренней пачке на одобрение (или /approve).`));
     }
     this.hq.complete(taskId, actor, res.result, staged.length > 0 ? 'review' : 'done');
     // Proposals that wait for the owner go first: one that runs at once (level 1) must not close the task while another is still open.
@@ -320,9 +414,24 @@ export class SalesHead implements ApprovalEditor {
     const ref = referrerFromSource(lead.origin);
     if (ref) {
       const { referral, created } = this.rstore().propose({ referrer: ref, referred: lead.name || `лид #${lead.id}`, leadId: lead.id, source: 'lead' });
-      if (created) await this.report(taskId, `Рекомендация ${describeReferral(referral)}, награда после оплаты: ${referral.reward}. Оплатит: /paid ${referral.id}.`);
+      if (created) await this.report(taskId, `Рекомендация ${describeReferral(referral)}, выплата после первой оплаты клиента (10% сметы, USDT). Счёт отмечается: /paid <номер счёта>.`);
     }
     if (lead.temperature === 'hot') await this.hq.alert(`Горячий лид #${lead.id} (${lead.niche || 'ниша не ясна'}). Карточка с контактом в пачке на одобрение, /approve.`);
+    await this.startKpFor(taskId, lead);
+  }
+
+  /** A qualified lead (service and budget or estimate) gets its КП by itself, once; `/kp` stays for the rest and for a redo. */
+  private async startKpFor(taskId: number, lead: Lead): Promise<void> {
+    const task = this.hq.task(taskId);
+    if (!task || task.tags.includes('drill')) return;
+    const raw = (task.meta.lead ?? {}) as Record<string, unknown>;
+    if (!isQualified(lead, raw)) return;
+    const base = { db: this.hq.db, now: this.hq.now };
+    if (presalesStoreFor(base).byLead(lead.id).some((x) => x.status === 'draft' || x.status === 'approved')) return;
+    if (this.hq.tasks({ dept: SALES, open: true, limit: 500 }).some((t) => t.meta.action === 'kp' && t.meta.leadId === lead.id)) return;
+    const kp = this.hq.createTask({ title: `КП для лида #${lead.id} ${oneLine(lead.name, 60)}`, dept: SALES, creator: 'head', priority: 1, meta: { action: 'kp', leadId: lead.id, auto: true } });
+    this.hq.wake(HEAD_ID, 'task');
+    await this.report(taskId, `Лид #${lead.id} квалифицирован (услуга и бюджет или смета): КП, смета и черновик договора готовятся сами (задача #${kp.id}), карточка придёт в пачке.`);
   }
 
   // ---- the webhook creates a task per lead ----

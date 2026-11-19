@@ -1,7 +1,7 @@
 import { MockLlm, type LlmRequest } from '@fir/core';
 import { storeFor } from '@fir/worker-content-maker';
 import { describe, expect, it } from 'vitest';
-import { OWNER, clipJson, routedLlm, world } from './helpers.js';
+import { OWNER, clipJson, openPack, routedLlm, world } from './helpers.js';
 
 const J = JSON.stringify;
 const RSS = '<rss><channel><item><title>ИИ агенты для бизнеса</title><ht:approx_traffic>500+</ht:approx_traffic></item></channel></rss>';
@@ -91,6 +91,7 @@ describe('Marketing: the daily publish flow', () => {
     w.hq.runRoutine('marketing-weekly-pack');
     await cycle(w);
     await w.director.sendApprovalBatch(false);
+    await openPack(w);
     await w.decide('approve', w.queue.pending()[0]!.id); // the item planned for Mon 23.11
     w.messenger.sent.length = 0;
     w.clock.t = Date.UTC(2026, 10, 23, 4, 0); // Mon 09:00 Tashkent

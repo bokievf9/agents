@@ -97,7 +97,8 @@ describe('pack generation', () => {
     await worker.run(task({ action: 'topic', topic: 'бот-администратор для барбершопа' }), ctx);
     const store = storeFor(ctx);
     const spec = worker.kindSpec(ctx, () => true);
-    expect(spec).toMatchObject({ initialLevel: 0, locked: true });
+    expect(spec).toMatchObject({ initialLevel: 0, keepManual: true }); // content is not money: never locked, never promoted
+    expect(spec.locked).toBeFalsy();
     await spec.execute(staged[0]!.payload, 1);
     const rows = store.readyRows();
     expect(rows.map((r) => r.platform)).toEqual(['instagram', 'tiktok', 'shorts']);

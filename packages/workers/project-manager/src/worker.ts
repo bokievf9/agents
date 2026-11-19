@@ -39,7 +39,15 @@ export class ProjectManagerWorker implements Worker {
     const given = PRODUCTS.find((x) => x === task.meta.product);
     const product = given ?? guessProduct(`${what} ${typeof task.meta.service === 'string' ? task.meta.service : ''}`);
     const source = typeof task.meta.source === 'string' ? task.meta.source : 'owner';
-    const p = store.createProject({ client, what, product, source, taskId: task.id });
+    // a project reserved by an approved КП (`meta.projectId`) starts on its row; otherwise (`/project`) a new one is made
+    const reservedId = Number(task.meta.projectId);
+    const reserved = Number.isInteger(reservedId) && reservedId > 0 ? store.project(reservedId) : undefined;
+    if (reserved && store.milestones(reserved.id).length > 0) return { ok: false, result: '', error: `проект #${reserved.id} уже запущен` };
+    let p;
+    if (reserved) {
+      store.start(reserved.id, { product, what, taskId: task.id });
+      p = store.project(reserved.id)!;
+    } else p = store.createProject({ client, what, product, source, taskId: task.id });
     const ms = planMilestones(product, ctx.now(), ctx.tz).map((m) => store.addMilestone({ projectId: p.id, ...m }));
     const spec = await buildSpec(ctx.llm, p, ms, ctx.tz);
     store.setSpec(p.id, spec);

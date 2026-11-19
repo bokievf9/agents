@@ -1,9 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { errMsg, log, tryJson, zonedParts, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
+import { errMsg, escapeHtml, log, tryJson, zonedParts, type ApprovalQueue, type Button, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import {
-  ARTICLE_KIND, KIND, ContentMakerWorker, TYPE_RU, articleSchema, articleTargetPath, builderInstruction, editableParts, nicheById, partLabel, replacePart,
+  ARTICLE_KIND, KIND, ContentMakerWorker, TYPE_RU, dayLabel, articleSchema, articleTargetPath, builderInstruction, editableParts, nicheById, partLabel, replacePart,
   findNiche, splitPlatforms, storeFor, titleOf, ymd, RenderQueue, parseReel, shortReason, type RenderJob,
   type PartId,
 } from '@fir/worker-content-maker';
@@ -15,9 +15,16 @@ import { z } from 'zod';
 import { AuditStore, type AuditInput } from '../audit-shared.js';
 import { ClientBlockedError, type ClientChannel } from '../client/channel.js';
 import type { ApprovalEditor } from '../editor.js';
+import type { LostLeads } from '../lost-leads.js';
 import type { Reporter } from '../reporter.js';
 
 export const MARKETING = 'marketing';
+/**
+ * The weekly pack as ONE card (owner decision 2026-11-19): it lists every item, «Одобрить пакет» approves them all, «Посмотреть по одному»
+ * opens the per-item cards, «Отклонить пакет» rejects them all. Content is not money: the pack and the items are ordinary
+ * (included in «Одобрить все обычные»), only never promoted to level 1 by the counter.
+ */
+export const PACK_KIND = 'content_pack';
 export const HEAD_ID = 'marketing-head';
 const WORKER_ID = 'content-maker';
 
@@ -48,6 +55,8 @@ export interface MarketingDeps {
    */
   renderReels?: boolean;
   rng?: () => number;
+  /** An audit request that cannot be prepared is written down as a lost request (kind `lost_lead`) and summed up in the hourly alert. */
+  lost?: LostLeads;
   /** The client bot: an approved audit goes to the contact when that person already wrote to it (matched by username or chat id). */
   audit?: ClientChannel & { findChat(username: string): number | undefined };
 }
@@ -71,6 +80,14 @@ const splitSchema = z.object({
 /** Telegram bots upload videos up to 50 MB. */
 const MAX_VIDEO_BYTES = 49 * 1024 * 1024;
 const reviewSchema = z.object({ ok: z.boolean(), issues: z.array(z.string()).max(10).default([]) });
+
+/** The pack's card: one decision for all, or the items one by one. `ap:` buttons keep the core's approve and reject; `pk:` ones are the app's own. */
+export function packButtons(id: number, previews: number): Button[][] {
+  return [
+    [{ text: '✅ Одобрить пакет', data: `ap:${id}:a` }, { text: '👁 Посмотреть по одному', data: `pk:${id}:o` }],
+    [{ text: '❌ Отклонить пакет', data: `ap:${id}:r` }, ...(previews > 0 ? [{ text: '🖼 Превью', data: `pk:${id}:v` }] : [])],
+  ];
+}
 
 /** An audit not delivered this long after the request raises an alert (the promise is «в течение рабочего дня»). */
 export const AUDIT_ALERT_AFTER_MS = 20 * 3_600_000;
@@ -150,6 +167,12 @@ export class MarketingHead implements ApprovalEditor {
         },
       });
     }
+    // The pack's card: approving it approves every held item, «Посмотреть по одному» sends the items' own cards instead.
+    d.hq.registerKind(PACK_KIND, {
+      initialLevel: 0, keepManual: true, bulk: true,
+      buttons: (id, payload) => packButtons(id, Number(payload.previews ?? 0)),
+      execute: (payload, approvalId) => this.decidePack(payload, approvalId),
+    });
     // An approved article becomes a `builder` task whose issue carries the article JSON and the target file path.
     d.hq.registerKind(ARTICLE_KIND, {
       initialLevel: 0, locked: true,
@@ -175,6 +198,7 @@ export class MarketingHead implements ApprovalEditor {
     }, { urgent: true }); // a visitor is waiting: the card goes out at once, not with the 10:00 batch
     // The owner rejected an item: the worker's own table follows.
     d.hq.onApprovalDecision((link, state) => {
+      if (link.kind === PACK_KIND && (state === 'rejected' || state === 'failed')) this.packDeclined(link.payload, link.approvalId, state);
       if (link.kind === AUDIT_KIND && state === 'rejected') this.audits().setStatus(Number(link.payload.auditId), 'rejected');
       if (link.kind === KIND && state === 'rejected') storeFor({ db: d.hq.db, now: d.hq.now }).setStatus(Number(link.payload.itemId), 'rejected');
       if (link.kind === ARTICLE_KIND && state === 'rejected') {
@@ -431,7 +455,12 @@ export class MarketingHead implements ApprovalEditor {
       this.hq.setMeta(task.id, { action: 'audit' });
       await this.runDirect(task.id, this.seo);
       const auditId = Number(this.hq.task(task.id)?.meta.auditId);
-      if (Number.isInteger(auditId)) this.audits().setStatus(auditId, this.hq.task(task.id)?.status === 'blocked' ? 'failed' : 'proposed');
+      const failed = this.hq.task(task.id)?.status === 'blocked';
+      if (Number.isInteger(auditId)) this.audits().setStatus(auditId, failed ? 'failed' : 'proposed');
+      if (failed && Number.isInteger(auditId)) {
+        const a = this.audits().get(auditId);
+        this.d.lost?.record('audit', 'аудит сайта не подготовлен (сайт не открылся или сбой)', { ...(a ? { contact: a.contact } : {}), ref: `аудит #${auditId}` });
+      }
       return;
     }
     if (DIRECT.includes(action)) {
@@ -475,6 +504,99 @@ export class MarketingHead implements ApprovalEditor {
     await this.runWorkerTask(child.id, WORKER_ID);
   }
 
+  // ---- the weekly pack's card ----
+  /** Item tasks of a pack (the pack parent's subtasks that carry a held proposal). */
+  private heldOf(payload: Record<string, unknown>) {
+    const ids = Array.isArray(payload.itemTaskIds) ? payload.itemTaskIds.filter((x): x is number => typeof x === 'number') : [];
+    return this.hq.heldApprovals(ids);
+  }
+
+  /**
+   * «Одобрить пакет» (or the pack inside «Одобрить все обычные»): every held item gets its approval row without a card and is
+   * approved one by one through the queue, so renders, trust counters and the journal are as for a button press. In `split` mode
+   * («Посмотреть по одному») the items go out as their own cards instead.
+   */
+  private async decidePack(payload: Record<string, unknown>, approvalId: number): Promise<void> {
+    const held = this.heldOf(payload);
+    if (this.hq.setting(`pack_split:${approvalId}`) === '1') {
+      await this.hq.releaseHeld(held.map((l) => l.id));
+      return;
+    }
+    for (const l of held) {
+      const id = this.hq.openHeld(l.id);
+      if (id === null) continue;
+      await this.d.queue.handle('approve', id, this.d.ownerId);
+    }
+    this.hq.reconcileApprovals();
+  }
+
+  /** The pack was rejected (every held item is rejected with it) or its execution failed (the items go out as their own cards). */
+  private packDeclined(payload: Record<string, unknown>, approvalId: number | null, state: 'rejected' | 'failed' | string): void {
+    const held = this.heldOf(payload);
+    if (approvalId !== null && this.hq.setting(`pack_split:${approvalId}`) === '1') return;
+    if (state === 'failed') void this.hq.releaseHeld(held.map((l) => l.id));
+    else for (const l of held) this.hq.rejectHeld(l.id);
+  }
+
+  /** Buttons of the pack's card: `pk:<id>:o` opens the items one by one, `pk:<id>:v` sends the previews that exist. */
+  async onPackButton(op: 'o' | 'v', approvalId: number, at: { chatId: number; messageId: number }): Promise<string> {
+    const row = this.d.queue.get(approvalId);
+    if (!row || row.kind !== PACK_KIND || row.status !== 'pending') {
+      await this.d.queue.settleCard(approvalId, at).catch(() => undefined);
+      return 'Уже обработано';
+    }
+    if (op === 'v') {
+      const files = this.packPreviewFiles(row.payload);
+      if (!files.length || !this.d.messenger.sendPhotos) return 'Превью пока нет: картинки собираются после одобрения';
+      await this.d.messenger.sendPhotos(this.d.ownerId, files.slice(0, 10), 'Превью пакета недели');
+      return 'Превью ниже';
+    }
+    const n = this.heldOf(row.payload).length;
+    this.hq.setSetting(`pack_split:${approvalId}`, '1');
+    await this.d.queue.handle('approve', approvalId, this.d.ownerId);
+    this.hq.reconcileApprovals();
+    await this.d.messenger.edit(at.chatId, at.messageId, `👁 <b>Пакет открыт по одному</b>\n${escapeHtml(`Карточек ниже: ${n}. Каждую можно одобрить, исправить или отклонить отдельно.`)}`, { html: true }).catch(() => undefined);
+    return 'Карточки ниже';
+  }
+
+  /** The first PNG of every item of the pack that has pictures (they exist only for items rendered earlier, e.g. a regenerated pack). */
+  private packPreviewFiles(payload: Record<string, unknown>): string[] {
+    const ids = Array.isArray(payload.itemIds) ? payload.itemIds.filter((x): x is number => typeof x === 'number') : [];
+    const out: string[] = [];
+    for (const itemId of ids) {
+      const first = this.store().rowsOfItem(itemId).flatMap((r) => r.files).find((f) => existsSync(f));
+      if (first) out.push(first);
+    }
+    return out;
+  }
+
+  /**
+   * The pack parent is ready: its items' queued proposals leave the batch and ONE card stands for them (type, topic and one line each).
+   * Returns the card to request (null: fewer than two proposals, the batch handles them as before).
+   */
+  private planPack(parent: Task, kids: Task[]): { payload: Record<string, unknown>; summary: string; covered: number } | null {
+    const kidIds = new Set(kids.map((k) => k.id));
+    const links = this.hq.queuedApprovals().filter((l) => kidIds.has(l.taskId) && l.kind === KIND);
+    if (links.length < 2) return null;
+    const store = this.store();
+    const rows = links.map((l) => ({ link: l, item: store.item(Number(l.payload.itemId)) })).filter((r): r is { link: typeof r.link; item: NonNullable<typeof r.item> } => Boolean(r.item));
+    if (rows.length < 2) return null;
+    const one = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
+    const lines = rows.map((r, i) => {
+      const pics = store.rowsOfItem(r.item.id).some((x) => x.files.length > 0) || (r.item.type === 'clip' && this.reelPath(r.item.id) !== null);
+      return `${i + 1}. ${TYPE_RU[r.item.type]}, ${dayLabel(r.item.plannedDate)}: ${one((r.item.title || r.item.topicText).replace(/\s+/g, ' '), 80)}${pics ? ' 🖼' : ''}`;
+    });
+    const previews = this.packPreviewFiles({ itemIds: rows.map((r) => r.item.id) }).length;
+    this.hq.holdApprovals(rows.map((r) => r.link.id));
+    const summary = [
+      `Пакет недели, материалов: ${rows.length} (задача #${parent.id}).`,
+      '«Одобрить пакет»: все материалы сразу. «Посмотреть по одному»: карточки по отдельности, в них можно править и отклонять любой. «Отклонить пакет»: все материалы отклонены.',
+      '',
+      ...lines,
+    ].join('\n');
+    return { payload: { itemTaskIds: rows.map((r) => r.link.taskId), itemIds: rows.map((r) => r.item.id), previews }, summary, covered: rows.length };
+  }
+
   /** Parents whose subtasks all left the work stages are done: the pack is prepared, the items wait for the owner. */
   private async finalizeParents(): Promise<void> {
     for (const p of this.hq.tasks({ dept: MARKETING, status: 'running', assigneeId: HEAD_ID })) {
@@ -483,8 +605,16 @@ export class MarketingHead implements ApprovalEditor {
       const n = (s: string) => kids.filter((k) => k.status === s).length;
       const blocked = n('blocked');
       const text = `${p.title}: материалов ${kids.length}, на одобрение ${n('approval') + n('done')}${blocked ? `, не получилось ${blocked}` : ''}.`;
+      // the pack becomes one card for the owner; the parent is done as before (an undecided card must not stop next week's routine)
+      let pack: ReturnType<MarketingHead['planPack']> = null;
+      try {
+        pack = this.planPack(p, kids);
+      } catch (e) {
+        log('error', 'pack card failed, the items go with the batch', { err: errMsg(e) });
+      }
       this.hq.complete(p.id, HEAD_ID, text);
-      await this.report(p.id, text);
+      if (pack) await this.hq.requestApproval(p.id, HEAD_ID, PACK_KIND, pack.payload, pack.summary);
+      await this.report(p.id, pack ? `${text} Придёт одной карточкой: пакет на ${pack.covered} материалов.` : text);
       if (blocked) await this.hq.alert(`Маркетинг: в задаче #${p.id} не получилось материалов: ${blocked}. Подробности: /tasks marketing.`);
     }
   }

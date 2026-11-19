@@ -69,6 +69,16 @@ export function billingStoreFor(ctx: Pick<WorkerCtx, 'db' | 'now'>, prefix = 'FT
   return s;
 }
 
+/** Where an invoice made by the sales chain comes from: its lead, КП pack, reserved project, the estimate total and the card's chain line. */
+export interface InvoiceLink {
+  leadId?: number | null;
+  packId?: number | null;
+  projectId?: number | null;
+  totalUsd?: number | null;
+  /** «КП #12 → договор → счёт 50%»: printed in the owner's card so the three cards point at each other. */
+  chain?: string;
+}
+
 export interface InvoiceArgs {
   client: string;
   amountUsd: number;
@@ -183,18 +193,21 @@ export class BillingWorker {
   }
 
   /** Creates an invoice and stages its text for the owner (locked, level 0). */
-  async createInvoice(ctx: WorkerCtx, a: { client: string; amountUsd: number; what: string; dueDate?: string | null; method?: PayMethod | null; newProject?: boolean; subscriptionId?: number | null }): Promise<Invoice> {
+  async createInvoice(ctx: WorkerCtx, a: { client: string; amountUsd: number; what: string; dueDate?: string | null; method?: PayMethod | null; newProject?: boolean; subscriptionId?: number | null; link?: InvoiceLink }): Promise<Invoice> {
     const store = this.store(ctx);
     const year = zonedParts(ctx.now(), ctx.tz).y;
     const due = a.dueDate ?? addDays(dateStr(ctx.now(), ctx.tz), DEFAULT_DUE_DAYS);
     const inv = store.addInvoice(
-      { client: a.client, amountUsd: a.amountUsd, what: a.what.trim() || 'Услуги Fir Tech', method: a.method ?? null, dueDate: due, subscriptionId: a.subscriptionId ?? null, newProject: a.newProject ?? false },
+      {
+        client: a.client, amountUsd: a.amountUsd, what: a.what.trim() || 'Услуги Fir Tech', method: a.method ?? null, dueDate: due, subscriptionId: a.subscriptionId ?? null, newProject: a.newProject ?? false,
+        leadId: a.link?.leadId ?? null, packId: a.link?.packId ?? null, projectId: a.link?.projectId ?? null, totalUsd: a.link?.totalUsd ?? null,
+      },
       year,
     );
     await ctx.requestApproval(
       KIND_INVOICE,
       { text: this.invoiceText(inv), invoiceId: inv.id, name: inv.client },
-      `Счёт ${inv.number} для ${inv.client}: ${usd(inv.amountUsd)}, до ${ruDate(inv.dueDate)}. Одобрение = «счёт утверждён», отправьте его клиенту сами. Метка в скобках означает, что реквизитов нет в PAYMENT_DETAILS_JSON: нажмите «Править».`,
+      `${a.link?.chain ? `${a.link.chain}\n` : ''}Счёт ${inv.number} для ${inv.client}: ${usd(inv.amountUsd)}, до ${ruDate(inv.dueDate)}. Одобрение = «счёт утверждён», отправьте его клиенту сами. Метка в скобках означает, что реквизитов нет в PAYMENT_DETAILS_JSON: нажмите «Править».${a.link?.totalUsd ? ` Сумма: предоплата от базовой цены направления (всего «от ${usd(a.link.totalUsd)}»), проверьте и поправьте текст.` : ''}`,
     );
     ctx.log('invoice', inv.number);
     return inv;

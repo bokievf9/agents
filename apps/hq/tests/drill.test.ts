@@ -95,7 +95,7 @@ describe('/drill', () => {
     expect(lead.name).toBe('Тест: нужен сайт');
     expect(lead.contact).toContain('invalid');
     await w.director.onCommand('help');
-    expect(w.messenger.last()!.text).toContain('/drill: учения');
+    expect(w.messenger.last()!.text).toMatch(/\/drill [^\n]*: учения/);
     await w.director.onCommand('drill', 'nope');
     expect(w.messenger.last()!.text).toContain('Формат: /drill');
   });

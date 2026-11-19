@@ -118,7 +118,37 @@ describe('privacy', () => {
     expect(o.tasks.recent.find((t) => t.id === id)!.title).toBe(`Лид #${id}`);
     expect(text).not.toMatch(/Dilnoza|dilnoza|Роза|Лид с сайта/);
     expect(text).toContain('Клип: ИИ-приёмщик');
-    expect(publicTitle({ id: 7, title: 'Ответ бизнесу #3 Кафе', dept: 'sales', routineId: null, meta: { action: 'reply' } })).toBe('Sales: задача #7');
+    expect(publicTitle({ id: 7, title: 'Ответ бизнесу #3 Кафе', dept: 'sales', routineId: null, meta: { action: 'reply' } })).toBe('Ответ бизнесу');
+  });
+
+  it('the public scene masks a client domain, name, phone, @username or email in a task title with a generic title; the admin office keeps the real one', () => {
+    const hq = world();
+    const audit = hq.createTask({ title: 'Аудит: example.com', dept: 'marketing', creator: 'head', meta: { action: 'audit', auditId: 1, url: 'https://example.com' } });
+    const byText = hq.createTask({ title: 'Написать @dilnoza_salon про бота', dept: 'marketing', creator: 'owner' });
+    const phone = hq.createTask({ title: 'Позвонить +7 701 000 00 04 по рилсу', dept: 'marketing', creator: 'owner' });
+    const mail = hq.createTask({ title: 'Ответ на письмо ivan@cafe.uz', dept: 'marketing', creator: 'owner' });
+    const ticket = hq.createTask({ title: 'Тикет из бота: Cambridge', dept: 'support', creator: 'routine', meta: { action: 'ticket' } });
+    const safe = hq.createTask({ title: 'Клип: ИИ-приёмщик', dept: 'marketing', creator: 'head' });
+    const pub = buildOffice(hq, NOW);
+    const title = (o: typeof pub, id: number) => o.tasks.recent.find((t) => t.id === id)!.title;
+    expect(title(pub, audit.id)).toBe('Аудит сайта');
+    expect(title(pub, byText.id)).toBe('Задача маркетинга');
+    expect(title(pub, phone.id)).toBe('Задача маркетинга');
+    expect(title(pub, mail.id)).toBe('Задача маркетинга');
+    expect(title(pub, ticket.id)).toBe('Тикет клиента');
+    expect(title(pub, safe.id)).toBe('Клип: ИИ-приёмщик'); // nothing about a client: kept
+    expect(JSON.stringify(pub)).not.toMatch(/example\.com|dilnoza_salon|701 000|ivan@cafe|Cambridge/);
+    // the admin office (GET /admin/office) asks for the real titles
+    const admin = buildOffice(hq, NOW, undefined, { maskClientData: false });
+    expect(title(admin, audit.id)).toBe('Аудит: example.com');
+    expect(title(admin, byText.id)).toContain('@dilnoza_salon');
+    expect(title(admin, ticket.id)).toBe('Тикет из бота: Cambridge');
+    expect(publicTitle({ id: 1, title: 'Аудит: example.com', dept: 'marketing', routineId: null, meta: {} })).toBe('Задача маркетинга');
+    expect(publicTitle({ id: 1, title: 'Аудит: example.com', dept: 'marketing', routineId: null, meta: { action: 'audit' } })).toBe('Аудит сайта');
+    // a routine title is ours and stays, unless it carries a client domain by mistake
+    expect(publicTitle({ id: 2, title: 'SEO и AI-SEO проверка сайта', dept: 'marketing', routineId: 5, meta: {} })).toBe('SEO и AI-SEO проверка сайта');
+    // the scene is the same: the visible tasks and the page's recent list never carry the domain
+    expect(JSON.stringify(officeSchema.parse(pub).scene)).not.toContain('example.com');
   });
 
   it('strips contacts and free text from the activity feed', () => {

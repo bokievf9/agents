@@ -74,6 +74,8 @@ export interface TaskApproval {
   payload: Payload;
   summary: string;
   state: ApprovalState;
+  /** A queued proposal that belongs to a weekly pack: it leaves with the pack's card (or when the owner opens the pack), not with the batch. */
+  held: boolean;
   createdAt: number;
 }
 
@@ -90,12 +92,16 @@ export interface Routine {
   /** skip: do not start while the previous task of this routine is still open. */
   overlap: 'skip' | 'allow';
   enabled: boolean;
+  /** Which clock the cron runs on: the company's (market, clients, publishing) or the owner's (what lands in his morning). */
+  tz: RoutineTz;
   lastRunAt: number | null;
   lastTaskId: number | null;
 }
 
-export type NewRoutine = Omit<Routine, 'id' | 'lastRunAt' | 'lastTaskId' | 'enabled' | 'overlap' | 'meta' | 'priority' | 'body' | 'assigneeId'> &
-  Partial<Pick<Routine, 'overlap' | 'enabled' | 'meta' | 'priority' | 'body' | 'assigneeId'>>;
+export type RoutineTz = 'company' | 'owner';
+
+export type NewRoutine = Omit<Routine, 'id' | 'lastRunAt' | 'lastTaskId' | 'tz' | 'enabled' | 'overlap' | 'meta' | 'priority' | 'body' | 'assigneeId'> &
+  Partial<Pick<Routine, 'overlap' | 'enabled' | 'meta' | 'priority' | 'body' | 'assigneeId' | 'tz'>>;
 
 export interface Heartbeat {
   id: number;

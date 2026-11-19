@@ -104,15 +104,26 @@ describe('agents and settings', () => {
     expect(hq.departments()).toEqual(['marketing', 'sales']);
   });
 
-  it('settings have defaults; quiet hours wrap midnight in the HQ timezone', () => {
+  it('settings have defaults; two clocks: quiet hours wrap midnight on the OWNER clock, not the company one', () => {
     const { hq, clock } = setup();
     expect(hq.setting('summary_time')).toBe('08:00');
-    expect(hq.tz).toBe('Asia/Tashkent');
+    expect(hq.setting('approval_time')).toBe('09:00');
+    expect(hq.setting('digest_time')).toBe('08:30');
+    expect(hq.tz).toBe('Asia/Dushanbe'); // the company: market, clients, publishing
+    expect(hq.ownerTz).toBe('Asia/Kuala_Lumpur'); // the owner: summary, batch, digest, alerts, quiet hours
     expect(hq.isQuiet()).toBe(false);
     hq.setSetting('quiet_hours', '23:00-07:00');
-    expect(hq.isQuiet()).toBe(false); // 12:00 Tashkent
-    clock.t = Date.UTC(2026, 10, 18, 20, 0); // 01:00 Tashkent
+    expect(hq.isQuiet()).toBe(false); // 07:00 UTC = 12:00 Dushanbe = 15:00 Kuala Lumpur
+    clock.t = Date.UTC(2026, 10, 18, 16, 0); // 21:00 Dushanbe, 00:00 Kuala Lumpur: the owner's night
     expect(hq.isQuiet()).toBe(true);
+    clock.t = Date.UTC(2026, 10, 18, 20, 0); // 01:00 Dushanbe (the company's night) but 04:00 Kuala Lumpur: still quiet
+    expect(hq.isQuiet()).toBe(true);
+    clock.t = Date.UTC(2026, 10, 18, 23, 30); // 04:30 Dushanbe, 07:30 Kuala Lumpur: the owner is up
+    expect(hq.isQuiet()).toBe(false);
+    clock.t = Date.UTC(2026, 10, 18, 15, 30); // 20:30 Dushanbe, 23:30 Kuala Lumpur: quiet for the owner, evening for the company
+    expect(hq.isQuiet()).toBe(true);
+    hq.setSetting('owner_tz', 'Asia/Dushanbe'); // an owner who moves: his clock follows
+    expect(hq.isQuiet()).toBe(false); // 20:30 Dushanbe
   });
 
   it('reports lists head reports since a time', () => {

@@ -50,7 +50,7 @@ describe('Support head', () => {
   it('seeds the department and two routines once', () => {
     const w = world();
     expect(w.hq.agents('support').map((a) => a.id).sort()).toEqual(['billing', 'customer-support', 'finance', 'monitoring', 'onboarding', 'support-head']);
-    expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([['support-daily', '50 7 * * *'], ['support-weekly', '0 20 * * 0'], ['support-billing', '30 9 * * *']]);
+    expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([['support-daily', '40 7 * * *'], ['support-weekly', '0 20 * * 0'], ['support-billing', '30 7 * * *']]);
     seedSupport(w.hq, { supportBudgetUsd: 5 }, () => 'другая');
     expect(w.hq.agent(SUPPORT_HEAD_ID)!.instructions).toBe('Инструкция головы');
     expect(w.hq.routines()).toHaveLength(3);

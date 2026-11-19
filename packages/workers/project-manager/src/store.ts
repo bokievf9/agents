@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS pm_projects (
   spec TEXT NOT NULL DEFAULT '',
   source TEXT NOT NULL DEFAULT 'owner',
   task_id INTEGER,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  lead_id INTEGER,
+  pack_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS pm_milestones (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,6 +43,9 @@ export interface Project {
   source: string;
   taskId: number | null;
   createdAt: number;
+  /** A project reserved by an approved КП: the lead and the presales pack it came from (the project itself starts on the first payment). */
+  leadId: number | null;
+  packId: number | null;
 }
 
 export interface Milestone {
@@ -56,6 +61,7 @@ export interface Milestone {
 
 interface ProjectRow {
   id: number; client: string; what: string; product: string; status: string; spec: string; source: string; task_id: number | null; created_at: number;
+  lead_id: number | null; pack_id: number | null;
 }
 interface MilestoneRow {
   id: number; project_id: number; kind: string; title: string; due_at: number; status: string; task_id: number | null; done_at: number | null;
@@ -63,7 +69,7 @@ interface MilestoneRow {
 
 const toProject = (r: ProjectRow): Project => ({
   id: r.id, client: r.client, what: r.what, product: r.product as Product, status: r.status as ProjectStatus, spec: r.spec,
-  source: r.source, taskId: r.task_id, createdAt: r.created_at,
+  source: r.source, taskId: r.task_id, createdAt: r.created_at, leadId: r.lead_id, packId: r.pack_id,
 });
 const toMilestone = (r: MilestoneRow): Milestone => ({
   id: r.id, projectId: r.project_id, kind: r.kind as MilestoneKind, title: r.title, dueAt: r.due_at, status: r.status === 'done' ? 'done' : 'open',
@@ -74,13 +80,37 @@ const toMilestone = (r: MilestoneRow): Milestone => ({
 export class PmStore {
   constructor(private readonly db: Db, private readonly now: () => number) {
     migrate(db, SCHEMA);
+    // added later: the lead and the pack a reserved project came from
+    const cols = db.prepare('PRAGMA table_info(pm_projects)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'lead_id')) db.exec('ALTER TABLE pm_projects ADD COLUMN lead_id INTEGER');
+    if (!cols.some((c) => c.name === 'pack_id')) db.exec('ALTER TABLE pm_projects ADD COLUMN pack_id INTEGER');
   }
 
-  createProject(p: { client: string; what: string; product: Product; source: string; taskId: number | null }): Project {
+  createProject(p: { client: string; what: string; product: Product; source: string; taskId: number | null; leadId?: number | null; packId?: number | null }): Project {
     const r = this.db
-      .prepare('INSERT INTO pm_projects (client, what, product, source, task_id, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(p.client, p.what, p.product, p.source, p.taskId, this.now());
+      .prepare('INSERT INTO pm_projects (client, what, product, source, task_id, created_at, lead_id, pack_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(p.client, p.what, p.product, p.source, p.taskId, this.now(), p.leadId ?? null, p.packId ?? null);
     return this.project(Number(r.lastInsertRowid))!;
+  }
+
+  /**
+   * An approved КП only RESERVES a project: a `draft` row without milestones or a ТЗ (the project starts when the first invoice
+   * is paid). One reservation per pack: approving the same pack again returns the same row.
+   */
+  reserve(p: { client: string; what: string; product: Product; leadId: number | null; packId: number }): Project {
+    const cur = this.db.prepare('SELECT * FROM pm_projects WHERE pack_id = ?').get(p.packId) as ProjectRow | undefined;
+    return cur ? toProject(cur) : this.createProject({ client: p.client, what: p.what, product: p.product, source: 'sales', taskId: null, leadId: p.leadId, packId: p.packId });
+  }
+
+  /** The project reserved by a КП for this client that has not started yet (no milestones), by the client's name. */
+  reservedFor(client: string): Project | undefined {
+    const q = client.trim().toLowerCase();
+    return this.projects('draft').find((p) => p.packId !== null && p.client.toLowerCase() === q && this.milestones(p.id).length === 0);
+  }
+
+  /** The reserved project starts: it takes its task, product and description. */
+  start(id: number, p: { product: Product; what: string; taskId: number }): void {
+    this.db.prepare('UPDATE pm_projects SET product = ?, what = ?, task_id = ? WHERE id = ?').run(p.product, p.what, p.taskId, id);
   }
 
   project(id: number): Project | undefined {

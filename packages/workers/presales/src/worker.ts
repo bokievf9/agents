@@ -114,15 +114,19 @@ export class PresalesWorker implements Worker {
     const docs = buildDocs(this.templates, offer, brief, wording, { prepaymentPercent: this.prepaymentPercent, validDays: this.validDays }, ctx.now(), ctx.tz);
     const saved = storeFor(ctx).createPack(brief.leadId, offer.id, docs);
     const packId = saved[0]!.packId;
+    // the numbers the sales chain needs after the approval (contract, invoice for the prepayment, the project): base price of the direction
+    const prepayUsd = Math.round((offer.fromUsd * this.prepaymentPercent) / 100);
     const payload: Payload = {
       packId, leadId: brief.leadId, direction: offer.id, docIds: saved.map((d) => d.id),
       kp: saved[0]!.body, estimate: saved[1]!.body, contract: saved[2]!.body,
+      client: brief.client, what: offer.title, totalUsd: offer.fromUsd, prepayUsd, prepayPercent: this.prepaymentPercent, timeline: offer.timeline,
     };
     const who = brief.leadId ? `лид #${brief.leadId} ${brief.client}` : 'по запросу владельца';
     const summary = [
       `${DOC_RU.kp}, смета и черновик договора #${packId}: ${who}`,
       `Направление: ${offer.title}, ${priceLabel(offer)}. Предоплата ${this.prepaymentPercent}%, КП действует ${this.validDays} дн.`,
       'Тексты длинные: «Скопировать документы» пришлёт их сообщениями. «Утвердить» отмечает документы утверждёнными, отправляете клиенту сами.',
+      `Дальше после «Утвердить»: договор и счёт на ${this.prepaymentPercent}% ($${prepayUsd}) придут отдельными карточками, проект стартует после оплаты счёта.`,
     ].join('\n');
     await ctx.requestApproval(KIND_PACK, payload, summary);
     log('info', 'presales pack', { packId, lead: brief.leadId, direction: offer.id });

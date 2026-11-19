@@ -5,6 +5,7 @@ import { ClientBlockedError, type ClientChannel } from './channel.js';
 import type { CounterStore } from './sanitize.js';
 import { ClientEngine, type ClientSinks, type ClientTransport, type From } from './engine.js';
 import { COMMANDS, OWNER_COMMANDS, PROFILE } from './texts.js';
+import type { LostInfo, LostSource } from '../lost-leads.js';
 
 const keyboard = (buttons?: Button[][]) => ({ inline_keyboard: (buttons ?? []).map((row) => row.map((b) => ({ text: b.text, callback_data: b.data }))) });
 
@@ -53,6 +54,10 @@ export interface ClientBotOptions {
   dailyCap: number;
   counter?: CounterStore;
   ownerFallback?: (text: string) => Promise<void>;
+  /** See `ClientEngineDeps`: lost requests, the gateway state, the wait for the model. */
+  onLost?: (source: LostSource, reason: string, info?: LostInfo) => void;
+  gatewayDown?: () => boolean;
+  llmTimeoutMs?: number;
 }
 
 const MEDIA: [string, string][] = [
@@ -84,6 +89,7 @@ export class ClientBot implements ClientChannel {
     this.engine = new ClientEngine({
       db: o.db, now: o.now, tz: o.tz, transport: grammyTransport(this.bot), llm: o.llm, ownerId: o.ownerId, instructions: o.instructions,
       quietHours: o.quietHours, perHour: o.perHour, dailyCap: o.dailyCap, ...(o.counter ? { counter: o.counter } : {}), ...(o.ownerFallback ? { ownerFallback: o.ownerFallback } : {}),
+      ...(o.onLost ? { onLost: o.onLost } : {}), ...(o.gatewayDown ? { gatewayDown: o.gatewayDown } : {}), ...(o.llmTimeoutMs !== undefined ? { llmTimeoutMs: o.llmTimeoutMs } : {}),
     });
     this.wire();
   }

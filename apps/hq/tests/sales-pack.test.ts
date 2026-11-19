@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { leadStoreFor } from '@fir/worker-lead-intake';
+import { PmStore } from '@fir/worker-project-manager';
 import { webLeadSchema } from '../src/webhook.js';
 import { DAY, OWNER, routedLlm, salesWorld } from './sales-helpers.js';
 
@@ -41,10 +42,13 @@ describe('/kp', () => {
 
     await w.decide('approve', 1);
     expect(w.hq.tasks({ dept: 'sales' })[0]!.status).toBe('done');
-    const proj = w.hq.tasks({ dept: 'production' });
-    expect(proj).toHaveLength(1);
-    expect(proj[0]!.title).toMatch(/^Проект: /);
-    expect(proj[0]!.meta).toMatchObject({ action: 'project', source: 'sales' });
+    // the project starts on PAYMENT: the approved КП only reserves a draft project and drafts the contract and the invoice
+    expect(w.hq.tasks({ dept: 'production' })).toHaveLength(0);
+    const reserved = new PmStore(w.db, w.hq.now).projects('draft');
+    expect(reserved).toHaveLength(1);
+    expect(reserved[0]).toMatchObject({ packId: 1, source: 'sales', client: 'КП #1' });
+    expect(w.hq.tasks({ dept: 'backoffice' })[0]!.meta).toMatchObject({ action: 'doc', type: 'contract', packId: 1 });
+    expect(w.hq.tasks({ dept: 'support' })[0]!.meta).toMatchObject({ action: 'kp_invoice', packId: 1, projectId: reserved[0]!.id });
     expect(await w.sales.onCopy(1)).toBe('Уже обработано');
   });
 
@@ -110,7 +114,7 @@ describe('referrals', () => {
 
   it('the daily routine reminds in the report (morning summary) after 3 days, silent before', async () => {
     const w = world();
-    expect(w.hq.routineByName('sales-referral-reminders')).toMatchObject({ cron: '30 9 * * *', dept: 'sales' });
+    expect(w.hq.routineByName('sales-referral-reminders')).toMatchObject({ cron: '20 7 * * *', tz: 'owner', dept: 'sales' });
     await cmd(w, 'referral', 'Cambridge -> Blanche');
     const run = async () => {
       w.hq.createTask({ title: 'Напоминания по рекомендациям', dept: 'sales', creator: 'routine', meta: { action: 'referral_reminders' } });

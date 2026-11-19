@@ -67,7 +67,7 @@ describe('Production head', () => {
   it('seeds the department and the 10:30 routine once', () => {
     const w = world();
     expect(w.hq.agents('production').map((a) => a.id).sort()).toEqual(['deployer', 'production-head', 'project-manager', 'reviewer']);
-    expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([['production-overdue', '30 10 * * *']]);
+    expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([['production-overdue', '50 7 * * *']]);
     seedProduction(w.hq, { productionBudgetUsd: 5 }, () => 'другая');
     expect(w.hq.agent(PRODUCTION_HEAD_ID)!.instructions).toBe('Инструкция головы производства');
     expect(w.hq.routines()).toHaveLength(1);

@@ -8,7 +8,7 @@ import { OwnerChannel } from '../src/presence.js';
 import { Reporter, type TopicSender } from '../src/reporter.js';
 
 export const OWNER = 100;
-// Wed 2026-11-18 12:00 Tashkent (07:00 UTC): the next pack week starts Mon 2026-11-23
+// Wed 2026-11-18 12:00 Dushanbe (07:00 UTC): the next pack week starts Mon 2026-11-23
 export const NOW = Date.UTC(2026, 10, 18, 7, 0);
 export const instructionsDir = fileURLToPath(new URL('../instructions', import.meta.url));
 
@@ -128,11 +128,18 @@ export function world(opts: { presence?: boolean; llm?: LlmClient; groupTopics?:
   const marketing = new MarketingHead({ hq, llm, queue, messenger: toOwner, ownerId: OWNER, reporter, rng: () => 0.1, ...(opts.cadence ?? OLD_PACK), ...(opts.rendersDir ? { rendersDir: opts.rendersDir } : {}), ...(opts.renderReels ? { renderReels: true } : {}), ...(opts.integrations ? { integrations: opts.integrations } : {}), ...(opts.audit ? { audit: opts.audit } : {}) });
   director.editors.set('content_item', marketing);
   director.editors.set('article', marketing);
+  director.onPackButton = (op, id, at) => marketing.onPackButton(op, id, at);
   /** The owner presses a decision the way the Telegram glue does. */
   const decide = async (action: 'approve' | 'edit' | 'reject', approvalId: number) => {
     await queue.handle(action, approvalId, OWNER);
     director.afterDecision();
   };
   return { clock, db, messenger, channel, hq, queue, llm, posted, reporter, director, marketing, decide };
+}
+/** The owner presses «Посмотреть по одному» on every weekly pack card that waits: the items go out as their own cards. */
+export async function openPack(w: Pick<ReturnType<typeof world>, 'queue' | 'marketing'>): Promise<number> {
+  const packs = w.queue.pending().filter((r) => r.kind === 'content_pack');
+  for (const r of packs) await w.marketing.onPackButton('o', r.id, { chatId: OWNER, messageId: 1 });
+  return packs.length;
 }
 export { OffLlm };

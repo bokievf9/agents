@@ -2,7 +2,9 @@ import { Cron } from 'croner';
 import { errMsg, escapeHtml, log, schedule, stripHtml, tryJson, zonedParts, zonedToMs, type ApprovalQueue, type Button, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Hq, type Task } from '@fir/hq';
 import { z } from 'zod';
-import { dailyCron } from './config.js';
+import { dailyCron, weeklyCron } from './config.js';
+import { helpHtml } from './commands.js';
+import { workersText } from './workers.js';
 import type { ApprovalEditor } from './editor.js';
 import type { Reporter } from './reporter.js';
 import { openBuilderTasks } from './bridge.js';
@@ -29,11 +31,14 @@ const DAY = 86_400_000;
 const HM = /^([01]?\d|2[0-3]):[0-5]\d$/;
 
 /** The settings the owner may change by chat, with their validators. Anything else is refused. */
+const validZone = (v: string) => { try { new Intl.DateTimeFormat('en-US', { timeZone: v }); return true; } catch { return false; } };
 const SETTING_RULES: Record<string, { label: string; valid: (v: string) => boolean }> = {
-  tz: { label: 'часовой пояс отделов', valid: (v) => { try { new Intl.DateTimeFormat('en-US', { timeZone: v }); return true; } catch { return false; } } },
-  summary_time: { label: 'время утренней сводки', valid: (v) => HM.test(v) },
-  approval_time: { label: 'время пачки на одобрение', valid: (v) => HM.test(v) },
-  quiet_hours: { label: 'тихие часы (алерты копятся до сводки)', valid: (v) => v === '' || /^([01]?\d|2[0-3]):[0-5]\d-([01]?\d|2[0-3]):[0-5]\d$/.test(v) },
+  tz: { label: 'часовой пояс компании: рынок, клиенты, публикации (сейчас Душанбе)', valid: validZone },
+  owner_tz: { label: 'ваш часовой пояс: сводка, пачка, дайджест, тихие часы (сейчас Куала-Лумпур)', valid: validZone },
+  summary_time: { label: 'время утренней сводки, ваше время', valid: (v) => HM.test(v) },
+  approval_time: { label: 'время пачки на одобрение, ваше время', valid: (v) => HM.test(v) },
+  digest_time: { label: 'время недельного дайджеста по понедельникам, ваше время', valid: (v) => HM.test(v) },
+  quiet_hours: { label: 'тихие часы, ваше время (алерты копятся до сводки)', valid: (v) => v === '' || /^([01]?\d|2[0-3]):[0-5]\d-([01]?\d|2[0-3]):[0-5]\d$/.test(v) },
 };
 
 const intentSchema = z.discriminatedUnion('type', [
@@ -85,30 +90,8 @@ const ruRole: Record<string, string> = { director: 'директор', head: 'г
 const STATUS_RU: Record<string, string> = {
   inbox: 'ждёт отдел', assigned: 'ждёт отдел', running: 'в работе', review: 'на проверке', approval: 'ждёт вас в /approve', blocked: 'застряла', done: 'выполнена', rejected: 'отклонена',
 };
-/** Compact cheat sheet for /help, Telegram HTML (the full page: apps/hq/docs/owner-cheatsheet.md). */
-export const HELP = [
-  '🆘 <b>Директор Fir Tech</b>',
-  'Пишите задачу обычным текстом: передам отделу и буду править одно сообщение по ходу работы (взял, делает, ждёт вас, готово). Кнопки внизу: одобрения, задачи, статус, отделы, помощь.',
-  'Куда что приходит: ответы, карточки на одобрение и «живые» сообщения о задачах здесь, в личке. Отчёты отделов и сводки в группе HQ по темам.',
-  '',
-  '<b>Каждый день</b>',
-  '/status: кто чем занят, что ждёт вас (кнопки ведут в отделы)',
-  '/tasks [отдел]: задачи по страницам, у каждой карточка с действиями',
-  '/approve: пачка на одобрение карточками (сама приходит в 10:00)',
-  '/depts: отделы, пауза и возобновление кнопкой',
-  '/retry &lt;id&gt;: повторить застрявшую задачу (или 🔁 в карточке задачи)',
-  '/desk: я за столом, всё копится на сайте /admin; /away: я в пути, всё в Telegram',
-  '',
-  '<b>Ещё</b>',
-  '/costs расходы, /org оргструктура, /level уровни доверия (<тип|агент> <0|1>), /pause и /resume &lt;отдел&gt;',
-  '/reply &lt;id&gt;, /kp &lt;лид или описание&gt;, /referral, /referrals: продажи',
-  '/ticket, /tickets, /client, /clients, /invoice, /invoices, /sub, /onboard, /paid &lt;счёт или id&gt;: сопровождение',
-  '/project, /pstatus, /target, /mdone: производство; /doc, /lesson, /kb: документы и знания',
-  '/profile: настройка профиля Instagram (один раз); /article &lt;ниша&gt;: статья в блог сайта; /render &lt;id&gt;: собрать видео рилса заново',
-  '/builders, /builder &lt;id&gt;: задачи строителям; /topics: темы в группе; /drill: учения; /skip: отменить ожидание правки',
-  '',
-  '<i>Статусы на сайте офиса: работает, ждёт (ответ за вами), застрял (/retry), спит (ночь или тихие часы), офлайн.</i>',
-].join('\n');
+/** The cheat sheet of /help, Telegram HTML, made from the one command list (`commands.ts`; the full page: apps/hq/docs/owner-cheatsheet.md). */
+export const HELP = helpHtml();
 export const WELCOME = [
   '👋 <b>Директор Fir Tech</b>',
   'Пишите задачу обычным текстом: я передам её отделу и покажу ход работы в одном сообщении.',
@@ -133,6 +116,10 @@ export class Director {
   onSupportCommand: ((name: string, args: string) => Promise<string>) | null = null;
   /** Set by the topic manager: `/topics` creates the missing topics (or explains the two steps). Returns the reply. */
   onTopicsCommand: (() => Promise<string>) | null = null;
+  /** Set by the Marketing head: the buttons of a weekly pack's card (`pk:<id>:o` opens the items one by one, `v` sends previews). Returns the toast. */
+  onPackButton: ((op: 'o' | 'v', approvalId: number, at: ButtonAt) => Promise<string>) | null = null;
+  /** Set by the app: a clock or a time setting changed, so the routines and the heads' own crons must restart on the new clock. */
+  onTimingChange: (() => void) | null = null;
   /** Set by the builder bridge: a builder task was just created, make its issue now instead of at the next poll. */
   onBuilderTask: (() => Promise<unknown>) | null = null;
   /** Set by the drill: `/drill [dept|report|clear]`. Returns the reply. */
@@ -204,14 +191,25 @@ export class Director {
   }
 
   // ---- scheduling ----
+  /** The Director's own cron jobs and the clock each runs on: everything addressed to the owner is on HIS clock (`owner_tz`), not the company's. */
+  schedulePlan(): { name: string; cron: string; tz: string }[] {
+    const tz = this.hq.ownerTz;
+    return [
+      { name: 'director-summary', cron: dailyCron(this.hq.setting('summary_time')), tz },
+      { name: 'director-approvals', cron: dailyCron(this.hq.setting('approval_time')), tz },
+      { name: 'director-digest', cron: weeklyCron(this.hq.setting('digest_time'), 1), tz },
+    ];
+  }
+
   start(): void {
     this.stop();
     this.progress.start();
-    const tz = this.hq.tz;
-    this.jobs = [
-      schedule('director-summary', dailyCron(this.hq.setting('summary_time')), tz, () => this.sendMorningSummary()),
-      schedule('director-approvals', dailyCron(this.hq.setting('approval_time')), tz, async () => void (await this.sendApprovalBatch(false))),
-    ];
+    const jobs: Record<string, () => Promise<unknown>> = {
+      'director-summary': () => this.sendMorningSummary(),
+      'director-approvals': () => this.sendApprovalBatch(false),
+      'director-digest': () => this.sendWeeklyDigest(),
+    };
+    this.jobs = this.schedulePlan().map((p) => schedule(p.name, p.cron, p.tz, async () => void (await jobs[p.name]!())));
   }
 
   stop(): void {
@@ -228,9 +226,56 @@ export class Director {
     this.hq.setSetting('held_alerts', '[]');
   }
 
+  /** Monday's digest: the week in numbers and what each department reported. Not held by quiet hours (it comes at 08:30 on his clock). */
+  async sendWeeklyDigest(): Promise<void> {
+    const text = this.weeklyDigest();
+    await this.say(text, undefined, 'summary');
+    await this.d.reporter?.post('general', text);
+  }
+
+  weeklyDigest(): string {
+    const hq = this.hq;
+    const now = hq.now();
+    const since = now - 7 * DAY;
+    const day = (at: number) => {
+      const p = zonedParts(at, hq.ownerTz);
+      return `${String(p.d).padStart(2, '0')}.${String(p.mo).padStart(2, '0')}`;
+    };
+    const count = (sql: string, ...args: unknown[]): number => {
+      try {
+        return (hq.db.prepare(sql).get(...args) as { c: number | null } | undefined)?.c ?? 0;
+      } catch {
+        return 0; // a worker table that does not exist yet counts as empty
+      }
+    };
+    const out: string[] = [`Недельный дайджест, ${day(since)}-${day(now)}`];
+    const done = hq.db.prepare("SELECT dept, COUNT(*) c FROM tasks WHERE status = 'done' AND updated_at >= ? AND (',' || tags || ',') NOT LIKE '%,drill,%' GROUP BY dept ORDER BY dept").all(since) as { dept: string; c: number }[];
+    out.push(done.length ? `Задач выполнено: ${done.map((r) => `${deptRu(r.dept)} ${r.c}`).join(', ')}.` : 'Выполненных задач за неделю нет.');
+    const approved = count("SELECT COUNT(*) c FROM decisions WHERE decision IN ('approve','auto') AND at >= ?", since);
+    const rejected = count("SELECT COUNT(*) c FROM decisions WHERE decision = 'reject' AND at >= ?", since);
+    const waiting = hq.queuedApprovals().length + hq.heldApprovals().length + this.d.queue.pending().length;
+    out.push(`Одобрения: одобрено ${approved}, отклонено ${rejected}, ждёт вас ${waiting}.`);
+    const leads = count('SELECT COUNT(*) c FROM li_leads WHERE created_at >= ?', since);
+    const lost = count("SELECT COUNT(*) c FROM activity WHERE action = 'lost_lead' AND at >= ?", since);
+    out.push(`Лидов за неделю: ${leads}${lost ? `, не доставлено владельцу: ${lost} (см. алерты)` : ''}.`);
+    const revenue = count("SELECT COALESCE(SUM(amount_usd), 0) c FROM bl_invoices WHERE status = 'paid' AND paid_at >= ?", since);
+    out.push(`Оплаты за неделю: ${money(revenue)}.`);
+    const spend = hq.costSummary(since);
+    out.push(spend.length ? `Расходы на модели: ${spend.map((r) => `${r.dept} ${money(r.usd)}`).join(', ')}.` : 'Расходов на модели за неделю нет.');
+    const reports = hq.reports(since);
+    if (reports.length) {
+      const last = new Map<string, string>();
+      for (const r of reports) last.set(r.dept, oneLine(r.body, 500));
+      out.push(`Что писали отделы (последний отчёт):\n${[...last].map(([dept, body]) => `- ${deptRu(dept)}: ${body}`).join('\n')}`);
+    }
+    const blocked = hq.tasks({ status: 'blocked', limit: 30 }).filter((t) => !t.tags.includes('drill')).slice(0, 8);
+    if (blocked.length) out.push(`Застряло:\n${blocked.map((t) => `- #${t.id} ${deptRu(t.dept)}: ${oneLine(t.title, 80)}`).join('\n')}`);
+    return out.join('\n\n');
+  }
+
   morningSummary(): string {
     const hq = this.hq;
-    const p = zonedParts(hq.now(), hq.tz);
+    const p = zonedParts(hq.now(), hq.ownerTz);
     const since = hq.now() - DAY;
     const out: string[] = [`Утренняя сводка, ${String(p.d).padStart(2, '0')}.${String(p.mo).padStart(2, '0')}`];
     const reports = hq.reports(since);
@@ -265,10 +310,10 @@ export class Director {
     const resent = manual ? (await this.channel?.resendUndelivered()) ?? 0 : 0;
     const queued = this.hq.queuedApprovals();
     // the header with «Одобрить все обычные» only when there are at least two ordinary cards to approve at once
-    const ordinary = queued.filter((l) => !this.d.queue.isLocked(l.kind) && !this.d.queue.hasOwnButtons(l.kind)).length;
+    const ordinary = queued.filter((l) => this.d.queue.isBulk(l.kind)).length;
     if (queued.length > 0 && ordinary >= 2) {
       await this.sayHtml(
-        `Пачка на одобрение: ${proposals(queued.length)}. Карточки ниже, у каждой кнопки.\n<i>«Одобрить все обычные» не трогает цены, деньги и карточки со своими кнопками: их по одной.</i>`,
+        `Пачка на одобрение: ${proposals(queued.length)}. Карточки ниже, у каждой кнопки.\n<i>«Одобрить все обычные» берёт контент (пакеты недели и отдельные материалы) и не трогает деньги, цены, документы и ответы клиентам: их по одной.</i>`,
         { buttons: [[{ text: '✅ Одобрить все обычные', data: 'ap:all' }, { text: '⏭ Позже', data: 'ap:later' }]] },
       );
     }
@@ -382,6 +427,8 @@ export class Director {
         return this.say(this.orgText());
       case 'level':
         return this.say(this.levelCommand(arg));
+      case 'workers':
+        return this.say(workersText(this.hq));
       case 'pause':
       case 'resume': {
         if (!this.hq.departments().includes(dept)) return this.say(`Укажите отдел: ${this.hq.departments().join(', ')}.`);
@@ -494,7 +541,7 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
     let dueAt: number | null = null;
     if (i.due) {
       const [y, m, d] = i.due.split('-').map(Number) as [number, number, number];
-      dueAt = zonedToMs(y, m, d, 23, 59, this.hq.tz);
+      dueAt = zonedToMs(y, m, d, 23, 59, this.hq.ownerTz); // the owner's own deadline, on his clock
     }
     const t = this.hq.createTask({ title: i.title, body: i.body ?? '', dept, creator: 'owner', priority: i.priority, dueAt });
     this.hq.wake(head.id, 'task');
@@ -573,7 +620,8 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
       if (rule.target === 'setting' && rule.key && SETTING_RULES[rule.key]?.valid(rule.value ?? '')) {
         this.hq.setSetting(rule.key, rule.value ?? '');
         this.hq.log('director', 'setting_changed', 'setting', rule.key);
-        this.start(); // times or timezone may have changed
+        this.start(); // times or a clock may have changed
+        this.onTimingChange?.(); // routines and the heads' crons run on these clocks too
       } else if (rule.target === 'instructions' && rule.agentId && rule.text) {
         const agent = this.hq.agent(rule.agentId);
         if (!agent) return 'Агент не найден';
@@ -630,6 +678,8 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
       }
       case 'ap':
         return this.approvalButton(nav, at);
+      case 'pk':
+        return this.onPackButton ? this.onPackButton(nav.op, nav.id, at) : 'Устарело';
     }
   }
 
@@ -782,9 +832,10 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
 
   /** The owner rejects a task: its pending proposals are rejected, queued ones dropped, the task closed. */
   private async rejectTask(t: Task): Promise<void> {
-    const links = this.hq.db.prepare("SELECT id, approval_id, state FROM task_approvals WHERE task_id = ? AND state IN ('queued','asked')").all(t.id) as { id: number; approval_id: number | null; state: string }[];
+    const links = this.hq.db.prepare("SELECT id, approval_id, state, held FROM task_approvals WHERE task_id = ? AND state IN ('queued','asked')").all(t.id) as { id: number; approval_id: number | null; state: string; held: number }[];
     for (const l of links) {
-      if (l.state === 'asked' && l.approval_id !== null) {
+      if (l.held === 1) this.hq.rejectHeld(l.id);
+      else if (l.state === 'asked' && l.approval_id !== null) {
         await this.d.queue.handle('reject', l.approval_id, this.d.ownerId);
         await this.d.queue.settleCard(l.approval_id).catch(() => false);
       } else this.hq.db.prepare("UPDATE task_approvals SET state = 'rejected' WHERE id = ?").run(l.id);
@@ -892,8 +943,9 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
     return null;
   }
 
+  /** A time of day for the owner, on his clock. */
   private hm(at: number): string {
-    const p = zonedParts(at, this.hq.tz);
+    const p = zonedParts(at, this.hq.ownerTz);
     return `${String(p.h).padStart(2, '0')}:${String(p.mi).padStart(2, '0')}`;
   }
 
@@ -903,15 +955,15 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
     for (const r of this.hq.routines().filter((x) => x.enabled)) {
       let at: number | undefined;
       try {
-        at = new Cron(r.cron, { timezone: this.hq.tz, paused: true }).nextRun(new Date(now))?.getTime();
+        at = new Cron(r.cron, { timezone: this.hq.routineTz(r), paused: true }).nextRun(new Date(now))?.getTime();
       } catch {
         at = undefined;
       }
       if (at !== undefined && (!best || at < best.at)) best = { at, title: r.title, dept: r.dept };
     }
     if (!best) return null;
-    const p = zonedParts(best.at, this.hq.tz);
-    const today = zonedParts(now, this.hq.tz);
+    const p = zonedParts(best.at, this.hq.ownerTz);
+    const today = zonedParts(now, this.hq.ownerTz);
     const day = p.d === today.d && p.mo === today.mo ? '' : `${String(p.d).padStart(2, '0')}.${String(p.mo).padStart(2, '0')} `;
     return `${day}${this.hm(best.at)}, ${deptRu(best.dept)}: ${oneLine(best.title, 60)}`;
   }

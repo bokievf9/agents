@@ -53,6 +53,11 @@ export interface Invoice {
   overdueAlerted: boolean;
   createdAt: number;
   paidAt: number | null;
+  /** The sales chain this invoice belongs to (КП → договор → счёт 50% → проект): the lead, the presales pack, the reserved project, the estimate total in USD. */
+  leadId: number | null;
+  packId: number | null;
+  projectId: number | null;
+  totalUsd: number | null;
 }
 
 const SCHEMA = `
@@ -94,6 +99,7 @@ interface SubRow { id: number; client: string; plan: string; amount_usd: number;
 interface InvRow {
   id: number; number: string; client: string; amount_usd: number; what: string; method: string | null; due_date: string; status: string;
   subscription_id: number | null; new_project: number; remind3: number; remind0: number; overdue_alerted: number; created_at: number; paid_at: number | null;
+  lead_id: number | null; pack_id: number | null; project_id: number | null; total_usd: number | null;
 }
 
 const toSub = (r: SubRow): Subscription => ({
@@ -103,6 +109,7 @@ const toInv = (r: InvRow): Invoice => ({
   id: r.id, number: r.number, client: r.client, amountUsd: r.amount_usd, what: r.what, method: storedMethod(r.method), dueDate: r.due_date,
   status: r.status as InvoiceStatus, subscriptionId: r.subscription_id, newProject: r.new_project === 1, remind3: r.remind3 === 1, remind0: r.remind0 === 1,
   overdueAlerted: r.overdue_alerted === 1, createdAt: r.created_at, paidAt: r.paid_at,
+  leadId: r.lead_id, packId: r.pack_id, projectId: r.project_id, totalUsd: r.total_usd,
 });
 
 export interface NewInvoice {
@@ -113,11 +120,20 @@ export interface NewInvoice {
   dueDate: string;
   subscriptionId?: number | null;
   newProject?: boolean;
+  /** The sales chain link (see `Invoice.leadId`). */
+  leadId?: number | null;
+  packId?: number | null;
+  projectId?: number | null;
+  totalUsd?: number | null;
 }
 
 export class BillingStore {
   constructor(private readonly db: Db, private readonly now: () => number = Date.now, private readonly prefix = 'FT') {
     migrate(db, SCHEMA);
+    // added later: the sales chain an invoice belongs to
+    const cols = db.prepare('PRAGMA table_info(bl_invoices)').all() as { name: string }[];
+    for (const c of ['lead_id', 'pack_id', 'project_id']) if (!cols.some((x) => x.name === c)) db.exec(`ALTER TABLE bl_invoices ADD COLUMN ${c} INTEGER`);
+    if (!cols.some((x) => x.name === 'total_usd')) db.exec('ALTER TABLE bl_invoices ADD COLUMN total_usd REAL');
   }
 
   addSubscription(s: { client: string; plan: string; amountUsd: number; period: Period; nextDue: string; method: PayMethod | null }): Subscription {
@@ -146,10 +162,10 @@ export class BillingStore {
     const number = `${this.prefix}-${year}-${String(seq).padStart(3, '0')}`;
     const r = this.db
       .prepare(
-        `INSERT INTO bl_invoices (number, year, seq, client, amount_usd, what, method, due_date, subscription_id, new_project, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO bl_invoices (number, year, seq, client, amount_usd, what, method, due_date, subscription_id, new_project, created_at, lead_id, pack_id, project_id, total_usd)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(number, year, seq, i.client, i.amountUsd, i.what, i.method, i.dueDate, i.subscriptionId ?? null, i.newProject ? 1 : 0, this.now());
+      .run(number, year, seq, i.client, i.amountUsd, i.what, i.method, i.dueDate, i.subscriptionId ?? null, i.newProject ? 1 : 0, this.now(), i.leadId ?? null, i.packId ?? null, i.projectId ?? null, i.totalUsd ?? null);
     return this.invoice(Number(r.lastInsertRowid))!;
   }
 
@@ -173,6 +189,11 @@ export class BillingStore {
   invoices(status?: InvoiceStatus[], limit = 30): Invoice[] {
     const where = status?.length ? `WHERE status IN (${status.map(() => '?').join(',')})` : '';
     return (this.db.prepare(`SELECT * FROM bl_invoices ${where} ORDER BY id DESC LIMIT ?`).all(...(status ?? []), limit) as InvRow[]).map(toInv);
+  }
+
+  /** How many invoices of this lead are paid (the first one starts the project and the referral payout). */
+  paidCountForLead(leadId: number): number {
+    return (this.db.prepare("SELECT COUNT(*) c FROM bl_invoices WHERE lead_id = ? AND status = 'paid'").get(leadId) as { c: number }).c;
   }
 
   /** A live (not void) invoice of this subscription for this due date already exists. */

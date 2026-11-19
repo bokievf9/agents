@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { articleSchema, storeFor } from '@fir/worker-content-maker';
 import { issueBody } from '../src/bridge.js';
 import { DIRECTOR_COMMANDS } from '../src/tg.js';
-import { OWNER, world } from './helpers.js';
+import { COMMAND_NAMES } from '../src/commands.js';
+import { OWNER, openPack, world } from './helpers.js';
 
 const NEW_PACK = { postsPerWeek: 3, storiesPerWeek: 5, carouselsPerWeek: 2 };
 const cycle = (w: ReturnType<typeof world>) => w.marketing.onHeartbeat();
@@ -19,10 +20,12 @@ describe('Instagram page: the weekly pack', () => {
     const kids = w.hq.tasks({ parentId: t.id });
     expect(kids).toHaveLength(17);
     expect(kids.every((k) => k.status === 'approval')).toBe(true);
-    const types = w.hq.queuedApprovals().map((a) => store(w).item(Number(a.payload.itemId))!.type);
+    // the 17 proposals are held back: ONE card (kind content_pack) stands for them in the batch
+    const types = w.hq.heldApprovals().map((a) => store(w).item(Number(a.payload.itemId))!.type);
     const n = (x: string) => types.filter((y) => y === x).length;
     expect([n('clip'), n('post'), n('carousel'), n('story')]).toEqual([7, 3, 2, 5]);
-    expect(w.hq.queuedApprovals().every((a) => a.kind === 'content_item')).toBe(true);
+    expect(w.hq.heldApprovals().every((a) => a.kind === 'content_item')).toBe(true);
+    expect(w.hq.queuedApprovals().map((a) => a.kind)).toEqual(['content_pack']);
     expect(w.hq.task(t.id)!.result).toContain('материалов 17, на одобрение 17');
   });
 
@@ -32,6 +35,7 @@ describe('Instagram page: the weekly pack', () => {
     w.hq.runRoutine('marketing-weekly-pack');
     await cycle(w);
     await w.director.sendApprovalBatch(false);
+    await openPack(w);
     const post = w.queue.pending().find((a) => store(w).item(Number(a.payload.itemId))!.type === 'post')!;
     expect(String(post.payload.text)).toContain('На картинке:');
     expect(String(post.payload.text)).toContain('== Instagram ==');
@@ -52,6 +56,7 @@ describe('Publisher message of the day', () => {
     w.hq.runRoutine('marketing-weekly-pack');
     await cycle(w);
     await w.director.sendApprovalBatch(false);
+    await openPack(w);
     for (const a of [...w.queue.pending()]) {
       if (store(w).item(Number(a.payload.itemId))!.plannedDate === '2026-11-23') await w.decide('approve', a.id);
     }
@@ -108,10 +113,10 @@ describe('/profile', () => {
     expect(store(w).rowsOfItem(item)[0]!.files).toHaveLength(5);
   });
 
-  it('the Director command table knows /profile and /article, the menu stays within 20 commands', () => {
-    const names = DIRECTOR_COMMANDS.map((c) => c.command);
-    expect(names).toEqual(expect.arrayContaining(['profile', 'article']));
-    expect(names.length).toBeLessThanOrEqual(20);
+  it('the Director command list knows /profile and /article, the menu stays within 20 commands', () => {
+    expect(COMMAND_NAMES).toEqual(expect.arrayContaining(['profile', 'article']));
+    expect(DIRECTOR_COMMANDS.map((c) => c.command)).toContain('profile');
+    expect(DIRECTOR_COMMANDS.length).toBeLessThanOrEqual(20);
   });
 });
 
@@ -192,9 +197,9 @@ describe('Blog articles', () => {
     expect(w.llm instanceof Object).toBe(true);
   });
 
-  it('the weekly routine exists on Tuesday 10:00 and runs the article action', async () => {
+  it('the weekly routine exists on Tuesday 07:00 (the owner clock, before his batch) and runs the article action', async () => {
     const w = world();
-    expect(w.hq.routineByName('marketing-article-weekly')).toMatchObject({ cron: '0 10 * * 2', dept: 'marketing', meta: { action: 'article' } });
+    expect(w.hq.routineByName('marketing-article-weekly')).toMatchObject({ cron: '0 7 * * 2', tz: 'owner', dept: 'marketing', meta: { action: 'article' } });
     w.hq.runRoutine('marketing-article-weekly');
     await cycle(w);
     expect(store(w).articles()).toHaveLength(1);

@@ -10,6 +10,7 @@ import {
 import { isCatalogueId, nicheHint } from './products.js';
 import { DemoSalon, DEMO_START } from './demo.js';
 import { auditInputSchema, type AuditOutcome } from '../audit-shared.js';
+import type { LostInfo, LostSource } from '../lost-leads.js';
 
 /** What the engine needs from Telegram; the grammy bot implements it, tests keep everything in memory. */
 export interface ClientTransport {
@@ -62,6 +63,12 @@ export interface ClientEngineDeps {
   sinks?: ClientSinks;
   /** Plain text to the owner through the Director when the client bot cannot write to him (he never opened it). */
   ownerFallback?: (text: string) => Promise<void>;
+  /** A request accepted from a person that failed before the owner could see it: `lost_lead` and the hourly alert (see `lost-leads.ts`). */
+  onLost?: (source: LostSource, reason: string, info?: LostInfo) => void;
+  /** True while the model gateway is known to be down: the free conversation answers with the scripted «принял» and records a lead. */
+  gatewayDown?: () => boolean;
+  /** How long a person waits for the model before the scripted answer (ms, default 20 s). */
+  llmTimeoutMs?: number;
 }
 
 /**
@@ -204,7 +211,7 @@ export class ClientEngine implements ClientChannel {
     }
     if (chat.muted) return this.forward(chat, text, 'Сообщение (бот молчит, ждёт вас)');
     if (await this.slotPick(chat, text)) return;
-    await this.answer(chat, text);
+    await this.answer(chat, from, text);
   }
 
   /** A photo, voice, sticker or file: text only for now. */
@@ -384,7 +391,15 @@ export class ClientEngine implements ClientChannel {
       message: clip(x.message, 2000), estimate: '', locale: chat.lang, slot: '', source: ref ? `ref:${ref}` : (x.source ?? 'telegram'), chatId: chat.chatId, product: x.product ?? '',
       ...(from.username ? { username: from.username.slice(0, 40) } : {}),
     };
-    const taskId = this.sinks.createLead(lead, x.service);
+    let taskId: number;
+    try {
+      taskId = this.sinks.createLead(lead, x.service);
+    } catch (e) {
+      // the person was told «принято»: the request is kept for the owner (contact and words) and the owner hears about it at once and in the hourly alert
+      this.d.onLost?.('bot', `заявка не создана: ${errMsg(e)}`, { contact: lead.contact, ref: `чат ${chat.chatId}`, text: x.message });
+      await this.forward(chat, x.message, 'Заявка не дошла до продаж (сбой), текст сохранён');
+      return;
+    }
     this.store.update(chat.chatId, { leadTask: taskId, summary: `${masked} · задача #${taskId}` });
     log('info', 'client bot lead', { chatId: chat.chatId, taskId });
     await this.notifyOwner(
@@ -456,10 +471,14 @@ export class ClientEngine implements ClientChannel {
     return [[{ text: T[lang].menu.discuss, data: 'm:discuss' }, { text: T[lang].menu.human, data: 'm:human' }]];
   }
 
-  private async answer(chat: Chat, text: string): Promise<void> {
+  private async answer(chat: Chat, from: From, text: string): Promise<void> {
     const t = T[chat.lang];
     const r = await freeAnswer(
-      { llm: this.d.llm, instructions: this.d.instructions, gate: this.limiter }, chat.lang, text, this.turns(chat.chatId),
+      {
+        llm: this.d.llm, instructions: this.d.instructions, gate: this.limiter,
+        ...(this.d.gatewayDown ? { gatewayDown: this.d.gatewayDown } : {}), ...(this.d.llmTimeoutMs !== undefined ? { timeoutMs: this.d.llmTimeoutMs } : {}),
+      },
+      chat.lang, text, this.turns(chat.chatId),
       () => this.d.transport.typing(chat.chatId).catch(() => undefined),
     );
     switch (r.kind) {
@@ -467,7 +486,7 @@ export class ClientEngine implements ClientChannel {
         await this.say(chat.chatId, t.priceAnswer, this.discussButton(chat.lang));
         return;
       case 'fallback':
-        return this.fallback(chat, text);
+        return this.fallback(chat, from, text, r.down === true);
       default:
     }
     await this.say(chat.chatId, esc(r.text));
@@ -477,9 +496,20 @@ export class ClientEngine implements ClientChannel {
     if (r.team || r.removed > 0) await this.forward(chat, text, r.team ? 'Нужен человек (вопрос к команде)' : 'Вопрос о цене или сроках');
   }
 
-  private async fallback(chat: Chat, text: string): Promise<void> {
-    await this.say(chat.chatId, T[chat.lang].fallback);
-    await this.forward(chat, text, 'Сообщение без ответа модели');
+  private async fallback(chat: Chat, from: From, text: string, down: boolean): Promise<void> {
+    if (!down) {
+      await this.say(chat.chatId, T[chat.lang].fallback);
+      await this.forward(chat, text, 'Сообщение без ответа модели');
+      return;
+    }
+    // The gateway is down: the person gets the scripted «принял, менеджер ответит в рабочее время», never an error, and the question still
+    // becomes a lead record (once per chat) so Sales and the owner see it; a chat that already has a lead only forwards the text.
+    await this.say(chat.chatId, T[chat.lang].gatewayDown);
+    if (!chat.leadTask && this.sinks) {
+      await this.createLead(chat, from, { message: `Вопрос в клиентском боте (модель была недоступна): ${text}`, budget: '', service: 'other' }, 'вопрос без ответа модели');
+      return;
+    }
+    await this.forward(chat, text, 'Вопрос без ответа (модель недоступна)');
   }
 
   private turns(chatId: number) {

@@ -7,6 +7,7 @@ import { parseRefSlug, RefStore, type Draft } from './store.js';
 import { BUDGETS, DEADLINES, NEEDS, T, type Budget, type Deadline, type Lang, type Need } from './texts.js';
 import { WebSessionStore, type WebSession, type WebState } from './web-store.js';
 import { isCatalogueId, nicheHint } from './products.js';
+import type { LostInfo, LostSource } from '../lost-leads.js';
 import { budgetButtons, deadlineButtons, intakeButton, menuButtons, needButtons, plain, productCardButtons, productCardText, productListButtons, W, type WebButton } from './web-texts.js';
 
 /** The request contract of `POST /chat` (the site is built against exactly these names). */
@@ -45,6 +46,12 @@ export interface WebChatDeps {
   perSessionHour?: number;
   perIpHour?: number;
   llmPerSession?: number;
+  /** A request accepted from a visitor that failed before the owner could see it: `lost_lead` and the hourly alert (see `lost-leads.ts`). */
+  onLost?: (source: LostSource, reason: string, info?: LostInfo) => void;
+  /** True while the model gateway is known to be down: the free conversation answers with the scripted «принял» and asks for a contact. */
+  gatewayDown?: () => boolean;
+  /** How long a visitor waits for the model before the scripted answer (ms, default 20 s). */
+  llmTimeoutMs?: number;
 }
 
 /** Telegram @username, phone or email, validated loosely. Returns the contact as stored, or null. */
@@ -112,8 +119,10 @@ export class WebChatEngine {
     try {
       return { kind: 'ok', body: await run };
     } catch (e) {
+      // Never an error to the visitor: the scripted «принял, менеджер ответит» goes out and the failure is recorded (the message was accepted)
       log('error', 'web chat failed', { err: errMsg(e) });
-      return { kind: 'unavailable' };
+      this.d.onLost?.('chat', `веб-чат не обработал сообщение: ${errMsg(e)}`, { ref: `сессия ${req.sessionId.slice(0, 8)}`, text: req.message });
+      return { kind: 'ok', body: { ok: true, reply: W[req.locale].down, state: 'chat' } };
     }
   }
 
@@ -258,21 +267,39 @@ export class WebChatEngine {
     const pageLine = page ? `\nСтраница: ${page}` : '';
     const ref = this.refs.get(`web:${s.id}`);
     const base = { name: 'Посетитель веб-чата', contact, estimate: '', locale: lang, slot: '', source: ref ? `ref:${ref}` : 'web', page };
+    // The visitor is told «принято» in every case: when Sales cannot take the request the contact and the words are kept (lost_lead) and the owner is alerted.
+    const lose = (reason: string, text: string, e: unknown): void => {
+      this.d.onLost?.('chat', `${reason}: ${errMsg(e)}`, { contact, ref: `сессия ${s.id.slice(0, 8)}`, text });
+      this.setState(s, 'idle', this.fresh(s));
+      this.store.update(s.id, { summary: `${reason} (в журнале потерянных)` });
+    };
     if (d.pending === 'client') {
       const question = d.question ?? '';
       if (d.client) {
-        const taskId = await sinks.createTicket(d.client, `${question}\nКонтакт: ${contact}`);
-        this.finished(s, `клиент: тикет, задача #${taskId}`, taskId, 'ticket');
+        try {
+          const taskId = await sinks.createTicket(d.client, `${question}\nКонтакт: ${contact}`);
+          this.finished(s, `клиент: тикет, задача #${taskId}`, taskId, 'ticket');
+        } catch (e) {
+          lose('тикет клиента не создан', question, e);
+        }
         return { reply: W[lang].clientDone(true, night), created: true };
       }
       const message = `Пишет как клиент («${d.clientQuery ?? '?'}»), в базе клиентов не найден.\nВопрос: ${question}\nЗаявка из веб-чата на сайте.${pageLine}`;
-      const taskId = sinks.createLead({ ...base, service: 'other', budget: '', message: clip(message, 2000) }, 'other');
-      this.finished(s, `пишет как клиент, не найден, задача #${taskId}`, taskId, 'lead');
+      try {
+        const taskId = sinks.createLead({ ...base, service: 'other', budget: '', message: clip(message, 2000) }, 'other');
+        this.finished(s, `пишет как клиент, не найден, задача #${taskId}`, taskId, 'lead');
+      } catch (e) {
+        lose('заявка клиента не создана', message, e);
+      }
       return { reply: W[lang].clientDone(false, night), created: true };
     }
     const rec = intakeRecord(d, lang, 'Заявка из веб-чата на сайте.');
-    const taskId = sinks.createLead({ ...base, service: rec.service, product: rec.product, budget: clip(rec.budget, 40), message: clip(`${rec.message}${pageLine}`, 2000) }, rec.service);
-    this.finished(s, `${rec.masked} · задача #${taskId}`, taskId, 'lead');
+    try {
+      const taskId = sinks.createLead({ ...base, service: rec.service, product: rec.product, budget: clip(rec.budget, 40), message: clip(`${rec.message}${pageLine}`, 2000) }, rec.service);
+      this.finished(s, `${rec.masked} · задача #${taskId}`, taskId, 'lead');
+    } catch (e) {
+      lose('заявка не создана', `${rec.message}${pageLine}`, e);
+    }
     return { reply: W[lang].done(rec.shown.need, rec.shown.deadline, rec.shown.budget, night), created: true };
   }
 
@@ -294,11 +321,20 @@ export class WebChatEngine {
         this.d.gate.llmUsed();
       },
     };
-    const r = await freeAnswer({ llm: this.d.llm, instructions: this.d.instructions, gate }, lang, text, this.history.turns(s.id));
+    const r = await freeAnswer(
+      { llm: this.d.llm, instructions: this.d.instructions, gate, ...(this.d.gatewayDown ? { gatewayDown: this.d.gatewayDown } : {}), ...(this.d.llmTimeoutMs !== undefined ? { timeoutMs: this.d.llmTimeoutMs } : {}) },
+      lang, text, this.history.turns(s.id),
+    );
     if (used) this.store.update(s.id, { llmAnswers: s.llmAnswers + used });
     switch (r.kind) {
       case 'price': return { reply: w.price, buttons: intakeButton(lang) };
-      case 'fallback': return { reply: s.llmAnswers >= cap ? w.cap : w.fallback, buttons: intakeButton(lang) };
+      case 'fallback':
+        if (r.down) {
+          // The gateway is down: «принял, менеджер ответит в рабочее время», and the visitor's question becomes the intake that only needs a contact
+          this.setState(s, 'contact', { ...this.fresh(s), needText: clip(text, 1000), pending: 'intake' });
+          return { reply: w.down };
+        }
+        return { reply: s.llmAnswers >= cap ? w.cap : w.fallback, buttons: intakeButton(lang) };
       default:
     }
     this.history.remember(s.id, 'user', text);

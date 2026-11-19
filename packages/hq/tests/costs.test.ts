@@ -93,7 +93,7 @@ describe('export and import', () => {
 
     const fresh = setup().hq;
     fresh.db.exec('DELETE FROM agents; DELETE FROM routines;');
-    expect(importOrg(fresh, yaml)).toEqual({ agents: 4, routines: 1, settings: 4 });
+    expect(importOrg(fresh, yaml)).toEqual({ agents: 4, routines: 1, settings: 6 });
     expect(fresh.agent('marketing-head')).toMatchObject({ bot: 'MARKETING_BOT_TOKEN', instructions: 'Правила\nвторая строка', budgetUsdMonth: 5, bossId: 'director' });
     expect(fresh.routineByName('daily')!.meta).toEqual({ action: 'daily' });
     expect(fresh.setting('quiet_hours')).toBe('23:00-07:00');
