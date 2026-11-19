@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "yt-auth": "tsx --conditions=source --env-file-if-exists=.env.local src/yt-auth.ts",
+    "reload-instructions": "tsx --conditions=source --env-file-if-exists=.env.local src/reload-instructions.ts",
     "import-prospects": "tsx --conditions=source --env-file-if-exists=.env.local src/import-prospects.ts"
   },
   "dependencies": {

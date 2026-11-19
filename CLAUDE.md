@@ -74,7 +74,7 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 `WorkerCtx.tools` необязателен только ради ручных контекстов тестов: `toolsOf(ctx, dept)` из `@fir/hq`. Новый инструмент: файл в `tools/`, строка
 политики, строка в `docs/tools.md` (тест реестра это проверяет), тест-контракт. Переехали в core: `chain.ts` (Сопровождение реэкспортирует),
 подпись `/media/` (`media-sign.ts`, Публикатор реэкспортирует), загрузка YouTube (`youtube.ts`), Search Console. Шрифты PDF: `packages/core/assets/fonts`
-(в `files` пакета, Dockerfile проверяет их наличие в образе). Мониторинг сознательно на своём `fetch` (внутренние адреса).
+(в `files` пакета, Dockerfile проверяет их наличие в образе). Мониторинг тоже на `ctx.tools.web` (флаг `internal: true` только у `support`, внутренние `http://` адреса). Шрифты PDF: Latin, Cyrillic и Cyrillic Extended (таджикские буквы). `pnpm --filter hq reload-instructions` обновляет инструкции голов из `instructions/*.md` (`--dry-run` сначала).
 `packages/mac-poster`: команды `ig:login`, `ig:run`, `ig:install-launchd`, `ig:uninstall-launchd` (голые `login`/`run` совпадали со встроенными pnpm).
 
 ## Как добавить нового агента («новая голова»)
