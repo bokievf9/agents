@@ -1,0 +1,19 @@
+{
+  "name": "@fir/mac-poster",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Publishes approved Instagram items from the owner's Mac through instagram.com in a real browser profile. Mac-only tool, not part of the Docker image.",
+  "scripts": {
+    "login": "tsx src/cli.ts login",
+    "instagram": "tsx src/cli.ts instagram",
+    "install-launchd": "tsx src/cli.ts install-launchd",
+    "uninstall-launchd": "tsx src/cli.ts uninstall-launchd",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "playwright": "1.65.1"
+  }
+}
