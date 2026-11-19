@@ -72,6 +72,31 @@ export function profileJson(): string {
   });
 }
 
+export function youtubeJson(): string {
+  return JSON.stringify({
+    name: 'Fir Tech',
+    handle: '@firtech',
+    description: 'Fir Tech делает сайты, Telegram-ботов и ИИ-агентов для малого бизнеса: запись клиентов, приём заявок, ответы на вопросы в любое время. На канале показываем, как это устроено изнутри, разбираем ниши и отвечаем на вопросы владельцев. Новые Shorts каждую неделю. Конструктор бота и контакты: firtech.pro, заявка в Telegram: @firtech_bot',
+    playlists: [{ name: 'Боты для бизнеса', line: 'Как бот ведёт запись и заявки' }, { name: 'Ниши', line: 'Разбор по типам бизнеса' }, { name: 'Вопросы владельцев', line: 'Короткие ответы на частые вопросы' }],
+    banner: { title: 'Боты и сайты для малого бизнеса', sub: 'Запись и заявки без ручной работы' },
+    avatar: 'fir.tech',
+    shorts: ['Бот отвечает в два часа ночи', 'Как бот записывает клиента', 'Что нужно для запуска бота', 'Сайт и бот вместе', 'Вопрос владельца: сколько ждать'].map((title) => ({ title, hook: `${title}: смотрите, как это выглядит` })),
+    pinnedComment: 'Хотите такого бота для своего дела? Напишите @firtech_bot или зайдите на firtech.pro',
+    trailer: 'Тридцать секунд: кто мы, что делает бот в живом диалоге и куда писать, чтобы получить такого же.',
+  });
+}
+
+export function tiktokJson(): string {
+  return JSON.stringify({
+    name: 'Fir Tech',
+    bio: 'Боты и сайты для малого бизнеса. firtech.pro',
+    videos: [{ hook: 'Клиент пишет в два часа ночи', text: 'Бот отвечает сразу' }, { hook: 'Как бот записывает на стрижку', text: 'Запись за минуту' }, { hook: 'Что умеет бот-администратор', text: 'Три задачи в день' }],
+    hashtagSets: [['#бот', '#малыйбизнес', '#telegram'], ['#автоматизация', '#бизнес', '#сайт'], ['#барбершоп', '#салон', '#запись'], ['#иибизнес', '#агент', '#бот'], ['#предприниматель', '#заявки', '#сайты']],
+    avatarNote: 'Логотип fir.tech на тёмном фоне с лаймовым акцентом',
+    pin: 'Закрепите видео про ночного бота: оно объясняет всё за 20 секунд',
+  });
+}
+
 /** Mock model: the prompt's first words pick the material; everything else is a clip. */
 export const smartLlm = () =>
   new MockLlm((r: LlmRequest) => {
@@ -79,6 +104,8 @@ export const smartLlm = () =>
     if (t.startsWith('Составь карусель')) return carouselJson();
     if (t.startsWith('Составь пост')) return postJson();
     if (t.startsWith('Составь историю')) return storyJson();
+    if (t.startsWith('Составь пакет настройки канала')) return youtubeJson();
+    if (t.startsWith('Составь пакет настройки аккаунта')) return tiktokJson();
     if (t.startsWith('Составь пакет настройки')) return profileJson();
     return clipJson();
   });

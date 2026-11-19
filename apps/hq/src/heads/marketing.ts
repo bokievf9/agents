@@ -4,7 +4,7 @@ import { GoogleAuth, errMsg, escapeHtml, log, parseClientJson, tryJson, zonedPar
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import {
   ARTICLE_KIND, KIND, ContentMakerWorker, TYPE_RU, approveArticle, articleLineOn, dayLabel, editableParts, isAiAsk, partLabel, replacePart,
-  findNiche, lintReelScript, splitPlatforms, storeFor, titleOf, ymd, RenderQueue, parseReel, shortReason, type RenderJob,
+  findNiche, kitLabel, kitRendersNote, lintReelScript, parseKitArg, splitPlatforms, storeFor, titleOf, ymd, RenderQueue, parseReel, shortReason, type RenderJob,
   type PartId,
 } from '@fir/worker-content-maker';
 import { AnalystWorker } from '@fir/worker-analyst';
@@ -472,7 +472,7 @@ export class MarketingHead implements ApprovalEditor {
       return;
     }
     if (action === 'profile') {
-      this.hq.setMeta(task.id, { action: 'profile' });
+      this.hq.setMeta(task.id, { action: 'profile', ...(typeof task.meta.platform === 'string' ? { platform: task.meta.platform } : {}) });
       await this.runWorkerTask(task.id, HEAD_ID);
       return;
     }
@@ -911,9 +911,11 @@ export class MarketingHead implements ApprovalEditor {
   /** Director commands `/profile` and `/article [ниша]`: a department task for the head, the answer is what happens next. */
   async command(name: string, arg: string): Promise<string> {
     if (name === 'profile') {
-      const t = this.hq.createTask({ title: 'Оформление профиля Instagram: био, актуальное, закрепы, порядок недели', body: '', dept: MARKETING, creator: 'owner', meta: { action: 'profile' } });
+      const scope = parseKitArg(arg);
+      if (!scope) return 'Не понял платформу. Напишите /profile (все три), /profile instagram, /profile youtube или /profile tiktok.';
+      const t = this.hq.createTask({ title: `Старт-кит профилей: ${kitLabel(scope)}`, body: '', dept: MARKETING, creator: 'owner', meta: { action: 'profile', platform: scope.length === 1 ? scope[0]! : 'all' } });
       this.hq.wake(HEAD_ID, 'task');
-      return `Взял (задача #${t.id}): Контент-мейкер соберёт пакет настройки профиля, он придёт в одобрения одной карточкой, обложки Актуального отрисую после одобрения.`;
+      return `Взял (задача #${t.id}): Контент-мейкер соберёт старт-кит (${kitLabel(scope)}), он придёт в одобрения одной карточкой. ${kitRendersNote(scope).trim()}`;
     }
     if (name === 'render') return this.renderCommand(arg);
     const niche = arg.trim();

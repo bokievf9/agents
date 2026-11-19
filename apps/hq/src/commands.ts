@@ -60,7 +60,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'lesson', route: 'backoffice', group: 'backoffice', args: '<проект>: <урок>', help: 'записать урок из проекта' },
   { name: 'kb', route: 'backoffice', group: 'backoffice', args: '<запрос>', help: 'поиск по базе знаний' },
   { name: 'playbook', route: 'backoffice', group: 'backoffice', args: '<роль>', help: 'правила роли из плейбука (контент-мейкер, публикатор, трендвотчер, seo, аналитик, продажи, строитель рендера)' },
-  { name: 'profile', route: 'marketing', group: 'marketing', help: 'настройка профиля Instagram (один раз)', menu: 'Маркетинг: настройка профиля Instagram' },
+  { name: 'profile', route: 'marketing', group: 'marketing', args: '[youtube|tiktok|instagram]', help: 'старт-кит профилей Instagram, YouTube, TikTok (один раз; без аргумента все три)', menu: 'Маркетинг: старт-кит профилей' },
   { name: 'article', route: 'marketing', group: 'marketing', args: '[ниша]', help: 'статья в блог сайта' },
   { name: 'render', route: 'marketing', group: 'marketing', args: '<id>', help: 'собрать видео рилса заново' },
   { name: 'builders', route: 'director', group: 'system', help: 'задачи строителям (Claude Code)', menu: 'Задачи строителям (Claude Code)' },

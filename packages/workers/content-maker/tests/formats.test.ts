@@ -2,13 +2,13 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { postSchema, profileSchema, renderPost, renderProfile, renderStory, storySchema, editableParts, splitPlatforms, titleOf } from '../src/format.js';
+import { KIT_SECTIONS, parseKitArg, renderKit, renderTiktok, renderYoutube, splitKit, tiktokProfileSchema, youtubeProfileSchema, postSchema, profileSchema, renderPost, renderProfile, renderStory, storySchema, editableParts, splitPlatforms, titleOf } from '../src/format.js';
 import { lintText } from '../src/lint.js';
 import { FORMAT_TOPICS, pickFormatTopics } from '../src/topics.js';
 import { NICHES, PRODUCTS, TOPIC_NICHES, findNiche } from '../src/niches.js';
-import { SIZES, framesOf, pngSize, renderFrame, renderItem } from '../src/render.js';
+import { BANNER_SAFE, SIZES, framesOf, pngSize, renderFrame, renderItem } from '../src/render.js';
 import { ARTICLE_KIND, IMAGE_TYPES, onApproved, storeFor } from '../src/worker.js';
-import { postJson, profileJson, setup, storyJson } from './helpers.js';
+import { postJson, profileJson, setup, storyJson, tiktokJson, youtubeJson } from './helpers.js';
 
 describe('post, story and profile schemas', () => {
   it('a valid post parses, renders with the caption section and keeps its title', () => {
@@ -171,5 +171,65 @@ describe('profile pack', () => {
       await worker.run(task({ action: 'topic', topic }), ctx);
       expect(storeFor(ctx).item(Number(staged[0]!.payload.itemId))!.type).toBe(type);
     }
+  });
+});
+
+describe('start kit (Instagram, YouTube, TikTok)', () => {
+  it('YouTube and TikTok sections parse; the site link and limits are enforced', () => {
+    const yt = youtubeProfileSchema.parse(JSON.parse(youtubeJson()));
+    expect(yt.handle).toBe('@firtech');
+    expect(renderYoutube(yt)).toContain('Баннер, заголовок: Боты и сайты для малого бизнеса');
+    expect(youtubeProfileSchema.safeParse({ ...yt, description: 'д'.repeat(1001) }).success).toBe(false);
+    expect(youtubeProfileSchema.safeParse({ ...yt, description: 'Описание без ссылки. '.repeat(10) }).success).toBe(false);
+    expect(youtubeProfileSchema.safeParse({ ...yt, playlists: yt.playlists.slice(0, 2) }).success).toBe(false);
+    expect(youtubeProfileSchema.safeParse({ ...yt, shorts: yt.shorts.slice(0, 4) }).success).toBe(false);
+    const tt = tiktokProfileSchema.parse(JSON.parse(tiktokJson()));
+    expect(tt.bio.length).toBeLessThanOrEqual(80);
+    expect(renderTiktok(tt)).toContain('Что закрепить:');
+    expect(tiktokProfileSchema.safeParse({ ...tt, bio: 'б'.repeat(81) + ' firtech.pro' }).success).toBe(false);
+    expect(tiktokProfileSchema.safeParse({ ...tt, bio: 'Боты для бизнеса без ссылки' }).success).toBe(false);
+    expect(tiktokProfileSchema.safeParse({ ...tt, hashtagSets: tt.hashtagSets.slice(0, 4) }).success).toBe(false);
+  });
+
+  it('the kit text splits back into sections; an old Instagram-only text counts as Instagram', () => {
+    const ig = renderProfile(profileSchema.parse(JSON.parse(profileJson())));
+    const kit = renderKit({ instagram: ig, youtube: renderYoutube(youtubeProfileSchema.parse(JSON.parse(youtubeJson()))), tiktok: renderTiktok(tiktokProfileSchema.parse(JSON.parse(tiktokJson()))) });
+    expect(titleOf(kit)).toBe('Instagram + YouTube + TikTok');
+    expect(Object.keys(splitKit(kit))).toEqual(KIT_SECTIONS);
+    expect(splitKit(kit).youtube).toContain('Хэндл: @firtech');
+    expect(Object.keys(splitKit(ig))).toEqual(['instagram']);
+    expect(parseKitArg('')).toEqual(KIT_SECTIONS);
+    expect(parseKitArg('YouTube')).toEqual(['youtube']);
+    expect(parseKitArg('тикток')).toEqual(['tiktok']);
+    expect(parseKitArg('vk')).toBeNull();
+  });
+
+  it('banner is 2560x1440 and the text frame sits in the 1546x423 safe area', async () => {
+    expect(SIZES.banner).toEqual({ width: 2560, height: 1440 });
+    expect(BANNER_SAFE).toEqual({ width: 1546, height: 423, x: 507, y: 508.5 });
+    const png = await renderFrame({ kind: 'banner', title: 'Боты и сайты для малого бизнеса', lines: ['Запись и заявки без ручной работы'] });
+    expect(pngSize(png)).toEqual({ width: 2560, height: 1440 });
+    const dir = mkdtempSync(join(tmpdir(), 'kit-'));
+    const kit = renderKit({ instagram: renderProfile(profileSchema.parse(JSON.parse(profileJson()))), youtube: renderYoutube(youtubeProfileSchema.parse(JSON.parse(youtubeJson()))) });
+    const files = await renderItem(dir, 7, 'profile', kit);
+    expect(files).toHaveLength(6);
+    expect(files[0]).toContain(join('profile-instagram', '7'));
+    expect(files[5]).toBe(join(dir, 'profile-youtube', '7', 'banner.png'));
+    expect(pngSize(readFileSync(files[5]!))).toEqual({ width: 2560, height: 1440 });
+    expect(framesOf('profile', kit).filter((f) => f.kind === 'banner')).toHaveLength(1);
+  });
+
+  it('a profile run drafts all three platforms into one card; /profile youtube scopes to one section', async () => {
+    const all = setup();
+    await all.worker.run(all.task({ action: 'profile' }), all.ctx);
+    expect(all.staged).toHaveLength(1);
+    expect(all.staged[0]!.summary).toMatch(/Instagram \+ YouTube \+ TikTok/);
+    expect(Object.keys(splitKit(String(all.staged[0]!.payload.text)))).toEqual(KIT_SECTIONS);
+    const yt = setup();
+    await yt.worker.run(yt.task({ action: 'profile', platform: 'youtube' }), yt.ctx);
+    const text = String(yt.staged[0]!.payload.text);
+    expect(Object.keys(splitKit(text))).toEqual(['youtube']);
+    expect(yt.staged[0]!.summary).not.toContain('TikTok');
+    expect(storeFor(yt.ctx).item(Number(yt.staged[0]!.payload.itemId))!.topicKey).toBe('profile:youtube');
   });
 });

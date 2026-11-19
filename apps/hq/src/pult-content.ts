@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync, readSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import type { ApprovalQueue } from '@fir/core';
 import type { Hq } from '@fir/hq';
-import { RenderQueue, SIZES, shortReason, splitPlatforms, storeFor, type ArticleRow, type ContentStore, type Item, type ReadyRow } from '@fir/worker-content-maker';
+import { RenderQueue, SIZES, shortReason, kitScopeOf, splitKit, splitPlatforms, storeFor, type ArticleRow, type ContentStore, type Item, type ReadyRow } from '@fir/worker-content-maker';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import type { MarketingHead } from './heads/marketing.js';
@@ -27,11 +27,11 @@ const PLATFORMS = ['instagram', 'tiktok', 'shorts'] as const;
 const postBody = z.object({ action: z.enum(CONTENT_ACTIONS), note: z.string().trim().min(1).max(4000).optional(), platform: z.enum(PLATFORMS).optional() }).strict();
 
 type Status = 'draft' | 'pending' | 'approved' | 'rendering' | 'ready' | 'published' | 'rejected';
-type Kind = 'clip' | 'post' | 'carousel' | 'story' | 'article';
+type Kind = 'clip' | 'post' | 'carousel' | 'story' | 'article' | 'profile';
 interface FileOut { path: string; type: 'png' | 'mp4'; w: number; h: number }
 interface Link { id: number; approvalId: number | null; state: string }
 
-const KIND_OF: Record<Item['type'], Kind> = { clip: 'clip', post: 'post', carousel: 'carousel', story: 'story', profile: 'post' };
+const KIND_OF: Record<Item['type'], Kind> = { clip: 'clip', post: 'post', carousel: 'carousel', story: 'story', profile: 'profile' };
 const IMAGE_SIZE: Record<Item['type'], { width: number; height: number }> = {
   clip: SIZES.cover, post: SIZES.post, carousel: SIZES.slide, story: SIZES.story, profile: SIZES.cover,
 };
@@ -100,8 +100,11 @@ export function createPultContent(d: PultContentDeps) {
     const { body, sections } = splitPlatforms(rows.find((r) => r.platform === 'instagram')?.text ?? item.text);
     const cap = (p: (typeof PLATFORMS)[number]) => rows.find((r) => r.platform === p)?.text ?? sections[p] ?? (p === 'instagram' ? body : '');
     const err = job?.status === 'failed' || (job?.status === 'queued' && job.error) ? shortReason(job.error) : (posts.find((x) => x.error)?.error ?? (item.status === 'failed' ? (item.comment ?? 'не получилось') : null));
+    // start kit: platform is the one the kit covers (instagram, youtube, tiktok) or `all`; `kit` holds the section texts
+    const scope = item.type === 'profile' ? kitScopeOf(item.topicKey) : [];
+    const kit = item.type === 'profile' ? splitKit(item.text) : undefined;
     return {
-      id: item.id, kind: KIND_OF[item.type], platform: 'instagram', status, title: item.title || item.topicText.slice(0, 120),
+      id: item.id, kind: KIND_OF[item.type], platform: item.type === 'profile' ? (scope.length === 1 ? scope[0]! : 'all') : 'instagram', ...(kit ? { kit: { instagram: kit.instagram ?? '', youtube: kit.youtube ?? '', tiktok: kit.tiktok ?? '' } } : {}), status, title: item.title || item.topicText.slice(0, 120),
       hook: /^Хук[^:]*:\s*(.+)$/m.exec(item.text)?.[1]?.trim() ?? '',
       caption: { instagram: cap('instagram'), tiktok: cap('tiktok'), shorts: cap('shorts'), dzen: '' },
       files, sourceSlug: item.sourceSlug, approvalId: link && link.state === 'asked' ? link.approvalId : null,

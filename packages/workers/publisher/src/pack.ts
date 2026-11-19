@@ -94,11 +94,11 @@ export function renderItemMessage(group: PublishPack[], today: string, opts: { v
   const late = first.plannedDate < today ? ` (план был ${first.plannedDate.slice(8, 10)}.${first.plannedDate.slice(5, 7)}, не отмечено)` : '';
   const blocks = group.map((p) => {
     const files = IMAGE_TYPES.includes(p.type)
-      ? p.files.length ? `Картинок: ${p.files.length}, они пришли альбомом выше. Перешлите их в Instagram по порядку.` : 'Картинки не созданы (рендер недоступен): публикуйте по тексту, оформите карточку вручную.'
+      ? p.files.length ? `Картинок: ${p.files.length}, они пришли альбомом выше. Перешлите их по порядку: обложки в Instagram, баннер в YouTube.` : 'Картинки не созданы (рендер недоступен): публикуйте по тексту, оформите карточку вручную.'
       : opts.videoSent && p.files.some(isVideo) ? 'Видео собрано, оно пришло выше: перешлите его в приложение платформы.'
       : p.note ? `Видео: ${p.note}. Сценарий выше, снимите по нему или подождите следующего утра.`
       : p.files.length ? `Файл: ${p.files.join(', ')}` : 'Файл: пока готовит человек по сценарию (рендер видео этап 2)';
-    return [`== ${PLATFORM_LABEL[p.platform]} ==`, p.caption, p.hashtags.join(' '), files].filter(Boolean).join('\n');
+    return [`== ${p.type === 'profile' ? 'Профили' : PLATFORM_LABEL[p.platform]} ==`, p.caption, p.hashtags.join(' '), files].filter(Boolean).join('\n');
   });
   return `Публикуем: ${TYPE_RU[first.type]} «${first.title}»${late}\n\n${blocks.join('\n\n')}\n\nПосле публикации нажмите кнопку платформы.`.slice(0, 4000);
 }
@@ -111,4 +111,4 @@ export function videoCaption(group: PublishPack[], today: string): { caption: st
 }
 
 export const BUTTON_PREFIX = 'pb:';
-export const publishedButtons = (group: PublishPack[]) => [group.map((p) => ({ text: `Опубликовано: ${PLATFORM_LABEL[p.platform]}`, data: `${BUTTON_PREFIX}${p.readyId}` }))];
+export const publishedButtons = (group: PublishPack[]) => [group.map((p) => ({ text: p.type === 'profile' ? 'Профили настроены' : `Опубликовано: ${PLATFORM_LABEL[p.platform]}`, data: `${BUTTON_PREFIX}${p.readyId}` }))];

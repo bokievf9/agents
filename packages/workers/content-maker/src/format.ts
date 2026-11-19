@@ -82,6 +82,68 @@ export const profileSchema = z.object({
 });
 export type Profile = z.output<typeof profileSchema>;
 
+/** The YouTube part of the start kit: channel texts, three playlists, banner text (2560x1440 PNG), first Shorts. */
+export const youtubeProfileSchema = z
+  .object({
+    name: z.string().min(1).max(50),
+    handle: z.string().regex(/^@[A-Za-z0-9._-]{3,30}$/, 'handle looks like @firtech'),
+    description: z.string().min(120).max(1000),
+    playlists: z.array(z.object({ name: z.string().min(1).max(60), line: z.string().min(1).max(100) })).length(3),
+    banner: z.object({ title: z.string().min(1).max(40), sub: z.string().min(1).max(60) }),
+    avatar: z.string().min(1).max(40),
+    shorts: z.array(z.object({ title: z.string().min(1).max(90), hook: z.string().min(1).max(90) })).length(5),
+    pinnedComment: z.string().min(10).max(300),
+    trailer: z.string().min(10).max(300),
+  })
+  .superRefine((c, ctx) => {
+    if (!/firtech\.pro/i.test(c.description)) ctx.addIssue({ code: 'custom', message: 'the channel description must hold the site link firtech.pro' });
+  });
+export type YoutubeProfile = z.output<typeof youtubeProfileSchema>;
+
+/** The TikTok part of the start kit: name, bio up to 80 characters with the site link, three first videos, five hashtag sets. */
+export const tiktokProfileSchema = z
+  .object({
+    name: z.string().min(1).max(30),
+    bio: z.string().min(10).max(80),
+    videos: z.array(z.object({ hook: z.string().min(1).max(90), text: z.string().min(1).max(70) })).length(3),
+    hashtagSets: z.array(tags(6).pipe(z.array(z.string()).min(3))).length(5),
+    avatarNote: z.string().min(5).max(200),
+    pin: z.string().min(5).max(200),
+  })
+  .superRefine((c, ctx) => {
+    if (!/firtech\.pro/i.test(c.bio)) ctx.addIssue({ code: 'custom', message: 'the bio must hold the site link firtech.pro' });
+  });
+export type TiktokProfile = z.output<typeof tiktokProfileSchema>;
+
+export type KitSection = 'instagram' | 'youtube' | 'tiktok';
+export const KIT_SECTIONS: KitSection[] = ['instagram', 'youtube', 'tiktok'];
+export const KIT_LABEL: Record<KitSection, string> = { instagram: 'Instagram', youtube: 'YouTube', tiktok: 'TikTok' };
+/** `profile:setup` is the whole kit, `profile:<platform>` one section. */
+export const kitScopeKey = (sections: KitSection[]): string => (sections.length === KIT_SECTIONS.length ? 'profile:setup' : `profile:${sections[0]}`);
+export function kitScopeOf(topicKey: string): KitSection[] {
+  const m = /^profile:(instagram|youtube|tiktok)$/.exec(topicKey);
+  return m ? [m[1] as KitSection] : [...KIT_SECTIONS];
+}
+export const kitLabel = (sections: KitSection[]): string => sections.map((s) => KIT_LABEL[s]).join(' + ');
+/** One line for the approval card: the files that appear after «Одобрить». */
+export function kitRendersNote(sections: KitSection[]): string {
+  const files = [
+    ...(sections.includes('instagram') ? ['5 обложек Актуального 1080x1920 (profile-instagram)'] : []),
+    ...(sections.includes('youtube') ? ['баннер YouTube 2560x1440, безопасная зона 1546x423 (profile-youtube)'] : []),
+  ];
+  return files.length ? `После одобрения отрисую: ${files.join(', ')}. ` : 'Картинок для этой платформы нет, только тексты. ';
+}
+
+/** What the owner types after /profile: all, a platform name (also the Russian spellings), '' = all. null: not understood. */
+export function parseKitArg(arg: string): KitSection[] | null {
+  const a = arg.trim().toLowerCase();
+  if (!a || a === 'all' || a === 'все' || a === 'всё') return [...KIT_SECTIONS];
+  if (/^(instagram|insta|ig|инстаграм|инста)$/.test(a)) return ['instagram'];
+  if (/^(youtube|yt|ютуб|ютьюб)$/.test(a)) return ['youtube'];
+  if (/^(tiktok|tt|тикток|тик-ток)$/.test(a)) return ['tiktok'];
+  return null;
+}
+
 export const CTA_RE = /firtech\.pro|@firtech_bot/i;
 
 export function renderPost(c: Post | z.input<typeof postSchema>): string {
@@ -111,6 +173,67 @@ export function renderProfile(c: Profile | z.input<typeof profileSchema>): strin
     'Порядок первой недели:',
     ...p.week.map((t, i) => `${i + 1}) ${t}`),
   ].join('\n');
+}
+
+export function renderYoutube(c: YoutubeProfile | z.input<typeof youtubeProfileSchema>): string {
+  const y = c as YoutubeProfile;
+  return [
+    'Профиль YouTube: настройка канала',
+    `Название: ${y.name}`,
+    `Хэндл: ${y.handle}`,
+    `Аватар (текст): ${y.avatar}`,
+    `Баннер, заголовок: ${y.banner.title}`,
+    `Баннер, строка: ${y.banner.sub}`,
+    'Баннер: 2560x1440, текст внутри безопасной зоны 1546x423 по центру',
+    '',
+    `Описание канала (${y.description.length} знаков):`,
+    y.description,
+    '',
+    'Плейлисты:',
+    ...y.playlists.map((p, i) => `${i + 1}) ${p.name}. ${p.line}`),
+    '',
+    'Первые 5 Shorts:',
+    ...y.shorts.map((s, i) => `${i + 1}) ${s.title}. Хук: ${s.hook}`),
+    '',
+    `Закреплённый комментарий: ${y.pinnedComment}`,
+    `Трейлер канала: ${y.trailer}`,
+  ].join('\n');
+}
+
+export function renderTiktok(c: TiktokProfile | z.input<typeof tiktokProfileSchema>): string {
+  const t = c as TiktokProfile;
+  return [
+    `Профиль TikTok: настройка (био ${t.bio.length} знаков)`,
+    `Имя: ${t.name}`,
+    `Био: ${t.bio}`,
+    `Фото профиля: ${t.avatarNote}`,
+    '',
+    'Первые 3 видео:',
+    ...t.videos.map((v, i) => `${i + 1}) Хук: ${v.hook}. Текст на экране: ${v.text}`),
+    '',
+    'Наборы хештегов:',
+    ...t.hashtagSets.map((h, i) => `${i + 1}) ${h.join(' ')}`),
+    '',
+    `Что закрепить: ${t.pin}`,
+  ].join('\n');
+}
+
+/** The whole start kit as one text: a header line and a `## Platform` block per section. */
+export function renderKit(parts: Partial<Record<KitSection, string>>): string {
+  const secs = KIT_SECTIONS.filter((s) => parts[s] !== undefined);
+  return [`Старт-кит профилей: ${kitLabel(secs)}`, ...secs.map((s) => `\n## ${KIT_LABEL[s]}\n${parts[s]}`)].join('\n');
+}
+
+const KIT_MARKER = /^## (Instagram|YouTube|TikTok)\s*$/gm;
+/** Splits a kit text into its sections. Text without `## ` markers (the old Instagram-only pack, a broken edit) counts as Instagram. */
+export function splitKit(text: string): Partial<Record<KitSection, string>> {
+  const marks = [...text.matchAll(KIT_MARKER)];
+  if (marks.length === 0) return { instagram: text.trim() };
+  const out: Partial<Record<KitSection, string>> = {};
+  marks.forEach((m, i) => {
+    out[m[1]!.toLowerCase() as KitSection] = text.slice(m.index + m[0].length, marks[i + 1]?.index ?? text.length).trim();
+  });
+  return out;
 }
 
 type Captions = Clip['captions'] | Carousel['captions'];
@@ -201,5 +324,5 @@ function joinParts(body: string, sections: Partial<Record<Platform, string>>): s
 /** First line of the body without the type prefix: the item's short title. */
 export function titleOf(text: string): string {
   const first = text.split('\n')[0] ?? '';
-  return first.replace(/^(Клип|Карусель|Пост|История|Профиль Instagram)[^:]*:\s*/, '').trim() || first.trim();
+  return first.replace(/^(Клип|Карусель|Пост|История|Профиль Instagram|Старт-кит профилей)[^:]*:\s*/, '').trim() || first.trim();
 }

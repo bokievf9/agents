@@ -56,6 +56,31 @@ export const profileJson = () =>
     week: ['Пн: рилс про бота-администратора', 'Вт: карусель про приёмщика заявок', 'Ср: пост с чеклистом', 'Чт: история с вопросом', 'Пт: рилс про автоматизацию'],
   });
 
+export function youtubeJson(): string {
+  return JSON.stringify({
+    name: 'Fir Tech',
+    handle: '@firtech',
+    description: 'Fir Tech делает сайты, Telegram-ботов и ИИ-агентов для малого бизнеса: запись клиентов, приём заявок, ответы на вопросы в любое время. На канале показываем, как это устроено изнутри, разбираем ниши и отвечаем на вопросы владельцев. Новые Shorts каждую неделю. Конструктор бота и контакты: firtech.pro, заявка в Telegram: @firtech_bot',
+    playlists: [{ name: 'Боты для бизнеса', line: 'Как бот ведёт запись и заявки' }, { name: 'Ниши', line: 'Разбор по типам бизнеса' }, { name: 'Вопросы владельцев', line: 'Короткие ответы на частые вопросы' }],
+    banner: { title: 'Боты и сайты для малого бизнеса', sub: 'Запись и заявки без ручной работы' },
+    avatar: 'fir.tech',
+    shorts: ['Бот отвечает в два часа ночи', 'Как бот записывает клиента', 'Что нужно для запуска бота', 'Сайт и бот вместе', 'Вопрос владельца: сколько ждать'].map((title) => ({ title, hook: `${title}: смотрите, как это выглядит` })),
+    pinnedComment: 'Хотите такого бота для своего дела? Напишите @firtech_bot или зайдите на firtech.pro',
+    trailer: 'Тридцать секунд: кто мы, что делает бот в живом диалоге и куда писать, чтобы получить такого же.',
+  });
+}
+
+export function tiktokJson(): string {
+  return JSON.stringify({
+    name: 'Fir Tech',
+    bio: 'Боты и сайты для малого бизнеса. firtech.pro',
+    videos: [{ hook: 'Клиент пишет в два часа ночи', text: 'Бот отвечает сразу' }, { hook: 'Как бот записывает на стрижку', text: 'Запись за минуту' }, { hook: 'Что умеет бот-администратор', text: 'Три задачи в день' }],
+    hashtagSets: [['#бот', '#малыйбизнес', '#telegram'], ['#автоматизация', '#бизнес', '#сайт'], ['#барбершоп', '#салон', '#запись'], ['#иибизнес', '#агент', '#бот'], ['#предприниматель', '#заявки', '#сайты']],
+    avatarNote: 'Логотип fir.tech на тёмном фоне с лаймовым акцентом',
+    pin: 'Закрепите видео про ночного бота: оно объясняет всё за 20 секунд',
+  });
+}
+
 /** A valid article body (~800 words RU / ~750 EN, five headings, cta, FAQ of three). */
 export function articleContent(lang: 'ru' | 'en') {
   const s = lang === 'ru'
@@ -97,6 +122,8 @@ export function routedLlm(r: Replies = {}): MockLlm {
     if (user.startsWith('Составь карусель')) return carouselJson();
     if (user.startsWith('Составь пост')) return postJson();
     if (user.startsWith('Составь историю')) return storyJson();
+    if (user.startsWith('Составь пакет настройки канала')) return youtubeJson();
+    if (user.startsWith('Составь пакет настройки аккаунта')) return tiktokJson();
     if (user.startsWith('Составь пакет настройки')) return profileJson();
     if (user.startsWith('Напиши статью')) return JSON.stringify({ slug: 'bot-dlya-barber', ru: articleContent('ru') });
     if (user.startsWith('Translate')) return JSON.stringify({ en: articleContent('en') });

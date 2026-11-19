@@ -1,7 +1,7 @@
 import { errMsg, log, zonedParts, type KindSpec, type Payload } from '@fir/core';
 import type { SubtaskSpec, Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { fill, generateItem, loadPrompts, noTrends, type Prompts, type TrendHint, type TrendsProvider } from './generate.js';
-import { PLATFORM_LABEL, splitPlatforms, type ItemType, type Platform } from './format.js';
+import { KIT_SECTIONS, PLATFORM_LABEL, kitLabel, kitRendersNote, kitScopeKey, kitScopeOf, parseKitArg, splitPlatforms, type ItemType, type Platform } from './format.js';
 import { ContentStore } from './store.js';
 import { AI_TOPICS, ALL_TOPICS, ARTICLE_WINDOW_DAYS, freeTopic, freshWindowMs, pickAiTopic, pickFormatTopics, pickTopics, type Topic } from './topics.js';
 import { renderItem } from './render.js';
@@ -245,7 +245,8 @@ export class ContentMakerWorker implements Worker {
     const store = storeFor(ctx);
     let itemId = Number(task.meta.itemId) || 0;
     if (!itemId && task.meta.action === 'profile') {
-      itemId = store.insertItem({ packId: null, seq: 1, total: 1, type: 'profile', topicKey: 'profile:setup', topicText: 'Оформление профиля Instagram', plannedDate: addDays(ymd(ctx.now()), 1) });
+      const scope = parseKitArg(String(task.meta.platform ?? '')) ?? [...KIT_SECTIONS];
+      itemId = store.insertItem({ packId: null, seq: 1, total: 1, type: 'profile', topicKey: kitScopeKey(scope), topicText: `Старт-кит профилей: ${kitLabel(scope)}`, plannedDate: addDays(ymd(ctx.now()), 1) });
     } else if (!itemId) {
       if (task.meta.action !== 'topic') return { ok: false, result: '', error: `Неизвестное действие: ${String(task.meta.action)}` };
       const m = PREFIX_RE.exec(String(task.meta.topic ?? ''));
@@ -269,14 +270,14 @@ export class ContentMakerWorker implements Worker {
     }
     try {
       const gen = await generateItem(ctx.llm, this.prompts, {
-        type: item.type, topic, week: item.packId ? `с ${ddmm(item.plannedDate)}` : '', ...(feedback ? { comment: feedback, previous: item.text } : {}), ...(trends.length ? { trends } : {}),
+        type: item.type, topic, ...(item.type === 'profile' ? { sections: kitScopeOf(item.topicKey) } : {}), week: item.packId ? `с ${ddmm(item.plannedDate)}` : '', ...(feedback ? { comment: feedback, previous: item.text } : {}), ...(trends.length ? { trends } : {}),
         ...(source ? { source: articleSource(articleSchema.parse(JSON.parse(source.json))) } : {}),
       });
       if (!gen) {
         store.setStatus(itemId, 'failed');
         return { ok: false, result: '', error: `Материал ${item.seq} из ${item.total} (${TYPE_RU[item.type]}, ${topic.text}): модель не дала валидный ответ` };
       }
-      const head = `${item.packId ? `Пакет, материал ${item.seq} из ${item.total}` : 'Отдельный материал'}${feedback ? ' (вторая версия)' : ''}. ${TYPE_RU[item.type]}, ${PLATFORMS[item.type].map((p) => PLATFORM_LABEL[p]).join(' + ')}. Выход: ${dayLabel(item.plannedDate)}. Тема: ${topic.text}${item.sourceSlug ? `. Из статьи: ${item.sourceSlug}` : ''}`;
+      const head = `${item.packId ? `Пакет, материал ${item.seq} из ${item.total}` : 'Отдельный материал'}${feedback ? ' (вторая версия)' : ''}. ${TYPE_RU[item.type]}, ${item.type === 'profile' ? kitLabel(kitScopeOf(item.topicKey)) : PLATFORMS[item.type].map((p) => PLATFORM_LABEL[p]).join(' + ')}. ${item.type === 'profile' ? kitRendersNote(kitScopeOf(item.topicKey)) : ''}Выход: ${dayLabel(item.plannedDate)}. Тема: ${topic.text}${item.sourceSlug ? `. Из статьи: ${item.sourceSlug}` : ''}`;
       const warn = gen.issues.length ? `\nПроверка тона нашла: ${gen.issues.join('; ')}.` : '';
       store.setProposed(itemId, gen.text, gen.title);
       await ctx.requestApproval(KIND, { text: gen.text, itemId }, head + warn);

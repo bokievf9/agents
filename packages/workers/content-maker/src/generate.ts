@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tryJson, withPlaybook, type Db, type LlmClient } from '@fir/core';
 import { DIRECTIONS, priceLine } from './directions.js';
-import { carouselSchema, clipSchema, postSchema, profileSchema, renderCarousel, renderClip, renderPost, renderProfile, renderStory, storySchema, titleOf, type ItemType } from './format.js';
+import { carouselSchema, clipSchema, postSchema, profileSchema, renderCarousel, renderKit, renderTiktok, renderYoutube, splitKit, tiktokProfileSchema, youtubeProfileSchema, KIT_SECTIONS, type KitSection, renderClip, renderPost, renderProfile, renderStory, storySchema, titleOf, type ItemType } from './format.js';
 import { estimateSeconds, lintText } from './lint.js';
 import type { Topic } from './topics.js';
 
@@ -13,6 +13,8 @@ export interface Prompts {
   post: string;
   story: string;
   profile: string;
+  profileYoutube: string;
+  profileTiktok: string;
   articleSystem: string;
   articleRu: string;
   articleEn: string;
@@ -22,7 +24,7 @@ export interface Prompts {
 
 export function loadPrompts(dir: string): Prompts {
   const read = (f: string) => readFileSync(join(dir, f), 'utf8').trim();
-  return { system: read('system.md'), clip: read('clip.md'), carousel: read('carousel.md'), post: read('post.md'), story: read('story.md'), profile: read('profile.md'), articleSystem: read('article.md'), articleRu: read('article-ru.md'), articleEn: read('article-en.md'), articleAiRu: read('article-ai-ru.md'), articleAiEn: read('article-ai-en.md') };
+  return { system: read('system.md'), clip: read('clip.md'), carousel: read('carousel.md'), post: read('post.md'), story: read('story.md'), profile: read('profile.md'), profileYoutube: read('profile-youtube.md'), profileTiktok: read('profile-tiktok.md'), articleSystem: read('article.md'), articleRu: read('article-ru.md'), articleEn: read('article-en.md'), articleAiRu: read('article-ai-ru.md'), articleAiEn: read('article-ai-en.md') };
 }
 
 export interface GenSpec {
@@ -38,6 +40,8 @@ export interface GenSpec {
   trends?: TrendHint[];
   /** The blog article a carousel or a reel is made from (title, h2 outline, first paragraph): the structure to follow. */
   source?: string;
+  /** Start kit only: which platform section this call writes (default Instagram). */
+  section?: KitSection;
 }
 
 /** One trend from the Trend scout, reduced to what a script needs. */
@@ -78,7 +82,8 @@ function userPrompt(p: Prompts, spec: GenSpec, fix?: { text: string; issues: str
   if (spec.source) extra.push(spec.source);
   if (spec.previous) extra.push(`Отклонённый вариант (не повторяй его):\n${spec.previous}`);
   if (fix) extra.push(`В черновике найдены нарушения правил: ${fix.issues.join('; ')}. Исправь их и верни полный JSON.\nЧерновик:\n${fix.text}`);
-  return fill(p[spec.type], {
+  const template = spec.type === 'profile' ? { instagram: p.profile, youtube: p.profileYoutube, tiktok: p.profileTiktok }[spec.section ?? 'instagram'] : p[spec.type];
+  return fill(template, {
     week: spec.week,
     topic: spec.topic.text,
     direction: dir ? `${dir.name}: ${dir.summary}` : 'свободная тема, выбери направление по смыслу',
@@ -115,9 +120,10 @@ async function once(llm: LlmClient, p: Prompts, spec: GenSpec, fix?: { text: str
     return { text, title: titleOf(text), issues: lintText(text, { noPrices: true }) };
   }
   if (spec.type === 'profile') {
-    const parsed = await tryJson(llm, req, profileSchema);
+    const section = spec.section ?? 'instagram';
+    const parsed = section === 'youtube' ? await tryJson(llm, req, youtubeProfileSchema) : section === 'tiktok' ? await tryJson(llm, req, tiktokProfileSchema) : await tryJson(llm, req, profileSchema);
     if (!parsed) return null;
-    const text = renderProfile(parsed);
+    const text = section === 'youtube' ? renderYoutube(parsed as never) : section === 'tiktok' ? renderTiktok(parsed as never) : renderProfile(parsed as never);
     return { text, title: titleOf(text), issues: lintText(text, { noPrices: true, cta: false }) };
   }
   const parsed = await tryJson(llm, req, carouselSchema);
@@ -130,7 +136,25 @@ async function once(llm: LlmClient, p: Prompts, spec: GenSpec, fix?: { text: str
  * One content item through the gateway: strict JSON, validated; the brand-voice lint runs on the result and,
  * if it finds problems, the model gets one repair pass. null when the model is off or keeps failing.
  */
-export async function generateItem(llm: LlmClient, p: Prompts, spec: GenSpec): Promise<Generated | null> {
+export async function generateItem(llm: LlmClient, p: Prompts, spec: GenSpec & { sections?: KitSection[] }): Promise<Generated | null> {
+  if (spec.type !== 'profile') return generateOne(llm, p, spec);
+  // the start kit: one request and one repair pass per platform section, one text out
+  const parts: Partial<Record<KitSection, string>> = {};
+  const issues: string[] = [];
+  const prev = spec.previous ? splitKit(spec.previous) : {};
+  for (const section of KIT_SECTIONS.filter((x) => (spec.sections ?? KIT_SECTIONS).includes(x))) {
+    const { sections, previous, ...rest } = spec;
+    void sections;
+    const g = await generateOne(llm, p, { ...rest, section, ...(previous && prev[section] ? { previous: prev[section]! } : {}) });
+    if (!g) return null;
+    parts[section] = g.text;
+    issues.push(...g.issues);
+  }
+  const text = renderKit(parts);
+  return { text, title: titleOf(text), issues: [...new Set(issues)] };
+}
+
+async function generateOne(llm: LlmClient, p: Prompts, spec: GenSpec): Promise<Generated | null> {
   const first = await once(llm, p, spec);
   if (!first || first.issues.length === 0) return first;
   const second = await once(llm, p, spec, { text: first.text, issues: first.issues });

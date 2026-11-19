@@ -110,7 +110,22 @@ describe('/profile', () => {
     await w.director.sendApprovalBatch(false);
     await w.decide('approve', w.queue.pending()[0]!.id);
     const item = Number(queued[0]!.payload.itemId);
-    expect(store(w).rowsOfItem(item)[0]!.files).toHaveLength(5);
+    const files = store(w).rowsOfItem(item)[0]!.files;
+    expect(files).toHaveLength(6); // five covers and the YouTube banner
+    expect(files.some((f) => f.includes('profile-youtube'))).toBe(true);
+    expect(String(queued[0]!.payload.text)).toMatch(/## YouTube[\s\S]*## TikTok/);
+  });
+
+  it('/profile youtube makes one section, an unknown platform is explained', async () => {
+    const w = world();
+    expect(await w.marketing.command('profile', 'vk')).toContain('Не понял платформу');
+    expect(await w.marketing.command('profile', 'youtube')).toContain('YouTube');
+    await cycle(w);
+    const queued = w.hq.queuedApprovals();
+    expect(queued).toHaveLength(1);
+    const text = String(queued[0]!.payload.text);
+    expect(text).toContain('Хэндл: @firtech');
+    expect(text).not.toContain('## TikTok');
   });
 
   it('the Director command list knows /profile and /article, the menu stays within 20 commands', () => {

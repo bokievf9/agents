@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Resvg } from '@resvg/resvg-js';
 import satori from 'satori';
-import type { ItemType } from './format.js';
+import { splitKit, type ItemType } from './format.js';
 
 /**
  * PNG rendering without a browser: `satori` (layout to SVG) + `@resvg/resvg-js` (SVG to PNG), plain Node.
@@ -11,7 +11,7 @@ import type { ItemType } from './format.js';
  */
 export const BRAND = { bg: '#0a0d0b', fg: '#ffffff', muted: '#9ba79d', accent: '#b5eb6a', surface: '#111512' } as const;
 
-export type FrameKind = 'post' | 'slide' | 'story' | 'cover';
+export type FrameKind = 'post' | 'slide' | 'story' | 'cover' | 'banner';
 /** One image: a headline, up to two body lines, a position mark («3/8») and the kind that sets the size. */
 export interface Frame {
   kind: FrameKind;
@@ -26,7 +26,11 @@ export const SIZES: Record<FrameKind, { width: number; height: number }> = {
   slide: { width: 1080, height: 1350 },
   story: { width: 1080, height: 1920 },
   cover: { width: 1080, height: 1920 },
+  banner: { width: 2560, height: 1440 },
 };
+
+/** The part of a YouTube banner every device shows (TV, desktop, phone): 1546x423 in the centre. Text stays inside it. */
+export const BANNER_SAFE = { width: 1546, height: 423, x: (2560 - 1546) / 2, y: (1440 - 423) / 2 } as const;
 
 type Font = { name: string; data: Buffer; weight: 400 | 700; style: 'normal' };
 let fontCache: Font[] | null = null;
@@ -48,7 +52,24 @@ export function loadFonts(dir = FONT_DIR): Font[] {
 type Node = { type: string; props: { style?: Record<string, unknown>; children?: unknown } };
 const h = (type: string, style: Record<string, unknown>, children?: unknown): Node => ({ type, props: { style: { display: 'flex', ...style }, ...(children !== undefined ? { children } : {}) } });
 
+/** YouTube banner: the headline, one line and the mark sit in the safe area; the rest is background shapes. */
+function bannerTree(fr: Frame): Node {
+  const { width, height } = SIZES.banner;
+  const s = BANNER_SAFE;
+  const size = fr.title.length > 28 ? 68 : fr.title.length > 16 ? 84 : 104;
+  const dot = (x: number, y: number, d: number) => h('div', { position: 'absolute', left: x, top: y, width: d, height: d, borderRadius: d / 2, backgroundColor: BRAND.surface });
+  return h('div', { width, height, backgroundColor: BRAND.bg, position: 'relative', fontFamily: 'Onest, OnestLatin', color: BRAND.fg }, [
+    dot(-260, -300, 900), dot(1900, 900, 1000),
+    h('div', { position: 'absolute', left: s.x, top: s.y, width: s.width, height: s.height, flexDirection: 'column', justifyContent: 'center' }, [
+      h('div', { width: 120, height: 10, backgroundColor: BRAND.accent, marginBottom: 28 }),
+      h('div', { fontFamily: 'Unbounded, Onest, OnestLatin', fontWeight: 700, fontSize: size, lineHeight: 1.12 }, fr.title),
+      ...fr.lines.slice(0, 1).map((l) => h('div', { fontSize: 44, lineHeight: 1.3, color: BRAND.muted, marginTop: 24 }, l)),
+    ]),
+  ]);
+}
+
 function tree(fr: Frame): Node {
+  if (fr.kind === 'banner') return bannerTree(fr);
   const { width, height } = SIZES[fr.kind];
   const story = height > width * 1.5;
   const pad = 88;
@@ -112,9 +133,13 @@ export function framesOf(type: ItemType, text: string): Frame[] {
     return frames.map((s, i) => ({ kind: 'story' as const, title: s.title, lines: s.lines.slice(0, 1), index: i + 1, total: frames.length }));
   }
   if (type === 'profile') {
+    const kit = splitKit(text);
     const out: Frame[] = [];
-    for (const m of body.matchAll(/^\d+\.\s+(.+?)\.\s+Обложка:\s*(.+)$/gm)) out.push({ kind: 'cover', title: m[2]!.trim(), lines: [m[1]!.trim()] });
-    return out.map((f, i) => ({ ...f, index: i + 1, total: out.length }));
+    for (const m of (kit.instagram ?? '').matchAll(/^\d+\.\s+(.+?)\.\s+Обложка:\s*(.+)$/gm)) out.push({ kind: 'cover', title: m[2]!.trim(), lines: [m[1]!.trim()] });
+    const covers = out.map((f, i) => ({ ...f, index: i + 1, total: out.length }));
+    const title = /^Баннер, заголовок:\s*(.+)$/m.exec(kit.youtube ?? '')?.[1]?.trim();
+    const sub = /^Баннер, строка:\s*(.+)$/m.exec(kit.youtube ?? '')?.[1]?.trim();
+    return [...covers, ...(title ? [{ kind: 'banner' as const, title, lines: sub ? [sub] : [] }] : [])];
   }
   return [];
 }
@@ -123,12 +148,13 @@ export function framesOf(type: ItemType, text: string): Frame[] {
 export async function renderItem(dir: string, itemId: number, type: ItemType, text: string): Promise<string[]> {
   const frames = framesOf(type, text);
   if (frames.length === 0) return [];
-  const out = join(dir, String(itemId));
-  mkdirSync(out, { recursive: true });
   const fonts = loadFonts();
   const files: string[] = [];
   for (const [i, f] of frames.entries()) {
-    const path = join(out, `${i + 1}.png`);
+    // start kit: `profile-<platform>/<itemId>/…`, other items `<itemId>/<n>.png`
+    const out = type === 'profile' ? join(dir, f.kind === 'banner' ? 'profile-youtube' : 'profile-instagram', String(itemId)) : join(dir, String(itemId));
+    mkdirSync(out, { recursive: true });
+    const path = join(out, f.kind === 'banner' ? 'banner.png' : `${i + 1}.png`);
     writeFileSync(path, await renderFrame(f, fonts));
     files.push(path);
   }
