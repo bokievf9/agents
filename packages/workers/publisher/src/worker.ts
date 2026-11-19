@@ -1,8 +1,11 @@
-import { zonedParts } from '@fir/core';
+import { existsSync } from 'node:fs';
+import { errMsg, log, zonedParts } from '@fir/core';
 import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { PLATFORM_LABEL, dayLabel, storeFor, todayReport } from '@fir/worker-content-maker';
-import { assemblePacks, groupByItem, type PublishPack, type RenderLookup, type RenderNote } from './pack.js';
+import { assemblePacks, groupByItem, isVideo, type PublishPack, type RenderLookup, type RenderNote } from './pack.js';
+import type { PlatformPoster } from './poster.js';
 import { PublishStore } from './store.js';
+import { QuotaExceeded } from './youtube.js';
 
 const ymd = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
@@ -16,6 +19,24 @@ export interface PublisherOptions {
   render?: RenderLookup;
   /** Stage 2: why a reel has no video yet. Default: nothing. */
   renderNote?: RenderNote;
+  /** Stage 2: real API posters by platform (YouTube only for now). Without one a platform stays manual. */
+  posters?: PlatformPoster[];
+  /** Tests: does the video file exist. */
+  fileExists?: (path: string) => boolean;
+}
+
+/** What one morning auto-posting run did with one pack. */
+export interface AutoResult {
+  readyId: number;
+  itemId: number;
+  platform: PublishPack['platform'];
+  title: string;
+  /** Set when the pack was posted. */
+  url?: string;
+  /** Set when posting failed (the manual flow shows it). */
+  error?: string;
+  /** The day's quota is spent: manual for the rest. */
+  quota?: boolean;
 }
 
 /**
@@ -33,6 +54,45 @@ export class PublisherWorker implements Worker {
     const today = publishDay(ctx);
     const store = new PublishStore(ctx.db);
     return groupByItem(assemblePacks(ctx, today, this.opts.render, this.opts.renderNote).filter((p) => store.get(p.readyId)?.sentOn !== today));
+  }
+
+  /**
+   * The morning run, before the owner's messages: every approved, due, not yet published pack of a platform that has a
+   * poster and whose MP4 exists is posted (one try per row per day, never retried blindly). Posted rows are marked published
+   * exactly as the owner's button would; a failure leaves the row `ready` with the reason in `pb_posts.error`. Rows without
+   * a file, and other platforms, are untouched.
+   */
+  async autoPublish(ctx: Pick<WorkerCtx, 'db' | 'now' | 'tz'>): Promise<AutoResult[]> {
+    const posters = this.opts.posters ?? [];
+    if (posters.length === 0) return [];
+    const today = publishDay(ctx);
+    const store = new PublishStore(ctx.db);
+    const content = storeFor(ctx);
+    const exists = this.opts.fileExists ?? existsSync;
+    const out: AutoResult[] = [];
+    for (const p of assemblePacks(ctx, today, this.opts.render, this.opts.renderNote)) {
+      const poster = posters.find((x) => x.platform === p.platform);
+      const video = p.files.find(isVideo);
+      if (!poster || !video || !exists(video)) continue;
+      const prev = store.get(p.readyId);
+      if (prev?.publishedAt != null || store.auto(p.readyId).autoOn === today) continue;
+      const base = { readyId: p.readyId, itemId: p.itemId, platform: p.platform, title: p.title };
+      store.markAttempt(p.readyId, p.itemId, p.platform, today);
+      try {
+        const { url } = await poster.post(p);
+        store.setUrl(p.readyId, url);
+        store.markPublished(p.readyId, p.itemId, p.platform, ctx.now());
+        content.markPublished(p.readyId);
+        out.push({ ...base, url });
+      } catch (e) {
+        const quota = e instanceof QuotaExceeded;
+        const error = errMsg(e);
+        store.setError(p.readyId, error);
+        log('warn', 'publisher: auto post failed', { readyId: p.readyId, platform: p.platform, err: error });
+        out.push({ ...base, error, ...(quota ? { quota: true } : {}) });
+      }
+    }
+    return out;
   }
 
   /** The head calls this after a pack message went out. */

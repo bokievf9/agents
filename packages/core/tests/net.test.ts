@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { safeGetJson, type PinnedAddress } from '../src/net.js';
+import { safeGetJson, safePost, type PinnedAddress } from '../src/net.js';
 
 const HOSTS = ['api.trongrid.io', 'toncenter.com'];
 const publicDns = () => Promise.resolve(['104.16.1.1']);
@@ -37,5 +37,39 @@ describe('safeGetJson (allow-listed hosts, pinned public address)', () => {
     expect(await safeGetJson('https://api.trongrid.io/v1', { ...base, fetch: answer('<html>') })).toEqual({ ok: false, status: 200, error: 'invalid_json' });
     const timeout = () => Promise.reject(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }));
     expect(await safeGetJson('https://api.trongrid.io/v1', { ...base, fetch: timeout })).toEqual({ ok: false, status: 0, error: 'timeout' });
+  });
+});
+
+describe('safePost (uploads and token calls)', () => {
+  const H = ['oauth2.googleapis.com', 'www.googleapis.com', 'youtube.googleapis.com'];
+  it('refuses other hosts, http, ports and credentials before any network work', async () => {
+    let calls = 0;
+    const fetch = () => {
+      calls++;
+      return Promise.resolve(new Response('{}'));
+    };
+    for (const u of ['https://evil.example/x', 'http://oauth2.googleapis.com/token', 'https://oauth2.googleapis.com:8443/t', 'https://u:p@www.googleapis.com/x', 'https://www.googleapis.com.evil.example/x', 'nonsense']) {
+      expect(await safePost(u, { allowHosts: H, lookup: publicDns, fetch }), u).toEqual({ ok: false, status: 0, error: 'not_allowed' });
+    }
+    expect(calls).toBe(0);
+  });
+
+  it('blocks private addresses, sends method, body and a 60 s timeout, returns lower-case headers and parsed JSON', async () => {
+    const seen: { url: string; init: RequestInit }[] = [];
+    const fetch = (url: string, init: RequestInit) => {
+      seen.push({ url, init });
+      return Promise.resolve(new Response('{"id":"abc"}', { status: 200, headers: { Location: 'https://www.googleapis.com/up?id=1' } }));
+    };
+    expect(await safePost('https://www.googleapis.com/x', { allowHosts: H, lookup: () => Promise.resolve(['10.0.0.1']), fetch })).toEqual({ ok: false, status: 0, error: 'blocked' });
+    const r = await safePost('https://www.googleapis.com/x', { allowHosts: H, lookup: publicDns, fetch, method: 'PUT', body: new Uint8Array([1, 2]) });
+    expect(r).toEqual({ ok: true, status: 200, body: { id: 'abc' }, headers: expect.objectContaining({ location: 'https://www.googleapis.com/up?id=1' }) });
+    expect(seen[0]!.init.method).toBe('PUT');
+    expect(seen[0]!.init.redirect).toBe('manual');
+    expect(seen[0]!.init.body).toEqual(new Uint8Array([1, 2]));
+  });
+
+  it('a non-JSON or empty answer is body null, a transport failure is status 0', async () => {
+    expect(await safePost('https://www.googleapis.com/x', { allowHosts: H, lookup: publicDns, fetch: () => Promise.resolve(new Response('', { status: 308 })) })).toMatchObject({ ok: true, status: 308, body: null });
+    expect(await safePost('https://www.googleapis.com/x', { allowHosts: H, lookup: publicDns, fetch: () => Promise.reject(new Error('boom')) })).toEqual({ ok: false, status: 0, error: 'network' });
   });
 });

@@ -76,6 +76,10 @@ export interface Config extends BaseConfig {
   /** Optional Marketing sources; each is off without its key. */
   youtubeApiKey: string | undefined;
   youtubeChannelId: string | undefined;
+  /** YouTube auto-posting and owner stats (all optional): the Google Desktop client JSON, the refresh token, the privacy of uploads. */
+  ytOauthClientJson: string | undefined;
+  ytRefreshToken: string | undefined;
+  ytPrivacy: string | undefined;
   trendsRegions: string[];
   gscServiceAccountJson: string | undefined;
   gscSiteUrl: string | undefined;
@@ -172,6 +176,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     knowledgeDir: optional(env, 'KNOWLEDGE_DIR'),
     youtubeApiKey: optional(env, 'YOUTUBE_API_KEY'),
     youtubeChannelId: optional(env, 'YOUTUBE_CHANNEL_ID'),
+    ytOauthClientJson: optional(env, 'YT_OAUTH_CLIENT_JSON'),
+    ytRefreshToken: optional(env, 'YT_REFRESH_TOKEN'),
+    ytPrivacy: optional(env, 'YT_PRIVACY'),
     trendsRegions: (optional(env, 'TRENDS_REGIONS') ?? 'KZ,UZ,RU').split(',').map((r) => r.trim().toUpperCase()).filter((r) => /^[A-Z]{2}$/.test(r)),
     gscServiceAccountJson: optional(env, 'GSC_SERVICE_ACCOUNT_JSON'),
     gscSiteUrl: optional(env, 'GSC_SITE_URL'),

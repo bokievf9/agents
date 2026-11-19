@@ -1,4 +1,4 @@
-import { errMsg, log, migrate, tryJson, zonedParts, type Db } from '@fir/core';
+import { GOOGLE_HOSTS, errMsg, log, migrate, safeGetJson, tryJson, zonedParts, type Db } from '@fir/core';
 import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { z } from 'zod';
 
@@ -20,6 +20,10 @@ export interface AnalystOptions {
   youtubeApiKey?: string | undefined;
   youtubeChannelId?: string | undefined;
   fetch?: FetchFn;
+  /** Owner access (refresh-token flow): channel stats of the channel behind the token and per-video stats of the week's Shorts. */
+  oauth?: { accessToken(): Promise<string> };
+  /** Tests: replaces `safeGetJson` for the OAuth calls. */
+  get?: (url: string, headers: Record<string, string>) => Promise<unknown>;
 }
 
 export interface YtStats {
@@ -60,6 +64,43 @@ export async function fetchYoutubeStats(fetchFn: FetchFn, key: string, channelId
   const s = ((await res.json()) as { items?: { statistics?: { subscriberCount?: string; viewCount?: string; videoCount?: string } }[] }).items?.[0]?.statistics;
   if (!s) throw new Error('YouTube: канал не найден (проверьте YOUTUBE_CHANNEL_ID)');
   return { subscribers: Number(s.subscriberCount ?? 0), views: Number(s.viewCount ?? 0), videos: Number(s.videoCount ?? 0) };
+}
+
+/** The `YouTube` GET with the owner's token (`mine=true`): an https allow-listed call, never the key path. */
+async function oauthGet(opts: AnalystOptions, url: string): Promise<unknown> {
+  const headers = { authorization: `Bearer ${await opts.oauth!.accessToken()}` };
+  if (opts.get) return opts.get(url, headers);
+  const r = await safeGetJson(url, { allowHosts: GOOGLE_HOSTS, headers, timeoutMs: 10_000 });
+  if (!r.ok || r.status !== 200) throw new Error(`YouTube HTTP ${r.ok ? r.status : r.error}`);
+  return r.body;
+}
+
+export async function fetchOwnYoutubeStats(opts: AnalystOptions): Promise<YtStats> {
+  const s = ((await oauthGet(opts, 'https://www.googleapis.com/youtube/v3/channels?part=statistics&mine=true')) as { items?: { statistics?: { subscriberCount?: string; viewCount?: string; videoCount?: string } }[] }).items?.[0]?.statistics;
+  if (!s) throw new Error('YouTube: канал не найден для этого токена');
+  return { subscribers: Number(s.subscriberCount ?? 0), views: Number(s.viewCount ?? 0), videos: Number(s.videoCount ?? 0) };
+}
+
+/** Video ids of the Shorts the Publisher uploaded in the window (from `pb_posts.url`). */
+export function weekVideoIds(db: Db, winFrom: number, winTo: number): string[] {
+  if (!hasTable(db, 'pb_posts') || !hasColumn(db, 'pb_posts', 'url')) return [];
+  const rows = db.prepare("SELECT url FROM pb_posts WHERE platform = 'shorts' AND url IS NOT NULL AND published_at >= ? AND published_at < ?").all(winFrom, winTo) as { url: string }[];
+  return rows.map((r) => /\/shorts\/([\w-]{6,20})/.exec(r.url)?.[1]).filter((x): x is string => !!x);
+}
+
+export async function fetchVideoViews(opts: AnalystOptions, ids: string[]): Promise<number> {
+  let views = 0;
+  for (let i = 0; i < ids.length; i += 50) {
+    const url = `https://www.googleapis.com/youtube/v3/videos?part=statistics&id=${ids.slice(i, i + 50).map(encodeURIComponent).join(',')}`;
+    const items = ((await oauthGet(opts, url)) as { items?: { statistics?: { viewCount?: string } }[] }).items ?? [];
+    views += items.reduce((n, v) => n + Number(v.statistics?.viewCount ?? 0), 0);
+  }
+  return views;
+}
+
+/** «YouTube за неделю: 3 Shorts, 1200 просмотров, 45 подписчиков (+6)». */
+export function youtubeWeekLine(shorts: number, views: number, subs: number, delta: number | null): string {
+  return `YouTube за неделю: ${shorts} Shorts, ${views} просмотров, ${subs} подписчиков${delta === null ? '' : ` (${delta >= 0 ? '+' : ''}${delta})`}`;
 }
 
 /** Everything from the HQ database for the 7 days ending at `to` (inclusive, YYYY-MM-DD, HQ timezone). */
@@ -178,7 +219,15 @@ export class AnalystWorker implements Worker {
     const from = ymd(Date.parse(`${to}T00:00:00Z`) - 6 * DAY);
     let yt: YtStats | null = null;
     let note = '';
-    if (this.opts.youtubeApiKey && this.opts.youtubeChannelId) {
+    if (this.opts.oauth) {
+      try {
+        yt = await fetchOwnYoutubeStats(this.opts);
+      } catch (e) {
+        note = `YouTube: ${errMsg(e)}`;
+        log('warn', 'analyst: youtube (oauth) failed', { err: note });
+      }
+    }
+    if (!yt && this.opts.youtubeApiKey && this.opts.youtubeChannelId) {
       try {
         yt = await fetchYoutubeStats(this.fetchFn, this.opts.youtubeApiKey, this.opts.youtubeChannelId);
       } catch (e) {
@@ -192,7 +241,18 @@ export class AnalystWorker implements Worker {
       .prepare('INSERT INTO an_snapshots (week_end, yt_subscribers, yt_views, yt_videos, numbers, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(week_end) DO UPDATE SET yt_subscribers = excluded.yt_subscribers, yt_views = excluded.yt_views, yt_videos = excluded.yt_videos, numbers = excluded.numbers, created_at = excluded.created_at')
       .run(to, yt?.subscribers ?? null, yt?.views ?? null, yt?.videos ?? null, JSON.stringify(n), ctx.now());
 
-    const text = numbersText(n);
+    let ytLine = '';
+    if (this.opts.oauth && yt) {
+      const p2 = zonedParts(ctx.now(), ctx.tz);
+      const off = Date.UTC(p2.y, p2.mo - 1, p2.d, p2.h, p2.mi) - Math.floor(ctx.now() / 60_000) * 60_000;
+      const ids = weekVideoIds(ctx.db, Date.parse(`${from}T00:00:00Z`) - off, Date.parse(`${to}T00:00:00Z`) + DAY - off);
+      try {
+        ytLine = `\n${youtubeWeekLine(ids.length, ids.length ? await fetchVideoViews(this.opts, ids) : 0, yt.subscribers, n.subscribersDelta)}`;
+      } catch (e) {
+        note = `${note ? `${note}\n` : ''}YouTube: ${errMsg(e)}`;
+      }
+    }
+    const text = numbersText(n) + ytLine;
     const funnel = n.funnel ? `\nВоронка разведчика: ${Object.entries(n.funnel).map(([k, v]) => `${k} ${v}`).join(', ')}.` : '';
     const llm = await tryJson(
       ctx.llm,

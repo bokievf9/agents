@@ -98,6 +98,8 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 и текст, публикует владелец вручную; `/profile` (разовый пакет настройки профиля); `/article [ниша|ии]` и рутина `marketing-article-daily` (ежедневно 07:30 по времени владельца)
 пишут статью дня RU+EN (пн, ср, пт, вс «ИИ для бизнеса», вт, чт, сб ниша); одобренная публикуется самим HQ (публичный `GET /blog`, `docs/public-api.md`), в пакет недели из неё идут карусель и рилс. Telegram-канала нет (владелец отказался).
 
+YouTube Shorts автоматом (2026-11-20, этап 2): при `YT_OAUTH_CLIENT_JSON` + `YT_REFRESH_TOKEN` Публикатор утром сам грузит одобренные Shorts с MP4 (`YouTubePoster`, resumable upload, квота 1600 из 10 000 в `pb_quota`, потолок 9000, одна попытка на строку в сутки, сбой остаётся ручным с причиной в `pb_posts.error`); `YT_PRIVACY=unlisted` для проб; токен один раз через `pnpm --filter hq yt-auth` (в буфер, не на экран); `safePost` в `packages/core/src/net.ts` (https, список хостов, без редиректов); Аналитик добавляет строку «YouTube за неделю». См. `packages/workers/publisher/README.md`.
+
 Видео рилсов (2026-11-19): `packages/renderer` (Remotion + Piper `ru_RU-denis-medium`), сервис `renderer` в `compose.yaml` (1,5 ГБ, без сети, общий том с `hq`),
 очередь `cm_render_jobs` в SQLite HQ, образ `agents-renderer` в CI. Одобренный рилс ставится в очередь, утром Публикатор шлёт MP4; `/render <id>`; `REELS_RENDER=off`
 возвращает путь через `builder`. `packages/clips` (локальный инструмент на Mac) остаётся как есть. Подробно: `packages/renderer/README.md`.

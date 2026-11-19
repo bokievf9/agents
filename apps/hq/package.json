@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "yt-auth": "tsx --conditions=source --env-file-if-exists=.env.local src/yt-auth.ts",
     "import-prospects": "tsx --conditions=source --env-file-if-exists=.env.local src/import-prospects.ts"
   },
   "dependencies": {
