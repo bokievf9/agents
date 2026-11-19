@@ -100,7 +100,7 @@ export const HELP = [
   '/desk: я за столом, всё копится на сайте /admin; /away: я в пути, всё в Telegram',
   '',
   '<b>Ещё</b>',
-  '/costs расходы, /org оргструктура, /pause и /resume &lt;отдел&gt;',
+  '/costs расходы, /org оргструктура, /level уровни доверия (<тип|агент> <0|1>), /pause и /resume &lt;отдел&gt;',
   '/reply &lt;id&gt;, /kp &lt;лид или описание&gt;, /referral, /referrals: продажи',
   '/ticket, /tickets, /client, /clients, /invoice, /invoices, /sub, /onboard, /paid &lt;счёт или id&gt;: сопровождение',
   '/project, /pstatus, /target, /mdone: производство; /doc, /lesson, /kb: документы и знания',
@@ -380,6 +380,8 @@ export class Director {
       }
       case 'org':
         return this.say(this.orgText());
+      case 'level':
+        return this.say(this.levelCommand(arg));
       case 'pause':
       case 'resume': {
         if (!this.hq.departments().includes(dept)) return this.say(`Укажите отдел: ${this.hq.departments().join(', ')}.`);
@@ -976,6 +978,36 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
       return `${dept}: ${money(r?.usd ?? 0)}${limit > 0 ? ` из ${money(limit)}` : ' (без лимита)'}, токенов ${(r?.inputTokens ?? 0) + (r?.outputTokens ?? 0)}`;
     });
     return `Расходы за месяц (токены оценочные, бесплатные модели $0):\n${lines.join('\n') || 'нет данных'}`;
+  }
+
+  /**
+   * `/level` lists the trust levels; `/level <kind|agent> <0|1>` is the owner's own decision and writes the level the core
+   * reads (0: every proposal waits for a button, 1: the agent acts and reports). A kind is changed as given (also a locked
+   * one: that is the way to unlock it); an agent id moves every unlocked kind its department has proposed.
+   */
+  levelCommand(arg: string): string {
+    const q = this.d.queue;
+    const [target, lv] = arg.trim().split(/\s+/);
+    if (!target) {
+      const rows = q.trustTable().map((r) => `${r.kind}: уровень ${r.level}${r.locked ? ' (деньги/цены, замок)' : ''}, подряд ${r.streak}`);
+      return `Уровни доверия (0: жду кнопку, 1: делаю сам и отчитываюсь):\n${rows.join('\n') || 'типов нет'}\nИзменить: /level <тип или агент> <0|1>`;
+    }
+    if (lv !== '0' && lv !== '1') return 'Укажите уровень 0 или 1: /level <тип или агент> <0|1>.';
+    const level = lv === '1' ? 1 : 0;
+    const kinds = q.trustTable();
+    if (kinds.some((k) => k.kind === target)) {
+      q.setLevel(target, level);
+      this.hq.log('owner', 'level_set', 'kind', target, String(level));
+      return level === 0 ? `Тип «${target}» на уровне 0: каждое предложение ждёт вашу кнопку.` : `Тип «${target}» на уровне 1: делаю сам и отчитываюсь. Вернуть: /level ${target} 0`;
+    }
+    const agent = this.hq.agent(target);
+    if (!agent) return `Не знаю «${target}». Типы: ${kinds.map((k) => k.kind).join(', ') || 'нет'}; агенты: /org.`;
+    const used = new Set((this.hq.db.prepare('SELECT DISTINCT kind FROM task_approvals WHERE dept = ?').all(agent.dept) as { kind: string }[]).map((r) => r.kind));
+    const moved = kinds.filter((k) => used.has(k.kind) && !k.locked);
+    for (const k of moved) q.setLevel(k.kind, level);
+    this.hq.upsertAgent({ ...agent, trustLevel: level });
+    this.hq.log('owner', 'level_set', 'agent', target, `${level}: ${moved.map((k) => k.kind).join(',')}`);
+    return `${agent.id}: уровень ${level}${moved.length ? `, типы: ${moved.map((k) => k.kind).join(', ')}` : ' (у отдела пока нет типов, замки цен и денег не трогаю)'}.`;
   }
 
   orgText(): string {

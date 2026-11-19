@@ -84,6 +84,9 @@ export function grammyMessenger(bot: Bot): Messenger {
         ...(buttons ? { reply_markup: inline(buttons) } : {}),
       });
     },
+    async sendDocument(chatId, file, caption) {
+      await bot.api.sendDocument(chatId, new InputFile(file), caption ? { caption: caption.slice(0, 1024) } : {});
+    },
     async sendPhotos(chatId, files, caption) {
       for (let i = 0; i < files.length; i += 10) {
         const chunk = files.slice(i, i + 10);

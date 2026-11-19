@@ -42,7 +42,7 @@ export function seedSupport(hq: Hq, cfg: SupportSeedConfig, readInstructions: (f
     { name: 'support-weekly', cron: '0 20 * * 0', dept: SUPPORT, title: 'Отчёт по расходам за месяц', meta: { action: 'weekly' } },
     { name: 'support-billing', cron: '30 9 * * *', dept: SUPPORT, title: 'Счета, напоминания об оплате, онбординг', meta: { action: 'billing' } },
   ];
-  for (const r of routines) if (!hq.routineByName(r.name)) hq.scheduleRoutine(r);
+  hq.syncRoutines('support', routines);
 }
 
 export interface SupportDeps {

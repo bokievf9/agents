@@ -89,7 +89,7 @@ export function seedSales(hq: Hq, cfg: { instructionsDir: string; salesBudgetUsd
     { name: 'sales-followups', cron: '5 10 * * *', dept: SALES, title: 'Дожимы Разведчика', meta: { action: 'followups' } },
     { name: 'sales-referral-reminders', cron: '30 9 * * *', dept: SALES, title: 'Напоминания по рекомендациям', meta: { action: 'referral_reminders' } },
   ];
-  for (const r of routines) if (!hq.routineByName(r.name)) hq.scheduleRoutine(r);
+  hq.syncRoutines('sales', routines);
 }
 
 /**

@@ -47,10 +47,10 @@ export const DIRECTOR_COMMANDS: BotCommand[] = [
   { command: 'away', description: 'Я в пути: всё в Telegram' },
   { command: 'costs', description: 'Расходы за месяц по отделам' },
   { command: 'org', description: 'Оргструктура и доверие' },
+  { command: 'level', description: '<тип|агент> <0|1>: уровень доверия' },
   { command: 'builders', description: 'Задачи строителям (Claude Code)' },
   { command: 'drill', description: 'Учения: проверить все отделы' },
-  { command: 'reply', description: 'Продажи: <id> ответ бизнеса' },
-  { command: 'kp', description: 'Продажи: КП по лиду или описанию' },
+  { command: 'kp', description: 'Продажи: КП по лиду; /reply ответ бизнеса' },
   { command: 'tickets', description: 'Сопровождение: тикеты, /invoices счета' },
   { command: 'project', description: 'Производство: проект из КП' },
   { command: 'doc', description: 'Бэк-офис: документ клиенту, /kb поиск' },
@@ -144,6 +144,7 @@ export function approvalCardFormat(hq: Hq, editors: Map<string, ApprovalEditor>)
           };
         case 'edited': return { text: `✏️ ${bold('Правка принята, одобрите')} · ${esc(t)}\nНовая карточка ниже.` };
         case 'stale': return { text: 'Устарело: этого предложения больше нет.' };
+        case 'running': return { text: `⏳ ${bold('Выполняется')} · ${esc(t)}` };
       }
     },
   };

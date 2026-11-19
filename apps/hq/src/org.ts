@@ -32,5 +32,5 @@ export function seedOrg(hq: Hq, cfg: Pick<Config, 'instructionsDir' | 'marketing
     { name: 'marketing-article-weekly', cron: '0 10 * * 2', dept: 'marketing', title: 'Статья в блог сайта (ниша без статьи)', meta: { action: 'article' } },
     { name: 'marketing-seo-weekly', cron: '0 11 * * 1', dept: 'marketing', title: 'SEO и AI-SEO проверка сайта', meta: { action: 'seo' } },
   ];
-  for (const r of routines) if (!hq.routineByName(r.name)) hq.scheduleRoutine(r);
+  hq.syncRoutines('marketing', routines);
 }

@@ -22,7 +22,7 @@ export interface CardInfo {
 export interface CardFormat {
   card(info: CardInfo): { text: string; buttons: Button[][] };
   /** The card after the owner's decision (or while waiting for the edit text): no decision buttons left, unless given. */
-  settled(row: ApprovalRow, state: 'executed' | 'rejected' | 'failed' | 'editing' | 'edited' | 'stale'): { text: string; buttons?: Button[][] };
+  settled(row: ApprovalRow, state: 'executed' | 'rejected' | 'failed' | 'editing' | 'edited' | 'stale' | 'running'): { text: string; buttons?: Button[][] };
 }
 
 export interface CardRef {
@@ -51,7 +51,8 @@ export interface KindSpec {
 }
 
 export type Action = 'approve' | 'edit' | 'reject';
-type Status = 'pending' | 'editing' | 'executed' | 'rejected' | 'failed';
+/** `running`: claimed by one decision (approve/reject/auto) and being executed; nobody else may touch it. */
+type Status = 'pending' | 'editing' | 'running' | 'executed' | 'rejected' | 'failed';
 
 export interface ApprovalRow {
   id: number;
@@ -66,7 +67,7 @@ export interface Decision {
   id: number;
   approvalId: number | null;
   kind: string;
-  decision: 'approve' | 'edit' | 'reject' | 'auto';
+  decision: 'approve' | 'edit' | 'reject' | 'auto' | 'auto_failed';
   at: number;
 }
 
@@ -237,6 +238,7 @@ export class ApprovalQueue {
       }
       const answer = await this.handle('approve', row.id, fromId);
       if (answer === 'Одобрено') out.approved++;
+      else if (answer === 'Уже обработано') out.skipped++;
       else out.failed++;
       await this.settleCard(row.id).catch((e) => log('warn', 'card settle failed', { approvalId: row.id, err: errMsg(e) }));
     }
@@ -269,18 +271,28 @@ export class ApprovalQueue {
   }
 
   /**
-   * Level 0: stores the proposal and asks the owner. Level 1: runs it now and journals "auto".
+   * Level 0: stores the proposal and asks the owner. Level 1: runs it now and journals "auto"; when the action fails the
+   * owner is told (a message with the way back to manual approval), never a silent journal row.
    * `summary` is what the owner reads above the buttons (can hold client text: it only goes to the owner).
+   * `onCreated` gets the id as soon as the row exists, before the card is sent: if the send fails the caller still knows
+   * the id and can show the same card later (`showCard`) instead of proposing the same thing twice.
    */
-  async propose(kind: string, payload: Payload, summary: string): Promise<{ id: number; auto: boolean }> {
+  async propose(kind: string, payload: Payload, summary: string, opts: { onCreated?: (id: number) => void } = {}): Promise<{ id: number; auto: boolean; ok?: boolean }> {
     const spec = this.spec(kind);
     if (this.level(kind) === 1) {
-      const id = this.insert(kind, payload, summary, 'pending');
-      await this.run(id, spec, payload);
-      this.journal(id, kind, 'auto');
-      return { id, auto: true };
+      const id = this.insert(kind, payload, summary, 'running');
+      opts.onCreated?.(id);
+      const ok = await this.run(id, spec, payload);
+      this.journal(id, kind, ok ? 'auto' : 'auto_failed');
+      if (!ok) {
+        await this.messenger
+          .send(this.ownerId, `Предложение #${id} (${kind}) выполнилось само (уровень 1), но не сработало: подробности в логе. Вернуть на ручное одобрение: /level ${kind} 0`)
+          .catch((e) => log('warn', 'auto failure notice not sent', { approvalId: id, err: errMsg(e) }));
+      }
+      return { id, auto: true, ok };
     }
     const id = this.insert(kind, payload, summary, 'pending');
+    opts.onCreated?.(id);
     await this.ask(id);
     return { id, auto: false };
   }
@@ -311,6 +323,7 @@ export class ApprovalQueue {
     const spec = this.spec(row.kind);
 
     if (action === 'reject') {
+      if (!this.claim(id)) return 'Уже обработано';
       this.setStatus(id, 'rejected');
       this.bump(row.kind, 'reset');
       this.journal(id, row.kind, 'reject');
@@ -323,7 +336,8 @@ export class ApprovalQueue {
       await this.messenger.send(this.ownerId, `Пришлите новый текст для предложения #${id} одним сообщением.`);
       return 'Жду правку';
     }
-    // approve
+    // approve: claim first (one UPDATE), so a second press or «Одобрить все» running at the same time cannot execute it twice
+    if (!this.claim(id)) return 'Уже обработано';
     if (this.editing === id) this.editing = null;
     const ok = await this.run(id, spec, row.payload);
     if (!ok) {
@@ -375,6 +389,18 @@ export class ApprovalQueue {
       .prepare('INSERT INTO approvals (kind, payload, summary, status, created_at) VALUES (?, ?, ?, ?, ?)')
       .run(kind, JSON.stringify(payload), summary, status, this.now());
     return Number(r.lastInsertRowid);
+  }
+
+  /** Atomically takes a pending (or being edited) proposal for one decision; false when somebody else already did. */
+  private claim(id: number): boolean {
+    return this.db.prepare("UPDATE approvals SET status = 'running', decided_at = ? WHERE id = ? AND status IN ('pending','editing')").run(this.now(), id).changes === 1;
+  }
+
+  /** At process start: a proposal still `running` was cut off mid-execution; whether it happened is unknown, so it is failed and the owner decides. */
+  recoverInterrupted(): number[] {
+    const ids = (this.db.prepare("SELECT id FROM approvals WHERE status = 'running'").all() as { id: number }[]).map((r) => r.id);
+    for (const id of ids) this.setStatus(id, 'failed');
+    return ids;
   }
 
   private setStatus(id: number, status: Status): void {

@@ -28,9 +28,7 @@ export function seedProduction(hq: Hq, cfg: ProductionSeedConfig, readInstructio
   hq.ensureAgent({ id: PM_ID, dept: PRODUCTION, role: 'worker', title: 'Проектный менеджер', bossId: PRODUCTION_HEAD_ID });
   hq.ensureAgent({ id: REVIEWER_ID, dept: PRODUCTION, role: 'worker', title: 'Ревьюер', bossId: PRODUCTION_HEAD_ID });
   hq.ensureAgent({ id: DEPLOYER_ID, dept: PRODUCTION, role: 'worker', title: 'Деплойер', bossId: PRODUCTION_HEAD_ID });
-  if (!hq.routineByName('production-overdue')) {
-    hq.scheduleRoutine({ name: 'production-overdue', cron: '30 10 * * *', dept: PRODUCTION, title: 'Просроченные этапы проектов', meta: { action: 'overdue' } });
-  }
+  hq.syncRoutines('production', [{ name: 'production-overdue', cron: '30 10 * * *', dept: PRODUCTION, title: 'Просроченные этапы проектов', meta: { action: 'overdue' } }]);
 }
 
 export interface ProductionDeps {

@@ -189,6 +189,18 @@ export class OwnerChannel implements Messenger {
     return this.d.inner.sendPhotos(chatId, files, caption);
   }
 
+  /** The reel's MP4 always goes to Telegram too (a video cannot live in the website inbox). Same as `sendPhotos`: delegates to the real messenger. */
+  sendVideo(chatId: number, file: string, caption?: string, buttons?: Button[][]): Promise<void> {
+    if (!this.d.inner.sendVideo) return Promise.reject(new Error('this messenger cannot send video'));
+    return this.d.inner.sendVideo(chatId, file, caption, buttons);
+  }
+
+  /** Backups and other files: straight to Telegram. */
+  sendDocument(chatId: number, file: string, caption?: string): Promise<void> {
+    if (!this.d.inner.sendDocument) return Promise.reject(new Error('this messenger cannot send documents'));
+    return this.d.inner.sendDocument(chatId, file, caption);
+  }
+
   private classify(text: string, buttons?: Button[][]): { kind: InboxKind; approvalId: number | null } {
     for (const row of buttons ?? []) {
       for (const b of row) {

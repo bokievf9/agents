@@ -24,9 +24,11 @@ export function seedBackoffice(hq: Hq, cfg: BackofficeSeedConfig, readInstructio
   });
   hq.ensureAgent({ id: DOCS_ID, dept: BACKOFFICE, role: 'worker', title: 'Документовед', bossId: BACKOFFICE_HEAD_ID });
   hq.ensureAgent({ id: KNOWLEDGE_ID, dept: BACKOFFICE, role: 'worker', title: 'Хранитель знаний', bossId: BACKOFFICE_HEAD_ID });
-  if (!hq.routineByName('backoffice-lessons-weekly')) {
-    hq.scheduleRoutine({ name: 'backoffice-lessons-weekly', cron: '0 19 * * 0', dept: BACKOFFICE, title: 'Обновить knowledge/lessons', meta: { action: 'lessons_export' } });
-  }
+  hq.syncRoutines('backoffice', [
+    { name: 'backoffice-lessons-weekly', cron: '0 19 * * 0', dept: BACKOFFICE, title: 'Обновить knowledge/lessons', meta: { action: 'lessons_export' } },
+    { name: 'backoffice-backup-daily', cron: '30 3 * * *', dept: BACKOFFICE, title: 'Резервная копия баз и отправка владельцу', meta: { action: 'backup' } },
+    { name: 'backoffice-renders-cleanup', cron: '45 3 * * *', dept: BACKOFFICE, title: 'Очистка старых рендеров', meta: { action: 'renders_cleanup' } },
+  ]);
 }
 
 export interface BackofficeDeps {

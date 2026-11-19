@@ -35,10 +35,10 @@ function world(knowledgeDir?: string) {
 }
 
 describe('Back Office head', () => {
-  it('seeds the department and the Sunday 19:00 routine once', () => {
+  it('seeds the department, the Sunday 19:00 routine and the nightly backup and cleanup routines', () => {
     const w = world();
     expect(w.hq.agents('backoffice').map((a) => a.id).sort()).toEqual(['backoffice-head', 'documents', 'knowledge']);
-    expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([['backoffice-lessons-weekly', '0 19 * * 0']]);
+    expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([['backoffice-lessons-weekly', '0 19 * * 0'], ['backoffice-backup-daily', '30 3 * * *'], ['backoffice-renders-cleanup', '45 3 * * *']]);
   });
 
   it('/doc fills the contract template from the project, versions it, locks the level and refuses placeholders', async () => {

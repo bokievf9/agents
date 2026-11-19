@@ -1,4 +1,4 @@
-import { zonedParts, zonedToMs, type ApprovalQueue, type Db, type KindSpec, type Payload } from '@fir/core';
+import { errMsg, zonedParts, zonedToMs, type ApprovalQueue, type Db, type KindSpec, type Payload } from '@fir/core';
 import { SCHEMA } from './schema.js';
 import type {
   Agent, ApprovalState, Creator, Heartbeat, NewRoutine, NewTask, Role, Routine, Task, TaskApproval, TaskEvent, TaskStatus,
@@ -112,6 +112,10 @@ export class Hq {
 
   constructor(readonly db: Db, opts: { now?: () => number; prices?: PriceTable } = {}) {
     db.exec(SCHEMA);
+    // added later: which code block owns a routine (see `syncRoutines`)
+    const rcols = db.prepare('PRAGMA table_info(routines)').all() as { name: string }[];
+    if (!rcols.some((c) => c.name === 'source')) db.exec('ALTER TABLE routines ADD COLUMN source TEXT');
+    if (!rcols.some((c) => c.name === 'edited_by_owner')) db.exec('ALTER TABLE routines ADD COLUMN edited_by_owner INTEGER NOT NULL DEFAULT 0');
     this.now = opts.now ?? Date.now;
     const seed = db.prepare('INSERT OR IGNORE INTO prices (prefix, in_usd, out_usd) VALUES (?, ?, ?)');
     for (const [prefix, p] of Object.entries(DEFAULT_PRICES)) seed.run(prefix, p.in, p.out);
@@ -436,7 +440,7 @@ export class Hq {
     this.log(actor, 'approval_requested', 'task', String(taskId));
     const urgent = this.urgentKinds.has(kind);
     if (urgent || this.q().level(kind) === 1) {
-      await this.askOne(linkId, urgent ? `Срочно, ${t.dept}, задача #${taskId}\n` : '');
+      if (!(await this.askOne(linkId, urgent ? `Срочно, ${t.dept}, задача #${taskId}\n` : ''))) void this.alert(`Одобрение «${kind}» (задача #${taskId}) не отправилось в Telegram, оно уйдёт со следующей пачкой.`);
       this.reconcileApprovals();
     }
     return linkId;
@@ -456,24 +460,49 @@ export class Hq {
     return (this.db.prepare("SELECT * FROM task_approvals WHERE state = 'queued' ORDER BY dept, id").all() as LinkRow[]).map(toLink);
   }
 
-  private async askOne(linkId: number, prefix: string): Promise<void> {
+  /**
+   * Sends one proposal to the owner. The link records the core approval id as soon as the row exists, but is marked `asked`
+   * only after Telegram confirmed the card. When the send failed earlier, the same card is shown again (no second proposal
+   * for the same task). Returns false when the card could not be sent now (it stays `queued` and goes with the next batch).
+   */
+  private async askOne(linkId: number, prefix: string): Promise<boolean> {
     const l = this.approvalLink(linkId)!;
-    const { id } = await this.q().propose(l.kind, l.payload, `${prefix}${l.summary}`);
-    this.db.prepare("UPDATE task_approvals SET approval_id = ?, state = 'asked' WHERE id = ?").run(id, linkId);
+    if (l.state !== 'queued') return true;
+    try {
+      if (l.approvalId !== null) {
+        const row = this.q().get(l.approvalId);
+        // decided meanwhile (e.g. through /approve): reconcile picks it up; otherwise send the existing card again
+        if (row && (row.status === 'pending' || row.status === 'editing')) await this.q().showCard(l.approvalId);
+      } else {
+        const { id } = await this.q().propose(l.kind, l.payload, `${prefix}${l.summary}`, {
+          onCreated: (cid) => void this.db.prepare('UPDATE task_approvals SET approval_id = ? WHERE id = ?').run(cid, linkId),
+        });
+        this.db.prepare('UPDATE task_approvals SET approval_id = ? WHERE id = ?').run(id, linkId);
+      }
+    } catch (e) {
+      this.log('hq', 'approval_send_failed', 'task', String(l.taskId), `${l.kind}: ${errMsg(e).slice(0, 120)}`);
+      return false;
+    }
+    this.db.prepare("UPDATE task_approvals SET state = 'asked' WHERE id = ? AND state = 'queued'").run(linkId);
+    return true;
   }
 
   /**
-   * The owner's batch: every queued proposal of every department goes out as one numbered series
-   * (the core sends each with its buttons). Returns how many were sent.
+   * The owner's batch: every queued proposal of every department goes out as one numbered series (the core sends each with
+   * its buttons, one by one through the Telegram queue). A card that fails (after the retries) does not stop the rest and
+   * leaves no orphan: it stays queued with its row and is sent again next time without a duplicate. Returns how many were sent.
    */
   async releaseApprovals(): Promise<number> {
     const queued = this.queuedApprovals();
+    let sent = 0;
     for (const [i, l] of queued.entries()) {
-      await this.askOne(l.id, `[${i + 1}/${queued.length}] ${l.dept}, задача #${l.taskId}\n`);
+      if (!(await this.askOne(l.id, `[${i + 1}/${queued.length}] ${l.dept}, задача #${l.taskId}\n`))) continue;
+      sent++;
       this.addEvent(l.taskId, 'approval', 'director', `${l.kind}: sent to the owner`);
     }
     this.reconcileApprovals();
-    return queued.length;
+    if (sent < queued.length) void this.alert(`Одобрения: отправлено ${sent} из ${queued.length}, остальные уйдут со следующей пачкой (или /approve).`);
+    return sent;
   }
 
   /** Called for every proposal the owner decided (executed, rejected or failed), e.g. to update a worker's own tables. */
@@ -509,7 +538,17 @@ export class Hq {
   }
 
   // ---- routines ----
+  /**
+   * Creates or replaces a routine by hand (the owner's org import, an edit): it is then marked `edited_by_owner`, and
+   * `syncRoutines` keeps its cron and title from then on.
+   */
   scheduleRoutine(r: NewRoutine): Routine {
+    const out = this.upsertRoutine(r);
+    this.db.prepare('UPDATE routines SET edited_by_owner = 1 WHERE name = ?').run(r.name);
+    return out;
+  }
+
+  private upsertRoutine(r: NewRoutine): Routine {
     this.db
       .prepare(
         `INSERT INTO routines (name, cron, dept, assignee_id, title, body, meta, priority, overlap, enabled)
@@ -534,25 +573,77 @@ export class Hq {
   }
 
   /**
-   * Fires a routine: creates its task (creator `routine`) and wakes the department head. With the `skip` policy
-   * nothing is created while the previous task of the routine is still open. Returns the task or null when skipped.
+   * Makes the routines a block of code defines (`source`: "marketing", "sales"...) the routines of the database: new ones are
+   * created, a changed cron/title/body/meta/priority/overlap is updated, and ones the code no longer defines are disabled
+   * (never deleted: their history stays). Routines of other sources are left alone, and so are routines the owner edited by
+   * hand (`scheduleRoutine`, e.g. an org import: flag `edited_by_owner`). Returns what changed.
+   */
+  syncRoutines(source: string, defs: NewRoutine[]): { created: string[]; updated: string[]; disabled: string[] } {
+    const out = { created: [] as string[], updated: [] as string[], disabled: [] as string[] };
+    this.db.transaction(() => {
+      for (const d of defs) {
+        const cur = this.routineByName(d.name);
+        const edited = cur ? (this.db.prepare('SELECT edited_by_owner e FROM routines WHERE name = ?').get(d.name) as { e: number }).e === 1 : false;
+        const next = { cron: d.cron, dept: d.dept, title: d.title, body: d.body ?? '', meta: d.meta ?? {}, priority: d.priority ?? 0, overlap: d.overlap ?? 'skip', enabled: d.enabled !== false, assigneeId: d.assigneeId ?? null };
+        if (!cur) {
+          this.upsertRoutine(d);
+          out.created.push(d.name);
+        } else if (!edited) {
+          const same = cur.cron === next.cron && cur.dept === next.dept && cur.title === next.title && cur.body === next.body
+            && JSON.stringify(cur.meta) === JSON.stringify(next.meta) && cur.priority === next.priority && cur.overlap === next.overlap
+            && cur.enabled === next.enabled && cur.assigneeId === next.assigneeId;
+          if (!same) {
+            this.upsertRoutine(d);
+            out.updated.push(d.name);
+          }
+        }
+        this.db.prepare('UPDATE routines SET source = ? WHERE name = ?').run(source, d.name);
+      }
+      const names = new Set(defs.map((d) => d.name));
+      const mine = this.db.prepare('SELECT name FROM routines WHERE source = ? AND enabled = 1 AND edited_by_owner = 0').all(source) as { name: string }[];
+      for (const r of mine) {
+        if (names.has(r.name)) continue;
+        this.db.prepare('UPDATE routines SET enabled = 0 WHERE name = ?').run(r.name);
+        out.disabled.push(r.name);
+      }
+    })();
+    if (out.created.length || out.updated.length || out.disabled.length) {
+      this.log('hq', 'routines_synced', 'source', source, `+${out.created.length} ~${out.updated.length} -${out.disabled.length}`);
+    }
+    return out;
+  }
+
+  /**
+   * Fires a routine: creates its task (creator `routine`) and wakes the department head. With the `skip` policy nothing is
+   * created while the previous task of the routine is still moving (inbox, assigned, running, review, approval). A previous
+   * task that ended `blocked` is a failure, not a reason to stop: the routine fires again, the outcome is logged, and after
+   * three skips in a row the owner gets an alert. Returns the task or null when skipped.
    */
   runRoutine(name: string): Task | null {
     const r = this.routineByName(name);
     if (!r || !r.enabled) return null;
+    const skipKey = `routine_skips:${name}`;
+    let prevOutcome = '';
     if (r.overlap === 'skip' && r.lastTaskId !== null) {
       const prev = this.task(r.lastTaskId);
       if (prev && !TERMINAL.includes(prev.status)) {
-        this.log('routine', 'routine_skipped', 'routine', name);
-        return null;
-      }
+        if (prev.status !== 'blocked') {
+          const n = Number(this.setting(skipKey) || '0') + 1;
+          this.setSetting(skipKey, String(n));
+          this.log('routine', 'routine_skipped', 'routine', name, `previous #${prev.id} is ${prev.status}`);
+          if (n === 3) void this.alert(`Рутина «${name}» пропущена 3 раза подряд: прошлая задача #${prev.id} всё ещё ${prev.status}.`);
+          return null;
+        }
+        prevOutcome = `previous #${prev.id} ended blocked`;
+      } else if (prev) prevOutcome = `previous #${prev.id} ${prev.status}`;
     }
+    this.setSetting(skipKey, '0');
     const t = this.createTask({
       title: r.title, body: r.body, dept: r.dept, assigneeId: r.assigneeId, creator: 'routine', priority: r.priority, meta: { ...r.meta, routine: name },
       routineId: r.id,
     });
     this.db.prepare('UPDATE routines SET last_run_at = ?, last_task_id = ? WHERE id = ?').run(this.now(), t.id, r.id);
-    this.log('routine', 'routine_fired', 'routine', name);
+    this.log('routine', 'routine_fired', 'routine', name, prevOutcome || undefined);
     const target = r.assigneeId ?? this.headOf(r.dept)?.id;
     if (target) this.wake(target, 'schedule');
     return t;
@@ -572,8 +663,8 @@ export class Hq {
     return Number(this.db.prepare('INSERT INTO heartbeats (agent_id, reason, due_at, created_at) VALUES (?, ?, ?, ?)').run(agentId, reason, dueAt, this.now()).lastInsertRowid);
   }
 
-  /** Due wake-ups, one per agent (not paused, not in `busy`); they are marked delivered. */
-  claimDueHeartbeats(busy: ReadonlySet<string> = new Set()): Heartbeat[] {
+  /** Due wake-ups, one per agent (not paused, not in `busy`), at most `limit`; they are marked delivered. */
+  claimDueHeartbeats(busy: ReadonlySet<string> = new Set(), limit = Infinity): Heartbeat[] {
     return this.db.transaction(() => {
       const rows = this.db
         .prepare(
@@ -583,6 +674,7 @@ export class Hq {
         .all(this.now()) as { id: number; agent_id: string; reason: string; due_at: number; wakes: number }[];
       const out: Heartbeat[] = [];
       for (const r of rows) {
+        if (out.length >= limit) break;
         if (busy.has(r.agent_id) || out.some((o) => o.agentId === r.agent_id)) continue;
         this.db.prepare("UPDATE heartbeats SET status = 'delivered' WHERE id = ?").run(r.id);
         out.push({ id: r.id, agentId: r.agent_id, reason: r.reason, dueAt: r.due_at, wakes: r.wakes });

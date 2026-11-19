@@ -39,6 +39,8 @@ export interface Messenger {
   sendPhotos?(chatId: number, files: string[], caption?: string): Promise<void>;
   /** A local MP4 as a streamable video (Telegram bots: up to 50 MB), caption up to 1024 characters, optional inline buttons. */
   sendVideo?(chatId: number, file: string, caption?: string, buttons?: Button[][]): Promise<void>;
+  /** A local file as a document (backups; Telegram bots: up to 50 MB). */
+  sendDocument?(chatId: number, file: string, caption?: string): Promise<void>;
 }
 
 const ENTITIES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
@@ -70,6 +72,12 @@ export class MemoryMessenger implements Messenger {
   readonly videos: { chatId: number; file: string; caption?: string; buttons?: Button[][] }[] = [];
   sendVideo(chatId: number, file: string, caption?: string, buttons?: Button[][]): Promise<void> {
     this.videos.push({ chatId, file, ...(caption ? { caption } : {}), ...(buttons ? { buttons } : {}) });
+    return Promise.resolve();
+  }
+  /** Documents sent through `sendDocument`. */
+  readonly documents: { chatId: number; file: string; caption?: string }[] = [];
+  sendDocument(chatId: number, file: string, caption?: string): Promise<void> {
+    this.documents.push({ chatId, file, ...(caption ? { caption } : {}) });
     return Promise.resolve();
   }
   private seq = 0;

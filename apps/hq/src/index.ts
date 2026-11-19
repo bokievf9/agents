@@ -1,6 +1,6 @@
 import { Api } from 'grammy';
 import {
-  ApprovalQueue, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, schedule, setupBotMenu, startPolling, startPricesRefresh,
+  ApprovalQueue, OutboxMessenger, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, schedule, setupBotMenu, startPolling, startPricesRefresh,
 } from '@fir/core';
 import { HeartbeatWorker, Hq, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
@@ -56,7 +56,7 @@ seedBackoffice(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 
 
 const bot = createBot(cfg.botToken);
 // Every message to the owner goes through the channel: inbox always, Telegram only when he is away (presence.ts).
-const telegram = grammyMessenger(bot);
+const telegram = new OutboxMessenger(grammyMessenger(bot));
 const channel: OwnerChannel = new OwnerChannel({
   hq, inner: telegram, ownerId: cfg.ownerId, awayAfterMin: cfg.presenceAwayAfterMin, approvalPending: (id: number): boolean => queue.get(id)?.status === 'pending',
   onCardSent: (id: number, messageId: number) => queue.noteCard(id, cfg.ownerId, messageId),
@@ -64,6 +64,9 @@ const channel: OwnerChannel = new OwnerChannel({
 const messenger = channel;
 const queue: ApprovalQueue = new ApprovalQueue(db, messenger, cfg.ownerId, cfg.trustThreshold);
 hq.attachQueue(queue);
+// A decision cut off mid-execution by a restart is failed (never run twice); the owner decides again.
+const cutOff = queue.recoverInterrupted();
+if (cutOff.length) log('warn', 'approvals interrupted by a restart marked failed', { ids: cutOff });
 const llm = createLlm(cfg.llm);
 
 // Department bots only post into their topic of the HQ group (no polling, no private chats). Without a token, silent.
@@ -231,7 +234,7 @@ bot.on('callback_query:data', async (ctx) => {
   await ctx.answerCallbackQuery({ text: 'Устарело' }).catch(() => undefined);
 });
 
-const botCommands = ['start', 'help', 'status', 'depts', 'tasks', 'approve', 'costs', 'org', 'pause', 'resume', 'reply', 'skip', 'builders', 'builder', 'topics', 'drill', 'retry', 'desk', 'away', ...SUPPORT_COMMANDS, ...director.commands.keys(), 'kp', 'referral', 'referrals'];
+const botCommands = ['start', 'help', 'status', 'depts', 'tasks', 'approve', 'costs', 'org', 'level', 'pause', 'resume', 'reply', 'skip', 'builders', 'builder', 'topics', 'drill', 'retry', 'desk', 'away', ...SUPPORT_COMMANDS, ...director.commands.keys(), 'kp', 'referral', 'referrals'];
 const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
 for (const name of botCommands) {
   bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
