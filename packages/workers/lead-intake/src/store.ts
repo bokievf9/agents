@@ -79,6 +79,8 @@ export class LeadStore {
     if (!cols.some((c) => c.name === 'has_hosting')) db.exec('ALTER TABLE li_leads ADD COLUMN has_hosting INTEGER');
     // the cabinet account this lead belongs to (cab_clients.id), set when the client registers on the site
     if (!cols.some((c) => c.name === 'client_id')) db.exec('ALTER TABLE li_leads ADD COLUMN client_id INTEGER');
+    // a stage the owner set by hand in the workplace («Пульт v3»); the derived stage wins only when it is further along
+    if (!cols.some((c) => c.name === 'stage_override')) db.exec('ALTER TABLE li_leads ADD COLUMN stage_override TEXT');
   }
 
   get(id: number): Lead | undefined {

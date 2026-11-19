@@ -816,6 +816,32 @@ export class MarketingHead implements ApprovalEditor {
     await this.d.messenger.send(this.d.ownerId, `Принял замечание, переделываю статью (задача #${t.id}). Новая версия придёт в одобрения.`);
   }
 
+  /** The owner's remark on an article from the workplace: the same rework as the «Править» text in Telegram. False: the card is not open any more. */
+  async reviseArticle(approvalId: number, remark: string): Promise<boolean> {
+    const row = this.d.queue.get(approvalId);
+    if (!row || row.kind !== ARTICLE_KIND || (row.status !== 'pending' && row.status !== 'editing')) return false;
+    await this.reworkArticle(approvalId, remark);
+    return true;
+  }
+
+  /**
+   * «Собрать заново» from the workplace: a reel is queued for the renderer again (`/render`), a post, carousel or story gets its PNG files drawn again.
+   * `ok: false` carries the reason in `note` (nothing was started).
+   */
+  async rerenderItem(itemId: number): Promise<{ ok: boolean; note: string }> {
+    const item = this.store().item(itemId);
+    if (!item) return { ok: false, note: 'Материал не найден.' };
+    if (item.status !== 'ready') return { ok: false, note: 'Материал ещё не одобрен: картинки и видео собираются после одобрения.' };
+    if (item.type === 'clip') {
+      const note = this.renderCommand(String(itemId));
+      const job = this.renderQueue.latest(itemId);
+      return { ok: job?.status === 'queued' || job?.status === 'running', note };
+    }
+    if (!(this.worker instanceof ContentMakerWorker)) return { ok: false, note: 'Рисование картинок не подключено.' };
+    const files = await this.worker.renderApproved(this.store(), itemId);
+    return files.length ? { ok: true, note: `Картинок: ${files.length}.` } : { ok: false, note: 'Картинки не нарисовались (шрифты или рендер), материал остался текстом.' };
+  }
+
   async consume(text: string): Promise<boolean> {
     const awaitedArticle = this.store().getKv('await_article');
     if (awaitedArticle) {

@@ -31,6 +31,13 @@ CREATE TABLE IF NOT EXISTS web_chat_sessions (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS web_chat_sessions_updated ON web_chat_sessions (updated_at);
+CREATE TABLE IF NOT EXISTS web_chat_owner_replies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS web_chat_owner_replies_session ON web_chat_owner_replies (session_id, id);
 `;
 
 interface Row {
@@ -51,7 +58,23 @@ export class WebSessionStore {
 
   /** Expired sessions (idle for 24 h) are deleted on every access. */
   sweep(): number {
-    return this.db.prepare('DELETE FROM web_chat_sessions WHERE updated_at < ?').run(this.now() - SESSION_TTL).changes;
+    const n = this.db.prepare('DELETE FROM web_chat_sessions WHERE updated_at < ?').run(this.now() - SESSION_TTL).changes;
+    this.db.prepare('DELETE FROM web_chat_owner_replies WHERE session_id NOT IN (SELECT id FROM web_chat_sessions)').run();
+    return n;
+  }
+
+  /** The owner's own text for a visitor (written from the workplace): it waits for the session's next chat answer. False when the session is gone. */
+  queueOwnerReply(sessionId: string, text: string): boolean {
+    if (!this.get(sessionId)) return false;
+    this.db.prepare('INSERT INTO web_chat_owner_replies (session_id, text, at) VALUES (?, ?, ?)').run(sessionId, text.slice(0, 2000), this.now());
+    return true;
+  }
+
+  /** The waiting owner texts of a session, oldest first; they are handed over once. */
+  takeOwnerReplies(sessionId: string): string[] {
+    const rows = this.db.prepare('SELECT id, text FROM web_chat_owner_replies WHERE session_id = ? ORDER BY id').all(sessionId) as { id: number; text: string }[];
+    if (rows.length) this.db.prepare('DELETE FROM web_chat_owner_replies WHERE session_id = ?').run(sessionId);
+    return rows.map((r) => r.text);
   }
 
   get(id: string): WebSession | undefined {

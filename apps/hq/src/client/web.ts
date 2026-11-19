@@ -30,6 +30,8 @@ export interface ChatReply {
   buttons?: WebButton[];
   state: ChatApiState;
   leadCreated?: boolean;
+  /** Texts the owner wrote himself from the workplace to this visitor (a lead answered by hand): shown after the bot's answer, once. */
+  ownerReplies?: string[];
 }
 export type ChatOutcome = { kind: 'ok'; body: ChatReply } | { kind: 'rate_limited' } | { kind: 'unavailable' };
 
@@ -117,7 +119,9 @@ export class WebChatEngine {
       if (this.queues.get(req.sessionId) === settled) this.queues.delete(req.sessionId);
     });
     try {
-      return { kind: 'ok', body: await run };
+      const body = await run;
+      const ownerReplies = this.store.takeOwnerReplies(req.sessionId);
+      return { kind: 'ok', body: ownerReplies.length ? { ...body, ownerReplies } : body };
     } catch (e) {
       // Never an error to the visitor: the scripted «принял, менеджер ответит» goes out and the failure is recorded (the message was accepted)
       log('error', 'web chat failed', { err: errMsg(e) });
@@ -266,7 +270,7 @@ export class WebChatEngine {
     const page = d.page ?? '';
     const pageLine = page ? `\nСтраница: ${page}` : '';
     const ref = this.refs.get(`web:${s.id}`);
-    const base = { name: 'Посетитель веб-чата', contact, estimate: '', locale: lang, slot: '', source: ref ? `ref:${ref}` : 'web', page };
+    const base = { name: 'Посетитель веб-чата', contact, estimate: '', locale: lang, slot: '', source: ref ? `ref:${ref}` : 'web', page, sessionId: s.id };
     // The visitor is told «принято» in every case: when Sales cannot take the request the contact and the words are kept (lost_lead) and the owner is alerted.
     const lose = (reason: string, text: string, e: unknown): void => {
       this.d.onLost?.('chat', `${reason}: ${errMsg(e)}`, { contact, ref: `сессия ${s.id.slice(0, 8)}`, text });

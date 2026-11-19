@@ -3,6 +3,7 @@ import { ProspectStore, STATUSES as PROSPECT_STATUSES, TRANSITIONS as PROSPECT_T
 import { CsStore } from '@fir/worker-customer-support';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
+import { ensureStageColumn, nextActionOf, StageContext } from './lead-stage.js';
 
 /**
  * Owner's CRM panels of the website («Пульт», `/admin/crm/*`): read-mostly views over the tables of the workers.
@@ -58,10 +59,7 @@ const CAB_DOC_KINDS = ['contract', 'kp', 'estimate', 'act', 'offer'];
 /** A Telegram handle as compared everywhere: no `@`, no spaces, lower case. */
 const handleKey = (s: string) => s.trim().replace(/^@/, '').replace(/^https?:\/\/t\.me\//i, '').trim().toLowerCase();
 
-export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks = {}): {
-  handle(method: string, seg: string[], query: URLSearchParams, body: unknown): CrmReply;
-  clients(method: string, seg: string[], query: URLSearchParams, body: unknown): CrmReply;
-} {
+export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks = {}) {
   const has = (t: string) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t) !== undefined;
   const all = <T>(sql: string, ...p: unknown[]) => db.prepare(sql).all(...p) as T[];
   const one = <T>(sql: string, ...p: unknown[]) => db.prepare(sql).get(...p) as T | undefined;
@@ -147,37 +145,42 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
   interface LeadRow {
     id: number; task_id: number; name: string; contact: string; service: string; niche: string; task: string; deadline: string; budget: string;
     origin: string; temperature: string; lang: string; chosen_slot: number | null; price_asked: number; price_approved: number; created_at: number;
+    estimate?: string | null; stage_override?: string | null; client_id?: number | null; slots?: string;
   }
   const leadStatus = (taskId: number) => one<{ status: string }>('SELECT status FROM tasks WHERE id = ?', taskId)?.status ?? null;
+  const leadView = (l: LeadRow, stages: StageContext) => {
+    const stage = stages.stageOf(l);
+    return {
+      id: l.id, kind: 'lead', taskId: l.task_id, status: leadStatus(l.task_id), name: l.name, contact: l.contact, service: l.service, niche: l.niche,
+      task: cap(l.task), deadline: l.deadline, budget: l.budget, source: l.origin, temperature: l.temperature, lang: l.lang,
+      priceAsked: l.price_asked === 1, priceApproved: l.price_approved === 1, createdAt: iso(l.created_at), callAt: iso(l.chosen_slot),
+      stage, nextAction: nextActionOf(stage), note: note('lead', l.id), lostReason: stage === 'lost' ? note('lead_lost', l.id) : '',
+    };
+  };
   function leads(query: URLSearchParams): CrmReply {
     if (!has('li_leads')) return unavailable();
+    ensureStageColumn(db);
     const p = page(query);
     const r = idPage<LeadRow>('li_leads', p, ['name', 'contact', 'service', 'niche', 'origin']);
-    return ok({
-      available: true,
-      items: r.items.map((l) => ({
-        id: l.id, kind: 'lead', taskId: l.task_id, status: leadStatus(l.task_id), name: l.name, contact: l.contact, service: l.service, niche: l.niche,
-        task: cap(l.task), deadline: l.deadline, budget: l.budget, source: l.origin, temperature: l.temperature, lang: l.lang,
-        priceAsked: l.price_asked === 1, priceApproved: l.price_approved === 1, createdAt: iso(l.created_at),
-      })),
-      nextCursor: r.nextCursor,
-    });
+    const stages = StageContext.load(db);
+    return ok({ available: true, items: r.items.map((l) => leadView(l, stages)), nextCursor: r.nextCursor });
   }
 
   // ---- clients: one row per distinct client name across leads, support, projects, invoices and documents ----
   interface Client {
-    key: string; name: string; contact: string; sources: Set<string>; firstTouch: number; lastTouch: number;
+    key: string; name: string; contact: string; sources: Set<string>; firstTouch: number; lastTouch: number; cabId?: number;
     counts: { leads: number; tickets: number; projects: number; invoices: number; documents: number };
   }
   function clients(query: URLSearchParams): CrmReply {
     const p = page(query);
     const map = new Map<string, Client>();
-    const touch = (name: string, contact: string, source: string, at: number, count: keyof Client['counts'] | null) => {
+    const touch = (name: string, contact: string, source: string, at: number, count: keyof Client['counts'] | null, cabId?: number) => {
       const n = name.trim();
       if (!n) return;
       const key = n.toLowerCase();
       const c = map.get(key) ?? { key, name: n, contact: '', sources: new Set<string>(), firstTouch: at, lastTouch: at, counts: { leads: 0, tickets: 0, projects: 0, invoices: 0, documents: 0 } };
       if (!c.contact && contact) c.contact = contact;
+      if (cabId !== undefined && c.cabId === undefined) c.cabId = cabId;
       c.sources.add(source);
       c.firstTouch = Math.min(c.firstTouch, at);
       c.lastTouch = Math.max(c.lastTouch, at);
@@ -190,9 +193,9 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     if (has('pm_projects')) for (const r of all<{ client: string; created_at: number }>('SELECT client, created_at FROM pm_projects')) touch(r.client, '', 'project', r.created_at, 'projects');
     if (has('bl_invoices')) for (const r of all<{ client: string; created_at: number }>('SELECT client, created_at FROM bl_invoices')) touch(r.client, '', 'billing', r.created_at, 'invoices');
     if (has('bo_documents')) for (const r of all<{ client: string; created_at: number }>('SELECT client, created_at FROM bo_documents')) touch(r.client, '', 'documents', r.created_at, 'documents');
-    if (has('cab_clients')) for (const c of all<{ email: string; name: string; created_at: number; last_seen_at: number | null }>('SELECT email, name, created_at, last_seen_at FROM cab_clients')) {
-      touch(c.name || c.email, c.email, 'cabinet', c.created_at, null);
-      touch(c.name || c.email, c.email, 'cabinet', c.last_seen_at ?? c.created_at, null);
+    if (has('cab_clients')) for (const c of all<{ id: number; email: string; name: string; created_at: number; last_seen_at: number | null }>('SELECT id, email, name, created_at, last_seen_at FROM cab_clients')) {
+      touch(c.name || c.email, c.email, 'cabinet', c.created_at, null, c.id);
+      touch(c.name || c.email, c.email, 'cabinet', c.last_seen_at ?? c.created_at, null, c.id);
     }
     let list = [...map.values()];
     if (p.q) {
@@ -210,7 +213,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       available: map.size > 0 || has('li_leads') || has('cs_clients'),
       // anonymous chat sessions carry no name or contact, so they cannot be attributed to a client: only their totals are given
       chats,
-      items: slice.map((c) => ({ name: c.name, contact: c.contact, sources: [...c.sources].sort(), firstTouchAt: iso(c.firstTouch), lastTouchAt: iso(c.lastTouch), counts: c.counts })),
+      items: slice.map((c) => ({ id: c.cabId !== undefined ? String(c.cabId) : `c:${c.key}`, name: c.name, contact: c.contact, sources: [...c.sources].sort(), firstTouchAt: iso(c.firstTouch), lastTouchAt: iso(c.lastTouch), counts: c.counts })),
       nextCursor: start + p.limit < list.length ? start + p.limit : null,
     });
   }
@@ -385,6 +388,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     if (has('li_leads') && !all<{ name: string }>('PRAGMA table_info(li_leads)').some((c) => c.name === 'client_id')) db.exec('ALTER TABLE li_leads ADD COLUMN client_id INTEGER');
   };
   ensureLeadClientId();
+  ensureStageColumn(db);
   interface CabRow { id: number; email: string; name: string; telegram: string; locale: string; supabase_id: string; ref_slug: string | null; created_at: number }
   const cabById = (id: number) => one<CabRow>('SELECT * FROM cab_clients WHERE id = ?', id);
 
@@ -500,9 +504,37 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     return fail(404, 'not_found');
   }
 
+  const whereRows = <R>(table: string, where: string, params: unknown[], order = 'id DESC', limit = 200) =>
+    (has(table) ? all<R>(`SELECT * FROM ${table}${where ? ` WHERE ${where}` : ''} ORDER BY ${order} LIMIT ?`, ...params, limit) : []);
+  /** Row views for the «Пульт v3» routes (`pult.ts`): the same shapes as the panels above, so the two never drift apart. */
+  const views = {
+    has, all, one, note, setNote,
+    stages: (): StageContext => StageContext.load(db),
+    lead: (id: number, stages: StageContext = StageContext.load(db)) => {
+      const r = has('li_leads') ? one<LeadRow>('SELECT * FROM li_leads WHERE id = ?', id) : undefined;
+      return r ? leadView(r, stages) : undefined;
+    },
+    leadsWhere: (where: string, params: unknown[] = []) => {
+      const stages = StageContext.load(db);
+      return whereRows<LeadRow>('li_leads', where, params).map((r) => leadView(r, stages));
+    },
+    project: (id: number) => {
+      const r = has('pm_projects') ? one<ProjRow>('SELECT * FROM pm_projects WHERE id = ?', id) : undefined;
+      return r ? projectView(r) : undefined;
+    },
+    projectsWhere: (where: string, params: unknown[] = []) => whereRows<ProjRow>('pm_projects', where, params).map(projectView),
+    ticketsWhere: (where: string, params: unknown[] = []) => whereRows<TicketRow>('cs_tickets', where, params).map(ticketView),
+    referralsWhere: (where: string, params: unknown[] = []) => whereRows<RefRow>('rf_referrals', where, params).map(refView),
+    docs: () => allDocs(),
+    docView,
+    cabById,
+    handleKey,
+  };
+
   return {
+    views,
     clients: clientsRoute,
-    handle(method, seg, query, body) {
+    handle(method: string, seg: string[], query: URLSearchParams, body: unknown): CrmReply {
       const [panel, idRaw] = seg;
       const id = idRaw !== undefined ? intParam(idRaw) : null;
       if (idRaw !== undefined && id === null) return fail(404, 'not_found');

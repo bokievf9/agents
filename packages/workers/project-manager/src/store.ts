@@ -28,7 +28,7 @@ CREATE INDEX IF NOT EXISTS pm_milestones_project ON pm_milestones (project_id, i
 `;
 
 /** draft: the spec waits for the owner; active: approved, work and deadlines run; done: closed. */
-export type ProjectStatus = 'draft' | 'active' | 'done';
+export type ProjectStatus = 'draft' | 'active' | 'done' | 'paused';
 export type MilestoneKind = 'brief' | 'prototype' | 'delivery' | 'payment';
 export const MILESTONE_KINDS: MilestoneKind[] = ['brief', 'prototype', 'delivery', 'payment'];
 export type Product = 'site' | 'bot' | 'app' | 'automation';
@@ -141,6 +141,11 @@ export class PmStore {
 
   setStatus(id: number, status: ProjectStatus): void {
     this.db.prepare('UPDATE pm_projects SET status = ? WHERE id = ?').run(status, id);
+  }
+
+  /** The owner moves a milestone's date from the workplace. */
+  setDue(id: number, dueAt: number): void {
+    this.db.prepare('UPDATE pm_milestones SET due_at = ? WHERE id = ?').run(dueAt, id);
   }
 
   addMilestone(m: { projectId: number; kind: MilestoneKind; title: string; dueAt: number }): Milestone {

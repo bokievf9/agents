@@ -509,6 +509,19 @@ export class Hq {
     return id;
   }
 
+  /**
+   * The owner decides a proposal that was never sent as a card (queued for the batch, or held for a pack) from the workplace.
+   * Makes its core approval row without a card and returns the id (the caller runs `queue.handle`); the link becomes `asked`.
+   */
+  openQueued(linkId: number): number | null {
+    const l = this.approvalLink(linkId);
+    if (!l || l.state !== 'queued') return null;
+    // a card that failed to send earlier already has its core row: the same one is decided (never a second proposal)
+    const id = l.approvalId ?? this.q().open(l.kind, l.payload, l.summary);
+    this.db.prepare("UPDATE task_approvals SET approval_id = ?, state = 'asked', held = 0 WHERE id = ?").run(id, linkId);
+    return id;
+  }
+
   /** The owner rejects a held proposal through its pack: the link is closed as rejected and the task follows. */
   rejectHeld(linkId: number): boolean {
     const l = this.approvalLink(linkId);

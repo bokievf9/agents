@@ -166,3 +166,63 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 | referrals | `rf_referrals` |
 | reviews | нет таблицы, `available: false` |
 | cabinet | `cab_clients`, `li_leads.client_id`, `cs_tickets` |
+
+# Пульт v3 (2026-11-20)
+
+Новые маршруты для хаба, воронки, клиентов 360, проектов, счетов, контента, цифр и «Компании». Код: `apps/hq/src/pult*.ts`, `apps/hq/src/lead-stage.ts`.
+Тесты: `apps/hq/tests/pult-*.test.ts`. Общее как выше: `x-admin-token`, 401/404, лимит 600/10 минут, `{ ok: true, ... }` / `{ ok: false, error, ... }`, времена ISO UTC, деньги `amountUsd`.
+Каждая запись зовёт тот же код, что Telegram (очередь одобрений, `/paid`, `/mdone`, `/level`, методы рутин), а не копию. Сайт обязан переживать отсутствие любого поля.
+
+## GET /admin/hub
+Одна дешёвая сводка для офиса: по запросу на таблицу, 50 строк входящих, ответ кэшируется на 5 секунд.
+```json
+{ "ok": true, "generatedAt": "...",
+  "departments": { "marketing": { "pending": 2, "approvals": 1, "alerts": 0, "running": 1, "lastActivityAt": "..." }, "sales": {}, "support": {}, "production": {}, "backoffice": {}, "director": {} },
+  "inbox": [ { "id": "approval:91", "at": "...", "dept": "marketing", "kind": "approval|alert|lead|payment|ticket|content|info", "title": "...", "link": "approvals:91" } ] }
+```
+- Всегда все шесть отделов (нули и `lastActivityAt: null`, если пусто). `pending` = задачи отдела в `inbox`, `assigned`, `review`; `running` = в работе; `alerts` = `blocked` (нужен человек); `approvals` = ждущие одобрения отдела (в очереди и отправленные).
+- `inbox` новые первыми, не больше 50. Источники: открытые одобрения (`approval`, карточки контента `content`), последние лиды (`lead`), оплаты (`payment`), открытые обращения (`ticket`), алерты и сводки владельцу (`alert`, `info`).
+- `link` = `<панель>:<id>`: `leads:12`, `invoices:5`, `tickets:4`, `approvals:<id ядра>`, `content:item:77` (для карточки контента), `inbox:<id>` (алерт или сводка без своей панели). `id` строка вида `lead:12`.
+
+## Лиды (воронка)
+`GET /admin/crm/leads` получил в items: `stage`, `nextAction` (строка или `null`), `note`, `lostReason`, `callAt`.
+`stage` ∈ `new|qualified|proposal|contract|paid|project|lost` выводится из данных, колонка `li_leads.stage_override` (nullable) хранит ручной ход:
+- `qualified`: `isQualified` (услуга и бюджет или смета); `proposal`: одобренное КП (`ps_documents`, kind `kp`); `contract`: договор (`bo_documents` типа contract не отклонён по имени клиента, или одобренный договор пресейла); `paid`: оплачен счёт этого лида; `project`: есть запущенный проект лида (`draft`-резерв не считается); `lost`: контакт лида в `lost_leads` (только пока лид на `new`) или вручную.
+- Выведенная стадия побеждает ручную, только когда она дальше по линии; ручная `lost` не прячет оплатившего лида.
+
+`POST /admin/crm/leads/:id` тело `{ "stage"?, "note"?, "lost_reason"? }` (`note` до 2000, `lost_reason` до 500, лишние поля 400) → `{ ok, item }` (строка как в списке). Неизвестный `stage`: 400 `invalid` + `allowed` (список стадий).
+409 `illegal_transition` (`from`, `allowed`) только когда лид уже `paid` или `project`, а просят `new`.
+
+`POST /admin/crm/leads/:id/reply` тело `{ "text" }` (1..2000) → `{ ok, sent: true|false, via: "telegram"|"web"|"none" }`. Владелец пишет сам, одобрение не нужно.
+`telegram`: лид из клиентского бота (чат в `meta.lead.chatId`), отправка через `ClientChannel`; сбой бота даёт `sent: false`, `via: "telegram"`.
+`web`: лид из веб-чата (в задаче лида `meta.lead.sessionId`), текст ждёт в `web_chat_owner_replies` и приходит посетителю **в следующем ответе `/chat`** полем `ownerReplies: string[]` (у веб-чата нет канала наружу). Сессия уже удалена (24 ч): `none`.
+`none`: канала нет, сайт показывает «скопируйте и отправьте вручную». В журнал лида (комментарий задачи и `activity` `lead_reply`) запись попадает всегда, с каналом и признаком доставки.
+
+`POST /admin/crm/leads/:id/call` тело `{ "at": "<ISO>" }` → `{ ok, item }` со слотом созвона в `callAt` (колонка `li_leads.chosen_slot`).
+
+## GET /admin/crm/clients/:id (клиент 360)
+`id` из `GET /admin/crm/clients` (поле `id` добавлено в items): число из `cab_clients` (строкой, `"3"`) или `c:<имя в нижнем регистре>` для клиента без аккаунта (в пути URL-кодировать). Неизвестный 404.
+```json
+{ "ok": true, "client": { "id": "3", "name": "...", "email": "...", "telegram": "...", "cabinet": true, "createdAt": "..." },
+  "leads": [], "projects": [], "invoices": [], "documents": [], "tickets": [], "referrals": [], "touches": [ { "at": "...", "kind": "lead|message|document|invoice|payment|ticket", "title": "...", "link": "leads:12" } ] }
+```
+Строки как в панелях (`leads`, `projects`, `invoices` как в `GET /admin/crm/invoices`, `documents` без счетов, `tickets`, `referrals`), до 50 штук. Клиента определяют лиды с его `client_id`, имя, email и Telegram-ник; `touches` не больше 30, новые первыми.
+
+## Проекты
+`GET /admin/crm/projects/:id` → `{ ok, item, milestones: [ { id, kind, title, dueAt, doneAt } ], tasks: [ { id, title, status, assignee } ], issues: [ { number, title, state, url } ] }`.
+`item` как в списке плюс `note`; `tasks` = задача проекта, задачи этапов и их подзадачи; `issues` = задачи строителям с GitHub-ссылкой (`state` `open|closed`).
+`POST /admin/crm/projects/:id` тело одно из:
+- `{ "action": "complete_milestone", "milestoneId" }`: команда `/mdone` Производства (этап «Сдача» заводит деплой, последний этап закрывает проект), повтор безопасен;
+- `{ "action": "set_deadline", "milestoneId", "dueAt": "<ISO>" }`;
+- `{ "action": "set_status", "status": "draft|active|done|paused" }`. `paused` записывается в `pm_projects.status` как есть (раньше такого статуса не было). Другое значение: 400 `invalid` + `allowed`;
+- `{ "action": "note", "text" }` (1..2000, заметка владельца, ещё комментарий в задаче проекта).
+Ответ `{ ok, item }`. Чужой этап 404, плохое тело 400 `invalid`.
+
+## Счета
+`GET /admin/crm/invoices` (`?status=draft|issued|paid|void`, `?limit=`) → `{ ok, available, statuses, items, nextCursor: null }`, строка
+`{ id, number, client, title, amountUsd, payAmountUsd, status, dueDate, issuedAt, paidAt, paidVia, txId, payUrl, remindedAt, leadId, projectId }` (`title` = «за что», `payUrl` = ссылка страницы оплаты или `null`). Неизвестный статус: 400 `invalid_status` + `allowed`.
+`POST /admin/crm/invoices/:id` тело `{ "action": "remind" | "mark_paid" | "void" }` → `{ ok, item }`:
+- `mark_paid` = `/paid <номер>` (голова Сопровождения отмечает оплату, запускает проект и выплату рекомендателю), повтор безопасен; аннулированный счёт 409 `illegal_transition`;
+- `remind` = текст напоминания Billing (`reminderText`) клиенту через канал его лида (Telegram-бот), иначе текст кладётся владельцу во входящие. В `item` поле `remindedVia: "telegram"|"owner"`, `remindedAt` обновлён (колонка `bl_invoices.reminded_at`). Только для `issued`, иначе 409;
+- `void`: аннулирует, повтор безопасен, оплаченный 409.
+Плохое действие 400 `invalid` + `allowed`.

@@ -3,6 +3,10 @@ import type { Hq, Task } from '@fir/hq';
 import { openBuilderTasks } from './bridge.js';
 import type { Director } from './director.js';
 import { createCrm } from './admin-crm.js';
+import { createPult } from './pult.js';
+import type { BillingWorker } from '@fir/worker-billing';
+import type { ClientChannel } from './client/channel.js';
+import type { MarketingHead } from './heads/marketing.js';
 import { buildOffice } from './office.js';
 import type { OwnerChannel } from './presence.js';
 import { mask } from './progress.js';
@@ -21,6 +25,13 @@ export interface AdminDeps {
   now?: () => number;
   /** The Support head drafts the answer to a cabinet ticket (the row is already stored). Fire and forget. */
   cabinetTicket?: (t: { id: number; name: string; text: string; telegram: string }) => Promise<unknown>;
+  /** «Пульт v3»: Billing (reminder text, pay links), the client bot (replies to Telegram leads), the website chat (replies to web leads). */
+  billing?: BillingWorker;
+  client?: Pick<ClientChannel, 'send'>;
+  webReply?: (sessionId: string, text: string) => boolean;
+  /** «Пульт v3» content calendar: the Marketing head (approve/reject/revise/rerender run its code) and the folder of rendered files (`DATA_DIR/renders`). */
+  marketing?: MarketingHead;
+  rendersDir?: string;
 }
 
 export interface AdminRequest {
@@ -52,6 +63,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
     ...(d.cabinetTicket ? { cabinetTicket: (t) => void d.cabinetTicket!(t).catch((e) => log('warn', 'cabinet ticket flow failed', { err: errMsg(e) })) } : {}),
   });
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));
+  const pult = createPult({ hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply });
 
   const maxTaskId = () => (hq.db.prepare('SELECT COALESCE(MAX(id), 0) m FROM tasks').get() as { m: number }).m;
   const firstOwnerTaskAfter = (id: number): number | undefined =>
@@ -139,6 +151,8 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
     const [a, id, sub] = seg;
     const key = `${method} ${a}${id !== undefined && /^\d+$/.test(id) ? '/:id' : id ? `/${id}` : ''}${sub ? `/${sub}` : ''}`;
     const num = (v: string | undefined) => (v !== undefined && /^\d+$/.test(v) ? Number(v) : null);
+    const v3 = await pult.handle(method, seg, query, req.body);
+    if (v3) return v3;
     if (a === 'crm') return crm.handle(method, seg.slice(1), query, req.body);
     if (a === 'clients') return crm.clients(method, seg.slice(1), query, req.body);
 

@@ -78,6 +78,8 @@ export interface Invoice {
   txId: string | null;
   /** The client's language (the lead's, else ru): the pay link and the page follow it. */
   locale: Locale;
+  /** The last time the owner reminded the client from the workplace («Пульт v3»); null: never. */
+  remindedAt: number | null;
 }
 
 /** An incoming USDT transfer the watcher has seen: matched to an invoice, or kept unmatched (so it is reported once and never reused). */
@@ -143,6 +145,7 @@ interface InvRow {
   subscription_id: number | null; new_project: number; remind3: number; remind0: number; overdue_alerted: number; created_at: number; paid_at: number | null;
   lead_id: number | null; pack_id: number | null; project_id: number | null; total_usd: number | null;
   pay_key: string | null; pay_amount_usd: number | null; issued_at: number | null; paid_via: string | null; tx_id: string | null; locale: string | null;
+  reminded_at: number | null;
 }
 interface PayRow { id: number; tx_id: string; method: string; amount_usd: number; invoice_id: number | null; tx_time: number; seen_at: number }
 
@@ -155,7 +158,7 @@ const toInv = (r: InvRow): Invoice => ({
   overdueAlerted: r.overdue_alerted === 1, createdAt: r.created_at, paidAt: r.paid_at,
   leadId: r.lead_id, packId: r.pack_id, projectId: r.project_id, totalUsd: r.total_usd,
   payKey: r.pay_key, payAmountUsd: r.pay_amount_usd ?? r.amount_usd, issuedAt: r.issued_at,
-  paidVia: r.paid_via === 'usdt_trc20' || r.paid_via === 'usdt_ton' || r.paid_via === 'manual' ? r.paid_via : null, txId: r.tx_id, locale: r.locale === 'en' ? 'en' : 'ru',
+  paidVia: r.paid_via === 'usdt_trc20' || r.paid_via === 'usdt_ton' || r.paid_via === 'manual' ? r.paid_via : null, txId: r.tx_id, locale: r.locale === 'en' ? 'en' : 'ru', remindedAt: r.reminded_at ?? null,
 });
 const toPay = (r: PayRow): Payment => ({ id: r.id, txId: r.tx_id, method: r.method as ChainMethod, amountUsd: r.amount_usd, invoiceId: r.invoice_id, txTime: r.tx_time, seenAt: r.seen_at });
 
@@ -189,6 +192,7 @@ export class BillingStore {
     for (const [c, t] of [['pay_key', 'TEXT'], ['pay_amount_usd', 'REAL'], ['issued_at', 'INTEGER'], ['paid_via', 'TEXT'], ['tx_id', 'TEXT'], ['locale', "TEXT NOT NULL DEFAULT 'ru'"]] as const) {
       if (!cols.some((x) => x.name === c)) db.exec(`ALTER TABLE bl_invoices ADD COLUMN ${c} ${t}`);
     }
+    if (!cols.some((x) => x.name === 'reminded_at')) db.exec('ALTER TABLE bl_invoices ADD COLUMN reminded_at INTEGER');
     db.exec('CREATE UNIQUE INDEX IF NOT EXISTS bl_invoices_pay_key ON bl_invoices (pay_key) WHERE pay_key IS NOT NULL');
     this.backfill();
   }
@@ -356,6 +360,11 @@ export class BillingStore {
     this.db.prepare('UPDATE bl_invoices SET status = ?, paid_at = ? WHERE id = ?').run(status, status === 'paid' ? this.now() : null, id);
     if (status === 'issued') this.db.prepare('UPDATE bl_invoices SET issued_at = COALESCE(issued_at, ?) WHERE id = ?').run(this.now(), id);
     if (status === 'paid') this.db.prepare("UPDATE bl_invoices SET paid_via = COALESCE(paid_via, 'manual') WHERE id = ?").run(id);
+  }
+
+  /** The owner reminded the client from the workplace. */
+  markReminded(id: number): void {
+    this.db.prepare('UPDATE bl_invoices SET reminded_at = ? WHERE id = ?').run(this.now(), id);
   }
 
   setFlag(id: number, flag: 'remind3' | 'remind0' | 'overdue_alerted'): void {
