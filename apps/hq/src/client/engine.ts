@@ -62,8 +62,6 @@ export interface ClientEngineDeps {
   sinks?: ClientSinks;
   /** Plain text to the owner through the Director when the client bot cannot write to him (he never opened it). */
   ownerFallback?: (text: string) => Promise<void>;
-  /** Runs a delayed job (the demo reminder); default `setTimeout` (unref). Tests capture it. */
-  schedule?: (ms: number, job: () => void) => void;
 }
 
 /**
@@ -87,7 +85,6 @@ export class ClientEngine implements ClientChannel {
     this.demo = new DemoSalon(
       d.db, d.now, d.tz,
       { send: (chatId, html, buttons) => this.say(chatId, html, buttons), edit: (chatId, id, html, buttons) => this.edit(chatId, id, html, buttons) },
-      d.schedule ?? ((ms, job) => void setTimeout(job, ms).unref()),
     );
     this.limiter = new RateLimiter(d.perHour ?? 20, d.dailyCap ?? 300, d.now, d.tz, d.counter);
     this.sinks = d.sinks;

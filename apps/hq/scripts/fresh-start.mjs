@@ -4,4 +4,5 @@
 //   docker compose run --rm --no-deps hq node dist/fresh-start.js --i-stopped-hq
 import { main } from '../dist/fresh-start.js';
 
+/* global process */
 process.exit(await main(process.argv.slice(2)));

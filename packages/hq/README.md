@@ -10,13 +10,17 @@
 | `tasks` | задача: статус `inbox → assigned → running → review → approval → done`, плюс `blocked`, `rejected`; `meta` (JSON для исполнителя), `tags` (например `builder`), `parent_id`, `cost_usd` | `createTask`, `assign`, `claim`, `comment`, `setStatus`, `complete`, `block`, `tasks`, `countByStatus` |
 | `task_events` | журнал задачи: статусы, комментарии, результаты, ошибки, отчёты головы (`report`) | `events`, `addEvent`, `reports` |
 | `approvals` (+ `task_approvals`) | очередь одобрений из `@fir/core` (кнопки, правка, уровни доверия) и связь предложения с задачей | `registerKind`, `requestApproval`, `releaseApprovals`, `reconcileApprovals`, `onApprovalDecision` |
-| `routines` | cron, отдел, шаблон задачи, политика «не запускать, пока идёт прошлая» (`overlap: skip`) | `scheduleRoutine`, `runRoutine`, `startRoutines` |
-| `heartbeats` | очередь пробуждений с коалесценцией (одно ожидающее на агента, ближайшее время, причины склеены) | `wake`, `claimDueHeartbeats`, `HeartbeatWorker` (тик 30 с) |
+| `routines` | cron, отдел, шаблон задачи, политика «не запускать, пока идёт прошлая» (`overlap: skip`) | `syncRoutines(source, defs)` (код -> БД: создать, обновить cron/заголовок, отключить убранные; правленные вручную не трогает, флаг `edited_by_owner`), `scheduleRoutine` (ручная правка), `runRoutine`, `startRoutines` |
+| `heartbeats` | очередь пробуждений с коалесценцией (одно ожидающее на агента, ближайшее время, причины склеены) | `wake`, `claimDueHeartbeats`, `HeartbeatWorker` (тик 30 с, каждая голова сама по себе, не больше 3 одновременно: долгая голова не задерживает остальных) |
 | `costs` | usage по задаче, агенту, отделу; лимит отдела в месяц | `recordCost`, `monthSpend`, `overBudget`, `costSummary`, `meterLlm` |
 | `activity` | журнал действий (агент, действие, объект), без текстов клиентов | `log`, `activity` |
 | `settings` | `tz`, `summary_time`, `approval_time`, `quiet_hours` и служебные ключи | `setting`, `setSetting`, `isQuiet` |
 
 ## Правила
+- Рутина с `overlap: skip` пропускается, только пока прошлая задача движется (`inbox/assigned/running/review/approval`). Если прошлая `blocked`, рутина запускается снова (исход прошлой пишется в журнал `routine_fired`); после трёх пропусков подряд владелец получает алерт.
+- Рутины из кода применяются при старте через `syncRoutines`; убранные из кода отключаются, не удаляются.
+- Одобрение отправляется владельцу так: строка `approvals` создаётся и сразу связывается со ссылкой (`approval_id`), `asked` ставится только после подтверждения Telegram. Сбой отправки оставляет `queued` с той же строкой: следующая пачка шлёт ту же карточку, дубля нет. Решение (`handle`) сначала забирает предложение атомарно (`UPDATE ... WHERE status IN ('pending','editing')`), второй вызов получает «Уже обработано».
+- Лимит отдела: алерт на 80% и на 100% (по разу в месяц), на 100% обычные задачи блокируются, срочные (приоритет 2, `urgent` у клиентского бота) идут дальше. Цена по реальной модели из ответа шлюза (`priceFor` в `@fir/core`: свои строки владельца, таблица, `:free`, иначе оценка `UNKNOWN_MODEL_PRICE`).
 - `claim(taskId, agentId)` атомарен: один `UPDATE ... WHERE status IN ('inbox','assigned')`, второй претендент получает `false`.
   Переходы статусов проверяются таблицей (недопустимый переход бросает ошибку).
 - Одобрения: `requestApproval` кладёт предложение в очередь и переводит задачу в `approval`, но **владельцу не пишет**.

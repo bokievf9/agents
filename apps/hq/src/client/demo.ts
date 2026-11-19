@@ -39,6 +39,14 @@ CREATE TABLE IF NOT EXISTS cb_demo (
   picks TEXT NOT NULL DEFAULT '{}',
   created_at INTEGER NOT NULL
 );
+-- the reminder of a booking: a due time in the database, so a restart or a deploy does not lose it (a 30 s ticker sends what is due)
+CREATE TABLE IF NOT EXISTS cb_demo_reminders (
+  chat_id INTEGER NOT NULL,
+  seq INTEGER NOT NULL,
+  lang TEXT NOT NULL,
+  due_at INTEGER NOT NULL,
+  PRIMARY KEY (chat_id, seq)
+);
 `;
 
 const SERVICES: Record<Lang, string[]> = { ru: ['Стрижка', 'Окрашивание', 'Маникюр'], en: ['Haircut', 'Colouring', 'Manicure'] };
@@ -131,8 +139,6 @@ export class DemoSalon {
     private readonly now: () => number,
     private readonly tz: () => string,
     private readonly io: DemoIO,
-    /** Runs `job` after `ms` (setTimeout in production, captured by tests). */
-    private readonly schedule: (ms: number, job: () => void) => void,
   ) {
     migrate(db, SCHEMA);
   }
@@ -250,7 +256,7 @@ export class DemoSalon {
     if (act === 'ok' && row.step === 'confirm') {
       const picks = { ...p, seq: p.seq + 1 };
       const res = await go('booked', picks, l.booked(SERVICES[lang][p.service!]!, MASTERS[lang][p.master!]!, this.when(lang, picks)), this.bookedButtons(lang));
-      this.schedule(REMINDER_DELAY_MS, () => void this.remind(chatId, lang, picks.seq));
+      this.db.prepare('INSERT OR REPLACE INTO cb_demo_reminders (chat_id, seq, lang, due_at) VALUES (?, ?, ?, ?)').run(chatId, picks.seq, lang, this.now() + REMINDER_DELAY_MS);
       return res;
     }
     if (act === 'rs' && row.step === 'booked' && p.master !== undefined) {
@@ -268,7 +274,24 @@ export class DemoSalon {
     return stale;
   }
 
-  /** The scheduled reminder: only while that very booking is still the live one. */
+  /**
+   * Sends the reminders that are due (called by the 30 s ticker and once at start, so a reminder that fell due during a restart
+   * still goes out). A row is taken before sending: a reminder is sent at most once. Returns how many were handled.
+   */
+  async tick(): Promise<number> {
+    const due = this.db.prepare('SELECT chat_id, seq, lang FROM cb_demo_reminders WHERE due_at <= ? ORDER BY due_at').all(this.now()) as { chat_id: number; seq: number; lang: Lang }[];
+    let n = 0;
+    for (const r of due) {
+      if (this.db.prepare('DELETE FROM cb_demo_reminders WHERE chat_id = ? AND seq = ?').run(r.chat_id, r.seq).changes !== 1) continue;
+      n++;
+      await this.remind(r.chat_id, r.lang, r.seq).catch(() => undefined);
+    }
+    // reminders of demos that are long gone
+    this.db.prepare('DELETE FROM cb_demo_reminders WHERE due_at < ?').run(this.now() - DEMO_TTL_MS);
+    return n;
+  }
+
+  /** The reminder itself: only while that very booking is still the live one. */
   async remind(chatId: number, lang: Lang, seq: number): Promise<void> {
     const row = this.get(chatId);
     if (!row || row.picks.seq !== seq || (row.step !== 'booked' && row.step !== 'review' && row.step !== 'reviewed')) return;

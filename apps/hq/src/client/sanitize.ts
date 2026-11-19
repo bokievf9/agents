@@ -160,7 +160,10 @@ export class RateLimiter {
     this.hits.set(chatId, list);
     // every chat or session id stays in the map: sweep the ones that have gone quiet for an hour
     if (this.hits.size > HITS_SWEEP_AT) {
-      for (const [k, v] of this.hits) if ((v.at(-1) ?? 0) <= t - 3600_000) (this.hits.delete(k), this.warned.delete(k));
+      for (const [k, v] of this.hits) if ((v.at(-1) ?? 0) <= t - 3600_000) {
+        this.hits.delete(k);
+        this.warned.delete(k);
+      }
     }
     if (list.length <= this.perHour) {
       this.warned.delete(chatId);

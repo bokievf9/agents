@@ -36,7 +36,6 @@ function world(lang: 'ru' | 'en' = 'ru', audit?: ClientSinks['createAudit']) {
   const clock = { t: NOW };
   const db = openDb(':memory:');
   const transport = new MemoryTransport();
-  const jobs: { ms: number; job: () => void }[] = [];
   const leads: Record<string, unknown>[] = [];
   const sinks: ClientSinks = {
     createLead: (lead) => (leads.push(lead), leads.length),
@@ -47,7 +46,6 @@ function world(lang: 'ru' | 'en' = 'ru', audit?: ClientSinks['createAudit']) {
   };
   const engine = new ClientEngine({
     db, now: () => clock.t, tz: () => 'Asia/Tashkent', transport, llm: new MockLlm(() => 'нет'), ownerId: OWNER, instructions: 'x', sinks,
-    schedule: (ms, job) => void jobs.push({ ms, job }),
   });
   const from: From = { ...ME, langCode: lang };
   /** The live demo message: the last one sent with buttons (the demo edits it in place). */
@@ -55,10 +53,32 @@ function world(lang: 'ru' | 'en' = 'ru', audit?: ClientSinks['createAudit']) {
   const lastHtml = () => transport.edits.filter((e) => e.chatId === CHAT).at(-1)?.html ?? live().html;
   const lastButtons = () => transport.edits.filter((e) => e.chatId === CHAT).at(-1)?.buttons ?? live().buttons!;
   const press = (data: string) => engine.onButton(from, data, live().id);
-  return { clock, db, transport, jobs, leads, engine, from, live, lastHtml, lastButtons, press };
+  /** Reminders still waiting in the database. */
+  const reminders = () => db.prepare('SELECT chat_id, seq, due_at FROM cb_demo_reminders ORDER BY seq').all() as { chat_id: number; seq: number; due_at: number }[];
+  return { clock, db, transport, reminders, leads, engine, from, live, lastHtml, lastButtons, press };
 }
 
 const texts = (b: Button[][]) => b.flat().map((x) => x.text);
+
+describe('demo salon: the reminder survives a restart', () => {
+  it('a booking made before a deploy still gets its reminder from a new process, once', async () => {
+    const w = world();
+    await w.engine.onCommand(w.from, 'start', 'demo_salon');
+    await w.press('dm:s:0');
+    await w.press('dm:m:0');
+    await w.press('dm:d:1');
+    await w.press(`dm:t:${demoSlots(0, 1, NOW, 'Asia/Tashkent')[0]!.replace(':', '')}`);
+    await w.press('dm:ok');
+    // the process dies here; a new one starts on the same database 90 s later (the 30 s ticker had no chance to run)
+    w.clock.t += 90_000;
+    const transport = new MemoryTransport();
+    const restarted = new ClientEngine({ db: w.db, now: () => w.clock.t, tz: () => 'Asia/Tashkent', transport, llm: new MockLlm(() => 'нет'), ownerId: OWNER, instructions: 'x' });
+    expect(await restarted.demo.tick()).toBe(1);
+    expect(transport.sent.at(-1)!.html).toContain('Так клиент получит напоминание за день');
+    expect(await restarted.demo.tick()).toBe(0);
+    expect(w.reminders()).toHaveLength(0);
+  });
+});
 
 describe('demo salon: the state machine', () => {
   it('walks service -> master -> day -> time -> confirm -> reminder -> review -> intake with source demo_salon', async () => {
@@ -92,14 +112,16 @@ describe('demo salon: the state machine', () => {
     expect(w.engine.demo.get(CHAT)).toMatchObject({ step: 'booked' });
     expect(w.lastHtml()).toContain('Вы записаны');
     expect(texts(w.lastButtons())).toEqual(expect.arrayContaining(['Перенести', 'Отменить', 'Оставить отзыв']));
-    expect(w.jobs).toHaveLength(1);
-    expect(w.jobs[0]!.ms).toBe(REMINDER_DELAY_MS);
+    expect(w.reminders()).toHaveLength(1);
+    expect(w.reminders()[0]!.due_at).toBe(NOW + REMINDER_DELAY_MS);
     expect(w.leads).toHaveLength(0);
 
-    // the reminder after 60 seconds, exactly once for this booking
+    // not yet due; after 60 seconds the ticker sends it, exactly once for this booking
     const before = w.transport.sent.length;
-    w.jobs[0]!.job();
-    await new Promise((r) => setTimeout(r, 0));
+    expect(await w.engine.demo.tick()).toBe(0);
+    w.clock.t += REMINDER_DELAY_MS;
+    expect(await w.engine.demo.tick()).toBe(1);
+    expect(await w.engine.demo.tick()).toBe(0);
     expect(w.transport.sent).toHaveLength(before + 1);
     expect(w.transport.sent.at(-1)!.html).toContain('Так клиент получит напоминание за день');
     expect(w.transport.sent.at(-1)!.html).toContain('Демо, записи не настоящие');
@@ -132,17 +154,16 @@ describe('demo salon: the state machine', () => {
     await w.press('dm:d:2');
     await w.press(`dm:t:${demoSlots(1, 2, NOW, 'Asia/Tashkent')[0]!.replace(':', '')}`);
     await w.press('dm:ok');
-    const reminder = w.jobs[0]!.job;
     await w.press('dm:rs');
     expect(w.engine.demo.get(CHAT)).toMatchObject({ step: 'day' });
     const sent = w.transport.sent.length;
-    reminder();
-    await new Promise((r) => setTimeout(r, 0));
+    w.clock.t += REMINDER_DELAY_MS;
+    await w.engine.demo.tick();
     expect(w.transport.sent).toHaveLength(sent); // the first booking is gone, no reminder
     await w.press('dm:d:1');
     await w.press(`dm:t:${demoSlots(1, 1, NOW, 'Asia/Tashkent')[0]!.replace(':', '')}`);
     await w.press('dm:ok');
-    expect(w.jobs).toHaveLength(2);
+    expect(w.reminders()).toHaveLength(1);
     await w.press('dm:cx');
     expect(w.engine.demo.get(CHAT)).toMatchObject({ step: 'cancelled' });
     expect(w.lastHtml()).toContain('Запись отменена');

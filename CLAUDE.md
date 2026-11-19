@@ -111,18 +111,25 @@ LLM в компании ходит не напрямую в Anthropic, а чер
   (верим только с loopback и шлюза docker при верном токене).
 - Аудит: карточка `audit` уходит сразу (`urgent`), алерт через 20 часов, при старте `running` возвращается в `assigned`. Образ OmniRoute закреплён по digest: `docs/omniroute-image.md`.
 
+## Надёжность ядра (2026-11-19, часть A аудита)
+Подробности и команды: `apps/hq/README.md`, раздел «Надёжность ядра». Коротко: головы работают независимо (до 3 одновременно); все отправки в Telegram идут через `OutboxMessenger`
+(пауза 1,1 с, повтор на 429/5xx); одобрение забирается атомарно, карточка считается отправленной только после ответа Telegram; рутины из кода синхронизируются в БД (`Hq.syncRoutines`),
+`blocked` прошлой задачи рутину не останавливает; `/level` пишет уровень доверия; ночной бэкап в Telegram (`BACKUP_AGE_RECIPIENT`) и очистка рендеров старше 14 дней;
+расходы считаются по реальной модели, лимит отдела 80%/100%; шлюз моделей и контейнеры под наблюдением (healthcheck, `hq.heartbeat`, `renderer.heartbeat`);
+чистый старт только скриптом `dist/fresh-start.js` (никогда `sqlite_sequence` и VACUUM под живым HQ; `hq-fresh-start.js` из scratchpad устарел и запрещён).
+
 ## Данные и секреты
 `.env*` и `data/` не коммитятся (в `data/` контакты клиентов). Секреты: `.env.local` (dev), `/opt/fir-agents/.env`
 (сервер, 600). Секреты с `$` в `.env` брать в одинарные кавычки (compose раскрывает `$`).
 
-## Docker и деплой (сервера пока нет)
+## Docker и деплой
 - Сервер: 201.79.122.133 (firtech-sg-1), `/opt/fir-agents`, пользователь `agents` uid 1002. Внешняя docker-сеть `fir-llm`
   (создаёт bootstrap, deploy.sh создаст при отсутствии) общая с Dono: omniroute в `agents-net` и `fir-llm`, Dono ходит на
   `LLM_BASE_URL=http://omniroute:20128`. Данные OmniRoute: `/opt/fir-agents/data/omniroute`. Секреты: `/opt/fir-agents/omniroute.env`
   (JWT_SECRET, API_KEY_SECRET, STORAGE_ENCRYPTION_KEY, STORAGE_ENCRYPTION_KEY_VERSION, MACHINE_ID_SALT, INITIAL_PASSWORD,
   REQUIRE_API_KEY=true), скопированы из локального OmniRoute владельца, чтобы перенести его storage.sqlite.
 - `apps/hq/Dockerfile` собирается из корня репо (`-f apps/hq/Dockerfile .`): не root, `tini`,
-  `pnpm deploy --prod`. На Mac Docker нет, образ локально не собирали, его соберёт CI.
+  `pnpm deploy --prod`, в рантайм-слое `age` и `tar` (бэкап). На Mac Docker нет, образ собирает CI.
 - `compose.yaml` (ставится в `/opt/fir-agents` скриптом bootstrap, root-owned, из CI не принимается):
   - `hq`: `read_only`, `cap_drop ALL`, `no-new-privileges`, 512 МБ, 0.5 CPU, `pids_limit`, логи json-file
     10 МБ x 5, единственный порт `127.0.0.1:8787` (webhook лидов, за nginx позже), `LLM_BASE_URL=http://omniroute:20128`.
@@ -142,4 +149,6 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 - CI (`.github/workflows/ci.yml`): проверки на каждый push и PR, образы в GHCR (`agents-hq`, `agents-polly`) только с `main`,
   деплой-job только при переменной репо `DEPLOY_ENABLED=true`; секреты `AGENTS_SSH_KEY`, `VPS_HOST`,
   `VPS_KNOWN_HOSTS` в Environment `production` (ограничен веткой main). Пока `DEPLOY_ENABLED` не выставлен, деплоя нет.
-- Не пушить без решения владельца: репо на GitHub ещё не создан.
+- Репо `bokievf9/agents` на GitHub, образы собирает CI и деплоит на VPS. Пуш и GitHub-записи делает главное окно владельца после проверок (typecheck, lint, test, build), сессии проектов не пушат.
+- Compose на VPS root-owned: после правки `compose.yaml` (например healthcheck) его должен заново скопировать root (повторный bootstrap или `cp`), с пушем он сам не доезжает.
+- `deploy.sh` чистит висячие образы всех наших меток (`hq`, `renderer`, `polly`).

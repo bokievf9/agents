@@ -58,11 +58,11 @@ x-lead-token: <LEAD_WEBHOOK_TOKEN>
   "uptime30d": { "site": 99.9, "omniroute": 100 }
 }
 ```
-- `services`: всегда четыре записи `site`, `hq`, `bot`, `omniroute` (Polly и Dono не студийные сервисы и не показываются); `state` `up | degraded | down | unknown`;
+- `services`: четыре записи `site`, `hq`, `bot`, `omniroute` плюс пятая `renderer` («Video renderer», `down` не бывает: при сбое `degraded`), только когда рендер рилсов включён и мониторинг его проверяет; клиент должен спокойно принимать неизвестный `id` (Polly и Dono не студийные сервисы и не показываются); `state` `up | degraded | down | unknown`;
   `since` и `note` только у `degraded` и `down` (фиксированные английские фразы). `incidents`: за 30 дней, не больше 20, новые первыми;
   без `endedAt` значит ещё идёт. `uptime30d`: только для сервисов с данными (процент 0..100, одна цифра после запятой).
 - Источник: таблицы `mon_*` мониторинга (`mon_state`, `mon_samples`, `mon_incidents`). `site` = проверки хоста firtech.pro
-  (health URL: `down`; сертификат: `degraded`), `omniroute` = проверка `omniroute`, `hq` = проверки `disk` и `docker` (`degraded`),
+  (health URL: `down`; сертификат: `degraded`), `omniroute` = проверка `omniroute`, `hq` = проверки `disk` и `docker` (`degraded`) и `hq` (healthcheck контейнера или файл сигнала: `down`),
   плюс сам факт ответа HQ: `up`, а если проверки не запускались больше 30 минут, `degraded`. **`bot`** (@firtech_bot): `down`, если поллинг упал или `getMe` не отвечает (две проверки подряд), `degraded`, если 10 минут нет ни сообщений, ни завершённых запросов getUpdates без ошибок поллинга (зависший поллинг); `unknown` пока бот не запущен или выключен. Нет данных мониторинга вообще: `site` и `omniroute` `unknown`.
 - В ответ никогда не попадают URL, порты, токены, id проверок и тексты ошибок. Оговорка: образцы `mon_samples` хранятся 7 дней
   (`prune`), поэтому `uptime30d` считается по доступным образцам, а не за полные 30 дней; инциденты хранятся 30 дней.

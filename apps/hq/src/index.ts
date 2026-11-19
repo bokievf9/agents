@@ -1,6 +1,6 @@
 import { Api } from 'grammy';
 import {
-  ApprovalQueue, GatewayWatch, OutboxMessenger, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, schedule, setupBotMenu, startPolling, startPricesRefresh,
+  ApprovalQueue, GatewayWatch, OutboxMessenger, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, setupBotMenu, startPolling, startPricesRefresh,
 } from '@fir/core';
 import { HeartbeatWorker, Hq, meterLlm, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
@@ -301,7 +301,15 @@ bridge.start();
 director.start();
 support.start();
 drill.start();
-const auditWatchJob = schedule('audit-watch', '*/15 * * * *', hq.tz, async () => void (await marketing.auditWatch()));
+// Due times live in the database, not in timers: the demo-salon reminder (60 s after a booking) and the 20-hour audit alert are
+// found by this 30 s ticker, also right after a start, so a restart or a deploy loses nothing.
+const dueTick = async () => {
+  await clientBot?.engine.demo.tick().catch((e) => log('warn', 'demo reminders failed', { err: errMsg(e) }));
+  await marketing.auditWatch().catch((e) => log('warn', 'audit watch failed', { err: errMsg(e) }));
+};
+void dueTick();
+const dueTimer = setInterval(() => void dueTick(), 30_000);
+dueTimer.unref();
 void topicManager.ensure().then((r) => log('info', 'topics checked', { state: r.state, created: r.created }));
 // Wake every head once at start: tasks that waited while the process was down.
 for (const dept of hq.departments()) {
@@ -363,7 +371,7 @@ const stop = () => {
   director.stop();
   support.stop();
   drill.stop();
-  auditWatchJob.stop();
+  clearInterval(dueTimer);
   routineJobs.forEach((j) => j.stop());
   // Exit fast: a long poll in flight would hold the process (and Telegram's update slot) for up to 30 s, which is the
   // gap the owner sees on every deploy. Once the process is gone Telegram frees the slot for the new container at once.
