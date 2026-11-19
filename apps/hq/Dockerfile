@@ -37,7 +37,9 @@ COPY apps/hq apps/hq
 COPY knowledge knowledge
 RUN pnpm --filter "hq..." build \
     && pnpm --filter hq --prod deploy /out \
-    && node -e "new (require('/out/node_modules/better-sqlite3'))(':memory:').exec('select 1')"
+    && node -e "new (require('/out/node_modules/better-sqlite3'))(':memory:').exec('select 1')" \
+    && test -f /out/node_modules/@fir/core/assets/fonts/onest-latin-400-normal.woff \
+    && test -f /out/node_modules/@fir/core/assets/fonts/onest-cyrillic-700-normal.woff
 
 FROM node:22-bookworm-slim
 LABEL app=hq

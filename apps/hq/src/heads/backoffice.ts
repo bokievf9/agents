@@ -1,4 +1,4 @@
-import { errMsg, log, PLAYBOOK_ROLES, PLAYBOOK_ROLE_RU, loadPlaybook, playbookSection, type PlaybookRole, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
+import { errMsg, log, markdownToPdfDoc, PLAYBOOK_ROLES, PLAYBOOK_ROLE_RU, loadPlaybook, playbookSection, type PlaybookRole, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx } from '@fir/hq';
 import {
   DocStore, DOC_RU, DOC_TYPES, kindSpecs as docKinds, onDecision as onDocDecision, parseDocType, DocumentsWorker, type DocContext,
@@ -80,11 +80,28 @@ export class BackofficeHead {
     const base = { db: d.hq.db, now: d.hq.now };
     for (const [kind, spec] of Object.entries(
       docKinds(base, {
-        deliver: (doc) =>
-          d.messenger.send(d.ownerId, `${DOC_RU[doc.type]}, ${doc.client}, версия ${doc.version}: утверждён. Отправьте клиенту сами:\n\n${doc.text}`),
+        deliver: async (doc) => {
+          await d.messenger.send(d.ownerId, `${DOC_RU[doc.type]}, ${doc.client}, версия ${doc.version}: утверждён. Отправьте клиенту сами:\n\n${doc.text}`);
+          await this.sendPdf(doc);
+        },
       }),
     )) d.hq.registerKind(kind, spec);
     d.hq.onApprovalDecision((link, state) => onDocDecision(base, link, state));
+  }
+
+  /**
+   * The approved document as an A4 PDF (`tools.media.pdf`, Onest), saved under `renders/docs/` and sent to the owner as a file. Best effort:
+   * the text already went out, a PDF that cannot be made is only logged (no files folder in tests, no fonts, a Telegram error).
+   */
+  private async sendPdf(doc: { id: number; type: string; client: string; version: number; text: string }): Promise<void> {
+    const tools = toolsFor(this.hq, this.d.tools, { agentId: DOCS_ID, dept: BACKOFFICE, messenger: this.d.messenger, ownerId: this.d.ownerId });
+    if (!tools.can('files.put') || !tools.can('media.pdf') || !tools.can('telegram.sendDocument')) return;
+    const pdf = await tools.media.pdf(markdownToPdfDoc(doc.text, { footer: 'Fir Tech · firtech.pro' }));
+    if (!pdf.ok) return void log('warn', 'document pdf not rendered', { doc: doc.id, err: pdf.error });
+    const file = await tools.files.put('docs', `${doc.type}-${doc.id}-v${doc.version}.pdf`, pdf.value.bytes);
+    if (!file.ok) return void log('warn', 'document pdf not saved', { doc: doc.id, err: file.error });
+    const sent = await tools.telegram.sendDocument(file.value.path, `${DOC_RU[doc.type as keyof typeof DOC_RU] ?? 'Документ'}, ${doc.client}, версия ${doc.version} (PDF)`);
+    if (!sent.ok) log('warn', 'document pdf not sent', { doc: doc.id, err: sent.error });
   }
 
   private get hq(): Hq {

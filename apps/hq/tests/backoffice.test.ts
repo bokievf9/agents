@@ -2,20 +2,21 @@ import { ApprovalQueue, MemoryMessenger, MockLlm, openDb } from '@fir/core';
 import { Hq } from '@fir/hq';
 import { KbStore } from '@fir/worker-knowledge';
 import { PmStore } from '@fir/worker-project-manager';
-import { mkdtempSync, mkdirSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Director } from '../src/director.js';
 import { BackofficeHead, seedBackoffice } from '../src/heads/backoffice.js';
 import { Reporter } from '../src/reporter.js';
+import type { AppTools } from '../src/tools.js';
 
 const OWNER = 100;
 const T0 = Date.UTC(2026, 10, 18, 7, 0);
 
 interface DocRow { type: string; client: string; version: number; text: string; status: string; project_id: number | null }
 
-function world(knowledgeDir?: string) {
+function world(knowledgeDir?: string, tools?: AppTools) {
   const clock = { t: T0 };
   const db = openDb(':memory:');
   const messenger = new MemoryMessenger();
@@ -27,7 +28,7 @@ function world(knowledgeDir?: string) {
   const llm = new MockLlm(() => '');
   const reporter = new Reporter(undefined, {}, new Map());
   const director = new Director({ hq, llm, messenger, queue, ownerId: OWNER, reporter });
-  const head = new BackofficeHead({ hq, llm, queue, messenger, ownerId: OWNER, reporter, knowledgeDir });
+  const head = new BackofficeHead({ hq, llm, queue, messenger, ownerId: OWNER, reporter, knowledgeDir, ...(tools ? { tools } : {}) });
   for (const n of ['doc', 'lesson', 'kb']) director.commands.set(n, { dept: 'backoffice', run: (a) => head.command(n, a) });
   director.summaryLines.push(() => head.pendingLine());
   const docs = () => db.prepare('SELECT * FROM bo_documents ORDER BY id').all() as DocRow[];
@@ -84,6 +85,23 @@ describe('Back Office head', () => {
     expect(w.messenger.last()!.text).toContain('Отправьте клиенту сами');
     expect(w.messenger.last()!.text).toContain('готовый текст');
     expect(w.docs()[0]!.status).toBe('approved');
+  });
+
+  it('with the toolbox set up the approved document also comes as an A4 PDF (tools.media.pdf, saved under renders/docs)', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'bo-pdf-'));
+    const w = world(undefined, { config: { dataDir } });
+    await w.director.onCommand('doc', 'политика');
+    await w.head.onHeartbeat();
+    await w.hq.releaseApprovals();
+    await w.queue.handle('edit', w.queue.pending()[0]!.id, OWNER);
+    await w.queue.submitEdit(OWNER, '# Политика конфиденциальности\n\n## Какие данные\n- имя\n- контакт\n\nХраним не дольше года.');
+    await w.queue.handle('approve', w.queue.pending()[0]!.id, OWNER);
+    expect(w.messenger.documents).toHaveLength(1);
+    const doc = w.messenger.documents[0]!;
+    expect(doc.file).toBe(join(realpathSync(dataDir), 'renders', 'docs', 'privacy-1-v1.pdf'));
+    expect(doc.caption).toContain('Политика конфиденциальности');
+    expect(readFileSync(doc.file).subarray(0, 5).toString()).toBe('%PDF-');
+    expect(w.db.prepare("SELECT COUNT(*) n FROM activity WHERE agent_id = 'documents' AND action LIKE 'tool:%'").get()).toEqual({ n: 3 }); // pdf, put, sendDocument
   });
 
   it('every template type fills without leftover {{ }}; offer and policy need no client, the act does', async () => {
