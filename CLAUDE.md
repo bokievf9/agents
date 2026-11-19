@@ -59,6 +59,12 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 Не раздувай выжимку: тест держит потолок. Рилс до одобрения проходит `lintReelScript` в `review()` головы маркетинга (хук, один призыв, без штампов ИИ). `/playbook <роль>` присылает владельцу правила.
 Правки плейбуков только коммитом, без секретов и клиентских данных.
 
+## Заявки из кабинета (2026-11-20)
+Заявки с сайта шлют только вошедшие в кабинет клиенты: `POST /lead` с `clientEmail`/`cabinetId`/`clientName` создаёт или обновляет `cab_clients` и сразу привязывает лид (`li_leads.client_id`, «Кабинет: да» в карточке),
+`GET /admin/clients/by-email` отдаёт `leads` (этап Пульта, `nextStep`, `timeline` из `ps_documents`/`bo_documents`/`bl_invoices`/`pm_projects`/`activity`, `replies` из `cab_messages`).
+Сообщение клиента `POST /admin/clients/:id/leads/:leadId/messages` создаёт тикет Поддержки (`cs_tickets.lead_id`), одобренный ответ дописывается в тред; ответы владельца и головы продаж по лиду с кабинетом
+тоже пишутся в `cab_messages` (`apps/hq/src/cabinet.ts`). Контракт: `docs/admin-crm-api.md`.
+
 ## Как добавить нового агента («новая голова»)
 1. `apps/<имя>/`: `package.json` (зависимость `"@fir/core": "workspace:*"`, скрипты как у `lead-intake`),
    `tsconfig.json` (`customConditions: ["source"]`), `tsconfig.build.json`, `vitest.config.ts` (как у `lead-intake`),

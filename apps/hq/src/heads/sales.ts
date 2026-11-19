@@ -19,6 +19,7 @@ import {
   isDirectionId, type DirectionId,
 } from '@fir/worker-presales';
 import { z } from 'zod';
+import { recordManagerReply } from '../cabinet.js';
 import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
 import type { ApprovalEditor } from '../editor.js';
 import type { LostLeads } from '../lost-leads.js';
@@ -250,6 +251,8 @@ export class SalesHead implements ApprovalEditor {
 
   /** The approved reply to a lead: into the client's bot chat when the lead came from there, else to the owner to send himself. */
   private async deliver(x: Delivery): Promise<void> {
+    // a cabinet client reads the approved answer in the lead's thread as well (no-op for leads without a cabinet)
+    if (Number.isInteger(x.leadId)) recordManagerReply(this.hq.db, this.hq.now(), x.leadId, x.text);
     await deliverOrHandOff({
       client: this.d.client, messenger: this.d.messenger, ownerId: this.d.ownerId, chatId: x.chatId, text: x.text, ref: `Лид #${x.leadId}`, contact: x.contact,
       ownerText: `Лид #${x.leadId}: ответ утверждён, отправьте клиенту ${x.contact}${x.name ? ` (${x.name})` : ''}:\n\n${x.text}`,

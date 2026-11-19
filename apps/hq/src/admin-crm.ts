@@ -1,9 +1,11 @@
 import type { Db } from '@fir/core';
 import { ProspectStore, STATUSES as PROSPECT_STATUSES, TRANSITIONS as PROSPECT_TRANSITIONS, type Status as ProspectStatus } from '@fir/worker-prospector';
 import { CsStore } from '@fir/worker-customer-support';
+import { builderTotal } from '@fir/worker-presales';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { ensureStageColumn, nextActionOf, StageContext } from './lead-stage.js';
+import { addCabMessage, ensureCabinetTables, MESSAGE_CAP, nextStepOf, stageMoveTitle, timelineTitle } from './cabinet.js';
+import { ensureStageColumn, nextActionOf, StageContext, type Stage } from './lead-stage.js';
 
 /**
  * Owner's CRM panels of the website («Пульт», `/admin/crm/*`): read-mostly views over the tables of the workers.
@@ -40,7 +42,9 @@ export interface CrmHooks {
   /** A short non-blocking line for the owner (inbox, Telegram digest when away). */
   notifyOwner?: (text: string) => void;
   /** A cabinet ticket was stored: the Support head drafts the answer (fire and forget). */
-  cabinetTicket?: (t: { id: number; name: string; text: string; telegram: string }) => void;
+  cabinetTicket?: (t: { id: number; name: string; text: string; telegram: string; leadId?: number }) => void;
+  /** A line for the Sales head's journal of a lead's task (a cabinet client wrote about the lead). */
+  leadJournal?: (taskId: number, text: string) => void;
 }
 
 const clientPost = z.object({
@@ -52,6 +56,9 @@ const clientPost = z.object({
   marketingConsent: z.boolean().default(false),
 });
 const ticketCreate = z.object({ text: z.string().trim().min(1).max(1000) });
+const leadMessage = z.object({ text: z.string().trim().min(1).max(MESSAGE_CAP) });
+const CAB_LEADS_CAP = 20;
+const STAGE_SET = new Set<string>(['new', 'qualified', 'proposal', 'contract', 'paid', 'project', 'lost']);
 const emailParam = z.string().trim().toLowerCase().max(254).email();
 const CAB_LIST_CAP = 50;
 const CAB_TICKETS_PER_HOUR = 10;
@@ -154,7 +161,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       id: l.id, kind: 'lead', taskId: l.task_id, status: leadStatus(l.task_id), name: l.name, contact: l.contact, service: l.service, niche: l.niche,
       task: cap(l.task), deadline: l.deadline, budget: l.budget, source: l.origin, temperature: l.temperature, lang: l.lang,
       priceAsked: l.price_asked === 1, priceApproved: l.price_approved === 1, createdAt: iso(l.created_at), callAt: iso(l.chosen_slot),
-      stage, nextAction: nextActionOf(stage), note: note('lead', l.id), lostReason: stage === 'lost' ? note('lead_lost', l.id) : '',
+      cabinet: l.client_id != null, stage, nextAction: nextActionOf(stage), note: note('lead', l.id), lostReason: stage === 'lost' ? note('lead_lost', l.id) : '',
     };
   };
   function leads(query: URLSearchParams): CrmReply {
@@ -370,20 +377,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
   }
 
   // ---- client cabinet (`/admin/clients/*`): accounts made on the site, scoped views of their own rows ----
-  db.exec(`CREATE TABLE IF NOT EXISTS cab_clients (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL DEFAULT '',
-    telegram TEXT NOT NULL DEFAULT '',
-    locale TEXT NOT NULL DEFAULT 'ru',
-    supabase_id TEXT NOT NULL DEFAULT '',
-    marketing_consent INTEGER NOT NULL DEFAULT 0,
-    ref_slug TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    last_seen_at INTEGER
-  )`);
-  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS cab_clients_slug ON cab_clients (ref_slug)');
+  ensureCabinetTables(db);
   const ensureLeadClientId = () => {
     if (has('li_leads') && !all<{ name: string }>('PRAGMA table_info(li_leads)').some((c) => c.name === 'client_id')) db.exec('ALTER TABLE li_leads ADD COLUMN client_id INTEGER');
   };
@@ -470,6 +464,61 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     return ok({
       client: { id: c.id, name: c.name, email: c.email, telegram: c.telegram, createdAt: iso(c.created_at) },
       projects: projectsOut, invoices, documents: documentsOut, tickets: ticketsOut, referrals: referralsOut, referralSlug: slug,
+      leads: cabinetLeads(c.id),
+    });
+  }
+
+  /**
+   * What the client sees of each of their leads: the stage in plain words, a timeline made of what already exists in the other tables
+   * (no internal texts, no prompts) and the thread of messages. Newest lead first, at most CAB_LEADS_CAP.
+   */
+  function cabinetLeads(clientId: number) {
+    if (!has('li_leads')) return [];
+    const rows = all<LeadRow & { has_domain?: number | null; has_hosting?: number | null }>('SELECT * FROM li_leads WHERE client_id = ? ORDER BY id DESC LIMIT ?', clientId, CAB_LEADS_CAP);
+    if (!rows.length) return [];
+    const stages = StageContext.load(db);
+    const hasCol = (t: string, col: string) => has(t) && all<{ name: string }>(`PRAGMA table_info(${t})`).some((x) => x.name === col);
+    const moves = has('activity') ? all<{ object_id: string; detail: string; at: number }>("SELECT object_id, detail, at FROM activity WHERE action = 'lead_stage' AND object_type = 'lead' ORDER BY id") : [];
+    return rows.map((l) => {
+      const stage = stages.stageOf(l);
+      const lang = l.lang;
+      const events: { at: number; kind: string; title: string }[] = [{ at: l.created_at, kind: 'lead', title: timelineTitle('lead', lang) }];
+      const replies = all<{ from: string; text: string; at: number }>('SELECT "from", text, at FROM cab_messages WHERE lead_id = ? AND client_id = ? ORDER BY at, id', l.id, clientId);
+      const firstManager = replies.find((r) => r.from === 'manager');
+      if (firstManager) events.push({ at: firstManager.at, kind: 'reply', title: timelineTitle('reply', lang) });
+      if (has('ps_documents')) {
+        for (const d of all<{ kind: string; created_at: number; decided_at: number | null }>("SELECT kind, created_at, decided_at FROM ps_documents WHERE lead_id = ? AND status = 'approved' AND kind IN ('kp', 'contract') ORDER BY id", l.id)) {
+          events.push({ at: d.decided_at ?? d.created_at, kind: d.kind, title: timelineTitle(d.kind === 'kp' ? 'kp' : 'contract', lang) });
+        }
+      }
+      if (has('bo_documents') && !events.some((e) => e.kind === 'contract')) {
+        // compared in JS: SQLite lower() does not fold Cyrillic
+        const d = all<{ client: string; created_at: number }>("SELECT client, created_at FROM bo_documents WHERE type = 'contract' AND status != 'rejected' ORDER BY id").find((x) => x.client.trim().toLowerCase() === l.name.trim().toLowerCase());
+        if (d) events.push({ at: d.created_at, kind: 'contract', title: timelineTitle('contract', lang) });
+      }
+      let invoiceTotal: number | null = null;
+      if (hasCol('bl_invoices', 'lead_id')) {
+        for (const i of all<{ status: string; created_at: number; paid_at: number | null; total_usd?: number | null }>("SELECT * FROM bl_invoices WHERE lead_id = ? AND status IN ('issued', 'paid') ORDER BY id", l.id)) {
+          events.push({ at: i.created_at, kind: 'invoice', title: timelineTitle('invoice', lang) });
+          if (i.status === 'paid') events.push({ at: i.paid_at ?? i.created_at, kind: 'paid', title: timelineTitle('paid', lang) });
+          if (invoiceTotal === null && i.total_usd) invoiceTotal = i.total_usd;
+        }
+      }
+      if (hasCol('pm_projects', 'lead_id')) {
+        const p = one<{ created_at: number }>("SELECT created_at FROM pm_projects WHERE lead_id = ? AND status != 'draft' ORDER BY id LIMIT 1", l.id);
+        if (p) events.push({ at: p.created_at, kind: 'project', title: timelineTitle('project', lang) });
+      }
+      for (const m of moves) if (m.object_id === String(l.id) && STAGE_SET.has(m.detail)) events.push({ at: m.at, kind: 'stage', title: stageMoveTitle(m.detail as Stage, lang) });
+      events.sort((a, b) => a.at - b.at);
+      return {
+        id: l.id, createdAt: iso(l.created_at), service: l.service,
+        summary: (l.task || (l.estimate ?? '').split('\n')[0] || '').trim().slice(0, 200),
+        estimateUsd: invoiceTotal ?? builderTotal(l.estimate ?? ''),
+        hasDomain: l.has_domain == null ? null : l.has_domain === 1, hasHosting: l.has_hosting == null ? null : l.has_hosting === 1,
+        stage, nextStep: nextStepOf(stage, lang),
+        timeline: events.map((e) => ({ at: iso(e.at), kind: e.kind, title: e.title })),
+        replies: replies.map((r) => ({ at: iso(r.at), text: r.text, from: r.from })),
+      };
     });
   }
 
@@ -497,9 +546,32 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     return ok({ item: { id: tk.id, text: tk.text, status: tk.status, createdAt: iso(tk.createdAt), answeredAt: iso(tk.answeredAt), answer: tk.answer } });
   }
 
+  /** `POST /admin/clients/:id/leads/:leadId/messages`: the client writes about their own lead; it becomes a Support ticket (draft through approvals). */
+  function leadMessageCreate(id: number, leadId: number, body: unknown): CrmReply {
+    const c = cabById(id);
+    if (!c) return fail(404, 'not_found');
+    const lead = has('li_leads') ? one<{ id: number; task_id: number; client_id: number | null }>('SELECT id, task_id, client_id FROM li_leads WHERE id = ?', leadId) : undefined;
+    // someone else's lead looks exactly like a missing one
+    if (!lead || lead.client_id !== c.id) return fail(404, 'not_found');
+    const parsed = leadMessage.safeParse(body ?? {});
+    if (!parsed.success) return fail(400, 'invalid');
+    const since = now() - 3_600_000;
+    const sentMessages = one<{ n: number }>('SELECT COUNT(*) n FROM cab_messages WHERE client_id = ? AND "from" = \'client\' AND at > ?', c.id, since)?.n ?? 0;
+    const sentTickets = one<{ n: number }>("SELECT COUNT(*) n FROM cs_tickets WHERE source = 'cabinet' AND lower(contact) = ? AND created_at > ?", c.email, since)?.n ?? 0;
+    if (sentMessages >= CAB_TICKETS_PER_HOUR || sentTickets >= CAB_TICKETS_PER_HOUR) return fail(429, 'rate_limited');
+    const text = parsed.data.text;
+    const tk = new CsStore(db, now).addCabinetTicket({ clientName: c.name || c.email, contact: c.email, text, leadId });
+    addCabMessage(db, now(), { clientId: c.id, leadId, from: 'client', text, ticketId: tk.id });
+    hooks.leadJournal?.(lead.task_id, `Сообщение клиента из кабинета по лиду #${leadId}: ${text.slice(0, 300)}`);
+    hooks.notifyOwner?.(`Сообщение по заявке #${leadId} от ${c.name || c.email}`);
+    hooks.cabinetTicket?.({ id: tk.id, name: tk.clientName, text: tk.text, telegram: c.telegram, leadId });
+    return ok({ item: { at: iso(now()), text, from: 'client', leadId, ticketId: tk.id } });
+  }
+
   function clientsRoute(method: string, seg: string[], query: URLSearchParams, body: unknown): CrmReply {
     if (method === 'POST' && seg.length === 0) return clientCreate(body);
     if (method === 'GET' && seg.length === 1 && seg[0] === 'by-email') return clientByEmail(query);
+    if (method === 'POST' && seg.length === 4 && seg[1] === 'leads' && seg[3] === 'messages' && /^\d+$/.test(seg[0]!) && /^\d+$/.test(seg[2]!)) return leadMessageCreate(Number(seg[0]), Number(seg[2]), body);
     if (method === 'POST' && seg.length === 2 && seg[1] === 'tickets' && /^\d+$/.test(seg[0]!)) return clientTicketCreate(Number(seg[0]), body);
     return fail(404, 'not_found');
   }

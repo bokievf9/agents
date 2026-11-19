@@ -15,7 +15,8 @@ import { chatSchema, type ChatOutcome, type ChatRequest } from './client/web.js'
 /** Same fields as the firtech.pro form (`../firtech/src/lib/lead.ts` leadSchema); `estimate` is the builder's leadSummary. */
 export const webLeadSchema = z.object({
   name: z.string().trim().min(1).max(80),
-  contact: z.string().trim().min(3).max(120),
+  /** At least 3 characters, unless the lead comes from a signed-in cabinet (`clientEmail`): then the email stands in. */
+  contact: z.string().trim().max(120).default(''),
   service: z.string().trim().max(40).default('unknown'),
   budget: z.string().trim().max(40).optional().default(''),
   message: z.string().trim().max(2000).optional().default(''),
@@ -30,6 +31,14 @@ export const webLeadSchema = z.object({
   /** The client already has a domain / hosting (the site's brief). Absent: not known. */
   hasDomain: z.boolean().optional(),
   hasHosting: z.boolean().optional(),
+  /** A signed-in cabinet client sent the lead: the account is upserted by this email and the lead is linked to it. A malformed value is ignored (the lead still counts). */
+  clientEmail: z.string().trim().toLowerCase().max(254).email().optional().catch(undefined),
+  cabinetId: z.string().trim().min(1).max(64).optional().catch(undefined),
+  clientName: z.string().trim().max(120).optional().catch(undefined),
+}).transform((d, ctx) => {
+  const contact = d.contact.length >= 3 ? d.contact : d.clientEmail ?? '';
+  if (contact.length < 3) ctx.addIssue({ code: 'custom', path: ['contact'], message: 'contact is required' });
+  return { ...d, contact };
 });
 
 const MAX_BODY = 16 * 1024;
@@ -113,7 +122,7 @@ class KeyedLimit {
  * 127.0.0.1 only (firtech.pro on the same host posts here). `onLead` creates the Sales task and returns its id.
  */
 export function createWebhook(
-  onLead: (lead: WebLeadInput) => Promise<number>,
+  onLead: (lead: WebLeadInput) => Promise<number | { id: number; leadId?: number | null }>,
   /** Without it `POST /lead` answers 404 (the server may run for `/chat` only). */
   token: string | undefined,
   now: () => number = Date.now,
@@ -344,8 +353,9 @@ export function createWebhook(
         if (!parsed.success) return json(res, 400, { ok: false, error: 'invalid' });
         const lead = parsed.data;
         if (lead.website) return json(res, 200, { ok: true }); // honeypot: bots get a normal answer, nothing is stored
-        const id = await onLead(lead);
-        json(res, 200, { ok: true, id });
+        const made = await onLead(lead);
+        if (typeof made === 'number') return json(res, 200, { ok: true, id: made });
+        json(res, 200, { ok: true, id: made.id, ...(made.leadId != null ? { leadId: made.leadId } : {}) });
       } catch (e) {
         log('error', 'webhook failed', { err: errMsg(e) });
         json(res, 500, { ok: false, error: 'internal' });

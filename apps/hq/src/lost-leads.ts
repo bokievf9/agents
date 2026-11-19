@@ -46,7 +46,7 @@ export interface LostInfo {
  * `POST /lead` creates the Sales task through this: when the task cannot be created the form gets its error as before, but the person's
  * contact and words are kept (kind `lost_lead`) and the owner hears about it in the hourly summary.
  */
-export function guardedLead<L extends { contact: string; message?: string }>(lost: LostLeads, create: (lead: L) => number): (lead: L) => Promise<number> {
+export function guardedLead<L extends { contact: string; message?: string }, R = number>(lost: LostLeads, create: (lead: L) => R): (lead: L) => Promise<R> {
   return (lead) => {
     try {
       return Promise.resolve(create(lead));

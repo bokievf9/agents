@@ -116,6 +116,10 @@ Read-mostly представления над таблицами исполни�
 В `summary` `reviews: { available: false, pending: 0 }`. Панель показывает заглушку, пока агент отзывов не появится.
 
 ## Кабинет клиента (`/admin/clients/*`)
+Заявки с сайта отправляют только вошедшие в кабинет клиенты (решение владельца 2026-11-20): `POST /lead` принимает необязательные `clientEmail` (нижний регистр; битое значение игнорируется),
+`cabinetId` (id Supabase, до 64) и `clientName` (до 120). С `clientEmail`: аккаунт создаётся или обновляется по email (`cab_clients`, `supabase_id` из `cabinetId`), лид привязывается сразу
+(`li_leads.client_id`, строка лида создаётся в момент запроса, Приёмщик дополняет её позже), email становится контактом, если в форме его не было (поле `contact` тогда необязательно).
+Ответ `{ ok: true, id, leadId }`. В карточке лида владельцу «Кабинет: да», в `GET /admin/crm/leads` поле `cabinet`.
 Клиенты регистрируются на сайте через Supabase (email и пароль, Google, Apple), сайт зовёт HQ по loopback с тем же `x-admin-token`.
 Те же 401/404 и общий лимит 600 запросов за 10 минут. Код: `apps/hq/src/admin-crm.ts`, тесты: `apps/hq/tests/admin-cabinet.test.ts`.
 
@@ -154,6 +158,33 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 { "ok": true, "item": { "id": 7, "text": "Как оплатить?", "status": "open", "createdAt": "...", "answeredAt": null, "answer": null } }
 ```
 
+### Лиды клиента в `by-email` (`leads`)
+Лиды, привязанные к клиенту (`li_leads.client_id`), новые сверху, не больше 20. Внутренних текстов, промптов и заметок владельца нет.
+```json
+"leads": [{ "id": 12, "createdAt": "...", "service": "site", "summary": "Нужен сайт для салона", "estimateUsd": 1200, "hasDomain": true, "hasHosting": false,
+  "stage": "proposal", "nextStep": "КП отправлено, ждём вашего решения",
+  "timeline": [{ "at": "...", "kind": "lead", "title": "Заявка получена" }],
+  "replies": [{ "at": "...", "text": "Здравствуйте, Алиса!", "from": "manager" }] }]
+```
+- `stage`: этап Пульта (`new|qualified|proposal|contract|paid|project|lost`, с учётом ручного переноса владельца). `nextStep`: одно предложение на этап, на языке лида (`ru` по умолчанию):
+  new «Менеджер уточнит детали в течение рабочего дня», qualified «Готовим коммерческое предложение», proposal «КП отправлено, ждём вашего решения», contract «Договор и счёт на 50% готовы»,
+  paid «Оплата получена, запускаем проект», project «Проект в работе, этапы ниже», lost «Заявка закрыта».
+- `estimateUsd`: сумма выставленного счёта, иначе «Итого» из сметы сайта, иначе `null`. `summary`: до 200 знаков из слов самого клиента.
+- `timeline` по возрастанию времени, из того, что уже есть: заявка (`lead`), первый ответ менеджера (`reply`), утверждённое КП (`kp`, `ps_documents`), договор (`contract`, `ps_documents` или `bo_documents`),
+  счёт (`invoice`) и оплата (`paid`, `bl_invoices`), старт проекта (`project`, `pm_projects`), переносы владельца по этапам (`stage`, журнал `lead_stage`).
+- `replies`: переписка по лиду из `cab_messages` (`id, client_id, lead_id, from, text <= 2000, at`, плюс `ticket_id` для связи с тикетом): ответы владельца через `POST /admin/crm/leads/:id/reply`
+  (пишутся для лида с кабинетом даже если чат не принял), одобренные ответы головы продаж, сообщения клиента и одобренные ответы Поддержки на них. Для лида без кабинета строк нет.
+
+### POST /admin/clients/:id/leads/:leadId/messages
+Тело `{ text }` (1..2000 после обрезки). Клиент неизвестен или лид чужой/не найден: 404 `not_found` (чужой лид неотличим от несуществующего), плохой текст 400 `invalid`,
+больше 10 сообщений за час от одного клиента (и 10 обращений Поддержки, общий счётчик с тикетами) 429 `rate_limited`.
+Пишет `cab_messages` (`from: client`) и создаёт тикет Поддержки как `POST /admin/clients/:id/tickets` (`cs_tickets.lead_id`, в задаче Поддержки пометка «по заявке #N»): черновик ответа идёт через одобрения,
+одобренный ответ дописывается в тот же тред как `from: manager` (один раз на тикет). В журнал задачи лида (голова Продаж) идёт строка, владельцу во входящие без одобрения
+«Сообщение по заявке #N от <имя или email>».
+```json
+{ "ok": true, "item": { "at": "...", "text": "Когда будет КП?", "from": "client", "leadId": 12, "ticketId": 7 } }
+```
+
 ## Таблицы
 | Панель | Таблицы |
 |---|---|
@@ -165,7 +196,7 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 | projects | `pm_projects`, `pm_milestones` |
 | referrals | `rf_referrals` |
 | reviews | нет таблицы, `available: false` |
-| cabinet | `cab_clients`, `li_leads.client_id`, `cs_tickets` |
+| cabinet | `cab_clients`, `cab_messages`, `li_leads.client_id`, `cs_tickets` (+ `lead_id`) |
 
 # Пульт v3 (2026-11-20)
 

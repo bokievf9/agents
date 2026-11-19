@@ -31,6 +31,24 @@ export interface CsTicket {
   answer: string | null;
 }
 
+/**
+ * The messages of a cabinet client about one lead (the client's own, the manager's replies). Owned by the HQ cabinet; the table is declared here
+ * too because an approved ticket answer for such a lead lands in it (see `markAnswered`).
+ */
+export const CAB_MESSAGES_SCHEMA = `
+CREATE TABLE IF NOT EXISTS cab_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER NOT NULL,
+  lead_id INTEGER NOT NULL,
+  "from" TEXT NOT NULL CHECK ("from" IN ('manager', 'client')),
+  text TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  ticket_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS cab_messages_lead ON cab_messages (lead_id, at);
+CREATE UNIQUE INDEX IF NOT EXISTS cab_messages_ticket ON cab_messages (ticket_id, "from") WHERE ticket_id IS NOT NULL;
+`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS cs_clients (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,6 +93,8 @@ export class CsStore {
     const cols = db.prepare('PRAGMA table_info(cs_tickets)').all() as { name: string }[];
     if (!cols.some((c) => c.name === 'source')) db.exec("ALTER TABLE cs_tickets ADD COLUMN source TEXT NOT NULL DEFAULT ''");
     if (!cols.some((c) => c.name === 'answer')) db.exec('ALTER TABLE cs_tickets ADD COLUMN answer TEXT');
+    // a cabinet message about a lead (cab_messages): the approved answer goes back to that lead's thread
+    if (!cols.some((c) => c.name === 'lead_id')) db.exec('ALTER TABLE cs_tickets ADD COLUMN lead_id INTEGER');
   }
 
   upsertClient(c: { name: string; contact?: string; product?: string; plan?: string; since?: string }): CsClient {
@@ -112,10 +132,10 @@ export class CsStore {
   }
 
   /** A ticket from the client cabinet: the name and contact (email) are the cabinet's own, no cs_clients lookup. */
-  addCabinetTicket(t: { clientName: string; contact: string; text: string }): CsTicket {
+  addCabinetTicket(t: { clientName: string; contact: string; text: string; leadId?: number }): CsTicket {
     const r = this.db
-      .prepare("INSERT INTO cs_tickets (client_id, client_name, contact, text, money, created_at, source) VALUES (NULL, ?, ?, ?, 0, ?, 'cabinet')")
-      .run(t.clientName.trim(), t.contact, t.text, this.now());
+      .prepare("INSERT INTO cs_tickets (client_id, client_name, contact, text, money, created_at, source, lead_id) VALUES (NULL, ?, ?, ?, 0, ?, 'cabinet', ?)")
+      .run(t.clientName.trim(), t.contact, t.text, this.now(), t.leadId ?? null);
     return this.ticket(Number(r.lastInsertRowid))!;
   }
 
@@ -133,8 +153,25 @@ export class CsStore {
   }
 
   markAnswered(id: number, answer?: string): void {
-    if (answer !== undefined) this.db.prepare('UPDATE cs_tickets SET answer = ? WHERE id = ?').run(answer.slice(0, 4000), id);
+    if (answer !== undefined) {
+      this.db.prepare('UPDATE cs_tickets SET answer = ? WHERE id = ?').run(answer.slice(0, 4000), id);
+      this.answerToLeadThread(id, answer);
+    }
     this.db.prepare("UPDATE cs_tickets SET status = 'answered', answered_at = ? WHERE id = ? AND status = 'open'").run(this.now(), id);
+  }
+
+  /** A ticket written about a lead in the cabinet: its approved answer is also the manager's message in that lead's thread (once per ticket). */
+  private answerToLeadThread(id: number, answer: string): void {
+    const t = this.db.prepare('SELECT lead_id, contact FROM cs_tickets WHERE id = ?').get(id) as { lead_id: number | null; contact: string } | undefined;
+    if (!t || t.lead_id === null || !answer.trim()) return;
+    const hasClients = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cab_clients'").get() !== undefined;
+    if (!hasClients) return;
+    this.db.exec(CAB_MESSAGES_SCHEMA);
+    const c = this.db.prepare('SELECT id FROM cab_clients WHERE email = ?').get(t.contact.trim().toLowerCase()) as { id: number } | undefined;
+    if (!c) return;
+    this.db
+      .prepare("INSERT OR IGNORE INTO cab_messages (client_id, lead_id, \"from\", text, at, ticket_id) VALUES (?, ?, 'manager', ?, ?, ?)")
+      .run(c.id, t.lead_id, answer.trim().slice(0, 2000), this.now(), id);
   }
 
   /** Open tickets older than `slaMs` that were not alerted yet; marks them alerted (one alert per ticket). */
