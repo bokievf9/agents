@@ -13,6 +13,9 @@ export interface HqItem {
   /** Newer HQ: platforms already marked published, the Instagram caption ready to paste. */
   publishedOn?: string[];
   igCaption?: string;
+  /** Newer HQ: platforms an agent queued for this helper (`tools.mac.poster.enqueue`), still open. */
+  macQueued?: string[];
+  plannedDate?: string;
 }
 export interface HqDay { date: string; items: HqItem[] }
 
@@ -58,6 +61,16 @@ export class HqClient {
     const j = await this.json('GET', `/admin/content?week=${encodeURIComponent(week)}`);
     if (!Array.isArray(j.days)) throw new HqError(200, 'HQ: в ответе нет days');
     return j.days as HqDay[];
+  }
+
+  /**
+   * Items agents queued for this helper (`GET /admin/content?queued=1`, `queuedItems`: any week). Only those queued for `platform`;
+   * an older HQ without the field gives an empty list.
+   */
+  async queued(platform = 'instagram'): Promise<HqItem[]> {
+    const j = await this.json('GET', '/admin/content?queued=1');
+    const items = Array.isArray(j.queuedItems) ? (j.queuedItems as HqItem[]) : [];
+    return items.filter((x) => Array.isArray(x.macQueued) && x.macQueued.includes(platform));
   }
 
   async file(path: string): Promise<Buffer> {

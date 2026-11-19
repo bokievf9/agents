@@ -9,7 +9,7 @@ import { leftToday, markStuck, recordAttempt, recordPost, shouldSkip, type State
 import { weeksFor } from './week.js';
 
 export interface RunDeps {
-  client: Pick<HqClient, 'content' | 'file' | 'published' | 'failed'>;
+  client: Pick<HqClient, 'content' | 'file' | 'published' | 'failed' | 'queued'>;
   state: State;
   saveState: (s: State) => void;
   /** Opens the browser (only when there is something to post and it is not a dry run). */
@@ -34,6 +34,9 @@ export interface RunResult {
 export async function runInstagram(d: RunDeps): Promise<RunResult> {
   const days: HqDay[] = [];
   for (const week of weeksFor(d.date)) days.push(...(await d.client.content(week)));
+  // what agents queued through `tools.mac.poster.enqueue` goes first and counts as due today whatever week it is planned for
+  const queued = await d.client.queued('instagram');
+  if (queued.length) days.unshift({ date: d.date, items: queued });
   const plan = selectItems(days, d.date, { skip: (id) => shouldSkip(d.state, id, d.date) });
   const left = leftToday(d.state, d.date, d.dailyCap);
   d.log(formatPlan(plan, { date: d.date, limit: d.limit, leftToday: left }));

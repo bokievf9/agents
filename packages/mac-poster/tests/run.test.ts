@@ -11,13 +11,14 @@ import { emptyState, recordPost, type State } from '../src/state.js';
 const TOKEN = 'secret-admin-token';
 
 /** A fake HQ behind a mocked fetch: records every call. */
-function fakeHq(days: Record<string, HqDay[]>, opts: { status?: number } = {}) {
+function fakeHq(days: Record<string, HqDay[]>, opts: { status?: number; queued?: unknown[] } = {}) {
   const calls: { method: string; url: string; headers: Record<string, string>; body?: unknown }[] = [];
   const fetchImpl = (async (url: string, init: RequestInit) => {
     const headers = init.headers as Record<string, string>;
     calls.push({ method: init.method!, url, headers, ...(init.body ? { body: JSON.parse(String(init.body)) } : {}) });
     if (opts.status) return new Response(JSON.stringify({ ok: false, error: 'boom' }), { status: opts.status });
     const u = new URL(url);
+    if (u.pathname === '/admin/content' && u.searchParams.get('queued') === '1') return Response.json({ ok: true, week: '2026-W48', days: [], queuedItems: opts.queued ?? [] });
     if (u.pathname === '/admin/content') return Response.json({ ok: true, week: u.searchParams.get('week'), days: days[u.searchParams.get('week')!] ?? [] });
     if (u.pathname.startsWith('/admin/files/')) return new Response(Buffer.from(`bytes:${decodeURIComponent(u.pathname.slice(13))}`));
     if (u.pathname.startsWith('/admin/content/')) return Response.json({ ok: true, item: { id: Number(u.pathname.split('/')[3]) } });
@@ -88,7 +89,22 @@ describe('runInstagram', () => {
     expect(opened).toBe(0);
     expect(r.plan.map((p) => p.id)).toEqual([2, 4, 1, 3]);
     expect(d.lines[0]).toMatch(/^Instagram на 2026-11-23: к публикации 4, в этот запуск 4/);
-    expect(calls.map((c) => c.url.replace('http://127.0.0.1:18787', ''))).toEqual(['/admin/content?week=2026-W47', '/admin/content?week=2026-W48']);
+    expect(calls.map((c) => c.url.replace('http://127.0.0.1:18787', ''))).toEqual(['/admin/content?week=2026-W47', '/admin/content?week=2026-W48', '/admin/content?queued=1']);
+  });
+
+  it('items agents queued through tools.mac.poster.enqueue are picked up from any week, once, only for instagram', async () => {
+    const old = { ...it_(9, 'post'), macQueued: ['instagram'], plannedDate: '2026-10-01' }; // planned long ago, outside the two weeks
+    const future = { ...it_(8, 'post'), macQueued: ['instagram'], plannedDate: '2026-12-20' }; // queued early: due now
+    const other = { ...it_(7, 'post'), macQueued: ['tiktok'], plannedDate: '2026-10-01' };
+    const dup = { ...it_(1, 'post'), macQueued: ['instagram'], plannedDate: '2026-11-23' }; // also in the week: listed once
+    const { client, calls } = fakeHq(WEEKS, { queued: [old, future, other, dup] });
+    const r = await runInstagram(deps({ client, dryRun: true, openSite: () => fakeSite(() => Promise.resolve({ url: '' })).site }));
+    expect(r.plan.map((p) => p.id).sort((a, b) => Number(a) - Number(b))).toEqual([1, 2, 3, 4, 8, 9]);
+    expect(r.plan.filter((p) => p.id === 1)).toHaveLength(1);
+    expect(calls.some((c) => c.url.endsWith('/admin/content?queued=1'))).toBe(true);
+    // an older HQ without queuedItems is not an error
+    const plain = fakeHq(WEEKS);
+    expect((await runInstagram(deps({ client: plain.client, dryRun: true, openSite: () => fakeSite(() => Promise.resolve({ url: '' })).site }))).plan).toHaveLength(4);
   });
 
   it('posts in order, downloads files, reports published/failed; manual stories and stuck items', async () => {
