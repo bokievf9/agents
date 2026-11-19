@@ -52,10 +52,12 @@ export const fontsPresent = (dir = FONT_DIR): boolean => Object.values(FONTS).ev
  * also Ukrainian ґ in the first subset) has its own range; everything else is drawn with the Latin subset.
  */
 const CYR = /[́Ѐ-џҐ-ґҰ-ұ№]/;
-const EXT = /[Ѡ-ԯᲀ-ᲊ₴ⷠ-ⷿꙀ-ꚟ]/;
+/** U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F (the fontsource range of the subset), tested by code point. */
+const EXT_RANGES: readonly (readonly [number, number])[] = [[0x460, 0x52f], [0x1c80, 0x1c8a], [0x20b4, 0x20b4], [0x2de0, 0x2dff], [0xa640, 0xa69f]];
+const isExt = (ch: string): boolean => EXT_RANGES.some(([lo, hi]) => ch.codePointAt(0)! >= lo && ch.codePointAt(0)! <= hi);
 
 export type Script = 'lat' | 'cyr' | 'ext';
-const scriptOf = (ch: string): Script => (CYR.test(ch) ? 'cyr' : EXT.test(ch) ? 'ext' : 'lat');
+const scriptOf = (ch: string): Script => (CYR.test(ch) ? 'cyr' : isExt(ch) ? 'ext' : 'lat');
 const fontName = (script: Script, bold: boolean): string => (script === 'lat' ? (bold ? 'latB' : 'lat') : script === 'cyr' ? (bold ? 'cyrB' : 'cyr') : bold ? 'extB' : 'ext');
 
 /**
