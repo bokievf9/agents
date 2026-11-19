@@ -2,6 +2,7 @@ import { errMsg, log, type ApprovalQueue } from '@fir/core';
 import type { Hq, Task } from '@fir/hq';
 import { openBuilderTasks } from './bridge.js';
 import type { Director } from './director.js';
+import { createCrm } from './admin-crm.js';
 import { buildOffice } from './office.js';
 import type { OwnerChannel } from './presence.js';
 import { mask } from './progress.js';
@@ -43,6 +44,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   const now = d.now ?? Date.now;
   const hits: number[] = [];
   let served = 0;
+  const crm = createCrm(hq.db, now);
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));
 
   const maxTaskId = () => (hq.db.prepare('SELECT COALESCE(MAX(id), 0) m FROM tasks').get() as { m: number }).m;
@@ -130,6 +132,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
     const [a, id, sub] = seg;
     const key = `${method} ${a}${id !== undefined && /^\d+$/.test(id) ? '/:id' : id ? `/${id}` : ''}${sub ? `/${sub}` : ''}`;
     const num = (v: string | undefined) => (v !== undefined && /^\d+$/.test(v) ? Number(v) : null);
+    if (a === 'crm') return crm.handle(method, seg.slice(1), query, req.body);
 
     switch (key) {
       case 'GET state':
