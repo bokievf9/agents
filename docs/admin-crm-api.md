@@ -74,7 +74,7 @@ Read-mostly представления над таблицами исполни�
 Обращения клиентов (`cs_tickets`). У каждого `clientId`: тот же идентификатор, что у ряда `/admin/crm/clients` (`"<id кабинета>"`, если контакт обращения совпал с email или Telegram-ником клиента кабинета или имя принадлежит такому клиенту, иначе `"c:<имя в нижнем регистре>"`); он же в `tickets` у `GET /admin/crm/clients/:id` и `GET /admin/clients/by-email`. Параметры: `limit`, `cursor`, `q` (клиент, контакт, текст), `status` (`open`, `answered`).
 ```json
 { "ok": true, "available": true, "statuses": ["open","answered"], "nextCursor": null,
-  "items": [{ "id": 3, "clientName": "Алиса", "contact": "@alice", "text": "не работает бот", "status": "open", "money": false, "slaAlerted": false,
+  "items": [{ "id": 3, "clientId": "7", "clientName": "Алиса", "contact": "@alice", "text": "не работает бот", "status": "open", "money": false, "slaAlerted": false,
     "answer": null, "note": "", "createdAt": "...", "answeredAt": null }] }
 ```
 ## POST /admin/crm/tickets/:id
