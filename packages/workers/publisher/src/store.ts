@@ -50,6 +50,35 @@ export class PublishStore {
     const cols = (db.prepare('PRAGMA table_info(pb_posts)').all() as { name: string }[]).map((c) => c.name);
     // container_id (a Reel still processing at Instagram) and media_id (for insights and comments) came with the Instagram poster
     for (const c of ['url', 'error', 'auto_on', 'container_id', 'media_id']) if (!cols.includes(c)) db.exec(`ALTER TABLE pb_posts ADD COLUMN ${c} TEXT`);
+    // via ('mac': the owner's Mac helper reported the result) and failed_at came with packages/mac-poster (2026-11-20)
+    if (!cols.includes('via')) db.exec('ALTER TABLE pb_posts ADD COLUMN via TEXT');
+    if (!cols.includes('failed_at')) db.exec('ALTER TABLE pb_posts ADD COLUMN failed_at INTEGER');
+  }
+
+  /**
+   * A result reported by an outside helper (`via`: 'mac', the owner's Mac publishing through instagram.com). A success keeps
+   * the first URL; a failure keeps the row unpublished (the Telegram card stays manual) with the reason. Returns false when
+   * nothing changed (the same report twice).
+   */
+  recordExternal(readyId: number, itemId: number, platform: Platform, via: string, at: number, r: { url: string } | { error: string }): boolean {
+    this.db.prepare('INSERT OR IGNORE INTO pb_posts (ready_id, item_id, platform) VALUES (?, ?, ?)').run(readyId, itemId, platform);
+    if ('url' in r) return this.db.prepare('UPDATE pb_posts SET url = ?, error = NULL, via = ? WHERE ready_id = ? AND url IS NULL').run(r.url.slice(0, 500), via, readyId).changes > 0;
+    const error = r.error.slice(0, 500);
+    return this.db.prepare('UPDATE pb_posts SET error = ?, failed_at = ?, via = ? WHERE ready_id = ? AND published_at IS NULL AND (error IS NOT ? OR via IS NOT ?)').run(error, at, via, readyId, error, via).changes > 0;
+  }
+
+  /** The last failure an outside helper reported for a row that is still unpublished (null: none). */
+  externalError(readyId: number, via: string): string | null {
+    return (this.db.prepare('SELECT error FROM pb_posts WHERE ready_id = ? AND via = ? AND published_at IS NULL AND error IS NOT NULL').get(readyId, via) as { error: string } | undefined)?.error ?? null;
+  }
+
+  /** What an outside helper did in the window: rows it published, rows it failed (still unpublished). */
+  externalStats(via: string, fromMs: number, toMs: number): { published: number; failed: number } {
+    const n = (sql: string) => (this.db.prepare(sql).get(via, fromMs, toMs) as { n: number }).n;
+    return {
+      published: n('SELECT COUNT(*) n FROM pb_posts WHERE via = ? AND url IS NOT NULL AND published_at >= ? AND published_at < ?'),
+      failed: n('SELECT COUNT(*) n FROM pb_posts WHERE via = ? AND published_at IS NULL AND failed_at >= ? AND failed_at < ?'),
+    };
   }
 
   /** Auto-posting state of a row: the day it was last tried, the URL on success, the reason on failure. */

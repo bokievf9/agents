@@ -2,6 +2,7 @@ import { closeSync, existsSync, openSync, readSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import type { ApprovalQueue } from '@fir/core';
 import type { Hq } from '@fir/hq';
+import { PublishStore, captionOf } from '@fir/worker-publisher';
 import { RenderQueue, SIZES, shortReason, splitPlatforms, storeFor, type ArticleRow, type ContentStore, type Item, type ReadyRow } from '@fir/worker-content-maker';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
@@ -22,9 +23,14 @@ export interface PultContentDeps {
   decide: (approvalId: number, action: 'approve' | 'reject') => Promise<unknown>;
 }
 
-export const CONTENT_ACTIONS = ['approve', 'reject', 'revise', 'published', 'rerender'] as const;
+export const CONTENT_ACTIONS = ['approve', 'reject', 'revise', 'published', 'rerender', 'failed'] as const;
 const PLATFORMS = ['instagram', 'tiktok', 'shorts'] as const;
-const postBody = z.object({ action: z.enum(CONTENT_ACTIONS), note: z.string().trim().min(1).max(4000).optional(), platform: z.enum(PLATFORMS).optional() }).strict();
+/** `url` on `published` (and `failed` as a whole) come from the owner's Mac helper (`packages/mac-poster`): the row is marked `via = 'mac'`. */
+const MAC = 'mac';
+const postBody = z.object({
+  action: z.enum(CONTENT_ACTIONS), note: z.string().trim().min(1).max(4000).optional(), platform: z.enum(PLATFORMS).optional(),
+  url: z.string().trim().max(500).regex(/^https:\/\/[^\s]+$/).optional(),
+}).strict();
 
 type Status = 'draft' | 'pending' | 'approved' | 'rendering' | 'ready' | 'published' | 'rejected';
 type Kind = 'clip' | 'post' | 'carousel' | 'story' | 'article';
@@ -83,6 +89,13 @@ export function createPultContent(d: PultContentDeps) {
     return out;
   }
 
+  function igCaption(rows: ReadyRow[]): string {
+    const r = rows.find((x) => x.platform === 'instagram');
+    if (!r) return '';
+    const { caption, hashtags } = captionOf(r.text, 'instagram');
+    return [caption, hashtags.join(' ')].filter(Boolean).join('\n\n');
+  }
+
   function itemView(item: Item) {
     const s = store();
     const rows = s.rowsOfItem(item.id);
@@ -106,6 +119,8 @@ export function createPultContent(d: PultContentDeps) {
       caption: { instagram: cap('instagram'), tiktok: cap('tiktok'), shorts: cap('shorts'), dzen: '' },
       files, sourceSlug: item.sourceSlug, approvalId: link && link.state === 'asked' ? link.approvalId : null,
       publishedUrl: posts.find((x) => x.url)?.url ?? null, error: err ? String(err).slice(0, 300) : null, plannedDate: item.plannedDate,
+      // for the Mac helper: which platforms are already out, and the Instagram caption ready to paste (caption, blank line, hashtags)
+      publishedOn: rows.filter((r) => r.status === 'published').map((r) => r.platform), igCaption: igCaption(rows),
     };
   }
 
@@ -116,6 +131,7 @@ export function createPultContent(d: PultContentDeps) {
       id: `a${a.id}`, kind: 'article' as const, platform: 'blog', status, title: a.title || a.niche, hook: '', caption: { instagram: '', tiktok: '', shorts: '', dzen: '' },
       files: [] as FileOut[], sourceSlug: a.slug || null, approvalId: link && link.state === 'asked' ? link.approvalId : null,
       publishedUrl: a.published && a.slug ? `/blog/${a.slug}` : null, error: a.status === 'failed' ? (a.comment ?? 'не получилось') : null, plannedDate: a.date ?? dayOf(a.createdAt),
+      publishedOn: [] as string[], igCaption: '',
     };
   }
 
@@ -160,7 +176,10 @@ export function createPultContent(d: PultContentDeps) {
     const isArticle = m[1] === 'a';
     const parsed = postBody.safeParse(body ?? {});
     if (!parsed.success) return fail(400, 'invalid', { allowed: CONTENT_ACTIONS });
-    const { action, note, platform } = parsed.data;
+    const { action, note, platform, url } = parsed.data;
+    if (url !== undefined && action !== 'published') return fail(400, 'invalid', { hint: 'url only with published' });
+    if ((url !== undefined || action === 'failed') && !platform) return fail(400, 'invalid', { hint: 'platform is required' });
+    if (action === 'failed' && !note) return fail(400, 'invalid', { hint: 'failed needs a note' });
     const s = store();
     const item = isArticle ? undefined : s.item(id);
     const article = isArticle ? s.article(id) : undefined;
@@ -200,7 +219,22 @@ export function createPultContent(d: PultContentDeps) {
       if (!approved || rows.length === 0) return fail(409, 'not_ready', { status });
       const mine = platform ? rows.filter((r) => r.platform === platform) : rows;
       if (mine.length === 0) return fail(400, 'invalid', { allowed: rows.map((r) => r.platform) });
-      for (const r of mine) if (r.status === 'ready') d.marketing.onPublished(r.id);
+      for (const r of mine) if (r.status === 'ready') d.marketing.onPublished(r.id, url ? 'mac-poster' : 'owner');
+      if (url) {
+        const pstore = new PublishStore(db);
+        for (const r of mine) if (pstore.recordExternal(r.id, id, r.platform, MAC, now(), { url })) hq.log('mac-poster', 'published_url', 'content_ready', String(r.id), url);
+      }
+      return view();
+    }
+    if (action === 'failed') {
+      // the Mac helper could not post: the row stays ready (the Telegram card remains manual), the reason shows as `error`
+      const rows = s.rowsOfItem(id);
+      if (!approved || rows.length === 0) return fail(409, 'not_ready', { status });
+      const mine = rows.filter((r) => r.platform === platform);
+      if (mine.length === 0) return fail(400, 'invalid', { allowed: rows.map((r) => r.platform) });
+      const pstore = new PublishStore(db);
+      const reason = note!.slice(0, 300);
+      for (const r of mine) if (r.status === 'ready' && pstore.recordExternal(r.id, id, r.platform, MAC, now(), { error: reason })) hq.log('mac-poster', 'publish_failed', 'content_ready', String(r.id), reason);
       return view();
     }
     // rerender

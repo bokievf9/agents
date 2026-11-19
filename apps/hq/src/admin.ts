@@ -48,7 +48,11 @@ export interface AdminReply {
 }
 
 const RATE_WINDOW_MS = 10 * 60_000;
-const RATE_MAX = 600;
+// The admin API is reached only from loopback by the site's server with a valid token, and the Пульт v3
+// polls it from every open tab (office 10 s, hub 15 s, panels 30-60 s). 600 per 10 minutes was hit by one
+// or two tabs and made the office go dark for minutes (2026-11-20); the limit now protects against a
+// runaway client, not against normal polling: 6000 per 10 minutes, about 10 requests a second.
+const RATE_MAX = 6000;
 const iso = (ms: number | null | undefined) => (ms === null || ms === undefined ? null : new Date(ms).toISOString());
 const fail = (status: number, error: string, extra: Record<string, unknown> = {}): AdminReply => ({ status, body: { ok: false, error, ...extra } });
 const ok = (body: Record<string, unknown> = {}): AdminReply => ({ status: 200, body: { ok: true, ...body } });
