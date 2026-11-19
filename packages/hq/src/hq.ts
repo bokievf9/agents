@@ -266,6 +266,20 @@ export class Hq {
     return won;
   }
 
+  /**
+   * Call once at process start: a task still `running` was cut off by a restart or a deploy (its worker died with the
+   * process), so it goes back to `assigned` and its head takes it again. Returns the ids put back.
+   */
+  recoverInterrupted(actor = 'director'): number[] {
+    const rows = this.db.prepare("SELECT id FROM tasks WHERE status = 'running'").all() as { id: number }[];
+    for (const r of rows) {
+      this.db.prepare("UPDATE tasks SET status = 'assigned', updated_at = ? WHERE id = ? AND status = 'running'").run(this.now(), r.id);
+      this.addEvent(r.id, 'status', actor, 'running -> assigned: interrupted by a restart');
+    }
+    if (rows.length) this.log(actor, 'tasks_recovered', 'tasks', String(rows.length));
+    return rows.map((r) => r.id);
+  }
+
   comment(taskId: number, actor: string, body: string): void {
     this.addEvent(taskId, 'comment', actor, body);
   }
@@ -394,14 +408,21 @@ export class Hq {
     return this.queue;
   }
 
-  /** Registers an approval kind in the core queue (money and prices: `locked: true`, always level 0). */
-  registerKind(kind: string, spec: KindSpec): void {
+  private readonly urgentKinds = new Set<string>();
+
+  /**
+   * Registers an approval kind in the core queue (money and prices: `locked: true`, always level 0).
+   * `urgent: true`: a client is waiting on it, so each proposal goes to the owner at once as its own card instead of
+   * waiting for the next batch.
+   */
+  registerKind(kind: string, spec: KindSpec, opts: { urgent?: boolean } = {}): void {
     this.q().register(kind, spec);
+    if (opts.urgent) this.urgentKinds.add(kind);
   }
 
   /**
    * The head asks for the owner's decision. At level 0 the proposal waits in the queue and reaches the owner in the
-   * Director's batch (`releaseApprovals`); at level 1 the core runs it at once and reports. The task goes to `approval`.
+   * Director's batch (`releaseApprovals`), unless its kind is urgent (`registerKind` option); at level 1 the core runs it at once and reports. The task goes to `approval`.
    */
   async requestApproval(taskId: number, actor: string, kind: string, payload: Payload, summary: string): Promise<number> {
     const t = this.task(taskId);
@@ -413,8 +434,9 @@ export class Hq {
     if (t.status === 'running' || t.status === 'review') this.move(taskId, 'approval', actor);
     this.addEvent(taskId, 'approval', actor, `${kind}: queued`);
     this.log(actor, 'approval_requested', 'task', String(taskId));
-    if (this.q().level(kind) === 1) {
-      await this.askOne(linkId, '');
+    const urgent = this.urgentKinds.has(kind);
+    if (urgent || this.q().level(kind) === 1) {
+      await this.askOne(linkId, urgent ? `Срочно, ${t.dept}, задача #${taskId}\n` : '');
       this.reconcileApprovals();
     }
     return linkId;

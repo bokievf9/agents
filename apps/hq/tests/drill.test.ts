@@ -48,7 +48,7 @@ function drillWorld() {
     statfs: () => Promise.resolve({ blocks: 100, bavail: 60 }), listContainers: () => Promise.resolve([]),
   };
   const support = new SupportHead({
-    hq, llm, reporter, messenger, ownerId: OWNER, finance: new FinanceWorker({ fixedCosts: {} }), billing: new BillingWorker({ paymentDetails: { payme: '+998 00' } }),
+    hq, llm, reporter, messenger, ownerId: OWNER, finance: new FinanceWorker({ fixedCosts: {} }), billing: new BillingWorker({ paymentDetails: { usdt_trc20: 'TXyz00' } }),
     monitor: new MonitoringWorker({ urls: ['https://firtech.pro/api/health'], omnirouteUrl: 'http://omniroute:20128/health', dataDir: '/d', docker: false, dockerSocket: '/s', diskMaxPct: 85, certMinDays: 14, timeoutMs: 1000 }, deps),
   });
   const sales = new SalesHead({ hq, llm, queue, messenger, ownerId: OWNER, reporter, prospector: new ProspectorWorker({ batchSize: 10 }) });

@@ -1,8 +1,8 @@
 import { openDb } from '@fir/core';
 import { describe, expect, it } from 'vitest';
 import {
-  DAY_MS, MonitoringWorker, MonitorStore, checkDisk, containerProblems, dailyLine, isHealthy, parseCertDays, parseMonitorUrls, step,
-  type CheckDeps, type MonitorConfig,
+  BOT_SILENCE_MS, DAY_MS, MonitoringWorker, MonitorStore, checkBot, checkDisk, containerProblems, dailyLine, isHealthy, parseCertDays, parseMonitorUrls, step,
+  type BotProbe, type CheckDeps, type MonitorConfig,
 } from '../src/index.js';
 
 const NOW = Date.UTC(2026, 10, 18, 7, 0);
@@ -151,5 +151,68 @@ describe('MonitoringWorker tick', () => {
 
   it('no samples: honest line', () => {
     expect(dailyLine(new MonitorStore(openDb(':memory:')), NOW)).toContain('нет данных');
+  });
+});
+
+describe('the client bot (@firtech_bot)', () => {
+  function bot(over: Partial<{ last: number | null; started: number | null; err: string | null; getMe: () => Promise<unknown> }> = {}): BotProbe & { calls: number } {
+    const o = { last: NOW - 60_000, started: NOW - 3_600_000, err: null as string | null, getMe: () => Promise.resolve({ username: 'firtech_bot' }), ...over };
+    const p = { calls: 0, lastUpdateAt: () => o.last, startedAt: () => o.started, getMe: () => (p.calls++, o.getMe()), pollingError: () => o.err };
+    return p;
+  }
+
+  it('is fine while updates flow and getMe answers; getMe is called through the bot API', async () => {
+    const w = world();
+    const p = bot();
+    const r = await checkBot(w.deps, cfg, p);
+    expect(r).toMatchObject([{ id: 'bot', ok: true }, { id: 'bot:silence', ok: true, soft: true }]);
+    expect(p.calls).toBe(1);
+  });
+
+  it('10 minutes of silence with no polling error is degraded (soft): no uptime sample, incident or alert', async () => {
+    const w = world();
+    const m = new MonitoringWorker(cfg, w.deps);
+    const p = bot({ last: NOW - BOT_SILENCE_MS - 60_000 });
+    m.watchBot(p);
+    const t1 = await m.tick(w.db);
+    expect(t1.results.find((x) => x.id === 'bot:silence')).toMatchObject({ ok: false, soft: true });
+    expect(t1.results.find((x) => x.id === 'bot')!.ok).toBe(true);
+    w.st.t += 300_000;
+    const t2 = await m.tick(w.db);
+    expect(t2.events.filter((e) => e.checkId.startsWith('bot'))).toEqual([]);
+    const store = m.store(w.db);
+    expect(store.state('bot:silence')).toMatchObject({ status: 'down', fails: 2 });
+    expect(store.incidents(0).some((i) => i.checkId.startsWith('bot'))).toBe(false);
+    expect(store.uptime(0).perCheck.some((c) => c.checkId === 'bot:silence')).toBe(false);
+  });
+
+  it('a polling failure or a getMe failure is down: two ticks alert once, recovery says so', async () => {
+    const w = world();
+    const m = new MonitoringWorker(cfg, w.deps);
+    let err: string | null = 'GrammyError: 409 conflict';
+    m.watchBot({ lastUpdateAt: () => NOW, startedAt: () => NOW - 1000, getMe: () => Promise.resolve({}), pollingError: () => err });
+    expect((await m.tick(w.db)).events).toEqual([]);
+    w.st.t += 300_000;
+    const down = await m.tick(w.db);
+    expect(down.events).toHaveLength(1);
+    expect(down.events[0]).toMatchObject({ kind: 'down', checkId: 'bot' });
+    expect(down.events[0]!.text).toContain('Telegram-бот');
+    expect(down.events[0]!.text).toContain('поллинг остановлен');
+    w.st.t += 300_000;
+    expect((await m.tick(w.db)).events).toEqual([]);
+    err = null;
+    w.st.t += 300_000;
+    expect((await m.tick(w.db)).events.map((e) => e.kind)).toEqual(['recovered']);
+    const r = await checkBot(w.deps, cfg, bot({ getMe: () => Promise.reject(new Error('ETIMEDOUT')) }));
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ id: 'bot', ok: false });
+    expect(r[0]!.detail).toContain('getMe');
+  });
+
+  it('is not checked before polling starts, and without a probe the bot checks do not exist', async () => {
+    const w = world();
+    expect(await checkBot(w.deps, cfg, bot({ started: null, last: null }))).toMatchObject([{ id: 'bot', ok: true, detail: 'ещё не запущен' }]);
+    const m = new MonitoringWorker(cfg, w.deps);
+    expect((await m.tick(w.db)).results.some((x) => x.id.startsWith('bot'))).toBe(false);
   });
 });

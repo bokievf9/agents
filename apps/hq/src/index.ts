@@ -1,6 +1,6 @@
 import { Api } from 'grammy';
 import {
-  ApprovalQueue, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, setupBotMenu, startPolling,
+  ApprovalQueue, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, schedule, setupBotMenu, startPolling, startPricesRefresh,
 } from '@fir/core';
 import { HeartbeatWorker, Hq, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
@@ -38,6 +38,14 @@ import { DIRECTOR_COMMANDS, DIRECTOR_PROFILE, deptBotMenu, menuCommand } from '.
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
 const hq = new Hq(db);
+// Prices come from one place: the site's price list (fetched now and every 6 hours, the last good copy is kept in the
+// database, a bundled snapshot is the last resort). Workers and the client bot read `getPrices()` when they need a number.
+const pricesRefresh = startPricesRefresh({ url: cfg.pricesUrl, store: { get: (k) => hq.setting(k) || undefined, set: (k, v) => hq.setSetting(k, v) } });
+const pricesLoaded = await pricesRefresh.ready;
+log('info', 'prices loaded', { source: pricesLoaded.source, updatedAt: pricesLoaded.prices.updatedAt });
+// A restart or a deploy cuts off the tasks that were running: they go back to the head's queue.
+const recovered = hq.recoverInterrupted();
+if (recovered.length) log('warn', 'interrupted tasks put back to assigned', { count: recovered.length });
 // The timezone of the departments is a setting; the first start takes it from TZ.
 if (!db.prepare("SELECT 1 FROM settings WHERE key = 'tz'").get()) hq.setSetting('tz', cfg.tz);
 seedOrg(hq, cfg);
@@ -105,8 +113,10 @@ const marketing = new MarketingHead({
 director.editors.set('content_item', marketing);
 director.editors.set('article', marketing); // «Править» on an article = a remark, the article is written again
 for (const name of ['profile', 'article', 'render']) director.commands.set(name, { dept: 'marketing', run: (arg) => marketing.command(name, arg) });
+const monitor = new MonitoringWorker(cfg.monitor);
+if (clientBot) monitor.watchBot(clientBot.probe()); // getMe, polling errors and silence of @firtech_bot go to the checks and to /status
 const support = new SupportHead({
-  hq, llm, reporter, monitor: new MonitoringWorker(cfg.monitor), finance: new FinanceWorker({ fixedCosts: cfg.fixedCostsUsdMonth }),
+  hq, llm, reporter, monitor, finance: new FinanceWorker({ fixedCosts: cfg.fixedCostsUsdMonth }),
   cs: new CustomerSupportWorker({ slaHours: cfg.supportSlaHours }),
   billing: new BillingWorker({ prefix: cfg.invoicePrefix, paymentDetails: cfg.paymentDetails }),
   onboarding: new OnboardingWorker(), messenger, ownerId: cfg.ownerId, ...(clientBot ? { client: clientBot } : {}),
@@ -264,6 +274,7 @@ bridge.start();
 director.start();
 support.start();
 drill.start();
+const auditWatchJob = schedule('audit-watch', '*/15 * * * *', hq.tz, async () => void (await marketing.auditWatch()));
 void topicManager.ensure().then((r) => log('info', 'topics checked', { state: r.state, created: r.created }));
 // Wake every head once at start: tasks that waited while the process was down.
 for (const dept of hq.departments()) {
@@ -288,8 +299,8 @@ presenceTimer.unref();
 
 const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
   ? createWebhook(
-      ({ name, contact, service, budget, message, estimate, locale, slot, source }) =>
-        Promise.resolve(sales.createLeadTask({ name, contact, service, budget, message, estimate, locale, slot, source }, service)),
+      ({ name, contact, service, budget, message, estimate, locale, slot, source, telegramSent }) =>
+        Promise.resolve(sales.createLeadTask({ name, contact, service, budget, message, estimate, locale, slot, source, ...(telegramSent ? { telegramSent: true } : {}) }, service)),
       cfg.leadWebhookToken,
       Date.now,
       cfg.officeToken ? { token: cfg.officeToken, get: cachedOffice(hq) } : undefined,
@@ -308,16 +319,23 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
       },
     ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort, lead: Boolean(cfg.leadWebhookToken), chat: Boolean(webChat), admin: Boolean(admin) }))
   : null;
-if (!webhook) log('warn', 'LEAD_WEBHOOK_TOKEN and WEB_CHAT_TOKEN are not set, POST /lead and POST /chat are disabled');
+const missingTokens = [
+  ...(cfg.leadWebhookToken ? [] : ['LEAD_WEBHOOK_TOKEN: POST /lead and POST /audit answer 404']),
+  ...(cfg.webChatToken ? [] : ['WEB_CHAT_TOKEN: POST /chat answers 404']),
+  ...(cfg.adminToken ? [] : ['ADMIN_TOKEN: /admin/* answers 404']),
+];
+if (missingTokens.length) log('warn', `routes switched off, tokens are required (no fallback to another token): ${missingTokens.join('; ')}`);
 
 const stop = () => {
   webhook?.close();
+  pricesRefresh.stop();
   clearInterval(presenceTimer);
   heartbeats.stop();
   bridge.stop();
   director.stop();
   support.stop();
   drill.stop();
+  auditWatchJob.stop();
   routineJobs.forEach((j) => j.stop());
   // Exit fast: a long poll in flight would hold the process (and Telegram's update slot) for up to 30 s, which is the
   // gap the owner sees on every deploy. Once the process is gone Telegram frees the slot for the new container at once.
@@ -329,7 +347,11 @@ process.on('SIGINT', stop);
 
 log('info', 'hq starting', { tz: hq.tz, departments: hq.departments(), group: cfg.groupId !== undefined, marketingBot: Boolean(cfg.marketingBotToken), supportBot: Boolean(cfg.supportBotToken), salesBot: Boolean(cfg.salesBotToken), clientBot: Boolean(clientBot) });
 // The client bot polls on its own; if it stops, HQ keeps working (the Director stays the owner's interface).
-clientBot?.start().catch((e) => log('error', 'client bot stopped', { err: errMsg(e) }));
+clientBot?.start().catch((e) => {
+  log('error', 'client bot stopped', { err: errMsg(e) });
+  // The main sales channel is down: the owner hears about it at once (the monitoring check turns `down` too).
+  void hq.alert('Клиентский бот @firtech_bot остановился: поллинг упал. Заявки из Telegram не принимаются, пока HQ не перезапущен. Подробности в логе hq.');
+});
 if (!clientBot) log('info', 'CLIENT_BOT_TOKEN is not set, the public client bot is off');
 startPolling(bot).catch((e) => {
   log('error', 'bot stopped', { err: errMsg(e) });

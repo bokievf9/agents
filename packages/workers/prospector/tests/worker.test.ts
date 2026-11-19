@@ -3,24 +3,24 @@ import { checkFirst, checkFollowup, checkReply, firstFallback } from '../src/dra
 import { cardButtons, KIND_FIRST, KIND_FOLLOWUP, KIND_REPLY, kindSpecs, markReplied, onDecision, renderSummary, statsText } from '../src/worker.js';
 import { DAY, json, rig, T0 } from './helpers.js';
 
-const GOOD = 'Здравствуйте! Это Фирдавс из Fir Tech. У Cambridge запись на курс идёт только по звонку, поэтому вечером заявки теряются. Настроим бота для записи на пробный урок, от $250. Как сейчас обрабатываете вечерние заявки?';
+const GOOD = 'Здравствуйте! Это Фирдавс из Fir Tech. У Cambridge запись на курс идёт только по звонку, поэтому вечером заявки теряются. Настроим бота для записи на пробный урок, от $290. Как сейчас обрабатываете вечерние заявки?';
 const isReplyPrompt = (system: string) => system.includes('ответил');
 
 describe('draft shape', () => {
   it('accepts a message with one hook, the approved price and one question', () => {
-    expect(checkFirst(GOOD, 'от $250')).toBe(true);
+    expect(checkFirst(GOOD, 'от $290')).toBe(true);
   });
   it('rejects a wrong price, two questions, long dashes, placeholders and extra money', () => {
-    expect(checkFirst(GOOD.replace('$250', '$99'), 'от $250')).toBe(false);
-    expect(checkFirst(`${GOOD} Удобно?`, 'от $250')).toBe(false);
-    expect(checkFirst(GOOD.replace('поэтому', '—'), 'от $250')).toBe(false);
-    expect(checkFirst(GOOD.replace('от $250', 'от [цена]'), 'от $250')).toBe(false);
-    expect(checkFirst(GOOD.replace('Как', 'Скидка 20 $ сегодня. Как'), 'от $250')).toBe(false);
+    expect(checkFirst(GOOD.replace('$290', '$99'), 'от $290')).toBe(false);
+    expect(checkFirst(`${GOOD} Удобно?`, 'от $290')).toBe(false);
+    expect(checkFirst(GOOD.replace('поэтому', '—'), 'от $290')).toBe(false);
+    expect(checkFirst(GOOD.replace('от $290', 'от [цена]'), 'от $290')).toBe(false);
+    expect(checkFirst(GOOD.replace('Как', 'Скидка 20 $ сегодня. Как'), 'от $290')).toBe(false);
   });
   it('fallback template passes its own check for every offer', () => {
     const { store } = rig();
     for (const p of store.pickNew(10)) {
-      const price = p.offer.includes('Mini') ? 'от $500' : p.offer.includes('ИИ') ? 'от $300' : 'от $250';
+      const price = p.offer.includes('Mini') ? 'от $660' : p.offer.includes('ИИ') ? 'от $220' : 'от $290';
       expect(checkFirst(firstFallback(p), price)).toBe(true);
     }
   });
@@ -44,7 +44,7 @@ describe('batch', () => {
     expect(s.summary).toContain('#3 Cambridge');
     expect(s.summary).toContain('Учебные центры и репетиторы · Бишкек');
     expect(s.summary).toContain('Телефон: +996555000003');
-    expect(s.summary).toContain('от $250');
+    expect(s.summary).toContain('от $290');
     expect(r.store.get(3)).toMatchObject({ status: 'proposed', draftKind: 'first', draft: GOOD });
   });
 
@@ -61,7 +61,7 @@ describe('batch', () => {
     const r = rig(() => 'sorry, no json');
     await r.run({ action: 'batch', limit: 2 });
     const p = r.store.get(3)!;
-    expect(p.draft).toContain('от $250');
+    expect(p.draft).toContain('от $290');
     expect(p.draft).toContain('?');
     expect(r.store.stats().byStatus.proposed).toBe(2);
   });
@@ -70,7 +70,7 @@ describe('batch', () => {
     const r = rig(() => 'x');
     await r.run({ action: 'batch', limit: 5 });
     const prices = r.llm.calls.filter((c) => c.system.includes('ПЕРВОЕ')).map((c) => (JSON.parse(c.messages[0]!.content) as { price: string }).price);
-    expect([...new Set(prices)].sort()).toEqual(['от $250', 'от $300', 'от $500']);
+    expect([...new Set(prices)].sort()).toEqual(['от $220', 'от $290', 'от $660']);
   });
 
   it('says so when the base is empty and rejects unknown actions', async () => {
@@ -95,7 +95,7 @@ describe('card', () => {
     const { store } = rig();
     const text = renderSummary(store.get(2)!, 'first', 'текст?');
     expect(text).toContain('Telegram: https://t.me/rosa_shop');
-    expect(text).toContain('от $500');
+    expect(text).toContain('от $660');
   });
 
   it('all three kinds are locked at level 0 (the approval only records the owner send)', () => {
@@ -118,8 +118,8 @@ describe('approval outcomes', () => {
   it('an edited text is what counts as sent', async () => {
     const r = rig(() => json(GOOD));
     await r.run({ action: 'batch', limit: 1 });
-    await kindSpecs(r.ctx)[KIND_FIRST]!.execute({ text: 'Мой текст от $250. Идёт?', prospectId: 3 }, 1);
-    expect(r.store.get(3)!.sentText).toBe('Мой текст от $250. Идёт?');
+    await kindSpecs(r.ctx)[KIND_FIRST]!.execute({ text: 'Мой текст от $290. Идёт?', prospectId: 3 }, 1);
+    expect(r.store.get(3)!.sentText).toBe('Мой текст от $290. Идёт?');
   });
 
   it('refuses text with [цена]; a failed first card goes back to the new ones', async () => {
@@ -197,15 +197,15 @@ describe('reply flow', () => {
     expect(s.payload.text).toContain('[цена]');
     // «Отправлено» with the placeholder does not go through; after the owner's edit it does
     await expect(kindSpecs(r.ctx)[KIND_REPLY]!.execute(s.payload, 5)).rejects.toThrow();
-    await kindSpecs(r.ctx)[KIND_REPLY]!.execute({ ...s.payload, text: 'Стоимость от $250. Созвонимся в 11:00?' }, 5);
+    await kindSpecs(r.ctx)[KIND_REPLY]!.execute({ ...s.payload, text: 'Стоимость от $290. Созвонимся в 11:00?' }, 5);
     expect(r.store.get(3)).toMatchObject({ status: 'replied', draft: null });
   });
 
   it('uses the template when the model names a price itself', async () => {
-    const r = await sent3((req) => json(isReplyPrompt(req.system) ? 'Это стоит $300, берёте?' : GOOD));
+    const r = await sent3((req) => json(isReplyPrompt(req.system) ? 'Это стоит $777, берёте?' : GOOD));
     markReplied(r.store, 3);
     await r.run({ action: 'reply', prospectId: 3, replyText: 'Сколько?' });
-    expect(r.store.get(3)!.draft).not.toContain('$300');
+    expect(r.store.get(3)!.draft).not.toContain('$777');
     expect(r.store.get(3)!.draft).toContain('11:00');
   });
 

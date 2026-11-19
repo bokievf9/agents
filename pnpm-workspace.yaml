@@ -6,3 +6,8 @@ injectWorkspacePackages: true
 allowBuilds:
   esbuild: true
   better-sqlite3: true
+# Remotion pins an exact zod 4.5.4 (GHSA-mrhx-c7xc-m3w5, memory exhaustion, fixed in 4.6.6): one zod for the whole repo.
+overrides:
+  zod: 4.6.7
+  # satori's font decoder pulls fflate 0.7.3 (GHSA-px8p-9vwx-vf98, fixed in 0.7.5): the patch release of the same line.
+  fflate: 0.7.5

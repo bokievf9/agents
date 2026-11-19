@@ -34,6 +34,19 @@ describe('product in the lead', () => {
   });
 });
 
+describe('copy of a lead the site bot already sent', () => {
+  it('the card says so when the site sets telegramSent; without the flag, or from the client bot, it does not', async () => {
+    const r = setup();
+    const copy = await r.run(r.task(webLead({ telegramSent: true })));
+    expect(copy.result).toContain('копия: бот сайта тоже прислал');
+    const plain = setup();
+    expect((await plain.run(plain.task())).result).not.toContain('копия');
+    const bot = setup();
+    expect((await bot.run(bot.task(webLead({ telegramSent: true, chatId: 77 })))).result).not.toContain('копия');
+    expect(webLeadSchema.parse({ name: 'A', contact: '@abcde', telegramSent: true }).telegramSent).toBe(true);
+  });
+});
+
 describe('slots', () => {
   it('are the next two working days at 11:00 and 15:00 Tashkent, skipping weekends', () => {
     const [a, b] = nextSlots(NOW, 'Asia/Tashkent', ['11:00', '15:00']);

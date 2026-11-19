@@ -1,19 +1,29 @@
+import { getPrices, usd, type ProductKey } from '@fir/core';
+
 /**
- * Offers and USD prices. Prices live in ../../firtech/src/lib/directions.ts (`directionPrices`); this is a copy
- * of the three that Prospector sells first. Keep it in sync by hand, the owner approves prices (level 0).
+ * The three offers Prospector sells first. Names live here; the dollar amounts come from the site's price list
+ * (`getPrices()` in @fir/core, firtech.pro/api/prices), read at the moment of use. The owner approves prices (level 0).
  */
 export type OfferId = 'admin' | 'receptionist' | 'miniapp';
 
 export interface Offer {
   id: OfferId;
   title: string;
-  fromUsd: number;
+  readonly fromUsd: number;
 }
 
+const offer = (id: OfferId, title: string, key: ProductKey): Offer => ({
+  id,
+  title,
+  get fromUsd() {
+    return getPrices().products[key]!;
+  },
+});
+
 export const OFFERS: Record<OfferId, Offer> = {
-  admin: { id: 'admin', title: 'бот-администратор в Telegram', fromUsd: 250 },
-  receptionist: { id: 'receptionist', title: 'ИИ-приёмщик заявок', fromUsd: 300 },
-  miniapp: { id: 'miniapp', title: 'мини-приложение в Telegram', fromUsd: 500 },
+  admin: offer('admin', 'бот-администратор в Telegram', 'admin'),
+  receptionist: offer('receptionist', 'ИИ-приёмщик заявок', 'intake'),
+  miniapp: offer('miniapp', 'мини-приложение в Telegram', 'miniapp'),
 };
 
 const KEYWORDS: [RegExp, OfferId][] = [
@@ -33,5 +43,5 @@ export function offerFor(text: string): Offer {
 }
 
 export function priceLabel(offer: Offer): string {
-  return `от $${offer.fromUsd}`;
+  return `от ${usd(offer.fromUsd)}`;
 }

@@ -98,7 +98,7 @@ export const LLMS_MAX_AGE_DAYS = 90;
 export function checkLlms(res: { status: number; text: string; lastModified: string | null } | null, siteUrl: string, now: number): Finding[] {
   const page = `${siteUrl.replace(/\/$/, '')}/llms.txt`;
   if (!res || res.status !== 200) {
-    return [{ key: 'llms_missing:/llms.txt', severity: 3, page, problem: 'llms.txt не отдаётся', change: 'Добавить /llms.txt: кто мы, 8 направлений с ценами от, как связаться, ссылки на страницы направлений (RU и EN).', needsBuilder: true }];
+    return [{ key: 'llms_missing:/llms.txt', severity: 3, page, problem: 'llms.txt не отдаётся', change: 'Добавить /llms.txt: кто мы, направления с ценами от, как связаться, ссылки на страницы направлений (RU и EN).', needsBuilder: true }];
   }
   const out: Finding[] = [];
   if (res.text.trim().length < 200) out.push({ key: 'llms_thin:/llms.txt', severity: 2, page, problem: `llms.txt слишком короткий (${res.text.trim().length} символов)`, change: 'Дополнить llms.txt: описание студии, список направлений с ценами и ссылками.', needsBuilder: true });

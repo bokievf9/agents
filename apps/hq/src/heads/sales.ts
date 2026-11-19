@@ -320,7 +320,7 @@ export class SalesHead implements ApprovalEditor {
   // ---- the webhook creates a task per lead ----
   /** `POST /lead` and the client bot call this: a Sales task with the lead fields in `meta.lead`, the head wakes. Returns the task id. */
   createLeadTask(lead: Record<string, unknown>, service: string): number {
-    const where = lead.source === 'telegram' ? 'Лид из Telegram' : lead.source === 'web' ? 'Лид из веб-чата' : 'Лид с сайта';
+    const where = lead.source === 'telegram' || typeof lead.chatId === 'number' ? 'Лид из Telegram' : lead.source === 'web' ? 'Лид из веб-чата' : 'Лид с сайта';
     const t = this.hq.createTask({ title: `${where} (${service || 'форма'})`, dept: SALES, creator: 'routine', priority: 1, meta: { action: 'lead', lead } });
     this.hq.wake(HEAD_ID, 'task');
     return t.id;

@@ -1,6 +1,6 @@
 import type { Db } from '@fir/core';
 import type { SubtaskSpec, Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
-import { buildChecks, DAY_MS, realDeps, type CheckDeps, type CheckResult, type MonitorConfig } from './checks.js';
+import { buildChecks, DAY_MS, realDeps, type BotProbe, type CheckDeps, type CheckResult, type MonitorConfig } from './checks.js';
 import { MonitorStore, step } from './state.js';
 
 export const WORKER_ID = 'monitoring';
@@ -35,6 +35,7 @@ const nameOf = (r: CheckResult): string => r.label;
 export class MonitoringWorker implements Worker {
   readonly id = WORKER_ID;
   private readonly deps: CheckDeps;
+  private bot: BotProbe | undefined;
 
   constructor(private readonly cfg: MonitorConfig, deps?: CheckDeps) {
     this.deps = deps ?? realDeps(cfg);
@@ -42,6 +43,11 @@ export class MonitoringWorker implements Worker {
 
   store(db: Db): MonitorStore {
     return new MonitorStore(db);
+  }
+
+  /** Starts watching the public client bot: its `bot` and `bot:silence` checks run with every tick. */
+  watchBot(probe: BotProbe): void {
+    this.bot = probe;
   }
 
   /** Adds a health URL to the list checked from the next tick on (false: already monitored). */
@@ -53,18 +59,23 @@ export class MonitoringWorker implements Worker {
   async tick(db: Db): Promise<TickResult> {
     const store = this.store(db);
     const urls = [...new Set([...this.cfg.urls, ...store.urls()])];
-    const checks = buildChecks({ ...this.cfg, urls }, this.deps);
-    const results = await Promise.all(
-      checks.map((c) =>
-        c.run().catch((e: unknown): CheckResult => ({ id: c.id, label: c.id, ok: false, detail: e instanceof Error ? e.message.slice(0, 120) : 'сбой проверки' })),
-      ),
-    );
+    const checks = buildChecks({ ...this.cfg, urls }, this.deps, this.bot);
+    const results = (
+      await Promise.all(
+        checks.map((c) =>
+          (c.runMany ? c.runMany() : c.run().then((r) => [r])).catch((e: unknown): CheckResult[] => [
+            { id: c.id, label: c.id, ok: false, detail: e instanceof Error ? e.message.slice(0, 120) : 'сбой проверки' },
+          ]),
+        ),
+      )
+    ).flat();
     const now = this.deps.now();
     const events: MonEvent[] = [];
     for (const r of results) {
-      store.sample(now, r.id, r.ok);
       const s = step(store.state(r.id), r.ok, now);
       store.saveState(r.id, s.next);
+      if (r.soft) continue; // colours the public status only: no uptime sample, incident or alert
+      store.sample(now, r.id, r.ok);
       if (s.event === 'down') {
         store.openIncident(r.id, s.next.failSince, `${nameOf(r)}: ${r.detail}`);
         events.push({ kind: 'down', checkId: r.id, text: `Мониторинг: ${nameOf(r)} не в порядке (две проверки подряд). ${r.detail}.` });

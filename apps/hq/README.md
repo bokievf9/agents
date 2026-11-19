@@ -127,7 +127,7 @@
 нет: каждый текст клиенту владелец отправляет сам, одобрение значит «текст утверждён», после него Директор присылает его
 владельцу с контактом. Команды владельца идут через Директора общим `support_command` (`SUPPORT_COMMANDS` в `support.ts`):
 `/ticket клиент: вопрос`, `/tickets`, `/client Имя | контакт | продукт | тариф | с даты`, `/clients`,
-`/invoice клиент сумма за_что [due=ГГГГ-ММ-ДД] [method=payme] [new]`, `/invoices`, `/sub клиент сумма month|year метод дата [тариф]`,
+`/invoice клиент сумма за_что [due=ГГГГ-ММ-ДД] [method=usdt_trc20|usdt_ton|wallet] [new]`, `/invoices`, `/sub клиент сумма month|year метод дата [тариф]`,
 `/paid номер`, `/onboard клиент [: продукт]`. Задача отделу с текстом «вопрос клиента» и `клиент: вопрос` в теле тоже станет тикетом.
 - **Тикеты.** Ответ собирается из базы знаний `packages/workers/customer-support/kb/*.md` (формат: `# Заголовок`, строка `ключи: a, b`,
   пустая строка, текст ответа; правьте файлы без кода) и формулируется моделью (проверка: без меток и тире, иначе текст из базы).
@@ -136,7 +136,7 @@
   не заменят, он не уйдёт. SLA: тикет без утверждённого ответа дольше `SUPPORT_SLA_HOURS` (4) даёт один алерт; проверка раз в час от
   собственного крона головы (`SLA_CRON`), без задачи на запуск.
 - **Счета.** Номер `ИНДЕКС-ГГГГ-NNN` (`INVOICE_PREFIX`, по умолчанию FT), нумерация по годам. Текст счёта (RU) с реквизитами из
-  `PAYMENT_DETAILS_JSON` (ключи kaspi, payme, click, card, usdt) идёт видом `billing_invoice`: `locked`, уровень 0. Нет реквизитов:
+  `PAYMENT_DETAILS_JSON` (ключи `usdt_trc20`, `usdt_ton`, `wallet`; Kaspi, Payme, Click и карты не принимаются) идёт видом `billing_invoice`: `locked`, уровень 0. Нет реквизитов:
   в тексте метка в скобках, отправка блокируется, пока владелец не правит. Рутина `support-billing` 09:30: счета по подпискам за 7 дней
   до срока, напоминания за 3 дня и в день срока (вид `billing_reminder`, `locked`), просрочка 5 дней одним алертом. `/paid` ставит оплату
   и двигает срок подписки; выручка (оплаченные `bl_invoices`) читается Финансистом (`aggregate().revenue`): строка «Выручка» в утренней
@@ -183,7 +183,7 @@
   пустыми полями) лежат в `ps_documents` как `draft` и приходят ОДНИМ одобрением `presales_pack` (`locked`, уровень 0).
   Кнопка «Скопировать документы» (`pc:<id>:c`) присылает тексты сообщениями до 4096 знаков (документов в мессенджере нет),
   «Утвердить» переводит их в `approved`, клиенту отправляет владелец сам. Предоплата `PREPAYMENT_PERCENT` (50), КП действует
-  `KP_VALID_DAYS` (14) дней, сопровождение $25 в месяц, оплата Kaspi, Payme, Click, карты, USDT.
+  `KP_VALID_DAYS` (14) дней, сопровождение по цене с сайта (`extraPrice.support`), оплата USDT (TRC20 или TON) или онлайн-кошелёк из сметы, 50% до старта и 50% после приёмки. Все цены КП, сметы и договора идут из прайс-листа сайта (`getPrices()`, см. «Цены»).
 - **Рекомендации.** `/referral <клиент> -> <новый лид>` или лид с `source=ref:<клиент>` (вебхук принимает `ref:` и до 35 знаков
   `a-z0-9_-`) пишет строку в `rf_referrals` (статусы proposed, paid, rewarded). `/paid <id>` отмечает оплату реферала и кладёт
   одобрение `referral_reward` (`locked`, награда `REFERRAL_REWARD`, по умолчанию месяц сопровождения бесплатно); «Утвердить»
@@ -257,14 +257,14 @@
   бота-администратора для «Салона Лайм» (услуга, мастер, день, время, подтверждение, демо-напоминание через 60 с, перенос, отмена,
   отзыв 1-5), каждое сообщение с пометкой «Демо, записи не настоящие». Состояние в `cb_demo`, стирается `/start` или через 24 ч; сама
   лидов и задач не создаёт, только «Хочу такого бота себе» запускает обычную анкету с `source: demo_salon`. Кнопки `dm:<действие>`.
-- **`/audit <сайт>`**: бесплатный аудит за 24 часа, тот же путь, что `POST /audit` (задача Маркетинга `action: audit`, одобрение `audit`).
+- **`/audit <сайт>`**: бесплатный аудит в течение рабочего дня, тот же путь, что `POST /audit` (задача Маркетинга `action: audit`, одобрение `audit`).
   Подробно: `docs/public-api.md`.
 
 ## Веб-чат сайта: POST /chat (`src/client/web.ts`)
 Виджет «попробуйте приёмщика» на firtech.pro: тот же разговор, что у клиентского бота, без Telegram. Тот же порт, что `/lead`
-(`WEBHOOK_PORT`, 127.0.0.1 на хосте). Заголовок `x-chat-token` = `WEB_CHAT_TOKEN` (необязательно: пусто, значит берётся
-`LEAD_WEBHOOK_TOKEN`; сервер стартует, если задан любой из двух).
-- **Запрос**: JSON `{ sessionId (8-64, [A-Za-z0-9-]), locale: 'ru'|'en', message (1-1000), page? (до 200) }`. Кнопка приходит как
+(`WEBHOOK_PORT`, 127.0.0.1 на хосте). Заголовок `x-chat-token` = `WEB_CHAT_TOKEN` (обязателен для маршрута: без него `/chat` отвечает 404,
+к `LEAD_WEBHOOK_TOKEN` больше не возвращаемся). IP посетителя для лимитов: заголовок `x-visitor-ip`, только с loopback или шлюза docker и только при верном токене, иначе адрес сокета.
+- **Запрос**: JSON `{ sessionId (8-64, [A-Za-z0-9-]), locale: 'ru'|'en', message (1-1000), page? (до 200), ref? ([a-z0-9_-]{1,32}) }`. `ref` запоминается за сессией (первый побеждает), лид из чата получает `source: ref:<slug>`. Кнопка приходит как
   `message: '/btn <id>'`; `/start` и первое сообщение новой сессии дают приветствие с кнопками `intake`, `client`, `ask`
   (если первое сообщение это настоящий вопрос, ответ на него идёт после приветствия в том же ответе). Шаги анкеты: `need:<k>`,
   `deadline:<k>`, `budget:<k>` (ключи как в `texts.ts`).
@@ -352,11 +352,27 @@ id задачи HQ, контекст (описание, последние ко�
 необязательные `MARKETING_BOT_TOKEN`, `SALES_BOT_TOKEN`, `LEAD_WEBHOOK_TOKEN`, `OFFICE_TOKEN`, `ADMIN_TOKEN`, `PRESENCE_AWAY_AFTER_MIN`, `WEBHOOK_PORT`, `BATCH_SIZE`, `SLOT_HOURS`,
 `REPLY_LEVEL`, `SALES_BUDGET_USD`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
 id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `POSTS_PER_WEEK`, `STORIES_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`; сопровождение: `SUPPORT_BOT_TOKEN`, `MONITOR_URLS`, `MONITOR_DOCKER`, `OMNIROUTE_HEALTH_URL`,
-`FIXED_COSTS_USD_MONTH`, `SUPPORT_BUDGET_USD`; производство и бэк-офис: `PRODUCTION_BOT_TOKEN`, `BACKOFFICE_BOT_TOKEN`, `PRODUCTION_BUDGET_USD`, `BACKOFFICE_BUDGET_USD`, `KNOWLEDGE_DIR`; мост: `GITHUB_TOKEN`, `GITHUB_REPO`, `BUILDER_POLL_MINUTES`; клиентский бот: `CLIENT_BOT_TOKEN`, `CLIENT_QUIET_HOURS`, `CLIENT_RATE_PER_HOUR`, `CLIENT_LLM_DAILY_CAP`.
+`FIXED_COSTS_USD_MONTH`, `SUPPORT_BUDGET_USD`; производство и бэк-офис: `PRODUCTION_BOT_TOKEN`, `BACKOFFICE_BOT_TOKEN`, `PRODUCTION_BUDGET_USD`, `BACKOFFICE_BUDGET_USD`, `KNOWLEDGE_DIR`; мост: `GITHUB_TOKEN`, `GITHUB_REPO`, `BUILDER_POLL_MINUTES`; клиентский бот: `CLIENT_BOT_TOKEN`, `CLIENT_QUIET_HOURS`, `CLIENT_RATE_PER_HOUR`, `CLIENT_LLM_DAILY_CAP`; `PRICES_URL` (прайс-лист сайта); обязательные для своих маршрутов `ADMIN_TOKEN` и `WEB_CHAT_TOKEN`; платёж: `PAYMENT_DETAILS_JSON` (`usdt_trc20`, `usdt_ton`, `wallet`).
 необязательные `YOUTUBE_API_KEY`, `YOUTUBE_CHANNEL_ID`, `TRENDS_REGIONS` (по умолчанию `KZ,UZ,RU`), `GSC_SERVICE_ACCOUNT_JSON`, `GSC_SITE_URL`, `SITE_URL` (по умолчанию `https://firtech.pro`), `MARKETING_BOT_TOKEN`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
 id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `POSTS_PER_WEEK`, `STORIES_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`.
 
-Пресейл и рекомендации: `REFERRAL_REWARD`, `PREPAYMENT_PERCENT`, `KP_VALID_DAYS`.
+Пресейл и рекомендации: `REFERRAL_REWARD` (по умолчанию «10% от первой подтверждённой сметы, USDT, в течение 7 дней после оплаты»), `PREPAYMENT_PERCENT`, `KP_VALID_DAYS`.
+
+## Цены: один источник (2026-11-19)
+Сайт отдаёт прайс-лист `GET https://firtech.pro/api/prices` (из `firtech/src/lib/pricing.ts`). `@fir/core` (`packages/core/src/prices.ts`): HQ
+загружает его при старте (таймаут 5 с) и каждые 6 часов, проверяет схемой zod, держит в памяти и в `settings.prices_json` (последняя хорошая копия
+переживает рестарт без сети); без сети и без копии работает снимок `prices.fallback.json`. Сводки цен нигде не набираются руками: КП и смета
+(Presales), холодные сообщения (Разведчик), рилсы и линт контента (Контент-мейкер), SEO-проверка услуг, ответы клиентского бота и веб-чата читают
+`getPrices()` в момент использования. Тест в `packages/core/tests/prices.test.ts` падает, если в коде исполнителей или в ценовом коде клиентского бота
+появится сумма со знаком доллара. Цена в ответе бота проходит санитайзер: сумма должна быть в прайс-листе (для Dono и Polly только свои), любая другая вырезается.
+
+## Реферальная ссылка и дубль лида
+`https://t.me/firtech_bot?start=ref_<slug>` (slug `[a-z0-9_-]{1,32}`): клиентский бот запоминает slug за чатом (таблица `cb_refs`, 30 дней, первый побеждает) и
+лид из этого чата получает `source: ref:<slug>` (дальше работает исполнитель рекомендаций). Лид с сайта может нести `telegramSent: true`: тогда карточка лида
+помечена «копия: бот сайта тоже прислал».
+
+## Если HQ перезапустили посреди задачи
+При старте задачи в статусе `running` возвращаются в `assigned` (`Hq.recoverInterrupted`, журнал задачи фиксирует это), голова берёт их снова.
 
 ## Как добавить отдел
 1. Исполнители: `packages/workers/<имя>` (контракт в `packages/hq/README.md`).
@@ -401,7 +417,7 @@ firtech.pro на том же хосте читает его через `/api/adm
 
 ## Admin API и присутствие (`/admin/*`, `src/admin.ts`, `src/presence.ts`)
 Рабочее место владельца на `firtech.pro/admin`; Telegram остаётся запасным каналом. Тот же сервер и порт, что `POST /lead`. Заголовок
-`x-admin-token` = `ADMIN_TOKEN` (если не задан, берётся `OFFICE_TOKEN`; без обоих маршруты 404). Всё JSON: `{ ok: true, ... }` или `{ ok: false, error }`;
+`x-admin-token` = `ADMIN_TOKEN` (обязателен: без него маршруты 404, к `OFFICE_TOKEN` больше не возвращаемся, HQ пишет одно предупреждение при старте). Всё JSON: `{ ok: true, ... }` или `{ ok: false, error }`;
 время в ISO. Лимит 600 запросов за 10 минут (429). Это приватный интерфейс владельца: имена и тексты лидов в ответах разрешены (в логах только счётчики).
 
 **Присутствие.** Настройки `presence.mode` (`desk` | `away`, по умолчанию `away`) и `presence.lastPingAt`. Эффективно `away`, если режим `away` или сайт не слал
@@ -436,8 +452,8 @@ firtech.pro на том же хосте читает его через `/api/adm
 `docker compose exec hq node node_modules/@fir/hq/dist/cli.js export`.
 
 ## Публичные точки для сайта: /audit и /status (`docs/public-api.md`)
-- `POST /audit` (`x-lead-token`): бесплатный аудит сайта за 24 часа. Таблица `mk_audits`, задача Маркетинга `action: audit`, SEO-исполнитель
+- `POST /audit` (`x-lead-token`): бесплатный аудит сайта в течение рабочего дня (карточка одобрения уходит владельцу сразу, а не в пачку 10:00; через 20 часов без отправки алерт). Таблица `mk_audits`, задача Маркетинга `action: audit`, SEO-исполнитель
   собирает факты страницы, LLM даёт ровно 5 находок, владелец одобряет (`audit`, уровень 0, `locked`), текст уходит контакту через
   клиентского бота, если он уже писал, иначе владельцу для ручной отправки. Лимиты: 1 на контакт в сутки, 20 в час всего.
 - `GET /status` (без токена, кэш 60 с): публичное состояние сервисов по таблицам `mon_*` (`src/status.ts`), без URL и текстов ошибок;
-  `bot`, `polly`, `dono` пока `unknown`.
+  `bot` проверяется мониторингом (`getMe`, поллинг, тишина 10 минут), Polly и Dono не студийные сервисы и на странице не показываются.

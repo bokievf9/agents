@@ -1,9 +1,11 @@
 /**
  * The single product catalogue of the public channels (Telegram client bot and the website chat) and of the LLM prompt.
  * The seven products are what Fir Tech sells first («Что продаём» in COMPANY.md); the classics (site, bot, app) stay as
- * the plain ways to order. Prices are never here, with one exception: the two personal agents whose public prices the
- * owner approved (Dono and Polly, see `PUBLIC_PRICES`).
+ * the plain ways to order. No dollar amount is typed here: every price is read from the site's price list at the moment
+ * of use (`getPrices()` in @fir/core, firtech.pro/api/prices), see `priceOf` and `startingPrices`.
  */
+import { getPrices, planOf, usd, type ProductKey } from '@fir/core';
+
 export type PLang = 'ru' | 'en';
 type L<T> = Record<PLang, T>;
 
@@ -196,11 +198,37 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
 export const isCatalogueId = (s: string): s is CatalogueId => Object.prototype.hasOwnProperty.call(PRODUCTS, s);
 export const isProductId = (s: string): s is ProductId => (PRODUCT_IDS as readonly string[]).includes(s);
 
-/** The only prices the bot may say aloud (owner decision): Dono and Polly. */
-export const PUBLIC_PRICES: L<string> = {
-  ru: 'Dono: $150 + $15/мес. Polly: $100 + $10/мес.',
-  en: 'Dono: $150 + $15/month. Polly: $100 + $10/month.',
+const PRICE_KEY: Partial<Record<CatalogueId, ProductKey>> = {
+  admin: 'admin', receptionist: 'intake', automation: 'automation', miniapp: 'miniapp', ai: 'aiteam', site: 'site', bot: 'bot', app: 'app',
 };
+
+/** The public price of a product, from the site's price list: «от $N», «от $N + $M/мес», both agents for «agent». */
+export function priceOf(id: CatalogueId, lang: PLang): string {
+  const month = lang === 'ru' ? '/мес' : '/month';
+  const from = lang === 'ru' ? 'от' : 'from';
+  if (id === 'content') {
+    const c = planOf('content');
+    return `${from} ${usd(c.setup)} + ${usd(c.monthly)}${month}`;
+  }
+  if (id === 'agent') return publicPrices(lang);
+  const key = PRICE_KEY[id];
+  return `${from} ${usd(key ? getPrices().products[key]! : 0)}`;
+}
+
+/** Dono and Polly: setup plus a monthly fee, from the price list. */
+export function publicPrices(lang: PLang): string {
+  const d = planOf('dono');
+  const p = planOf('polly');
+  const month = lang === 'ru' ? '/мес' : '/month';
+  return `Dono: ${usd(d.setup)} + ${usd(d.monthly)}${month}. Polly: ${usd(p.setup)} + ${usd(p.monthly)}${month}.`;
+}
+
+/** One line with the starting price of every product: for the answer to a direct question about prices. */
+export function startingPrices(lang: PLang): string {
+  const ids: CatalogueId[] = [...PRODUCT_IDS, ...CLASSIC_IDS].filter((i) => i !== 'agent');
+  const list = ids.map((id) => `${PRODUCTS[id].name[lang]} ${priceOf(id, lang)}`).join('; ');
+  return lang === 'ru' ? `Цены на сайте, в долларах: ${list}; ${publicPrices(lang)}` : `Prices as on the site, in USD: ${list}; ${publicPrices(lang)}`;
+}
 
 /** Business niche the visitor mentions, the product that usually fits it, and the words for the hint. */
 interface Kind { id: KindId; re: RegExp; product: ProductId; hint: L<string> }
@@ -236,7 +264,7 @@ export function nicheHint(lang: PLang, text: string): string {
     : `For ${k.hint.en} we usually suggest “${p.name.en}”. Often paired with: ${pair}.`;
 }
 
-/** The catalogue as plain text for the LLM prompt (no prices except the two public ones). */
+/** The catalogue as plain text for the LLM prompt (prices from the site's price list). */
 export function catalogueText(lang: PLang): string {
   const head = lang === 'ru' ? 'Продукты Fir Tech (говори о них именно так, ничего не добавляй от себя)' : 'Fir Tech products (describe them exactly like this, add nothing of your own)';
   const lines = PRODUCT_IDS.map((id) => {
@@ -244,10 +272,13 @@ export function catalogueText(lang: PLang): string {
     const whom = p.kinds.map((k) => KIND_LABELS[k][lang]).join(', ');
     const pair = names(lang, p.pairs);
     return lang === 'ru'
-      ? `- ${p.name.ru}: ${p.benefit.ru} Для: ${whom}. Внутри: ${p.inside.ru.join('; ')}. Обычно вместе с: ${pair}.`
-      : `- ${p.name.en}: ${p.benefit.en} For: ${whom}. Inside: ${p.inside.en.join('; ')}. Usually together with: ${pair}.`;
+      ? `- ${p.name.ru} (${priceOf(id, lang)}): ${p.benefit.ru} Для: ${whom}. Внутри: ${p.inside.ru.join('; ')}. Обычно вместе с: ${pair}.`
+      : `- ${p.name.en} (${priceOf(id, lang)}): ${p.benefit.en} For: ${whom}. Inside: ${p.inside.en.join('; ')}. Usually together with: ${pair}.`;
   });
   const classics = lang === 'ru' ? `Классика: ${CLASSIC_IDS.map((i) => PRODUCTS[i].name.ru).join(', ')}.` : `Classics: ${CLASSIC_IDS.map((i) => PRODUCTS[i].name.en).join(', ')}.`;
-  const price = lang === 'ru' ? `Публичные цены, их можно назвать (только их): ${PUBLIC_PRICES.ru}` : `Public prices you may state (only these): ${PUBLIC_PRICES.en}`;
+  const price =
+    lang === 'ru'
+      ? `Цены (USD, те же, что на сайте): ${startingPrices(lang)}. Называй только эти суммы и только как «от $N», точную цену и срок называет команда в смете.`
+      : `Prices (USD, the same as on the site): ${startingPrices(lang)}. State only these amounts and only as "from $N"; the team names the exact price and timing in the estimate.`;
   return [head, ...lines, classics, price].join('\n');
 }

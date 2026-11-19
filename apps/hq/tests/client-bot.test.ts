@@ -181,6 +181,46 @@ describe('welcome and language', () => {
   });
 });
 
+describe('referral link ?start=ref_<slug>', () => {
+  it('/start ref_<slug> is remembered and the lead made later carries source ref:<slug>; the first referrer wins', async () => {
+    const w = world();
+    await w.engine.onCommand(ME, 'start', 'ref_dilnoza-77');
+    expect(w.transport.last(CLIENT)!.html).toContain('<b>Fir Tech</b>'); // the normal welcome, nothing odd shown
+    await w.engine.onCommand(ME, 'start', 'ref_someone_else'); // a second link does not replace the first
+    await w.intake();
+    const lead = w.leadTasks()[0]!.meta.lead as Record<string, unknown>;
+    expect(lead).toMatchObject({ source: 'ref:dilnoza-77', chatId: CLIENT });
+    expect(w.leadTasks()[0]!.title).toBe('Лид из Telegram (bots)');
+    expect(webLeadSchema.safeParse({ name: 'x', contact: '@dilnoza', source: lead.source }).success).toBe(true);
+  });
+
+  it('without a ref the lead stays source telegram; bad slugs and other payloads are ignored; the slug survives wiped drafts', async () => {
+    const w = world();
+    await w.engine.onCommand(ME, 'start', 'ref_BAD SLUG!');
+    await w.engine.onCommand(ME, 'start', `ref_${'a'.repeat(33)}`);
+    await w.engine.onCommand(ME, 'start', 'ref_');
+    await w.engine.onCommand(ME, 'start', 'campaign_x');
+    await w.intake();
+    expect(w.leadTasks()[0]!.meta.lead).toMatchObject({ source: 'telegram' });
+    const other = world();
+    await other.engine.onCommand(ME, 'start', 'ref_ali');
+    await other.engine.onCommand(ME, 'human', ''); // wipes the draft and mutes
+    await other.engine.onCommand(ME, 'start', ''); // and a plain /start later does not forget the referrer
+    await other.engine.onButton(ME, 'm:discuss', other.card());
+    await other.engine.onButton(ME, 'n:bot', other.card());
+    await other.engine.onButton(ME, 'd:urgent', other.card());
+    await other.engine.onButton(ME, 'b:mid', other.card());
+    expect(other.leadTasks()[0]!.meta.lead).toMatchObject({ source: 'ref:ali' });
+  });
+
+  it('the default reward text is the site rule', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    const base = { HQ_BOT_TOKEN: '1:abc', OWNER_TELEGRAM_ID: '1' };
+    expect(loadConfig(base).referralReward).toBe('10% от первой подтверждённой сметы, USDT, в течение 7 дней после оплаты');
+    expect(loadConfig({ ...base, REFERRAL_REWARD: 'custom' }).referralReward).toBe('custom');
+  });
+});
+
 describe('the 3-step intake', () => {
   it('buttons edit one card in place and end with «Готово»; exactly one lead task, source telegram, with the chat id', async () => {
     const w = world();
@@ -490,7 +530,7 @@ describe('sanitiser and limits', () => {
     const r = sanitizeAnswer('Мы делаем ботов. Цена от 500 у.е. Стоит $300. Будет готово к пятнице. Работает 24/7.', NOTE);
     expect(r.text).toBe(`Мы делаем ботов. Работает 24/7.\n${NOTE}`);
     expect(r.removed).toBe(3);
-    for (const s of ['Сделаем за 3 дня.', 'Запустим до 25 ноября.', 'Около 2 млн сум.', 'It costs $450.', 'Ready within 2 weeks.', 'Будет бесплатно.', '1500 USD', 'Сдадим 12.12.2026.', '5к и готово.']) {
+    for (const s of ['Сделаем за 3 дня.', 'Запустим до 25 ноября.', 'Около 2 млн сум.', 'It costs $460.', 'Ready within 2 weeks.', 'Будет бесплатно.', '1500 USD', 'Сдадим 12.12.2026.', '5к и готово.']) {
       expect(sanitizeAnswer(s, NOTE).text).toBe(NOTE);
     }
     expect(sanitizeAnswer('Расскажите о задаче, и мы предложим решение.', NOTE)).toEqual({ text: 'Расскажите о задаче, и мы предложим решение.', removed: 0 });
@@ -555,6 +595,21 @@ describe('grammy wiring', () => {
     expect(JSON.stringify(send.payload.reply_markup)).toContain('m:discuss');
   });
 
+  it('probe: last sign of life from people and polling, getMe, and a crashed start() raises the polling error', async () => {
+    const { bot } = fakeBot();
+    const probe = bot.probe();
+    expect(probe.startedAt()).toBeNull();
+    expect(probe.lastUpdateAt()).toBeNull();
+    expect(probe.pollingError()).toBeNull();
+    bot.engine.store.touch(CLIENT, 'dilnoza_salon', 'ru');
+    expect(probe.lastUpdateAt()).toBe(NOW);
+    await expect(probe.getMe()).resolves.toBeTruthy(); // answered by the in-memory API
+    bot.bot.start = () => Promise.reject(new Error('409 Conflict: terminated by other getUpdates request'));
+    await expect(bot.start()).rejects.toThrow(/409/);
+    expect(probe.startedAt()).toBe(NOW);
+    expect(probe.pollingError()).toContain('409');
+  });
+
   it('setup sets commands in RU and EN, the owner\'s commands and both descriptions, ignoring errors', async () => {
     const { bot, calls } = fakeBot();
     await bot.setup();
@@ -593,6 +648,12 @@ describe('products in the chat', () => {
     expect(sys).toContain('Dono: $150 + $15/мес');
     expect(sys).toContain('Подбери продукт');
     expect(systemPrompt('x', 'en')).toContain('Polly: $100 + $10/month');
+    // every product line carries its site price
+    expect(sys).toContain('Бот-администратор для услуг (от $290)');
+    expect(sys).toContain('ИИ-приёмщик заявок 24/7 (от $220)');
+    expect(sys).toContain('Telegram Mini App (от $660)');
+    expect(sys).toContain('Внедрение ИИ в компанию (от $550)');
+    expect(sys).toContain('Контент на автопилоте по подписке (от $90 + $60/мес)');
   });
 
   it('«Продукты» shows a list in place, a card per product, and «Обсудить» starts the intake with the product chosen', async () => {
@@ -661,7 +722,12 @@ describe('products in the chat', () => {
     expect(ok.text).toContain('$150 + $15/мес');
     expect(ok.text).toContain('$100 + $10/мес');
     expect(sanitizeAnswer('Dono: $150 + $15/month.', NOTE).removed).toBe(0);
-    for (const bad of ['Dono стоит $200 + $15/мес.', 'Dono: $150 + $25/мес.', 'Бот-администратор стоит $150.', 'Polly: $150 + $10/мес.', 'Сайт от 300 долларов.']) {
+    // the site's prices go through, a stale or invented one does not
+    expect(sanitizeAnswer('Бот-администратор стоит от $290. Расскажете о салоне?', NOTE)).toEqual({ text: 'Бот-администратор стоит от $290. Расскажете о салоне?', removed: 0 });
+    expect(sanitizeAnswer('Mini App от $660, внедрение ИИ от $550.', NOTE).removed).toBe(0);
+    expect(sanitizeAnswer('Приёмщик заявок стоит $300.', NOTE).text).toBe(NOTE);
+    expect(sanitizeAnswer('Приёмщик заявок стоит $220 за 3 дня.', NOTE).text).toBe(NOTE);
+    for (const bad of ['Dono стоит $200 + $15/мес.', 'Dono: $150 + $25/мес.', 'Бот-администратор стоит $99.', 'Polly: $150 + $10/мес.', 'Сайт от 300 долларов.']) {
       const r = sanitizeAnswer(bad, NOTE);
       expect(r.removed, bad).toBe(1);
       expect(r.text).toBe(NOTE);

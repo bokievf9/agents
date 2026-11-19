@@ -5,7 +5,8 @@ import { DAY_MS, MonitorStore, type CheckState, type Incident } from '@fir/worke
  * `GET /status`: the public view of the monitoring worker's `mon_*` tables. Only fixed service ids, states, times and
  * percentages leave the process: never a check id (they carry URLs), a detail, a port or an error body.
  */
-export const SERVICE_IDS = ['site', 'hq', 'bot', 'omniroute', 'polly', 'dono'] as const;
+/** Studio services only: Polly and Dono are the owner's personal agents, not studio services, and are not shown. */
+export const SERVICE_IDS = ['site', 'hq', 'bot', 'omniroute'] as const;
 export type ServiceId = (typeof SERVICE_IDS)[number];
 export type ServiceState = 'up' | 'degraded' | 'down' | 'unknown';
 
@@ -17,13 +18,13 @@ export interface PublicStatus {
   uptime30d: Partial<Record<ServiceId, number>>;
 }
 
-const TITLES: Record<ServiceId, string> = { site: 'Website', hq: 'Agents HQ', bot: 'Telegram bot', omniroute: 'AI gateway', polly: 'Polly', dono: 'Dono' };
+const TITLES: Record<ServiceId, string> = { site: 'Website', hq: 'Agents HQ', bot: 'Telegram bot', omniroute: 'AI gateway' };
 /** The public site's host: the monitoring checks of this host are «the site». */
 const SITE_HOST = /(^|\.)firtech\.pro$/i;
 /** Checks older than this and HQ is serving a page: the monitoring cycle (5 min) has stalled. */
 const STALE_MS = 30 * 60_000;
 
-type Kind = 'http' | 'tls' | 'omniroute' | 'disk' | 'docker';
+type Kind = 'http' | 'tls' | 'omniroute' | 'disk' | 'docker' | 'bot' | 'botsilence';
 interface Mapped { service: ServiceId; kind: Kind }
 
 /** Which public service a monitoring check stands for (null: a check that is not part of the public picture). */
@@ -31,6 +32,9 @@ export function mapCheck(checkId: string): Mapped | null {
   if (checkId === 'omniroute') return { service: 'omniroute', kind: 'omniroute' };
   if (checkId === 'disk') return { service: 'hq', kind: 'disk' };
   if (checkId === 'docker') return { service: 'hq', kind: 'docker' };
+  // The client bot (@firtech_bot): `bot` is getMe and polling, `bot:silence` is a hung poll with no error (soft, degraded only).
+  if (checkId === 'bot') return { service: 'bot', kind: 'bot' };
+  if (checkId === 'bot:silence') return { service: 'bot', kind: 'botsilence' };
   const host = (raw: string): string | null => {
     try {
       return new URL(raw.includes('://') ? raw : `https://${raw}`).hostname;
@@ -50,12 +54,14 @@ export function mapCheck(checkId: string): Mapped | null {
 }
 
 /** When a check fails: a dead health endpoint is `down`, a soon-expiring certificate or a full disk is `degraded`. */
-const DOWN_AS: Record<Kind, ServiceState> = { http: 'down', omniroute: 'down', tls: 'degraded', disk: 'degraded', docker: 'degraded' };
+const DOWN_AS: Record<Kind, ServiceState> = { http: 'down', omniroute: 'down', tls: 'degraded', disk: 'degraded', docker: 'degraded', bot: 'down', botsilence: 'degraded' };
 const NOTE: Record<Kind, string> = {
   http: 'The health check is failing', omniroute: 'The health check is failing', tls: 'The certificate expires soon', disk: 'Disk space is running low', docker: 'A container is unhealthy',
+  bot: 'The bot is not receiving updates', botsilence: 'The bot has been silent for a while',
 };
 const INCIDENT: Record<Kind, string> = {
   http: 'health check failed', omniroute: 'health check failed', tls: 'certificate problem', disk: 'low disk space', docker: 'container problem',
+  bot: 'bot not responding', botsilence: 'bot silent',
 };
 const RANK: Record<ServiceState, number> = { up: 0, unknown: 0, degraded: 1, down: 2 };
 const iso = (ms: number): string => new Date(ms).toISOString();
@@ -96,7 +102,7 @@ export function aggregate(inp: StatusInput, now: number): PublicStatus {
       }
     }
     services.push({ id, title: TITLES[id], state, ...(state !== 'up' && state !== 'unknown' && since ? { since: iso(since) } : {}), ...(note && state !== 'up' && state !== 'unknown' ? { note } : {}) });
-    const pcts = inp.perCheck.filter((p) => { const m = mapCheck(p.checkId); return m?.service === id && m.kind !== 'tls'; }).map((p) => p.pct);
+    const pcts = inp.perCheck.filter((p) => { const m = mapCheck(p.checkId); return m?.service === id && m.kind !== 'tls' && m.kind !== 'botsilence'; }).map((p) => p.pct);
     if (pcts.length) uptime[id] = Math.min(...pcts);
   }
   const incidents = inp.incidents

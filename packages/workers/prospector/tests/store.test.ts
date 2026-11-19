@@ -150,10 +150,10 @@ describe('stats and find', () => {
 
 describe('offers', () => {
   it('maps the offer text to a direction price from directions.ts', () => {
-    expect(priceLabel(offerFor('Бот-администратор: запись'))).toBe('от $250');
-    expect(priceLabel(offerFor('Бот-заказ и бронь в Telegram; ИИ-приёмщик'))).toBe('от $250');
-    expect(priceLabel(offerFor('ИИ-приёмщик заявок из директа + Telegram Mini App'))).toBe('от $300');
-    expect(priceLabel(offerFor('Telegram Mini App: каталог; сайт как основа'))).toBe('от $500');
-    expect(priceLabel(offerFor(''))).toBe('от $250');
+    expect(priceLabel(offerFor('Бот-администратор: запись'))).toBe('от $290');
+    expect(priceLabel(offerFor('Бот-заказ и бронь в Telegram; ИИ-приёмщик'))).toBe('от $290');
+    expect(priceLabel(offerFor('ИИ-приёмщик заявок из директа + Telegram Mini App'))).toBe('от $220');
+    expect(priceLabel(offerFor('Telegram Mini App: каталог; сайт как основа'))).toBe('от $660');
+    expect(priceLabel(offerFor(''))).toBe('от $290');
   });
 });

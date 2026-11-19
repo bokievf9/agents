@@ -1,9 +1,9 @@
-import { MockLlm, openDb, type Payload } from '@fir/core';
+import { allowedAmounts as sitePrices, FALLBACK_PRICES, MockLlm, openDb, setPrices, type Payload } from '@fir/core';
 import type { Task, WorkerCtx } from '@fir/hq';
 import { leadStoreFor } from '@fir/worker-lead-intake';
 import { describe, expect, it } from 'vitest';
 import { fillMarks, fallbackWording, wordingOk, type Wording } from '../src/docs.js';
-import { DIRECTION_IDS, guessDirection, OFFERS, priceLabel, SUPPORT_MONTHLY_USD } from '../src/offers.js';
+import { DIRECTION_IDS, guessDirection, OFFERS, priceLabel, supportMonthlyUsd } from '../src/offers.js';
 import { splitMessage } from '../src/split.js';
 import { render } from '../src/template.js';
 import { kindSpecs, KIND_PACK, onDecision, packMessages, PresalesWorker, storeFor } from '../src/worker.js';
@@ -41,10 +41,9 @@ function rig(handler: ConstructorParameters<typeof MockLlm>[0] = () => JSON.stri
 
 /** Every dollar amount a proposal may contain, computed from the table only. */
 function allowedAmounts(): Set<number> {
-  const s = new Set<number>([SUPPORT_MONTHLY_USD]);
+  const s = new Set<number>([supportMonthlyUsd(), ...sitePrices()]);
   for (const o of Object.values(OFFERS)) {
     s.add(o.fromUsd);
-    if (o.teamUsd) s.add(o.teamUsd);
     s.add(Math.round(o.fromUsd / 2));
     s.add(o.fromUsd - Math.round(o.fromUsd / 2));
   }
@@ -52,14 +51,26 @@ function allowedAmounts(): Set<number> {
 }
 const amounts = (text: string) => [...text.matchAll(/\$(\d+)/g)].map((m) => Number(m[1]));
 
-describe('prices come from the offers table only', () => {
+describe('prices come from the price list only', () => {
+  it('a changed price list changes the proposal at once', async () => {
+    setPrices({ ...FALLBACK_PRICES, products: { ...FALLBACK_PRICES.products, admin: 310 } });
+    try {
+      const r = rig();
+      r.lead();
+      await r.run({ leadId: 1 });
+      expect(r.staged[0]!.payload.kp).toContain('Стоимость: от $310');
+    } finally {
+      setPrices(FALLBACK_PRICES);
+    }
+  });
+
   it('the proposal fills [цена] and [срок] from the table: site 7-10 days, bot 5-7, receptionist 7, mini app 14-21', async () => {
     const r = rig();
     r.lead();
     const res = await r.run({ leadId: 1 });
     expect(res.ok).toBe(true);
     const kp = r.staged[0]!.payload.kp as string;
-    expect(kp).toContain('Стоимость: от $250, срок запуска 5-7 рабочих дней.');
+    expect(kp).toContain('Стоимость: от $290, срок запуска 5-7 рабочих дней.');
     expect(kp).not.toMatch(/\[(цена|срок)\]/);
     expect(OFFERS.site.timeline).toBe('7-10 рабочих дней');
     expect(OFFERS.receptionist.timeline).toBe('7 рабочих дней');
@@ -73,7 +84,7 @@ describe('prices come from the offers table only', () => {
     await r.run({ leadId: 1 });
     const docs = [r.staged[0]!.payload.kp, r.staged[0]!.payload.estimate, r.staged[0]!.payload.contract].join('\n');
     expect(docs).not.toContain('$99');
-    expect(docs).toContain('Предлагаем решение «Telegram-бот-администратор». Стоимость: от $250.');
+    expect(docs).toContain('Предлагаем решение «Telegram-бот-администратор». Стоимость: от $290.');
     expect(wordingOk({ ...GOOD, problem: 'Это — проблема' })).toBe(false);
     expect(wordingOk({ ...GOOD, scope: [...GOOD.scope.slice(0, 5)] })).toBe(true);
   });
@@ -109,15 +120,16 @@ describe('prices come from the offers table only', () => {
     r.lead();
     await r.run({ leadId: 1 });
     const kp = r.staged[0]!.payload.kp as string;
-    expect(kp).toContain('Предоплата 30%, оставшиеся 70% после сдачи работы. Способы оплаты: Kaspi, Payme, Click, банковские карты, USDT.');
-    expect(kp).toContain('$25 в месяц');
+    expect(kp).toContain('Предоплата 30% до старта, оставшиеся 70% после приёмки результата. Способы оплаты: USDT (сеть TRC20 или TON) или онлайн-кошелёк, который назван в смете.');
+    expect(kp).not.toMatch(/Kaspi|Payme|Click|карт/i);
+    expect(kp).toContain('$20 в месяц');
     expect(kp).toContain('Предложение действует 7 дней, до 27.11.2026');
-    expect(kp).toContain('| Предоплата 30% | от $75 |');
+    expect(kp).toContain('| Предоплата 30% | от $87 |');
     const dflt = rig();
     dflt.lead();
     await dflt.run({ leadId: 1 });
     expect(dflt.staged[0]!.payload.kp).toContain('до 04.12.2026');
-    expect(dflt.staged[0]!.payload.kp).toContain('| Предоплата 50% | от $125 |');
+    expect(dflt.staged[0]!.payload.kp).toContain('| Предоплата 50% | от $145 |');
   });
 });
 
@@ -131,8 +143,8 @@ describe('direction choice', () => {
   });
   it('fills marks only from the table', () => {
     expect(fillMarks('[цена] / [срок]', OFFERS.site)).toBe('от $150 / 7-10 рабочих дней');
-    expect(priceLabel(OFFERS.content)).toBe('от $60 в месяц');
-    expect(priceLabel(OFFERS.training)).toBe('от $150 за человека');
+    expect(priceLabel(OFFERS.content)).toBe('от $90 + $60 в месяц');
+    expect(priceLabel(OFFERS.agent)).toBe('от $100 + $10 в месяц');
     expect(fallbackWording({ leadId: null, client: 'X', niche: '', request: '' }, OFFERS.site).scope).toEqual(OFFERS.site.scope);
   });
   it('template without a value for a variable is a bug', () => {
@@ -222,9 +234,12 @@ describe('the pack and its approval', () => {
     r.lead();
     await r.run({ leadId: 1 });
     const c = r.staged[0]!.payload.contract as string;
-    expect(c).toContain('Договор оказания услуг № ______');
-    expect(c).toContain('Предоплата 50% (от $125)');
-    expect(c).toContain('Kaspi, Payme, Click, банковские карты, USDT');
+    expect(c).toContain('Договор оказания услуг');
+    expect(c).toContain('Предоплата 50% (от $145)');
+    expect(c).toContain('USDT (сеть TRC20 или TON)');
+    expect(c).toContain('30 дней');
+    expect(c).toContain('Республика Таджикистан');
+    expect(c).not.toMatch(/ИНН|______/);
     expect(c).not.toMatch(/\{\{/);
   });
 });

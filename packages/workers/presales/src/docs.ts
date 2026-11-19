@@ -1,10 +1,11 @@
-import { tryJson, zonedParts, type LlmClient } from '@fir/core';
+import { tryJson, usd, zonedParts, type LlmClient } from '@fir/core';
 import { z } from 'zod';
 import { DOC_RU, type NewDoc } from './store.js';
-import { priceLabel, SUPPORT_MONTHLY_USD, usd, type Offer } from './offers.js';
+import { priceLabel, supportMonthlyUsd, type Offer } from './offers.js';
 import { render, type Templates } from './template.js';
 
-export const PAYMENT_METHODS = 'Kaspi, Payme, Click, банковские карты, USDT';
+/** The studio's payment (owner decision 2026-11-19): USDT on TRC20 or TON, or an online wallet named in the estimate. */
+export const PAYMENT_METHODS = 'USDT (сеть TRC20 или TON) или онлайн-кошелёк, который назван в смете';
 export const DAY = 86_400_000;
 
 export interface PresalesTerms {
@@ -76,15 +77,15 @@ export function priceTable(o: Offer, pct: number): string {
   const pre = Math.round((o.fromUsd * pct) / 100);
   const rows: [string, string][] = [
     [o.title, priceLabel(o)],
-    ...(o.teamUsd ? [[`${o.title}, вся команда`, `от ${usd(o.teamUsd)}`] as [string, string]] : []),
     [`Предоплата ${pct}%`, fromAmount(pre)],
-    [`Оплата по сдаче ${100 - pct}%`, fromAmount(o.fromUsd - pre)],
-    ['Сопровождение (по желанию)', `${usd(SUPPORT_MONTHLY_USD)} в месяц`],
+    [`Оплата после приёмки ${100 - pct}%`, fromAmount(o.fromUsd - pre)],
+    ['Сопровождение (по желанию)', `${usd(supportMonthlyUsd())} в месяц`],
   ];
   return ['| Позиция | Стоимость, USD |', '|---|---|', ...rows.map(([a, b]) => `| ${a} | ${b} |`)].join('\n');
 }
 
-const paymentTerms = (pct: number) => `Предоплата ${pct}%, оставшиеся ${100 - pct}% после сдачи работы. Способы оплаты: ${PAYMENT_METHODS}.`;
+const paymentTerms = (pct: number) =>
+  `Предоплата ${pct}% до старта, оставшиеся ${100 - pct}% после приёмки результата. Способы оплаты: ${PAYMENT_METHODS}. Реквизиты вы получите в смете.`;
 
 /** Builds the three documents from the templates. Prices come from `o` only. */
 export function buildDocs(tpl: Templates, o: Offer, b: Brief, w: Wording, terms: PresalesTerms, now: number, tz: string): NewDoc[] {
@@ -99,7 +100,7 @@ export function buildDocs(tpl: Templates, o: Offer, b: Brief, w: Wording, terms:
     client, date, valid_until: validUntil, valid_days: String(terms.validDays), title: o.title,
     context: fill(w.context), problem: fill(w.problem), solution: fill(w.solution), scope: bullets(scope),
     timeline: o.timeline, price_table: priceTable(o, pct), payment_terms: paymentTerms(pct),
-    support: `После запуска можно подключить сопровождение: ${usd(SUPPORT_MONTHLY_USD)} в месяц (правки, мониторинг, помощь). Решение вы принимаете после запуска.`,
+    support: `После запуска можно подключить сопровождение: ${usd(supportMonthlyUsd())} в месяц (правки, мониторинг, помощь). Решение вы принимаете после запуска.`,
   });
   const estimate = render(tpl.estimate, {
     client, title: o.title, date, valid_until: validUntil,
@@ -108,15 +109,15 @@ export function buildDocs(tpl: Templates, o: Offer, b: Brief, w: Wording, terms:
       '| Позиция | USD |', '|---|---|',
       `| Базовая стоимость | ${priceLabel(o)} |`,
       `| Предоплата ${pct}% | ${fromAmount(pre)} |`,
-      `| Остаток ${100 - pct}% по сдаче | ${fromAmount(o.fromUsd - pre)} |`,
-      `| Сопровождение (по желанию) | ${usd(SUPPORT_MONTHLY_USD)} в месяц |`,
+      `| Остаток ${100 - pct}% после приёмки | ${fromAmount(o.fromUsd - pre)} |`,
+      `| Сопровождение (по желанию) | ${usd(supportMonthlyUsd())} в месяц |`,
     ].join('\n'),
   });
   const contract = render(tpl.contract, {
     client, title: o.title, date, timeline: o.timeline, price: priceLabel(o),
-    price_note: 'базовая цена направления', prepay_percent: String(pct), prepay_amount: fromAmount(pre),
+    price_note: 'базовая цена направления; цены на сайте firtech.pro в долларах США', prepay_percent: String(pct), prepay_amount: fromAmount(pre),
     rest_percent: String(100 - pct), rest_amount: fromAmount(o.fromUsd - pre), payment_methods: PAYMENT_METHODS,
-    support_price: `${usd(SUPPORT_MONTHLY_USD)} в месяц`,
+    support_price: `${usd(supportMonthlyUsd())} в месяц`,
   });
   return [
     { kind: 'kp', title: DOC_RU.kp, body: kp },

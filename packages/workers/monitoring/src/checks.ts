@@ -10,6 +10,11 @@ export interface CheckResult {
   ok: boolean;
   /** Short facts for the alert and the journal: status code, days left, percent. No secrets. */
   detail: string;
+  /**
+   * A soft check only colours the public status (a failure is `degraded`): no sample in the uptime line, no incident,
+   * no alert to the owner. Used for «silence», which is often just a quiet hour.
+   */
+  soft?: boolean;
 }
 
 export interface Container {
@@ -165,19 +170,70 @@ export async function checkDocker(deps: CheckDeps): Promise<CheckResult> {
   }
 }
 
+/** Silence of the client bot longer than this, with no polling error, makes it `degraded`. */
+export const BOT_SILENCE_MS = 10 * 60_000;
+
+/**
+ * What the monitoring needs to know about the public client bot (@firtech_bot). HQ implements it on the real bot
+ * (`ClientBot.probe()`); tests use fakes.
+ */
+export interface BotProbe {
+  /** Epoch ms of the latest sign of life: a message from a person (the client bot store) or a completed getUpdates. Null: none yet. */
+  lastUpdateAt(): number | null;
+  /** Epoch ms when polling started; null when it has not started (the bot is not checked then). */
+  startedAt(): number | null;
+  /** `getMe` through the bot API; rejects when Telegram does not answer. */
+  getMe(): Promise<unknown>;
+  /** Why polling stopped or failed (a crashed `start()`), null while it is fine. */
+  pollingError(): string | null;
+}
+
+const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('timeout')), ms);
+    p.then((v) => (clearTimeout(t), resolve(v)), (e: unknown) => (clearTimeout(t), reject(e instanceof Error ? e : new Error(String(e)))));
+  });
+
+/**
+ * The client bot: `bot` fails (`down`) when polling has failed or `getMe` does not answer; `bot:silence` (soft, `degraded`)
+ * when polling raised no error but nothing has been heard for 10 minutes: a hung long poll. Skipped until polling starts.
+ */
+export async function checkBot(deps: CheckDeps, cfg: Pick<MonitorConfig, 'timeoutMs'>, probe: BotProbe): Promise<CheckResult[]> {
+  const base = { id: 'bot', label: 'Telegram-бот' };
+  const started = probe.startedAt();
+  const err = probe.pollingError();
+  if (started === null && !err) return [{ ...base, ok: true, detail: 'ещё не запущен' }];
+  if (err) return [{ ...base, ok: false, detail: `поллинг остановлен: ${err.slice(0, 100)}` }];
+  try {
+    await withTimeout(probe.getMe(), cfg.timeoutMs);
+  } catch (e) {
+    return [{ ...base, ok: false, detail: `getMe: ${errText(e)}` }];
+  }
+  const last = Math.max(probe.lastUpdateAt() ?? 0, started ?? 0);
+  const quietMin = Math.floor((deps.now() - last) / 60_000);
+  const silent = deps.now() - last > BOT_SILENCE_MS;
+  return [
+    { ...base, ok: true, detail: 'getMe ответил' },
+    { id: 'bot:silence', label: 'Telegram-бот: тишина', ok: !silent, detail: silent ? `нет апдейтов ${quietMin} мин, ошибок поллинга нет` : 'апдейты идут', soft: true },
+  ];
+}
+
 export interface Check {
   id: string;
   run(): Promise<CheckResult>;
+  /** Checks that report several results at once (the bot). */
+  runMany?(): Promise<CheckResult[]>;
 }
 
-/** The checks for a config. The Docker check exists only with `docker: true`. */
-export function buildChecks(cfg: MonitorConfig, deps: CheckDeps): Check[] {
+/** The checks for a config. The Docker check exists only with `docker: true`, the bot check only with a probe. */
+export function buildChecks(cfg: MonitorConfig, deps: CheckDeps, bot?: BotProbe): Check[] {
   const checks: Check[] = cfg.urls.map((u) => ({ id: `http:${u}`, run: () => checkHttp(deps, cfg, u) }));
   const hosts = [...new Set(cfg.urls.filter((u) => u.startsWith('https:')).map(hostOf))];
   for (const h of hosts) checks.push({ id: `tls:${h}`, run: () => checkTls(deps, cfg, h) });
   checks.push({ id: 'omniroute', run: () => checkOmniroute(deps, cfg) });
   checks.push({ id: 'disk', run: () => checkDisk(deps, cfg) });
   if (cfg.docker) checks.push({ id: 'docker', run: () => checkDocker(deps) });
+  if (bot) checks.push({ id: 'bot', run: async () => (await checkBot(deps, cfg, bot))[0]!, runMany: () => checkBot(deps, cfg, bot) });
   return checks;
 }
 

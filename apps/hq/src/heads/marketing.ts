@@ -72,6 +72,16 @@ const splitSchema = z.object({
 const MAX_VIDEO_BYTES = 49 * 1024 * 1024;
 const reviewSchema = z.object({ ok: z.boolean(), issues: z.array(z.string()).max(10).default([]) });
 
+/** An audit not delivered this long after the request raises an alert (the promise is «в течение рабочего дня»). */
+export const AUDIT_ALERT_AFTER_MS = 20 * 3_600_000;
+const auditHostOf = (url: string): string => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url.slice(0, 60);
+  }
+};
+
 type Action = 'pack' | 'topic' | 'daily' | 'trends' | 'trends_weekly' | 'seo' | 'report' | 'profile' | 'article' | 'audit' | 'none';
 const DIRECT: Action[] = ['trends', 'trends_weekly', 'seo', 'report'];
 const ACTIONS: Action[] = ['pack', 'topic', 'daily', 'profile', 'article', 'audit', ...DIRECT];
@@ -162,7 +172,7 @@ export class MarketingHead implements ApprovalEditor {
     d.hq.registerKind(AUDIT_KIND, {
       initialLevel: 0, locked: true,
       execute: (payload) => this.deliverAudit(payload as unknown as AuditPayload),
-    });
+    }, { urgent: true }); // a visitor is waiting: the card goes out at once, not with the 10:00 batch
     // The owner rejected an item: the worker's own table follows.
     d.hq.onApprovalDecision((link, state) => {
       if (link.kind === AUDIT_KIND && state === 'rejected') this.audits().setStatus(Number(link.payload.auditId), 'rejected');
@@ -196,11 +206,28 @@ export class MarketingHead implements ApprovalEditor {
       /* the URL was validated before */
     }
     const t = this.hq.createTask({
-      title: `Аудит: ${host}`.slice(0, 200), body: 'Бесплатный аудит сайта за 24 часа: пять находок и одно закрывающее предложение.', dept: MARKETING, creator: 'head',
+      title: `Аудит: ${host}`.slice(0, 200), body: 'Бесплатный аудит сайта в течение рабочего дня: пять находок и одно закрывающее предложение.', dept: MARKETING, creator: 'head',
       meta: { action: 'audit', auditId: id, url: a.url, contact: a.contact, locale: a.locale },
     });
     this.hq.wake(HEAD_ID, 'task');
     return { id, taskId: t.id };
+  }
+
+  /**
+   * The audit is promised «в течение рабочего дня»: 20 hours after /audit or the form, an audit that is still not
+   * delivered (not approved, failed, stuck) becomes one alert to the owner. Once per audit.
+   */
+  async auditWatch(): Promise<number> {
+    let n = 0;
+    for (const a of this.audits().undelivered(AUDIT_ALERT_AFTER_MS)) {
+      const key = `audit_alerted_${a.id}`;
+      if (this.hq.setting(key)) continue;
+      this.hq.setSetting(key, String(this.hq.now()));
+      const hours = Math.floor((this.hq.now() - a.created) / 3_600_000);
+      await this.hq.alert(`Аудит #${a.id} (${auditHostOf(a.url)}, ${a.contact}) не отправлен уже ${hours} ч, статус «${a.status}». Посетителю обещан ответ в течение рабочего дня: проверьте карточку одобрения или задачу.`);
+      n++;
+    }
+    return n;
   }
 
   private async deliverAudit(p: AuditPayload): Promise<void> {

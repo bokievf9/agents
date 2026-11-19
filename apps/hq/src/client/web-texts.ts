@@ -1,4 +1,4 @@
-import { PRODUCT_IDS, PRODUCTS, type CatalogueId } from './products.js';
+import { PRODUCT_IDS, PRODUCTS, startingPrices, type CatalogueId } from './products.js';
 import { BUDGETS, DEADLINES, NEED_BUTTONS, productCardHtml, T, type Lang } from './texts.js';
 
 /** Telegram texts are HTML; the website chat shows plain text. */
@@ -38,15 +38,16 @@ const RU: WebTexts = {
   discuss: 'Обсудить',
   allProducts: 'Все продукты',
   menu: { intake: 'Обсудить проект', products: 'Продукты', client: 'Я уже клиент', ask: 'Задать вопрос' },
-  ask: 'Спрашивайте: расскажу, что и как мы делаем. Цены и сроки называет команда после короткого разговора.',
+  ask: 'Спрашивайте: расскажу, что и как мы делаем. Цены на сайте в долларах, точную цену и срок команда записывает в смете.',
   askContact: 'Последний шаг. Как с вами связаться? Напишите Telegram @username, телефон или email.',
   contactBad: 'Не похоже на контакт. Напишите Telegram @username, телефон с кодом страны или email.',
   done: (need, deadline, budget, night) =>
     `Готово, заявка принята.\nЗадача: ${need}\nСрок: ${deadline}\nБюджет: ${budget}\n\nМы свяжемся с вами по этому контакту с предложением в течение рабочего дня.${night ? ' Сейчас у нас ночь, поэтому ответ придёт утром.' : ''}`,
   clientDone: (ticket, night) =>
     `Приняли. ${ticket ? 'Ответим по вашему контакту в течение часа в рабочее время.' : 'Передали команде, свяжемся по вашему контакту в течение рабочего дня.'}${night ? ' Сейчас ночь, поэтому ответ придёт утром.' : ''}`,
-  price:
-    'Считаем под задачу: многое зависит от того, что именно должно уметь решение. Ответьте на три коротких вопроса, и мы вернёмся с предложением и ценой в течение рабочего дня.',
+  get price() {
+    return `${startingPrices('ru')}.\n\nТочную цену и срок считаем под задачу и записываем в смете. Ответьте на три коротких вопроса, и мы вернёмся с предложением в течение рабочего дня.`;
+  },
   night: 'Сейчас у нас ночь, человек ответит утром. Если хотите, оставьте заявку: это три коротких вопроса и контакт.',
   fallback: 'На этот вопрос лучше ответит команда. Оставьте заявку: три коротких вопроса и контакт, и мы вернёмся с ответом.',
   cap: 'Чтобы ответить по существу, нужно знать вашу задачу. Оставьте заявку: три коротких вопроса и контакт, и команда вернётся с предложением.',
@@ -60,15 +61,16 @@ const EN: WebTexts = {
   discuss: 'Discuss',
   allProducts: 'All products',
   menu: { intake: 'Discuss a project', products: 'Products', client: 'I am a client', ask: 'Ask a question' },
-  ask: 'Go ahead: I will tell you what we do and how. The team names prices and timing after a short talk.',
+  ask: 'Go ahead: I will tell you what we do and how. Prices are on the site in USD, the team writes the exact price and timing in the estimate.',
   askContact: 'Last step. How can we reach you? Send a Telegram @username, a phone number or an email.',
   contactBad: 'That does not look like a contact. Send a Telegram @username, a phone number with country code or an email.',
   done: (need, deadline, budget, night) =>
     `Done, request received.\nTask: ${need}\nTiming: ${deadline}\nBudget: ${budget}\n\nWe will contact you with a proposal within one working day.${night ? ' It is night here now, so the answer will come in the morning.' : ''}`,
   clientDone: (ticket, night) =>
     `Got it. ${ticket ? 'We will answer through your contact within an hour during working hours.' : 'Passed to the team, we will reach out within one working day.'}${night ? ' It is night here now, so the answer will come in the morning.' : ''}`,
-  price:
-    'We price each task separately: a lot depends on what exactly the solution should do. Answer three short questions and we will come back with a proposal and a price within one working day.',
+  get price() {
+    return `${startingPrices('en')}.\n\nWe set the exact price and timing for each task and write them in the estimate. Answer three short questions and we will come back with a proposal within one working day.`;
+  },
   night: 'It is night here now, a person will answer in the morning. If you like, leave a request: three short questions and a contact.',
   fallback: 'The team can answer this better. Leave a request: three short questions and a contact, and we will come back with an answer.',
   cap: 'To answer properly we need to know your task. Leave a request: three short questions and a contact, and the team will come back with a proposal.',

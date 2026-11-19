@@ -46,6 +46,20 @@ describe('POST /lead', () => {
     }
   });
 
+  it('limits per visitor IP from x-visitor-ip (20 an hour); the header is read only with a valid token', async () => {
+    const { server, url } = await start();
+    const withIp = (ip: string, token = 'secret-token') =>
+      fetch(`${url}/lead`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-lead-token': token, 'x-visitor-ip': ip }, body: JSON.stringify(body) });
+    try {
+      for (let i = 0; i < 20; i++) expect((await withIp('198.51.100.9')).status).toBe(200);
+      expect((await withIp('198.51.100.9')).status).toBe(429);
+      expect((await withIp('198.51.100.10')).status).toBe(200); // another visitor
+      expect((await withIp('198.51.100.9', 'wrong')).status).toBe(401); // a wrong token never reaches the limiter
+    } finally {
+      server.close();
+    }
+  });
+
   it('accepts an optional source tag and rejects a bad one', async () => {
     const { server, url, received } = await start();
     try {
@@ -74,5 +88,35 @@ describe('POST /lead', () => {
     expect(tokenOk('a', 'secret')).toBe(false);
     expect(tokenOk(undefined, 'secret')).toBe(false);
     expect(tokenOk('secret', 'secret')).toBe(true);
+  });
+});
+
+describe('required tokens (no fallback to another token)', () => {
+  it('ADMIN_TOKEN and WEB_CHAT_TOKEN are read only from their own variables', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    const base = { HQ_BOT_TOKEN: '1:abc', OWNER_TELEGRAM_ID: '1', OFFICE_TOKEN: 'office', LEAD_WEBHOOK_TOKEN: 'lead' };
+    const cfg = loadConfig(base);
+    expect(cfg.adminToken).toBeUndefined();
+    expect(cfg.webChatToken).toBeUndefined();
+    expect(cfg.officeToken).toBe('office');
+    expect(cfg.leadWebhookToken).toBe('lead');
+    const both = loadConfig({ ...base, ADMIN_TOKEN: 'adm', WEB_CHAT_TOKEN: 'chat' });
+    expect(both.adminToken).toBe('adm');
+    expect(both.webChatToken).toBe('chat');
+  });
+
+  it('without them the routes answer 404, even with the office or lead token in the header', async () => {
+    const server = createWebhook(() => Promise.resolve(1), 'lead', Date.now, { token: 'office', get: () => ({}) });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      expect((await fetch(`${url}/admin/tasks`, { headers: { 'x-admin-token': 'office' } })).status).toBe(404);
+      expect((await fetch(`${url}/admin/tasks`, { headers: { 'x-admin-token': 'lead' } })).status).toBe(404);
+      expect((await fetch(`${url}/chat`, { method: 'POST', headers: { 'x-chat-token': 'lead' }, body: '{}' })).status).toBe(404);
+      expect((await fetch(`${url}/office`, { headers: { 'x-office-token': 'office' } })).status).toBe(200);
+    } finally {
+      server.close();
+    }
   });
 });

@@ -26,7 +26,7 @@ export const CSV = [
 ].join('\n');
 
 export const json = (message: string): string => JSON.stringify({ message });
-export const GOOD = 'Здравствуйте! Это Фирдавс из Fir Tech. У Cambridge запись на курс идёт только по звонку, поэтому вечером заявки теряются. Настроим бота для записи на пробный урок, от $250. Как сейчас обрабатываете вечерние заявки?';
+export const GOOD = 'Здравствуйте! Это Фирдавс из Fir Tech. У Cambridge запись на курс идёт только по звонку, поэтому вечером заявки теряются. Настроим бота для записи на пробный урок, от $290. Как сейчас обрабатываете вечерние заявки?';
 
 export interface Replies {
   /** Director's intent parse. */

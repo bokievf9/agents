@@ -1,5 +1,5 @@
 import { Cron } from 'croner';
-import { loadBaseConfig, optional, required, type BaseConfig } from '@fir/core';
+import { DEFAULT_PRICES_URL, loadBaseConfig, optional, required, type BaseConfig } from '@fir/core';
 import { loadMonitorConfig, type MonitorConfig } from '@fir/worker-monitoring';
 import { parsePaymentDetails, type PaymentDetails } from '@fir/worker-billing';
 import { parseFixedCosts } from '@fir/worker-finance';
@@ -40,11 +40,11 @@ export interface Config extends BaseConfig {
   /** Shared secret of `POST /lead` (header `x-lead-token`); without it the webhook server does not start. */
   leadWebhookToken: string | undefined;
   webhookPort: number;
-  /** Secret of `POST /chat` (header `x-chat-token`); falls back to `LEAD_WEBHOOK_TOKEN`. */
+  /** Secret of `POST /chat` (header `x-chat-token`). Required for the route: without it `/chat` answers 404 (no fallback to another token). */
   webChatToken: string | undefined;
   /** Shared secret of `GET /office` (header `x-office-token`); without it the route answers 404. */
   officeToken: string | undefined;
-  /** Secret of `/admin/*` (header `x-admin-token`); falls back to `OFFICE_TOKEN`. Without both the admin API is off. */
+  /** Secret of `/admin/*` (header `x-admin-token`). Required for the routes: without it `/admin/*` answers 404 (no fallback to `OFFICE_TOKEN`, which the public hero uses). */
   adminToken: string | undefined;
   /** The site counts as gone after this many minutes without a ping: notifications go back to Telegram. */
   presenceAwayAfterMin: number;
@@ -75,6 +75,8 @@ export interface Config extends BaseConfig {
   gscServiceAccountJson: string | undefined;
   gscSiteUrl: string | undefined;
   siteUrl: string;
+  /** The site's price list (`GET`, JSON): the single source of every price the agents name. Fetched at start and every 6 hours. */
+  pricesUrl: string;
   /** Builder bridge: fine-grained token (Issues read/write on `githubRepo`). Without it the bridge is off. */
   githubToken: string | undefined;
   githubRepo: string;
@@ -97,6 +99,9 @@ function num(env: NodeJS.ProcessEnv, key: string, def: number, min: number, max:
 }
 
 const topicsSchema = z.record(z.string(), z.number().int().positive());
+
+/** The site's referral rule (owner decision 2026-11-19), in the words of the answer to a referrer. */
+export const DEFAULT_REFERRAL_REWARD = '10% от первой подтверждённой сметы, USDT, в течение 7 дней после оплаты';
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // The Director's own bot: HQ_BOT_TOKEN feeds the shared base config.
@@ -139,15 +144,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     salesBotToken: optional(env, 'SALES_BOT_TOKEN'),
     leadWebhookToken: optional(env, 'LEAD_WEBHOOK_TOKEN'),
     officeToken: optional(env, 'OFFICE_TOKEN'),
-    adminToken: optional(env, 'ADMIN_TOKEN') ?? optional(env, 'OFFICE_TOKEN'),
+    adminToken: optional(env, 'ADMIN_TOKEN'),
     presenceAwayAfterMin: num(env, 'PRESENCE_AWAY_AFTER_MIN', 20, 1, 1440),
-    webChatToken: optional(env, 'WEB_CHAT_TOKEN') ?? optional(env, 'LEAD_WEBHOOK_TOKEN'),
+    webChatToken: optional(env, 'WEB_CHAT_TOKEN'),
     webhookPort: Math.round(num(env, 'WEBHOOK_PORT', 8787, 1, 65_535)),
     batchSize: Math.round(num(env, 'BATCH_SIZE', 10, 1, 100)),
     slotHours: [hours[0]!, hours[1]!],
     replyLevel: num(env, 'REPLY_LEVEL', 1, 0, 1) === 0 ? 0 : 1,
     salesBudgetUsd: num(env, 'SALES_BUDGET_USD', 0, 0, 100_000),
-    referralReward: optional(env, 'REFERRAL_REWARD') ?? 'месяц сопровождения бесплатно',
+    referralReward: optional(env, 'REFERRAL_REWARD') ?? DEFAULT_REFERRAL_REWARD,
     prepaymentPercent: Math.round(num(env, 'PREPAYMENT_PERCENT', 50, 1, 100)),
     kpValidDays: Math.round(num(env, 'KP_VALID_DAYS', 14, 1, 90)),
     productionBotToken: optional(env, 'PRODUCTION_BOT_TOKEN'),
@@ -167,6 +172,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     clientQuietHours: quietWindow(optional(env, 'CLIENT_QUIET_HOURS') ?? '22:00-08:00'),
     clientRatePerHour: Math.round(num(env, 'CLIENT_RATE_PER_HOUR', 20, 1, 1000)),
     clientLlmDailyCap: Math.round(num(env, 'CLIENT_LLM_DAILY_CAP', 300, 0, 100_000)),
+    pricesUrl: optional(env, 'PRICES_URL') ?? DEFAULT_PRICES_URL,
     siteUrl: (optional(env, 'SITE_URL') ?? 'https://firtech.pro').replace(/\/$/, ''),
   };
 }

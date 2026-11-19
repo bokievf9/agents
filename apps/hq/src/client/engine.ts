@@ -2,7 +2,7 @@ import { errMsg, formatSlot, log, type Button, type Db, type LlmClient } from '@
 import { ClientBlockedError, type ClientChannel } from './channel.js';
 import { inWindow, linksOnly, RateLimiter } from './sanitize.js';
 import { clip, freeAnswer, GREETING, intakeRecord, TurnHistory } from './shared.js';
-import { ChatStore, maskUsername, textHash, type Chat, type Draft } from './store.js';
+import { ChatStore, maskUsername, RefStore, refFromStartArg, textHash, type Chat, type Draft } from './store.js';
 import {
   BUDGETS, budgetButtons, DEADLINES, deadlineButtons, esc, menuButtons, NEEDS, needButtons, productCardButtons, productCardHtml, productListButtons,
   productListHtml, T, X, type Budget, type Deadline, type Lang, type Need,
@@ -73,6 +73,7 @@ export interface ClientEngineDeps {
  */
 export class ClientEngine implements ClientChannel {
   readonly store: ChatStore;
+  private readonly refs: RefStore;
   readonly limiter: RateLimiter;
   private sinks: ClientSinks | undefined;
   private readonly history: TurnHistory<number>;
@@ -80,6 +81,7 @@ export class ClientEngine implements ClientChannel {
 
   constructor(private readonly d: ClientEngineDeps) {
     this.store = new ChatStore(d.db, d.now);
+    this.refs = new RefStore(d.db, d.now);
     this.demo = new DemoSalon(
       d.db, d.now, d.tz,
       { send: (chatId, html, buttons) => this.say(chatId, html, buttons), edit: (chatId, id, html, buttons) => this.edit(chatId, id, html, buttons) },
@@ -120,10 +122,14 @@ export class ClientEngine implements ClientChannel {
     const chat = this.chat(from);
     if (this.limiter.hit(chat.chatId) === 'drop') return;
     switch (name) {
-      case 'start':
+      case 'start': {
+        // `/start ref_<slug>`: who brought this person, kept for the lead made later (`origin: ref:<slug>`).
+        const ref = refFromStartArg(arg);
+        if (ref) this.refs.set(`tg:${chat.chatId}`, ref);
         this.demo.wipe(chat.chatId);
         if (/^demo(_salon)?$/i.test(arg.trim()) || arg.trim() === DEMO_START) return this.startDemo(chat);
         return this.welcome(chat, from);
+      }
       case 'demo':
         return this.startDemo(chat);
       case 'audit':
@@ -373,9 +379,10 @@ export class ClientEngine implements ClientChannel {
       return;
     }
     const name = clip(from.firstName?.trim() || (from.username ? `@${from.username}` : '') || 'Клиент из Telegram', 80);
+    const ref = this.refs.get(`tg:${chat.chatId}`);
     const lead = {
       name, contact: from.username ? `@${from.username}` : `Telegram id ${chat.chatId}`, service: x.service, budget: clip(x.budget, 40),
-      message: clip(x.message, 2000), estimate: '', locale: chat.lang, slot: '', source: x.source ?? 'telegram', chatId: chat.chatId, product: x.product ?? '',
+      message: clip(x.message, 2000), estimate: '', locale: chat.lang, slot: '', source: ref ? `ref:${ref}` : (x.source ?? 'telegram'), chatId: chat.chatId, product: x.product ?? '',
       ...(from.username ? { username: from.username.slice(0, 40) } : {}),
     };
     const taskId = this.sinks.createLead(lead, x.service);

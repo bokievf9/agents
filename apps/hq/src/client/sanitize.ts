@@ -1,4 +1,4 @@
-import { zonedParts } from '@fir/core';
+import { allowedAmounts, planOf, zonedParts } from '@fir/core';
 
 export const MAX_ANSWER = 600;
 
@@ -23,14 +23,35 @@ const DATE_PROMISE = new RegExp(
   'i',
 );
 
-/** The two prices the owner made public: Dono and Polly, exactly these amounts and no others. */
-const PUBLIC_PRICE_RES = [
-  /\bDono\b[^.!?\n$]{0,30}\$150(?:\s?\+\s?\$15(?:\s?(?:\/|в|per|a)\s?(?:мес[а-я]*|month))?)?/gi,
-  /\bPolly\b[^.!?\n$]{0,30}\$100(?:\s?\+\s?\$10(?:\s?(?:\/|в|per|a)\s?(?:мес[а-я]*|month))?)?/gi,
-];
+/** A dollar amount: «$N», «$ 1 500». */
+const DOLLAR = /\$\s?(\d[\d\s]*)(?:[.,]\d+)?/g;
+
+/**
+ * Dollar amounts a sentence may carry: those of the site price list (`getPrices()`, the single source of the studio's
+ * prices). A sentence about Dono or Polly may carry only that agent's own plan amounts, so Dono with another agent's or a stale amount goes.
+ * Whether the amount belongs to the product named next to it is the prompt's job; here an amount that is on no price
+ * list is a made-up price.
+ */
+function amountsAllowedIn(sentence: string): Set<number> {
+  const agents = (['dono', 'polly'] as const).filter((id) => new RegExp(`\\b${id}\\b`, 'i').test(sentence));
+  if (agents.length === 0) return allowedAmounts();
+  const s = new Set<number>();
+  for (const id of agents) {
+    const p = planOf(id);
+    s.add(p.setup);
+    s.add(p.monthly);
+  }
+  return s;
+}
+
+/** Price-list dollar amounts are removed before the money check; anything else with money in it stays a violation. */
+const withoutListedPrices = (s: string): string => {
+  const ok = amountsAllowedIn(s);
+  return s.replace(DOLLAR, (m, n: string) => (ok.has(Number(n.replace(/\s/g, ''))) ? ' ' : m));
+};
 
 export const hasMoneyOrDate = (s: string): boolean => {
-  const rest = PUBLIC_PRICE_RES.reduce((t, re) => t.replace(re, ' '), s);
+  const rest = withoutListedPrices(s);
   return MONEY.test(rest) || DATE_PROMISE.test(rest);
 };
 
