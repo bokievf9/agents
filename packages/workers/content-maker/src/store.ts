@@ -38,7 +38,21 @@ CREATE TABLE IF NOT EXISTS cm_ready (
   type TEXT NOT NULL,
   text TEXT NOT NULL,
   planned_date TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'ready'
+  status TEXT NOT NULL DEFAULT 'ready',
+  files TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS cm_articles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  niche TEXT NOT NULL,
+  status TEXT NOT NULL,
+  slug TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  json TEXT NOT NULL DEFAULT '',
+  comment TEXT,
+  task_id INTEGER,
+  issue_number INTEGER,
+  created_at INTEGER NOT NULL,
+  decided_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS cm_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
@@ -71,6 +85,39 @@ export interface ReadyRow {
   text: string;
   plannedDate: string;
   status: string;
+  /** Rendered PNG files (posts, carousel slides, story frames, highlight covers), in order. Empty for reels. */
+  files: string[];
+}
+
+/** proposed: with the owner. approved: handed to a builder. rejected. failed: the model gave nothing. */
+export type ArticleStatus = 'draft' | 'proposed' | 'approved' | 'rejected' | 'failed';
+export interface ArticleRow {
+  id: number;
+  niche: string;
+  status: ArticleStatus;
+  slug: string;
+  title: string;
+  json: string;
+  comment: string | null;
+  taskId: number | null;
+  issueNumber: number | null;
+  createdAt: number;
+  decidedAt: number | null;
+}
+
+interface ReadyDb {
+  id: number; item_id: number; platform: Platform; type: ItemType; text: string; planned_date: string; status: string; files: string;
+}
+const toReady = (r: ReadyDb): ReadyRow => ({
+  id: r.id, itemId: r.item_id, platform: r.platform, type: r.type, text: r.text, plannedDate: r.planned_date, status: r.status, files: parseFiles(r.files),
+});
+function parseFiles(raw: string): string[] {
+  try {
+    const v: unknown = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 interface ItemDb {
@@ -88,6 +135,9 @@ const toItem = (r: ItemDb): Item => ({
 export class ContentStore {
   constructor(private readonly db: Db, private readonly now: () => number = Date.now) {
     migrate(db, SCHEMA);
+    // `files` came later than the table
+    const cols = db.prepare('PRAGMA table_info(cm_ready)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'files')) db.exec("ALTER TABLE cm_ready ADD COLUMN files TEXT NOT NULL DEFAULT '[]'");
   }
 
   history(): History {
@@ -143,6 +193,11 @@ export class ContentStore {
     tx();
   }
 
+  /** Rendered images of an item: stored on its Instagram row (the publisher sends them with the caption). */
+  setFiles(itemId: number, files: string[]): void {
+    this.db.prepare("UPDATE cm_ready SET files = ? WHERE item_id = ? AND platform = 'instagram'").run(JSON.stringify(files), itemId);
+  }
+
   /** The owner posted this platform's copy by hand (Publisher): it leaves the ready queue. */
   markPublished(readyId: number): boolean {
     return this.db.prepare("UPDATE cm_ready SET status = 'published' WHERE id = ? AND status = 'ready'").run(readyId).changes > 0;
@@ -158,17 +213,11 @@ export class ContentStore {
   }
 
   private readyRowsWhere(where: string, ...args: unknown[]): ReadyRow[] {
-    const rows = this.db.prepare(`SELECT * FROM cm_ready WHERE ${where} ORDER BY planned_date, item_id, id`).all(...args) as {
-      id: number; item_id: number; platform: Platform; type: ItemType; text: string; planned_date: string; status: string;
-    }[];
-    return rows.map((r) => ({ id: r.id, itemId: r.item_id, platform: r.platform, type: r.type, text: r.text, plannedDate: r.planned_date, status: r.status }));
+    return (this.db.prepare(`SELECT * FROM cm_ready WHERE ${where} ORDER BY planned_date, item_id, id`).all(...args) as ReadyDb[]).map(toReady);
   }
 
   readyRows(): ReadyRow[] {
-    const rows = this.db.prepare("SELECT * FROM cm_ready WHERE status = 'ready' ORDER BY planned_date, item_id, id").all() as {
-      id: number; item_id: number; platform: Platform; type: ItemType; text: string; planned_date: string; status: string;
-    }[];
-    return rows.map((r) => ({ id: r.id, itemId: r.item_id, platform: r.platform, type: r.type, text: r.text, plannedDate: r.planned_date, status: r.status }));
+    return (this.db.prepare("SELECT * FROM cm_ready WHERE status = 'ready' ORDER BY planned_date, item_id, id").all() as ReadyDb[]).map(toReady);
   }
 
   /** Approved rows whose planned date is `date` (YYYY-MM-DD). */
@@ -196,4 +245,47 @@ export class ContentStore {
     if (value === null) this.db.prepare('DELETE FROM cm_kv WHERE key = ?').run(key);
     else this.db.prepare('INSERT INTO cm_kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
   }
+
+  // ---- blog articles ----
+  insertArticle(niche: string): number {
+    return Number(this.db.prepare("INSERT INTO cm_articles (niche, status, created_at) VALUES (?, 'draft', ?)").run(niche, this.now()).lastInsertRowid);
+  }
+
+  article(id: number): ArticleRow | undefined {
+    const r = this.db.prepare('SELECT * FROM cm_articles WHERE id = ?').get(id) as ArticleDb | undefined;
+    return r ? toArticle(r) : undefined;
+  }
+
+  articles(): ArticleRow[] {
+    return (this.db.prepare('SELECT * FROM cm_articles ORDER BY id').all() as ArticleDb[]).map(toArticle);
+  }
+
+  setArticle(id: number, f: Partial<{ status: ArticleStatus; slug: string; title: string; json: string; comment: string; taskId: number; issueNumber: number }>): void {
+    const cols: string[] = [];
+    const args: unknown[] = [];
+    const map: Record<string, string> = { status: 'status', slug: 'slug', title: 'title', json: 'json', comment: 'comment', taskId: 'task_id', issueNumber: 'issue_number' };
+    for (const [k, v] of Object.entries(f)) {
+      cols.push(`${map[k]!} = ?`);
+      args.push(v);
+    }
+    if (f.status === 'approved' || f.status === 'rejected') {
+      cols.push('decided_at = ?');
+      args.push(this.now());
+    }
+    if (cols.length) this.db.prepare(`UPDATE cm_articles SET ${cols.join(', ')} WHERE id = ?`).run(...args, id);
+  }
+
+  /** Niches that already have an article that is alive (anything but rejected and failed). */
+  coveredNiches(): Set<string> {
+    return new Set((this.db.prepare("SELECT niche FROM cm_articles WHERE status IN ('draft', 'proposed', 'approved')").all() as { niche: string }[]).map((r) => r.niche));
+  }
 }
+
+interface ArticleDb {
+  id: number; niche: string; status: ArticleStatus; slug: string; title: string; json: string; comment: string | null;
+  task_id: number | null; issue_number: number | null; created_at: number; decided_at: number | null;
+}
+const toArticle = (r: ArticleDb): ArticleRow => ({
+  id: r.id, niche: r.niche, status: r.status, slug: r.slug, title: r.title, json: r.json, comment: r.comment, taskId: r.task_id,
+  issueNumber: r.issue_number, createdAt: r.created_at, decidedAt: r.decided_at,
+});

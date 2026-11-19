@@ -40,6 +40,8 @@ export interface WeekNumbers {
   subscribersDelta: number | null;
   /** Prospector funnel counts by status, when the Sales tables exist. */
   funnel: Record<string, number> | null;
+  /** Blog articles of the week (null: the content-maker has no article table or no article yet). */
+  articles: { proposed: number; approved: number; published: number } | null;
 }
 
 const recsSchema = z.object({ recommendations: z.array(z.string().min(5).max(300)).length(3) });
@@ -82,6 +84,22 @@ export function aggregate(db: Db, from: string, to: string, nowMs: number, tz: s
       published += r.n;
     }
   }
+  let articles: WeekNumbers['articles'] = null;
+  if (hasTable(db, 'cm_articles') && (db.prepare('SELECT COUNT(*) c FROM cm_articles').get() as { c: number }).c > 0) {
+    const rows = db.prepare("SELECT created_at, decided_at, status, task_id FROM cm_articles").all() as { created_at: number; decided_at: number | null; status: string; task_id: number | null }[];
+    // published = the builder's issue is closed (the bridge marks the task `builderClosed`)
+    const closed = (taskId: number | null): boolean => {
+      if (taskId === null || !hasTable(db, 'tasks')) return false;
+      const m = (db.prepare('SELECT meta FROM tasks WHERE id = ?').get(taskId) as { meta: string } | undefined)?.meta ?? '';
+      return /"builderClosed":\s*true/.test(m);
+    };
+    const decided = rows.filter((r) => r.status === 'approved' && r.decided_at !== null && r.decided_at >= winFrom && r.decided_at < winTo);
+    articles = {
+      proposed: rows.filter((r) => r.created_at >= winFrom && r.created_at < winTo && r.status !== 'draft').length,
+      approved: decided.length,
+      published: decided.filter((r) => closed(r.task_id)).length,
+    };
+  }
   const leadCount = (a: number, b: number): number => {
     const rows = db.prepare("SELECT tags, meta, title FROM tasks WHERE dept = 'sales' AND parent_id IS NULL AND created_at >= ? AND created_at < ?").all(a, b) as { tags: string; meta: string; title: string }[];
     return rows.filter((r) => !r.tags.split(',').includes('drill')).filter((r) => r.tags.split(',').includes('lead') || /"action":"lead"/.test(r.meta) || /^лид(?![\p{L}])/iu.test(r.title)).length;
@@ -96,7 +114,7 @@ export function aggregate(db: Db, from: string, to: string, nowMs: number, tz: s
   const costUsd = hasTable(db, 'costs') ? ((db.prepare('SELECT COALESCE(SUM(usd), 0) s FROM costs WHERE at >= ? AND at < ?').get(winFrom, winTo) as { s: number }).s) : 0;
   return {
     approved, published, publishedByPlatform, leads: leadCount(winFrom, winTo), leadsPrev: leadCount(winFrom - 7 * DAY, winFrom), costUsd,
-    subscribers: yt?.subscribers ?? null, subscribersDelta: yt && prevSubs !== null ? yt.subscribers - prevSubs : null, funnel,
+    subscribers: yt?.subscribers ?? null, subscribersDelta: yt && prevSubs !== null ? yt.subscribers - prevSubs : null, funnel, articles,
   };
 }
 
@@ -111,6 +129,7 @@ export function numbersText(n: WeekNumbers): string {
     `3. Лидов: ${n.leads} (неделей ранее ${n.leadsPrev})`,
     `4. Расходы на ИИ за неделю: $${n.costUsd.toFixed(2)}`,
     `5. Подписчики YouTube: ${subs}`,
+    ...(n.articles ? [`6. Статьи блога: предложено ${n.articles.proposed}, одобрено ${n.articles.approved}, опубликовано ${n.articles.published} (опубликована = строитель закрыл issue; остальные переданы строителю)`] : []),
   ].join('\n');
 }
 
@@ -169,7 +188,7 @@ export class AnalystWorker implements Worker {
       ctx.llm,
       {
         tier: 'haiku', maxTokens: 700,
-        system: 'Ты аналитик отдела маркетинга студии Fir Tech (ИИ-агенты и боты, короткие видео RU). По пяти числам недели дай ровно 3 конкретных рекомендации на следующую неделю. Русский, без эмодзи и длинных тире, без выдуманных цифр, только то, что следует из чисел. Ответ: только JSON {"recommendations":["...","...","..."]}.',
+        system: 'Ты аналитик отдела маркетинга студии Fir Tech (ИИ-агенты и боты, короткие видео RU). По числам недели дай ровно 3 конкретных рекомендации на следующую неделю. Русский, без эмодзи и длинных тире, без выдуманных цифр, только то, что следует из чисел. Ответ: только JSON {"recommendations":["...","...","..."]}.',
         messages: [{ role: 'user', content: `${text}${funnel}`.slice(0, 3000) }],
       },
       recsSchema,

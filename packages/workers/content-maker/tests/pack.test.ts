@@ -6,24 +6,28 @@ import { lintText } from '../src/lint.js';
 import { OffLlm, carouselJson, clipJson, setup } from './helpers.js';
 
 describe('pack generation', () => {
-  it('plans 7 clips and 1 carousel (even ISO week): one draft item per day, topics recorded', async () => {
+  it('plans 7 reels, 3 posts, 2 carousels and 5 stories: one draft item each, topics recorded', async () => {
     const { worker, ctx, task } = setup();
     const specs = (await worker.plan(task({ action: 'pack' }), ctx))!;
-    expect(specs).toHaveLength(8);
-    expect(specs[0]!.title).toContain('Материал 1 из 8: клип, пн 23.11');
-    expect(specs[7]!.title).toContain('вс 29.11');
-    expect(specs.filter((s) => s.title.includes('карусель'))).toHaveLength(1);
-    expect(specs[3]!.title).toContain('карусель'); // Wednesday, next to the Wednesday clip
+    expect(specs).toHaveLength(17);
+    expect(specs[0]!.title).toContain('Материал 1 из 17: клип, пн 23.11');
+    expect(specs.at(-1)!.title).toContain('вс 29.11');
+    const count = (w: string) => specs.filter((s) => s.title.includes(`: ${w}, `)).length;
+    expect([count('клип'), count('пост'), count('карусель'), count('история')]).toEqual([7, 3, 2, 5]);
     const store = storeFor(ctx);
     expect(store.packExists('2026-11-23')).toBe(true);
-    expect(store.item(Number(specs[0]!.meta.itemId))).toMatchObject({ status: 'draft', plannedDate: '2026-11-23', seq: 1, total: 8 });
+    expect(store.item(Number(specs[0]!.meta.itemId))).toMatchObject({ status: 'draft', plannedDate: '2026-11-23', seq: 1, total: 17 });
+    // posts and stories get format topics (fmt:...), reels and carousels the direction x angle ones
+    const keys = specs.map((s) => store.item(Number(s.meta.itemId))!);
+    expect(keys.filter((i) => i.type === 'post' || i.type === 'story').every((i) => i.topicKey.startsWith('fmt:'))).toBe(true);
+    expect(keys.filter((i) => i.type === 'clip' || i.type === 'carousel').every((i) => !i.topicKey.startsWith('fmt:'))).toBe(true);
   });
 
   it('a week that already has a pack plans nothing unless forced; other actions are not split', async () => {
     const { worker, ctx, task } = setup();
     await worker.plan(task({ action: 'pack' }), ctx);
     expect(await worker.plan(task({ action: 'pack' }), ctx)).toEqual([]);
-    expect(await worker.plan(task({ action: 'pack', force: true }), ctx)).toHaveLength(8);
+    expect(await worker.plan(task({ action: 'pack', force: true }), ctx)).toHaveLength(17);
     expect(await worker.plan(task({ action: 'topic' }), ctx)).toBeNull();
   });
 
@@ -38,7 +42,7 @@ describe('pack generation', () => {
     const specs = (await worker.plan(task({ action: 'pack' }), ctx))!;
     const res = await worker.run(task(specs[0]!.meta), ctx);
     expect(res.ok).toBe(true);
-    expect(res.result).toContain('Пакет, материал 1 из 8');
+    expect(res.result).toContain('Пакет, материал 1 из 17');
     expect(staged).toHaveLength(1);
     expect(staged[0]!.kind).toBe(KIND);
     expect(staged[0]!.summary).toContain('клип, Instagram + TikTok + Shorts');
@@ -113,8 +117,8 @@ describe('pack generation', () => {
     expect(statsText(storeFor(ctx))).toContain('Одобрено: 0');
   });
 
-  it('a pack limited by config: 3 clips, no carousel', async () => {
-    const { worker, ctx, task } = setup({ clipsPerWeek: 3, carouselsPerWeek: 0 });
+  it('a pack limited by config: 3 clips, nothing else', async () => {
+    const { worker, ctx, task } = setup({ clipsPerWeek: 3, carouselsPerWeek: 0, postsPerWeek: 0, storiesPerWeek: 0 });
     expect(await worker.plan(task({ action: 'pack' }), ctx)).toHaveLength(3);
   });
 
@@ -161,17 +165,24 @@ describe('cadence', () => {
     expect(weeks.some((w) => hasCarousel(w, 0))).toBe(false);
   });
 
-  it('default plan: one clip every day Mon-Sun, carousel on Wednesday in an even week', () => {
-    const even = buildPackPlan('2026-11-23');
-    expect(even.filter((p) => p.type === 'clip').map((p) => p.day)).toEqual([0, 1, 2, 3, 4, 5, 6]);
-    expect(even).toHaveLength(8);
-    expect(buildPackPlan('2026-11-30')).toHaveLength(7);
-    expect(DEFAULT_CADENCE).toEqual({ clipsPerWeek: 7, carouselsPerWeek: 0.5 });
+  it('default plan: a reel every day, posts Mon/Wed/Fri, carousels Tue/Fri, five story days', () => {
+    const plan = buildPackPlan('2026-11-23');
+    const days = (t: string) => plan.filter((p) => p.type === t).map((p) => p.day);
+    expect(days('clip')).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(days('post')).toEqual([0, 2, 4]);
+    expect(days('carousel')).toEqual([1, 4]);
+    expect(days('story')).toEqual([0, 1, 2, 4, 5]);
+    expect(plan).toHaveLength(17);
+    expect(DEFAULT_CADENCE).toEqual({ clipsPerWeek: 7, carouselsPerWeek: 2, postsPerWeek: 3, storiesPerWeek: 5 });
+    expect(plan.map((p) => p.day)).toEqual([...plan.map((p) => p.day)].sort((a, b) => a - b));
   });
 
-  it('fewer clips are spread over the week; the carousel takes a free day', () => {
-    const plan = buildPackPlan('2026-11-23', { clipsPerWeek: 3, carouselsPerWeek: 1 });
+  it('a fractional carousel rate keeps the old behaviour; counts are configurable', () => {
+    expect(buildPackPlan('2026-11-23', { ...DEFAULT_CADENCE, carouselsPerWeek: 0.5 }).filter((p) => p.type === 'carousel')).toHaveLength(1);
+    expect(buildPackPlan('2026-11-30', { ...DEFAULT_CADENCE, carouselsPerWeek: 0.5 }).filter((p) => p.type === 'carousel')).toHaveLength(0);
+    const plan = buildPackPlan('2026-11-23', { clipsPerWeek: 3, carouselsPerWeek: 1, postsPerWeek: 0, storiesPerWeek: 0 });
     expect(plan.filter((p) => p.type === 'clip').map((p) => p.day)).toEqual([0, 2, 4]);
-    expect(plan.find((p) => p.type === 'carousel')!.day).toBe(3);
+    expect(plan.filter((p) => p.type === 'carousel')).toHaveLength(1);
+    expect(plan).toHaveLength(4);
   });
 });

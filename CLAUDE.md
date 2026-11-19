@@ -93,6 +93,10 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 без бота и крона в `packages/workers/*` (`run(task, ctx)`): `content-maker` (бывший `apps/content-maker`). `apps/hq`: один процесс,
 бот Директора (`HQ_BOT_TOKEN`), голова Маркетинга (`src/heads/marketing.ts`), инструкции агентов `apps/hq/instructions/*.md`.
 Образ `agents-hq`, сервис `hq` (данные `/opt/fir-agents/data/hq`). Подробно: `packages/hq/README.md`, `apps/hq/README.md`.
+Маркетинг на автопилоте, этап 1 (2026-11-19): пакет недели покрывает всю страницу Instagram (7 рилсов, 3 поста, 2 карусели, 5 историй;
+`POSTS_PER_WEEK`, `STORIES_PER_WEEK`), после одобрения PNG рисуются `satori` + `@resvg/resvg-js` в `DATA_DIR/renders`, Публикатор шлёт альбом
+и текст, публикует владелец вручную; `/profile` (разовый пакет настройки профиля); `/article` и рутина `marketing-article-weekly` (вт 10:00)
+пишут статью блога RU+EN, одобренная уходит строителю issue с JSON и путём `src/content/blog/<slug>.ts`. Telegram-канала нет (владелец отказался).
 
 ## Данные и секреты
 `.env*` и `data/` не коммитятся (в `data/` контакты клиентов). Секреты: `.env.local` (dev), `/opt/fir-agents/.env`

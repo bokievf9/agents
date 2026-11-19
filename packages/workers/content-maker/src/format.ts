@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
 export type Platform = 'instagram' | 'tiktok' | 'shorts';
-export type ItemType = 'clip' | 'carousel';
+/** `clip` is the reel script. `profile` is the one-time page setup pack. */
+export type ItemType = 'clip' | 'carousel' | 'post' | 'story' | 'profile';
 
 export const PLATFORM_LABEL: Record<Platform, string> = { instagram: 'Instagram', tiktok: 'TikTok', shorts: 'Shorts' };
 export const MAX_TEXT = 3500; // Telegram caps a message at 4096; the queue adds a header
@@ -40,6 +41,77 @@ export const carouselSchema = z
     if (renderCarousel(c).length > MAX_TEXT) ctx.addIssue({ code: 'custom', message: `whole text must be under ${MAX_TEXT} characters, shorten it` });
   });
 export type Carousel = z.output<typeof carouselSchema>;
+
+const tags = (max: number) =>
+  z
+    .preprocess((v) => (typeof v === 'string' ? v.split(/[\s,]+/).filter(Boolean) : v), z.array(z.string().min(1).max(40)).min(1).max(max))
+    .transform((a) => a.map((t) => (t.startsWith('#') ? t : `#${t.replace(/\s+/g, '')}`)));
+
+/** A single static card: a short headline and one or two lines on the image, a caption with a call to action. */
+export const postSchema = z
+  .object({
+    title: z.string().min(1).max(60),
+    lines: z.array(z.string().min(1).max(90)).min(1).max(2),
+    caption: z.string().min(300).max(900),
+    hashtags: tags(5),
+  })
+  .superRefine((c, ctx) => {
+    if (renderPost(c).length > MAX_TEXT) ctx.addIssue({ code: 'custom', message: `whole text must be under ${MAX_TEXT} characters, shorten it` });
+  });
+export type Post = z.output<typeof postSchema>;
+
+/** 3-5 story frames, the last one is the call to action; `leads` says where the story sends the viewer. */
+export const storySchema = z
+  .object({
+    title: z.string().min(1).max(60),
+    frames: z.array(z.object({ title: z.string().min(1).max(50), line: z.string().min(1).max(90) })).min(3).max(5),
+    leads: z.string().min(1).max(120),
+  })
+  .superRefine((c, ctx) => {
+    if (!CTA_RE.test(`${c.frames.at(-1)!.title} ${c.frames.at(-1)!.line}`)) ctx.addIssue({ code: 'custom', message: 'the last frame must hold the call to action with @firtech_bot or firtech.pro' });
+  });
+export type Story = z.output<typeof storySchema>;
+
+/** The page setup pack: bio, five highlights with cover headlines, pinned post ideas, link-in-bio, first-week order. */
+export const profileSchema = z.object({
+  bio: z.string().min(20).max(150),
+  link: z.string().min(1).max(200),
+  highlights: z.array(z.object({ name: z.string().min(1).max(16), cover: z.string().min(1).max(40) })).length(5),
+  pinned: z.array(z.string().min(5).max(160)).length(3),
+  week: z.array(z.string().min(5).max(160)).min(5).max(10),
+});
+export type Profile = z.output<typeof profileSchema>;
+
+export const CTA_RE = /firtech\.pro|@firtech_bot/i;
+
+export function renderPost(c: Post | z.input<typeof postSchema>): string {
+  const p = c as Post;
+  return [`Пост: ${p.title}`, 'На картинке:', ...p.lines.map((l) => `   ${l}`), '', '== Instagram ==', p.caption, p.hashtags.join(' ')].join('\n');
+}
+
+export function renderStory(c: Story | z.input<typeof storySchema>): string {
+  const s = c as Story;
+  const frames = s.frames.map((f, i) => `${i + 1}. ${f.title}\n   ${f.line}`).join('\n');
+  return [`История, ${s.frames.length} кадров: ${s.title}`, '', frames, '', `Куда ведёт: ${s.leads}`].join('\n');
+}
+
+export function renderProfile(c: Profile | z.input<typeof profileSchema>): string {
+  const p = c as Profile;
+  return [
+    `Профиль Instagram: настройка (био ${p.bio.length} знаков)`,
+    `Био: ${p.bio}`,
+    `Ссылка в шапке: ${p.link}`,
+    '',
+    'Актуальное (название, обложка 1080x1920):',
+    ...p.highlights.map((h, i) => `${i + 1}. ${h.name}. Обложка: ${h.cover}`),
+    '',
+    'Закреплённые посты:',
+    ...p.pinned.map((t, i) => `${i + 1}) ${t}`),
+    '',
+    'Порядок первой недели:',
+    ...p.week.map((t, i) => `${i + 1}) ${t}`),
+  ].join('\n');
+}
 
 type Captions = Clip['captions'] | Carousel['captions'];
 
@@ -94,11 +166,14 @@ export function splitPlatforms(text: string): { body: string; sections: Partial<
 export type PartId = 'script' | Platform;
 
 export function editableParts(type: ItemType): PartId[] {
-  return type === 'clip' ? ['script', 'instagram', 'tiktok', 'shorts'] : ['script', 'instagram'];
+  if (type === 'clip') return ['script', 'instagram', 'tiktok', 'shorts'];
+  if (type === 'story' || type === 'profile') return ['script'];
+  return ['script', 'instagram'];
 }
 
 export function partLabel(type: ItemType, part: PartId): string {
-  return part === 'script' ? (type === 'clip' ? 'Сценарий' : 'Слайды') : PLATFORM_LABEL[part];
+  if (part !== 'script') return type === 'post' ? 'Подпись' : PLATFORM_LABEL[part];
+  return { clip: 'Сценарий', carousel: 'Слайды', post: 'Картинка', story: 'Кадры', profile: 'Профиль' }[type];
 }
 
 const PLATFORM_ORDER: Platform[] = ['instagram', 'tiktok', 'shorts'];
@@ -126,5 +201,5 @@ function joinParts(body: string, sections: Partial<Record<Platform, string>>): s
 /** First line of the body without the type prefix: the item's short title. */
 export function titleOf(text: string): string {
   const first = text.split('\n')[0] ?? '';
-  return first.replace(/^(Клип|Карусель)[^:]*:\s*/, '').trim() || first.trim();
+  return first.replace(/^(Клип|Карусель|Пост|История|Профиль Instagram)[^:]*:\s*/, '').trim() || first.trim();
 }

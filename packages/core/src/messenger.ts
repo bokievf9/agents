@@ -32,6 +32,11 @@ export interface Messenger {
   edit(chatId: number, messageId: number, text: string, opts?: EditOptions): Promise<void>;
   /** Replaces only the inline buttons of a message (null: removes them). */
   editButtons(chatId: number, messageId: number, buttons: Button[][] | null): Promise<void>;
+  /**
+   * Local image files as one media group (a single file as a photo; more than 10 go in several groups). Optional: a
+   * messenger without it cannot send pictures and the caller falls back to text only.
+   */
+  sendPhotos?(chatId: number, files: string[], caption?: string): Promise<void>;
 }
 
 const ENTITIES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
@@ -53,6 +58,12 @@ export class MemoryMessenger implements Messenger {
   readonly edits: { chatId: number; messageId: number; text: string; buttons?: Button[][]; html?: boolean }[] = [];
   /** Options of each sent message, by index in `sent` (kept apart so `sent` entries keep their old shape). */
   readonly options: (SendOptions | undefined)[] = [];
+  /** Photo groups sent through `sendPhotos`. */
+  readonly photos: { chatId: number; files: string[]; caption?: string }[] = [];
+  sendPhotos(chatId: number, files: string[], caption?: string): Promise<void> {
+    this.photos.push(caption ? { chatId, files, caption } : { chatId, files });
+    return Promise.resolve();
+  }
   private seq = 0;
   /** Message id -> index in `sent`. */
   private readonly index = new Map<number, number>();

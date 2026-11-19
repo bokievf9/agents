@@ -1,4 +1,5 @@
 import { DIRECTIONS, type Direction } from './directions.js';
+import { PRODUCTS, TOPIC_NICHES } from './niches.js';
 
 export const ANGLES = {
   how: 'как это работает: механика на одном конкретном примере',
@@ -58,6 +59,47 @@ export function pickTopics(history: History, count: number, now: number, rng: ()
       const rest = ALL_TOPICS.filter((t) => !picked.includes(t)).sort((a, b) => lastKeyUse(a.key) - lastKeyUse(b.key));
       picked.push(rest[0]!);
     }
+  }
+  return picked;
+}
+
+// ---- posts and stories: a format over a product or a business niche ----
+export const FORMATS = {
+  scenario: 'кейс-сценарий «до и после»: придуманная ситуация, обязательно с подписью «Пример сценария», это не реальный клиент и без цифр результата',
+  mistake: 'разбор ошибки: типичная ошибка владельца бизнеса в этой рутине и как её закрывает агент, без цифр результата',
+  checklist: 'чеклист: 4-5 коротких пунктов, которые владелец проверит у себя за минуту, без цифр результата',
+  faq: 'частый вопрос владельца и прямой ответ по механике, без цифр результата',
+} as const;
+export type FormatId = keyof typeof FORMATS;
+
+interface FormatTopic extends Topic {
+  format: FormatId;
+  subject: string;
+  kind: 'product' | 'niche';
+}
+
+const subjects: { id: string; kind: 'product' | 'niche'; label: string }[] = [
+  ...PRODUCTS.map((p) => ({ id: p.id, kind: 'product' as const, label: p.name })),
+  ...TOPIC_NICHES.map((n) => ({ id: n.id, kind: 'niche' as const, label: `ниша «${n.name}» (что в её рутине берёт на себя бот или агент)` })),
+];
+
+/** 4 formats x (10 products + 55 niches) = 260 topics: eight a week come back after about 32 weeks. */
+export const FORMAT_TOPICS: FormatTopic[] = subjects.flatMap((sub) =>
+  (Object.keys(FORMATS) as FormatId[]).map((f) => ({ key: `fmt:${f}:${sub.id}`, directionId: null, text: `${sub.label}. Формат: ${FORMATS[f]}`, format: f, subject: sub.id, kind: sub.kind })),
+);
+
+/**
+ * Topics for posts and stories: products and niches alternate, formats rotate inside the pack, the least recently used
+ * key goes first (a topic never used counts as the oldest), one subject at most once per pack.
+ */
+export function pickFormatTopics(history: History, count: number, rng: () => number = Math.random): Topic[] {
+  const picked: FormatTopic[] = [];
+  for (let i = 0; i < count; i++) {
+    const want = i % 2 === 0 ? 'product' : 'niche';
+    const used = (f: FormatId) => picked.filter((p) => p.format === f).length;
+    const rest = FORMAT_TOPICS.filter((t) => !picked.some((p) => p.subject === t.subject)).map((t) => ({ t, r: rng() }));
+    rest.sort((a, b) => used(a.t.format) - used(b.t.format) || (history.get(a.t.key) ?? 0) - (history.get(b.t.key) ?? 0) || a.r - b.r);
+    picked.push((rest.find((x) => x.t.kind === want) ?? rest[0]!).t);
   }
   return picked;
 }

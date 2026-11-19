@@ -51,11 +51,11 @@ export const DIRECTOR_COMMANDS: BotCommand[] = [
   { command: 'drill', description: 'Учения: проверить все отделы' },
   { command: 'reply', description: 'Продажи: <id> ответ бизнеса' },
   { command: 'kp', description: 'Продажи: КП по лиду или описанию' },
-  { command: 'tickets', description: 'Сопровождение: открытые тикеты' },
-  { command: 'invoices', description: 'Сопровождение: счета' },
+  { command: 'tickets', description: 'Сопровождение: тикеты, /invoices счета' },
   { command: 'project', description: 'Производство: проект из КП' },
-  { command: 'doc', description: 'Бэк-офис: документ клиенту' },
-  { command: 'kb', description: 'Бэк-офис: поиск по базе знаний' },
+  { command: 'doc', description: 'Бэк-офис: документ клиенту, /kb поиск' },
+  { command: 'profile', description: 'Маркетинг: настройка профиля Instagram' },
+  { command: 'article', description: 'Маркетинг: статья в блог, <ниша>' },
   { command: 'help', description: 'Все команды и подсказки' },
 ];
 
@@ -77,7 +77,7 @@ export function deptBotMenu(dept: string, directorUsername = 'firtech_hq_bot'): 
 
 // ---- approval cards ----
 export const KIND_RU: Record<string, string> = {
-  content_item: 'Контент', seo_proposal: 'SEO-правка', billing_invoice: 'Счёт', billing_reminder: 'Напоминание об оплате',
+  content_item: 'Контент', article: 'Статья в блог', seo_proposal: 'SEO-правка', billing_invoice: 'Счёт', billing_reminder: 'Напоминание об оплате',
   support_answer: 'Ответ клиенту', support_money: 'Деньги клиента', bo_document: 'Документ', lead_reply: 'Ответ лиду',
   lead_price: 'Цена лиду', onboarding_guide: 'Онбординг', presales_pack: 'Пакет пресейла', pm_spec: 'ТЗ проекта',
   pm_client_status: 'Статус клиенту', prospect_first: 'Первое сообщение бизнесу', prospect_followup: 'Дожим бизнеса',

@@ -39,7 +39,7 @@
 спискам, неизвестное отклоняется. Изменение правил пишется только после кнопки «Применить»: настройки `tz`,
 `summary_time`, `approval_time`, `quiet_hours` или новая строка в раздел «Правила владельца» инструкции агента.
 Без LLM (нет ключа) Директор отвечает, что не смог разобрать, команды работают.
-Команды: `/status`, `/tasks [отдел]`, `/approve`, `/depts`, `/retry <id>`, `/costs`, `/org`, `/pause <отдел>`, `/resume <отдел>`, `/builders`, `/drill`, `/skip`, `/help`.
+Команды: `/status`, `/tasks [отдел]`, `/approve`, `/depts`, `/retry <id>`, `/costs`, `/org`, `/pause <отдел>`, `/resume <отдел>`, `/builders`, `/drill`, `/skip`, `/profile`, `/article <ниша>`, `/help`.
 Шпаргалка на одну страницу: `docs/owner-cheatsheet.md` (`/help` печатает её краткую версию).
 
 ### Telegram UX (`src/tg.ts`, паттерны: `docs/telegram-ux.md`)
@@ -84,11 +84,25 @@
 
 ## Маркетинг (`src/heads/marketing.ts`)
 Бот отдела `MARKETING_BOT_TOKEN` необязателен (тишина без него). Рутины создаются при первом старте (дальше правятся
-через `hq import` и не перезаписываются): понедельник 09:00 пакет недели (7 клипов, карусель раз в две недели),
-ежедневно 09:00 «что публикуем сегодня» (одобренное на сегодня из `cm_ready`). Задачу владельца голова делит LLM
-(`pack` / `topic` / `daily` / `none`); без LLM работают только очевидные формулировки. Исполнитель:
-`packages/workers/content-maker`. Правка карточки по частям (сценарий, Instagram, TikTok, Shorts) работает через
-`ApprovalEditor` головы. Отклонённый материал закрывает задачу; переделку владелец заказывает новой задачей.
+через `hq import` и не перезаписываются): понедельник 09:00 пакет недели, ежедневно 09:00 «что публикуем сегодня»
+(одобренное на сегодня из `cm_ready`), вторник 10:00 `marketing-article-weekly` (статья в блог). Задачу владельца голова
+делит LLM (`pack` / `topic` / `daily` / `profile` / `article` / `none`); без LLM работают только очевидные формулировки.
+Исполнитель: `packages/workers/content-maker`. Правка карточки по частям (сценарий, Instagram, TikTok, Shorts) работает
+через `ApprovalEditor` головы. Отклонённый материал закрывает задачу; переделку владелец заказывает новой задачей.
+
+### Маркетинг на автопилоте, этап 1 (2026-11-19)
+- **Страница Instagram целиком.** Пакет недели: 7 рилсов (`clip`), 3 поста, 2 карусели, 5 историй (`POSTS_PER_WEEK` 3,
+  `STORIES_PER_WEEK` 5, `CLIPS_PER_WEEK` 7, `CAROUSELS_PER_WEEK` 2; дробное значение карусели работает как раньше: 0.5 = раз в две недели).
+  Каждый материал отдельное одобрение `content_item` (уровень 0, `locked`), карточка показывает весь текст.
+- **Картинки без браузера.** После «Одобрить» пост, слайды карусели и кадры историй рисуются в PNG (`satori` + `@resvg/resvg-js`,
+  1080x1350 и 1080x1920, шрифты Onest и Unbounded в `packages/workers/content-maker/assets/fonts`) в `DATA_DIR/renders/<материал>/<n>.png`,
+  пути в `cm_ready.files`. Публикатор шлёт утром заголовок дня с числами по типам, затем на материал альбом PNG и текст с кнопкой
+  «Опубликовано». Публикует владелец руками. Не получилось нарисовать: приходит только текст с пометкой.
+- **`/profile`** (разово): био, 5 «Актуальных» с обложками 1080x1920, 3 идеи закрепов, текст ссылки, порядок первой недели; одно одобрение.
+- **Блог.** `/article [ниша]` и рутина вторник 10:00: статья RU+EN строгим JSON формата сайта, таблица `cm_articles` (ниша, статус,
+  номер issue). Одобрение `article` (уровень 0): «Одобрить» создаёт задачу `builder`, в issue полный JSON, путь `src/content/blog/<slug>.ts`
+  и инструкция главному окну; «Править» принимает замечание и переписывает статью. Опубликована = issue закрыт (в отчёте Аналитика).
+- **Отчёт недели** (Аналитик, пн 08:00) получил строку 6: статьи предложено / одобрено / опубликовано. Подписчиков канала нет: Telegram-канал не строим.
 
 ## Сопровождение (`src/heads/support.ts`)
 Голова `support-head`, исполнители `packages/workers/monitoring` и `packages/workers/finance`. Бот `SUPPORT_BOT_TOKEN`
@@ -327,10 +341,10 @@ id задачи HQ, контекст (описание, последние ко�
 См. `.env.example`: `HQ_BOT_TOKEN`, `OWNER_TELEGRAM_ID`, `TZ`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_FAST/SMART`;
 необязательные `MARKETING_BOT_TOKEN`, `SALES_BOT_TOKEN`, `LEAD_WEBHOOK_TOKEN`, `OFFICE_TOKEN`, `ADMIN_TOKEN`, `PRESENCE_AWAY_AFTER_MIN`, `WEBHOOK_PORT`, `BATCH_SIZE`, `SLOT_HOURS`,
 `REPLY_LEVEL`, `SALES_BUDGET_USD`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
-id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`; сопровождение: `SUPPORT_BOT_TOKEN`, `MONITOR_URLS`, `MONITOR_DOCKER`, `OMNIROUTE_HEALTH_URL`,
+id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `POSTS_PER_WEEK`, `STORIES_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`; сопровождение: `SUPPORT_BOT_TOKEN`, `MONITOR_URLS`, `MONITOR_DOCKER`, `OMNIROUTE_HEALTH_URL`,
 `FIXED_COSTS_USD_MONTH`, `SUPPORT_BUDGET_USD`; производство и бэк-офис: `PRODUCTION_BOT_TOKEN`, `BACKOFFICE_BOT_TOKEN`, `PRODUCTION_BUDGET_USD`, `BACKOFFICE_BUDGET_USD`, `KNOWLEDGE_DIR`; мост: `GITHUB_TOKEN`, `GITHUB_REPO`, `BUILDER_POLL_MINUTES`; клиентский бот: `CLIENT_BOT_TOKEN`, `CLIENT_QUIET_HOURS`, `CLIENT_RATE_PER_HOUR`, `CLIENT_LLM_DAILY_CAP`.
 необязательные `YOUTUBE_API_KEY`, `YOUTUBE_CHANNEL_ID`, `TRENDS_REGIONS` (по умолчанию `KZ,UZ,RU`), `GSC_SERVICE_ACCOUNT_JSON`, `GSC_SITE_URL`, `SITE_URL` (по умолчанию `https://firtech.pro`), `MARKETING_BOT_TOKEN`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и
-id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`.
+id отдела), `DATA_DIR`, `CLIPS_PER_WEEK`, `CAROUSELS_PER_WEEK`, `POSTS_PER_WEEK`, `STORIES_PER_WEEK`, `MARKETING_BUDGET_USD`, `TRUST_THRESHOLD`.
 
 Пресейл и рекомендации: `REFERRAL_REWARD`, `PREPAYMENT_PERCENT`, `KP_VALID_DAYS`.
 

@@ -2,7 +2,7 @@ import { MockLlm, openDb } from '@fir/core';
 import type { Task, WorkerCtx } from '@fir/hq';
 import { onApproved, renderCarousel, renderClip, storeFor, type Clip } from '@fir/worker-content-maker';
 import { describe, expect, it } from 'vitest';
-import { ManualPoster, PublishStore, PublisherWorker, assemblePacks, captionOf, groupByItem, publishedButtons, renderItemMessage } from '../src/index.js';
+import { ManualPoster, PublishStore, PublisherWorker, assemblePacks, captionOf, dayHeader, filesOf, groupByItem, publishedButtons, renderItemMessage } from '../src/index.js';
 
 // Mon 2026-11-23 09:00 Tashkent
 const NOW = Date.UTC(2026, 10, 23, 4, 0);
@@ -124,5 +124,53 @@ describe('Publisher: sending and the «Опубликовано» state', () => 
 
   it('the stage 2 interface exists but the manual poster never posts', async () => {
     await expect(new ManualPoster('instagram').post()).rejects.toThrow(/manual/);
+  });
+});
+
+describe('Instagram page items: posts, stories, pictures', () => {
+  const postText = 'Пост: Бот отвечает ночью\nНа картинке:\n   Клиент пишет в 2:00\n\n== Instagram ==\nПодпись поста с @firtech_bot\n#боты #салон';
+  const storyText = 'История, 3 кадров: Запись\n\n1. Один\n   строка\n2. Два\n   строка\n3. Три\n   @firtech_bot\n\nКуда ведёт: В @firtech_bot';
+  const approvedText = (t: ReturnType<typeof setup>, type: 'post' | 'story', text: string, date: string, files: string[] = []) => {
+    const id = t.store.insertItem({ packId: null, seq: 1, total: 1, type, topicKey: `free:${type}`, topicText: type, plannedDate: date });
+    t.store.setProposed(id, text, type);
+    onApproved(t.store, { itemId: id, text }, false);
+    if (files.length) t.store.setFiles(id, files);
+    return id;
+  };
+
+  it('packs carry the rendered files of their row; the caption of a post is its Instagram section', () => {
+    const t = setup();
+    approvedText(t, 'post', postText, '2026-11-23', ['/r/1/1.png']);
+    const [p] = assemblePacks(t.ctx, '2026-11-23');
+    expect(p).toMatchObject({ type: 'post', caption: 'Подпись поста с @firtech_bot', hashtags: ['#боты', '#салон'], files: ['/r/1/1.png'] });
+  });
+
+  it('the day header counts by type and the groups come reel, post, carousel, story', () => {
+    const t = setup();
+    approvedText(t, 'story', storyText, '2026-11-23', ['/r/2/1.png', '/r/2/2.png', '/r/2/3.png']);
+    approvedText(t, 'post', postText, '2026-11-23', ['/r/1/1.png']);
+    t.approved('Запись ночью', '2026-11-23');
+    const groups = groupByItem(assemblePacks(t.ctx, '2026-11-23'));
+    expect(groups.map((g) => g[0]!.type)).toEqual(['clip', 'post', 'story']);
+    expect(dayHeader(groups)).toBe('Сегодня публикуем: 1 рилс, 1 пост, 1 история. Картинок к отправке: 4.');
+    expect(filesOf(groups[2]!)).toEqual(['/r/2/1.png', '/r/2/2.png', '/r/2/3.png']);
+  });
+
+  it('the message says the album came with the pictures, or that there are none and the text is enough', () => {
+    const t = setup();
+    approvedText(t, 'post', postText, '2026-11-23', ['/r/1/1.png']);
+    approvedText(t, 'story', storyText, '2026-11-23');
+    const [post, story] = groupByItem(assemblePacks(t.ctx, '2026-11-23'));
+    expect(renderItemMessage(post!, '2026-11-23')).toContain('Картинок: 1, они пришли альбомом выше');
+    expect(renderItemMessage(story!, '2026-11-23')).toContain('Картинки не созданы (рендер недоступен)');
+  });
+
+  it('the «Опубликовано» flow is unchanged for a post: one press marks the Instagram row', () => {
+    const t = setup();
+    const id = approvedText(t, 'post', postText, '2026-11-23');
+    const row = t.store.rowsOfItem(id)[0]!;
+    expect(t.worker.markPublished(t.ctx, row.id)).toMatchObject({ ok: true });
+    expect(t.worker.markPublished(t.ctx, row.id)).toMatchObject({ ok: false, text: 'Уже отмечено' });
+    expect(assemblePacks(t.ctx, '2026-11-23')).toHaveLength(0);
   });
 });

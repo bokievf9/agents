@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tryJson, type Db, type LlmClient } from '@fir/core';
 import { DIRECTIONS, priceLine } from './directions.js';
-import { carouselSchema, clipSchema, renderCarousel, renderClip, titleOf, type ItemType } from './format.js';
+import { carouselSchema, clipSchema, postSchema, profileSchema, renderCarousel, renderClip, renderPost, renderProfile, renderStory, storySchema, titleOf, type ItemType } from './format.js';
 import { estimateSeconds, lintText } from './lint.js';
 import type { Topic } from './topics.js';
 
@@ -10,11 +10,17 @@ export interface Prompts {
   system: string;
   clip: string;
   carousel: string;
+  post: string;
+  story: string;
+  profile: string;
+  articleSystem: string;
+  articleRu: string;
+  articleEn: string;
 }
 
 export function loadPrompts(dir: string): Prompts {
   const read = (f: string) => readFileSync(join(dir, f), 'utf8').trim();
-  return { system: read('system.md'), clip: read('clip.md'), carousel: read('carousel.md') };
+  return { system: read('system.md'), clip: read('clip.md'), carousel: read('carousel.md'), post: read('post.md'), story: read('story.md'), profile: read('profile.md'), articleSystem: read('article.md'), articleRu: read('article-ru.md'), articleEn: read('article-en.md') };
 }
 
 export interface GenSpec {
@@ -50,7 +56,7 @@ export interface Generated {
   issues: string[];
 }
 
-function fill(template: string, vars: Record<string, string>): string {
+export function fill(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_, k: string) => vars[k] ?? '');
 }
 
@@ -67,7 +73,7 @@ function userPrompt(p: Prompts, spec: GenSpec, fix?: { text: string; issues: str
   }
   if (spec.previous) extra.push(`Отклонённый вариант (не повторяй его):\n${spec.previous}`);
   if (fix) extra.push(`В черновике найдены нарушения правил: ${fix.issues.join('; ')}. Исправь их и верни полный JSON.\nЧерновик:\n${fix.text}`);
-  return fill(spec.type === 'clip' ? p.clip : p.carousel, {
+  return fill(p[spec.type], {
     week: spec.week,
     topic: spec.topic.text,
     direction: dir ? `${dir.name}: ${dir.summary}` : 'свободная тема, выбери направление по смыслу',
@@ -88,6 +94,26 @@ async function once(llm: LlmClient, p: Prompts, spec: GenSpec, fix?: { text: str
     const sec = estimateSeconds(clip.scenes.map((s) => s.voice));
     if (sec < 15 || sec > 46) issues.push(`озвучка занимает около ${sec} с, нужно 20-40`);
     return { text, title: titleOf(text), issues };
+  }
+  if (spec.type === 'post') {
+    const parsed = await tryJson(llm, req, postSchema);
+    if (!parsed) return null;
+    // the caption must end with a call to action; the model sometimes forgets it
+    const post = /@firtech_bot|firtech\.pro/i.test(parsed.caption) ? parsed : { ...parsed, caption: `${parsed.caption.trimEnd()}\n\nНапишите нам: @firtech_bot` };
+    const text = renderPost(post);
+    return { text, title: titleOf(text), issues: lintText(text, { noPrices: true }) };
+  }
+  if (spec.type === 'story') {
+    const parsed = await tryJson(llm, req, storySchema);
+    if (!parsed) return null;
+    const text = renderStory(parsed);
+    return { text, title: titleOf(text), issues: lintText(text, { noPrices: true }) };
+  }
+  if (spec.type === 'profile') {
+    const parsed = await tryJson(llm, req, profileSchema);
+    if (!parsed) return null;
+    const text = renderProfile(parsed);
+    return { text, title: titleOf(text), issues: lintText(text, { noPrices: true, cta: false }) };
   }
   const parsed = await tryJson(llm, req, carouselSchema);
   if (!parsed) return null;

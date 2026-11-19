@@ -183,6 +183,12 @@ export class OwnerChannel implements Messenger {
     return this.d.inner.editButtons(chatId, messageId, buttons);
   }
 
+  /** Pictures cannot live in the website inbox: they always go to Telegram (the owner forwards them to Instagram from there). */
+  sendPhotos(chatId: number, files: string[], caption?: string): Promise<void> {
+    if (!this.d.inner.sendPhotos) return Promise.reject(new Error('this messenger cannot send photos'));
+    return this.d.inner.sendPhotos(chatId, files, caption);
+  }
+
   private classify(text: string, buttons?: Button[][]): { kind: InboxKind; approvalId: number | null } {
     for (const row of buttons ?? []) {
       for (const b of row) {

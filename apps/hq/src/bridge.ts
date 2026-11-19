@@ -104,7 +104,7 @@ export function issueBody(hq: Hq, t: Task): string {
   out.push('## Контекст', t.body.trim() || '(без описания)');
   const m = t.meta;
   const str = (k: string) => (typeof m[k] === 'string' && (m[k] as string).trim() ? (m[k] as string).trim() : null);
-  const section = (title: string, text: string | null) => text && out.push('', `## ${title}`, text);
+  const section = (title: string, text: string | null | undefined) => text && out.push('', `## ${title}`, text);
   section('Сценарий (одобрен владельцем)', str('script'));
   section('Субтитры', Array.isArray(m.subtitles) ? (m.subtitles as unknown[]).map((s, i) => `${i + 1}. ${String(s)}`).join('\n') : null);
   section('CTA', str('cta'));
@@ -112,6 +112,10 @@ export function issueBody(hq: Hq, t: Task): string {
     section('Подписи по платформам', Object.entries(m.captions as Record<string, unknown>).map(([p, c]) => `### ${p}\n${String(c)}`).join('\n\n'));
   }
   section('Целевая спецификация', str('target'));
+  // An approved blog article: the target file, what to do, and the whole article as JSON in a fenced block.
+  section('Файл в репозитории сайта', str('targetPath') && `\`${str('targetPath')}\``);
+  section('Что сделать (для главного окна)', str('instruction'));
+  section('Статья (JSON формата блога сайта)', str('articleJson') && `\`\`\`json\n${str('articleJson')}\n\`\`\``);
   const notes = hq.events(t.id).filter((e) => e.kind === 'comment' || e.kind === 'attachment').slice(-5);
   if (notes.length) section('Последние комментарии', notes.map((e) => `- ${e.actor ?? '?'}: ${e.body.slice(0, 800)}`).join('\n'));
   out.push(

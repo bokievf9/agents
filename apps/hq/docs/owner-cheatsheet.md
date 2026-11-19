@@ -41,6 +41,7 @@
 | `/ticket`, `/tickets`, `/client`, `/clients`, `/invoice`, `/invoices`, `/sub`, `/onboard` | сопровождение |
 | `/project`, `/pstatus`, `/target`, `/mdone` | производство |
 | `/doc`, `/lesson`, `/kb` | документы и знания |
+| `/profile`, `/article <ниша>` | маркетинг: настройка профиля Instagram (разово), статья в блог сайта |
 | `/builders`, `/builder <id>` | задачи строителям (Claude Code) |
 | `/topics`, `/drill`, `/skip` | темы в группе, учения, отмена ожидания правки |
 

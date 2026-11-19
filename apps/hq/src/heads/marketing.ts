@@ -1,11 +1,12 @@
 import { errMsg, log, tryJson, zonedParts, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import {
-  KIND, ContentMakerWorker, editableParts, partLabel, replacePart, splitPlatforms, storeFor, titleOf, ymd,
+  ARTICLE_KIND, KIND, ContentMakerWorker, TYPE_RU, articleSchema, articleTargetPath, builderInstruction, editableParts, nicheById, partLabel, replacePart,
+  findNiche, splitPlatforms, storeFor, titleOf, ymd,
   type PartId,
 } from '@fir/worker-content-maker';
 import { AnalystWorker } from '@fir/worker-analyst';
-import { PublisherWorker, publishedButtons, renderItemMessage, publishDay } from '@fir/worker-publisher';
+import { PublisherWorker, dayHeader, filesOf, publishedButtons, renderItemMessage, publishDay } from '@fir/worker-publisher';
 import { KIND as SEO_KIND, SeoWorker, type SeoProposalPayload } from '@fir/worker-seo';
 import { TrendScoutWorker, latestTrendHints } from '@fir/worker-trend-scout';
 import { z } from 'zod';
@@ -33,6 +34,10 @@ export interface MarketingDeps {
   integrations?: Integrations;
   clipsPerWeek?: number;
   carouselsPerWeek?: number;
+  postsPerWeek?: number;
+  storiesPerWeek?: number;
+  /** Where approved posts, slides and stories are rendered to PNG (`DATA_DIR/renders`). Absent: no pictures, text only. */
+  rendersDir?: string;
   rng?: () => number;
 }
 
@@ -48,15 +53,15 @@ export interface Integrations {
 }
 
 const splitSchema = z.object({
-  action: z.enum(['pack', 'topic', 'daily', 'trends', 'trends_weekly', 'seo', 'report', 'none']),
+  action: z.enum(['pack', 'topic', 'daily', 'trends', 'trends_weekly', 'seo', 'report', 'profile', 'article', 'none']),
   topic: z.string().max(300).optional(),
-  type: z.enum(['clip', 'carousel']).optional(),
+  type: z.enum(['clip', 'carousel', 'post', 'story']).optional(),
 });
 const reviewSchema = z.object({ ok: z.boolean(), issues: z.array(z.string()).max(10).default([]) });
 
-type Action = 'pack' | 'topic' | 'daily' | 'trends' | 'trends_weekly' | 'seo' | 'report' | 'none';
+type Action = 'pack' | 'topic' | 'daily' | 'trends' | 'trends_weekly' | 'seo' | 'report' | 'profile' | 'article' | 'none';
 const DIRECT: Action[] = ['trends', 'trends_weekly', 'seo', 'report'];
-const ACTIONS: Action[] = ['pack', 'topic', 'daily', ...DIRECT];
+const ACTIONS: Action[] = ['pack', 'topic', 'daily', 'profile', 'article', ...DIRECT];
 
 /** Heuristics for the case without an LLM: only the obvious wordings. */
 function guessAction(task: Task): { action: Action; topic?: string } {
@@ -66,7 +71,9 @@ function guessAction(task: Task): { action: Action; topic?: string } {
   if (/тренд/.test(text)) return { action: /недел|итог/.test(text) ? 'trends_weekly' : 'trends' };
   if (/seo|сео/.test(text)) return { action: 'seo' };
   if (/отч[её]т|аналитик/.test(text)) return { action: 'report' };
-  if (/клип|ролик|карусел|рилс|reels|shorts/.test(text)) return { action: 'topic', topic: task.body.trim() || task.title };
+  if (/оформлен\S* профил|настройк\S* профил|шапк/.test(text)) return { action: 'profile' };
+  if (/(?<!\p{L})(?:стать[яюи]|в блог|блог сайта)(?!\p{L})/u.test(text)) return { action: 'article', topic: task.body.trim() || '' };
+  if (/клип|ролик|карусел|рилс|reels|shorts|пост|истори|stories/.test(text)) return { action: 'topic', topic: task.body.trim() || task.title };
   return { action: 'none' };
 }
 
@@ -96,6 +103,9 @@ export class MarketingHead implements ApprovalEditor {
         trends: (ctx) => latestTrendHints(ctx, d.hq.tz),
         ...(d.clipsPerWeek !== undefined ? { clipsPerWeek: d.clipsPerWeek } : {}),
         ...(d.carouselsPerWeek !== undefined ? { carouselsPerWeek: d.carouselsPerWeek } : {}),
+        ...(d.postsPerWeek !== undefined ? { postsPerWeek: d.postsPerWeek } : {}),
+        ...(d.storiesPerWeek !== undefined ? { storiesPerWeek: d.storiesPerWeek } : {}),
+        ...(d.rendersDir ? { rendersDir: d.rendersDir } : {}),
         ...(d.rng ? { rng: d.rng } : {}),
       });
     if (this.worker instanceof ContentMakerWorker) {
@@ -113,6 +123,14 @@ export class MarketingHead implements ApprovalEditor {
         },
       });
     }
+    // An approved article becomes a `builder` task whose issue carries the article JSON and the target file path.
+    d.hq.registerKind(ARTICLE_KIND, {
+      initialLevel: 0, locked: true,
+      execute: (payload, approvalId) => {
+        this.requestArticleBuild(Number(payload.articleId), d.hq.approvalByCoreId(approvalId)?.taskId ?? null);
+        return Promise.resolve();
+      },
+    });
     // An approved SEO proposal becomes a task: tagged `builder` when the site's code has to change.
     d.hq.registerKind(SEO_KIND, {
       initialLevel: 0, locked: true,
@@ -126,6 +144,11 @@ export class MarketingHead implements ApprovalEditor {
     // The owner rejected an item: the worker's own table follows.
     d.hq.onApprovalDecision((link, state) => {
       if (link.kind === KIND && state === 'rejected') storeFor({ db: d.hq.db, now: d.hq.now }).setStatus(Number(link.payload.itemId), 'rejected');
+      if (link.kind === ARTICLE_KIND && state === 'rejected') {
+        const store = storeFor({ db: d.hq.db, now: d.hq.now });
+        // a rework (the owner sent it back with a remark) keeps the row alive: only a plain rejection closes it
+        if (store.article(Number(link.payload.articleId))?.status === 'proposed') store.setArticle(Number(link.payload.articleId), { status: 'rejected' });
+      }
     });
   }
 
@@ -156,6 +179,38 @@ export class MarketingHead implements ApprovalEditor {
     });
     this.hq.block(t.id, HEAD_ID, 'Нужен строитель: собрать клип (Remotion)', ['builder']);
     return t;
+  }
+
+  /**
+   * An approved article becomes a blocked `builder` task «Статья в блог»; the builder bridge turns it into an issue with
+   * the article JSON in a fenced block, the target file path and the instruction. Once per article.
+   */
+  private requestArticleBuild(articleId: number, parentId: number | null): Task | null {
+    const store = this.store();
+    const row = store.article(articleId);
+    if (!row || row.taskId) return null;
+    const article = articleSchema.parse(JSON.parse(row.json));
+    const t = this.hq.createTask({
+      title: `Статья в блог: ${article.ru.title}`.slice(0, 200),
+      body: `Добавить одобренную владельцем статью (ниша «${nicheById(article.niche)?.name ?? article.niche}») в блог сайта firtech.pro.`,
+      dept: MARKETING, creator: 'head', ...(parentId ? { parentId } : {}),
+      meta: {
+        action: 'publish_article', articleId, articleJson: JSON.stringify(article, null, 2), targetPath: articleTargetPath(article.slug),
+        instruction: builderInstruction(article, this.today()),
+      },
+    });
+    this.hq.block(t.id, HEAD_ID, 'Нужен строитель: добавить статью в блог сайта', ['builder']);
+    store.setArticle(articleId, { status: 'approved', taskId: t.id });
+    return t;
+  }
+
+  /** Copies the issue number of an article's builder task into `cm_articles` once the bridge has made the issue. */
+  syncArticles(): void {
+    const store = this.store();
+    for (const a of store.articles().filter((x) => x.status === 'approved' && x.taskId && !x.issueNumber)) {
+      const issue = this.hq.task(a.taskId!)?.meta.issue as { number?: number } | undefined;
+      if (typeof issue?.number === 'number') store.setArticle(a.id, { issueNumber: issue.number });
+    }
   }
 
   /** The rendered file of a clip (the builder's result path or URL), once its task reached review. */
@@ -193,6 +248,7 @@ export class MarketingHead implements ApprovalEditor {
       await this.runChild(t).catch((e) => this.crash(t, e));
     }
     await this.finalizeParents();
+    this.syncArticles();
   }
 
   private async crash(task: Task, e: unknown): Promise<void> {
@@ -202,7 +258,7 @@ export class MarketingHead implements ApprovalEditor {
     if (!task.parentId) await this.hq.alert(`Маркетинг: задача #${task.id} заблокирована (сбой), подробности в журнале задачи.`);
   }
 
-  private async decide(task: Task): Promise<{ action: Action; topic?: string; type?: 'clip' | 'carousel' }> {
+  private async decide(task: Task): Promise<{ action: Action; topic?: string; type?: 'clip' | 'carousel' | 'post' | 'story' }> {
     const metaAction = task.meta.action;
     if (typeof metaAction === 'string' && ACTIONS.includes(metaAction as Action)) {
       return { action: metaAction as Action, ...(typeof task.meta.topic === 'string' ? { topic: task.meta.topic } : {}) };
@@ -211,7 +267,7 @@ export class MarketingHead implements ApprovalEditor {
       this.llmFor(HEAD_ID, task.id),
       {
         tier: 'haiku', maxTokens: 400,
-        system: `${this.agent().instructions}\n\nОпредели, что нужно сделать исполнителю по задаче. Ответ: только JSON {"action": "pack"|"topic"|"daily"|"trends"|"trends_weekly"|"seo"|"report"|"none", "topic": "тема материала", "type": "clip"|"carousel"}. pack: пакет недели; topic: один материал на тему; daily: что публикуем сегодня; trends: хуки и форматы дня; trends_weekly: тренды недели; seo: проверка сайта; report: недельный отчёт; none: задача не для отдела маркетинга.`,
+        system: `${this.agent().instructions}\n\nОпредели, что нужно сделать исполнителю по задаче. Ответ: только JSON {"action": "pack"|"topic"|"daily"|"trends"|"trends_weekly"|"seo"|"report"|"profile"|"article"|"none", "topic": "тема материала или ниша статьи", "type": "clip"|"carousel"|"post"|"story"}. pack: пакет недели; topic: один материал на тему (рилс, карусель, пост или история); daily: что публикуем сегодня; trends: хуки и форматы дня; trends_weekly: тренды недели; seo: проверка сайта; report: недельный отчёт; profile: оформление профиля Instagram; article: статья в блог сайта; none: задача не для отдела маркетинга.`,
         messages: [{ role: 'user', content: `Задача: ${task.title}\n${task.body}`.slice(0, 2000) }],
       },
       splitSchema,
@@ -240,6 +296,16 @@ export class MarketingHead implements ApprovalEditor {
       this.hq.setMeta(task.id, { action: 'topic', topic: topic ?? (task.body.trim() || task.title), ...(type ? { type } : {}) });
       await this.runWorkerTask(task.id, HEAD_ID);
       return;
+    }
+    if (action === 'profile') {
+      this.hq.setMeta(task.id, { action: 'profile' });
+      await this.runWorkerTask(task.id, HEAD_ID);
+      return;
+    }
+    if (action === 'article') {
+      this.hq.setMeta(task.id, { action: 'article', ...(topic ? { niche: topic } : {}) });
+      // no checklist review here: the article is checked by its own schema and the owner's card, and a second run would take another niche
+      return this.runDirect(task.id, this.worker);
     }
     // pack: the worker splits it into items, each item is a subtask of the content-maker
     this.hq.setMeta(task.id, { action: 'pack' });
@@ -364,9 +430,28 @@ export class MarketingHead implements ApprovalEditor {
     const tctx = { db: this.hq.db, now: this.hq.now, tz: this.hq.tz };
     const groups = this.publisher.packsToSend(tctx);
     let sent = 0;
+    if (groups.length) {
+      try {
+        await this.d.messenger.send(this.d.ownerId, dayHeader(groups));
+      } catch (e) {
+        log('warn', 'publish header not delivered', { err: errMsg(e) });
+      }
+    }
     for (const g of groups) {
       try {
-        await this.d.messenger.send(this.d.ownerId, renderItemMessage(g, publishDay(tctx)), publishedButtons(g));
+        // pictures first, as one album (the owner forwards it to Instagram), then the text with the «Опубликовано» buttons
+        const files = filesOf(g);
+        let note = '';
+        if (files.length) {
+          try {
+            if (!this.d.messenger.sendPhotos) throw new Error('messenger cannot send photos');
+            await this.d.messenger.sendPhotos(this.d.ownerId, files, `${TYPE_RU[g[0]!.type]} «${g[0]!.title}»`.slice(0, 200));
+          } catch (e) {
+            log('warn', 'publish photos not delivered', { err: errMsg(e) });
+            note = '\n\nАльбом с картинками не отправился: публикуйте по тексту, картинки лежат на сервере.';
+          }
+        }
+        await this.d.messenger.send(this.d.ownerId, `${renderItemMessage(g, publishDay(tctx))}${note}`.slice(0, 4000), publishedButtons(g));
         this.publisher.markSent(tctx, g);
         sent++;
       } catch (e) {
@@ -398,6 +483,12 @@ export class MarketingHead implements ApprovalEditor {
   }
 
   async press(approvalId: number): Promise<string> {
+    const row = this.d.queue.get(approvalId);
+    if (row?.kind === ARTICLE_KIND && (row.status === 'pending' || row.status === 'editing')) {
+      this.store().setKv('await_article', String(approvalId));
+      await this.d.messenger.send(this.d.ownerId, `Пришлите замечание к статье одним сообщением (что изменить), я переделаю её и пришлю снова. /skip отменяет.`);
+      return 'Жду замечание';
+    }
     const e = this.editable(approvalId);
     if (!e) return 'Уже обработано';
     const buttons = editableParts(e.item.type).map((p) => ({ text: partLabel(e.item.type, p), data: `ce:${approvalId}:${p}` }));
@@ -415,7 +506,29 @@ export class MarketingHead implements ApprovalEditor {
     return `Жду: ${partLabel(e.item.type, id)}`;
   }
 
+  /** The owner's remark on an article: the card is closed, the same article row is written again with the remark. */
+  private async reworkArticle(approvalId: number, remark: string): Promise<void> {
+    const row = this.d.queue.get(approvalId);
+    const articleId = Number(row?.payload.articleId);
+    if (!row || row.kind !== ARTICLE_KIND || (row.status !== 'pending' && row.status !== 'editing') || !articleId) {
+      await this.d.messenger.send(this.d.ownerId, 'Эта статья уже обработана, замечание не применено.');
+      return;
+    }
+    this.store().setArticle(articleId, { status: 'draft', comment: remark.slice(0, 1000) });
+    await this.d.queue.handle('reject', approvalId, this.d.ownerId);
+    await this.d.queue.settleCard(approvalId).catch(() => undefined);
+    const t = this.hq.createTask({ title: `Переделать статью #${articleId} с замечанием`, body: remark.slice(0, 1000), dept: MARKETING, creator: 'owner', meta: { action: 'article', articleId, feedback: remark.slice(0, 1000) } });
+    this.hq.wake(HEAD_ID, 'task');
+    await this.d.messenger.send(this.d.ownerId, `Принял замечание, переделываю статью (задача #${t.id}). Новая версия придёт в одобрения.`);
+  }
+
   async consume(text: string): Promise<boolean> {
+    const awaitedArticle = this.store().getKv('await_article');
+    if (awaitedArticle) {
+      this.store().setKv('await_article', null);
+      await this.reworkArticle(Number(awaitedArticle), text);
+      return true;
+    }
     const pending = this.store().getKv('await_edit');
     if (!pending) return false;
     this.store().setKv('await_edit', null);
@@ -439,6 +552,23 @@ export class MarketingHead implements ApprovalEditor {
 
   cancel(): void {
     this.store().setKv('await_edit', null);
+    this.store().setKv('await_article', null);
+  }
+
+  /** Director commands `/profile` and `/article [ниша]`: a department task for the head, the answer is what happens next. */
+  async command(name: string, arg: string): Promise<string> {
+    if (name === 'profile') {
+      const t = this.hq.createTask({ title: 'Оформление профиля Instagram: био, актуальное, закрепы, порядок недели', body: '', dept: MARKETING, creator: 'owner', meta: { action: 'profile' } });
+      this.hq.wake(HEAD_ID, 'task');
+      return `Взял (задача #${t.id}): Контент-мейкер соберёт пакет настройки профиля, он придёт в одобрения одной карточкой, обложки Актуального отрисую после одобрения.`;
+    }
+    const niche = arg.trim();
+    const store = this.store();
+    if (niche && !findNiche(niche)) return `Не нашёл нишу «${niche.slice(0, 60)}». Напишите как в конструкторе, например: /article барбершоп. Или /article без названия: возьму первую нишу без статьи.`;
+    const covered = store.coveredNiches().size;
+    const t = this.hq.createTask({ title: `Статья в блог${niche ? `: ${niche}` : ''}`, body: niche, dept: MARKETING, creator: 'owner', meta: { action: 'article', ...(niche ? { niche } : {}) } });
+    this.hq.wake(HEAD_ID, 'task');
+    return `Взял (задача #${t.id}): Контент-мейкер пишет статью${niche ? ` для ниши «${findNiche(niche)!.name}»` : ' для следующей ниши без статьи'} (ниш со статьями сейчас ${covered}). Карточка придёт в одобрения.`;
   }
 
   parts(approvalId: number): { id: string; label: string }[] | null {

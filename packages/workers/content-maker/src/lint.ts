@@ -4,7 +4,7 @@ import { allowedPrices } from './directions.js';
  * Brand-voice checks from the content plan (section 6). Returns human-readable problems; the generator asks
  * the model to fix them once, and anything left goes to the owner as a warning above the item.
  */
-export function lintText(text: string): string[] {
+export function lintText(text: string, opts: { noPrices?: boolean; cta?: boolean } = {}): string[] {
   const issues: string[] = [];
   const rules: [RegExp, string][] = [
     [/(?<!\p{L})не(?!\p{L})[^.\n!?]{1,50}[,;]\s*а(?!\p{L})/iu, 'оборот «не X, а Y»'],
@@ -19,12 +19,16 @@ export function lintText(text: string): string[] {
     [/наши клиенты|наш опыт внедрения/i, 'выдуманные клиенты'],
   ];
   for (const [re, label] of rules) if (re.test(text)) issues.push(label);
+  if (opts.noPrices) {
+    if (/\$\s?\d|\d\s?(?:\$|usd|долл)|(?<!\p{L})(?:стоит|стоимость|цена|цену|цены)(?!\p{L})\s+(?:от\s+)?\d/iu.test(text)) issues.push('цена в тексте: в этом материале цен нет');
+    if (/цифра дня/i.test(text)) issues.push('«цифра дня» не используем');
+  }
   const allowed = allowedPrices();
-  const bad = [...text.matchAll(/\$\s?(\d[\d ]*)|(\d[\d ]*)\s?(?:\$|usd|долл)/gi)]
+  const bad = opts.noPrices ? [] : [...text.matchAll(/\$\s?(\d[\d ]*)|(\d[\d ]*)\s?(?:\$|usd|долл)/gi)]
     .map((m) => Number((m[1] ?? m[2] ?? '').replace(/\s/g, '')))
     .filter((n) => n > 0 && !allowed.has(n));
   if (bad.length) issues.push(`цена не из справки: $${[...new Set(bad)].join(', $')}`);
-  if (!/firtech\.pro/i.test(text)) issues.push('нет firtech.pro в призыве');
+  if (opts.cta !== false && !(opts.noPrices ? /firtech\.pro|@firtech_bot/i : /firtech\.pro/i).test(text)) issues.push(opts.noPrices ? 'нет @firtech_bot или firtech.pro в призыве' : 'нет firtech.pro в призыве');
   return issues;
 }
 

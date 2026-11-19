@@ -1,4 +1,4 @@
-import { Bot, type Api } from 'grammy';
+import { Bot, InputFile, type Api } from 'grammy';
 import type { ApprovalQueue, Action } from './approvals.js';
 import { errMsg, log } from './log.js';
 import { stripHtml, type Button, type Messenger, type ReplyKeyboard, type SendOptions } from './messenger.js';
@@ -75,6 +75,14 @@ export function grammyMessenger(bot: Bot): Messenger {
         await bot.api.editMessageReplyMarkup(chatId, messageId, { reply_markup: inline(buttons ?? []) });
       } catch (e) {
         if (!notModified(e)) throw e;
+      }
+    },
+    async sendPhotos(chatId, files, caption) {
+      for (let i = 0; i < files.length; i += 10) {
+        const chunk = files.slice(i, i + 10);
+        const cap = i === 0 && caption ? caption.slice(0, 1024) : undefined;
+        if (chunk.length === 1) await bot.api.sendPhoto(chatId, new InputFile(chunk[0]!), cap ? { caption: cap } : {});
+        else await bot.api.sendMediaGroup(chatId, chunk.map((f, j) => ({ type: 'photo' as const, media: new InputFile(f), ...(j === 0 && cap ? { caption: cap } : {}) })));
       }
     },
   };

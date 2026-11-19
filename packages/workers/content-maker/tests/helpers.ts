@@ -35,8 +35,53 @@ export function carouselJson(): string {
   });
 }
 
-/** Mock model: carousel prompt gets a carousel, everything else a clip. */
-export const smartLlm = () => new MockLlm((r: LlmRequest) => (r.messages[0]!.content.startsWith('Составь карусель') ? carouselJson() : clipJson()));
+export function postJson(over: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    title: 'Бот отвечает ночью',
+    lines: ['Клиент пишет в два часа ночи.', 'Утром мастер видит запись.'],
+    caption: `Клиент пишет в два часа ночи, а салон закрыт. Бот-администратор отвечает сразу.\n\nЧто происходит дальше:\n- бот показывает свободные окна\n- клиент выбирает время\n- мастер утром видит запись в календаре\n\nПример сценария: так выглядит обычная запись на стрижку без звонков и переписки. Бот спрашивает имя, услугу и удобное время, подтверждает запись и напоминает о ней за день и за час. Если клиент хочет перенести визит, бот предложит другое окно.\n\nНапишите нам в @firtech_bot, подберём состав под ваш бизнес.`,
+    hashtags: ['#боты', '#салон', '#автоматизация'],
+    ...over,
+  });
+}
+
+export function storyJson(over: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    title: 'Запись ночью',
+    frames: [
+      { title: 'Клиент пишет в 2:00', line: 'Салон закрыт, ответа нет.' },
+      { title: 'Бот отвечает сразу', line: 'Предлагает свободные окна.' },
+      { title: 'Запись готова', line: 'Мастер увидит её утром.' },
+      { title: 'Хотите так же?', line: 'Напишите в @firtech_bot' },
+    ],
+    leads: 'В @firtech_bot, анкета из трёх шагов',
+    ...over,
+  });
+}
+
+export function profileJson(): string {
+  return JSON.stringify({
+    bio: 'Боты и ИИ-агенты для малого бизнеса: запись, заявки, ответы 24/7. Конструктор на firtech.pro',
+    link: 'Собрать бота под ваш бизнес: firtech.pro',
+    highlights: [
+      { name: 'Боты', cover: 'Какие боты делаем' }, { name: 'Как работает', cover: 'Механика бота' }, { name: 'Ниши', cover: 'Для каких бизнесов' },
+      { name: 'Вопросы', cover: 'Частые вопросы' }, { name: 'Связаться', cover: 'Напишите нам' },
+    ],
+    pinned: ['Что делает бот-администратор: картинка с примером диалога', 'Как работает конструктор: карусель', 'Как с нами связаться: пост с @firtech_bot'],
+    week: ['Пн: рилс про бота-администратора', 'Вт: карусель про приёмщика заявок', 'Ср: пост с чеклистом', 'Чт: история с вопросом', 'Пт: рилс про автоматизацию'],
+  });
+}
+
+/** Mock model: the prompt's first words pick the material; everything else is a clip. */
+export const smartLlm = () =>
+  new MockLlm((r: LlmRequest) => {
+    const t = r.messages[0]!.content;
+    if (t.startsWith('Составь карусель')) return carouselJson();
+    if (t.startsWith('Составь пост')) return postJson();
+    if (t.startsWith('Составь историю')) return storyJson();
+    if (t.startsWith('Составь пакет настройки')) return profileJson();
+    return clipJson();
+  });
 
 export interface Staged {
   kind: string;
@@ -45,7 +90,7 @@ export interface Staged {
 }
 
 /** A worker context the way a head builds it: shared in-memory db, requestApproval stages proposals. */
-export function setup(opts: { llm?: LlmClient; clipsPerWeek?: number; carouselsPerWeek?: number } = {}) {
+export function setup(opts: { llm?: LlmClient; clipsPerWeek?: number; carouselsPerWeek?: number; postsPerWeek?: number; storiesPerWeek?: number; rendersDir?: string } = {}) {
   const db = openDb(':memory:');
   const staged: Staged[] = [];
   const clock = { t: NOW };
@@ -56,7 +101,7 @@ export function setup(opts: { llm?: LlmClient; clipsPerWeek?: number; carouselsP
     requestApproval: (kind, payload, summary) => Promise.resolve(staged.push({ kind, payload, summary }) - 1),
     log: (action, detail) => void logs.push(detail ? `${action}: ${detail}` : action),
   };
-  const worker = new ContentMakerWorker({ promptsDir, rng: () => 0.1, ...(opts.clipsPerWeek !== undefined ? { clipsPerWeek: opts.clipsPerWeek } : {}), ...(opts.carouselsPerWeek !== undefined ? { carouselsPerWeek: opts.carouselsPerWeek } : {}) });
+  const worker = new ContentMakerWorker({ promptsDir, rng: () => 0.1, ...(opts.clipsPerWeek !== undefined ? { clipsPerWeek: opts.clipsPerWeek } : {}), ...(opts.carouselsPerWeek !== undefined ? { carouselsPerWeek: opts.carouselsPerWeek } : {}), ...(opts.postsPerWeek !== undefined ? { postsPerWeek: opts.postsPerWeek } : {}), ...(opts.storiesPerWeek !== undefined ? { storiesPerWeek: opts.storiesPerWeek } : {}), ...(opts.rendersDir ? { rendersDir: opts.rendersDir } : {}) });
   let n = 0;
   const task = (meta: Record<string, unknown>, title = 'T'): Task => ({
     id: ++n, title, body: '', dept: 'marketing', assigneeId: 'content-maker', creator: 'routine', parentId: null, status: 'running', priority: 0,

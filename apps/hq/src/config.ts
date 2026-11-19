@@ -15,6 +15,11 @@ export interface Config extends BaseConfig {
   topics: Record<string, number>;
   clipsPerWeek: number;
   carouselsPerWeek: number;
+  /** Single posts and story series a week in the weekly pack (defaults 3 and 5). */
+  postsPerWeek: number;
+  storiesPerWeek: number;
+  /** Rendered PNG files of posts, slides, stories and covers: `<DATA_DIR>/renders`. */
+  rendersDir: string;
   /** Monthly limit of the Marketing department in USD (0: none). Used only when the head is first created. */
   marketingBudgetUsd: number;
   /** Support bot token. Without it the Support head is silent in the group (checks and alerts still work). */
@@ -116,7 +121,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     groupId,
     topics,
     clipsPerWeek: Math.round(num(env, 'CLIPS_PER_WEEK', 7, 1, 7)),
-    carouselsPerWeek: num(env, 'CAROUSELS_PER_WEEK', 0.5, 0, 1),
+    carouselsPerWeek: num(env, 'CAROUSELS_PER_WEEK', 2, 0, 7),
+    postsPerWeek: Math.round(num(env, 'POSTS_PER_WEEK', 3, 0, 7)),
+    storiesPerWeek: Math.round(num(env, 'STORIES_PER_WEEK', 5, 0, 7)),
+    rendersDir: `${base.dataDir}/renders`,
     marketingBudgetUsd: num(env, 'MARKETING_BUDGET_USD', 0, 0, 100_000),
     supportBotToken: optional(env, 'SUPPORT_BOT_TOKEN'),
     monitor: loadMonitorConfig(env, base.dataDir),

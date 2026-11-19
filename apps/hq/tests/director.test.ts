@@ -191,7 +191,7 @@ describe('org and config', () => {
     expect(w.hq.agent('marketing-head')).toMatchObject({ bot: 'MARKETING_BOT_TOKEN', bossId: 'director' });
     expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([
       ['marketing-weekly-pack', '0 9 * * 1'], ['marketing-daily-today', '0 9 * * *'], ['marketing-trends-daily', '30 8 * * *'],
-      ['marketing-trends-weekly', '0 20 * * 0'], ['marketing-analyst-weekly', '0 8 * * 1'], ['marketing-seo-weekly', '0 11 * * 1'],
+      ['marketing-trends-weekly', '0 20 * * 0'], ['marketing-analyst-weekly', '0 8 * * 1'], ['marketing-article-weekly', '0 10 * * 2'], ['marketing-seo-weekly', '0 11 * * 1'],
     ]);
     w.hq.setInstructions('marketing-head', 'edited');
     w.hq.scheduleRoutine({ ...w.hq.routineByName('marketing-daily-today')!, cron: '0 10 * * *' });
@@ -203,7 +203,7 @@ describe('org and config', () => {
   it('config: required vars, group and topics, bad values', () => {
     const base = { HQ_BOT_TOKEN: 't', OWNER_TELEGRAM_ID: '1' };
     const c = loadConfig({ ...base, HQ_GROUP_ID: '-100123', HQ_TOPICS: '{"general":2,"marketing":3}', MARKETING_BOT_TOKEN: 'm' });
-    expect(c).toMatchObject({ botToken: 't', ownerId: 1, groupId: -100123, topics: { general: 2, marketing: 3 }, marketingBotToken: 'm', clipsPerWeek: 7, carouselsPerWeek: 0.5 });
+    expect(c).toMatchObject({ botToken: 't', ownerId: 1, groupId: -100123, topics: { general: 2, marketing: 3 }, marketingBotToken: 'm', clipsPerWeek: 7, carouselsPerWeek: 2, postsPerWeek: 3, storiesPerWeek: 5 });
     expect(loadConfig(base).groupId).toBeUndefined();
     expect(loadConfig(base)).toMatchObject({ trendsRegions: ['KZ', 'UZ', 'RU'], siteUrl: 'https://firtech.pro', youtubeApiKey: undefined, gscSiteUrl: undefined });
     expect(loadConfig({ ...base, TRENDS_REGIONS: 'kz, uz ,bad', SITE_URL: 'https://example.com/' })).toMatchObject({ trendsRegions: ['KZ', 'UZ'], siteUrl: 'https://example.com' });
@@ -211,6 +211,8 @@ describe('org and config', () => {
     expect(() => loadConfig({ ...base, HQ_TOPICS: 'nope' })).toThrow(/HQ_TOPICS/);
     expect(() => loadConfig({ ...base, HQ_GROUP_ID: 'abc' })).toThrow(/HQ_GROUP_ID/);
     expect(() => loadConfig({ ...base, CLIPS_PER_WEEK: '9' })).toThrow(/CLIPS_PER_WEEK/);
+    expect(() => loadConfig({ ...base, POSTS_PER_WEEK: '9' })).toThrow(/POSTS_PER_WEEK/);
+    expect(loadConfig({ ...base, POSTS_PER_WEEK: '1', STORIES_PER_WEEK: '0', DATA_DIR: '/d' })).toMatchObject({ postsPerWeek: 1, storiesPerWeek: 0, rendersDir: '/d/renders' });
     expect(dailyCron('08:00')).toBe('0 8 * * *');
     expect(dailyCron('7:05')).toBe('5 7 * * *');
     expect(() => dailyCron('25:00')).toThrow();

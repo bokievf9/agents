@@ -93,12 +93,15 @@ const clientBot = cfg.clientBotToken
   : null;
 const marketing = new MarketingHead({
   hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, clipsPerWeek: cfg.clipsPerWeek, carouselsPerWeek: cfg.carouselsPerWeek,
+  postsPerWeek: cfg.postsPerWeek, storiesPerWeek: cfg.storiesPerWeek, rendersDir: cfg.rendersDir,
   integrations: {
     youtubeApiKey: cfg.youtubeApiKey, youtubeChannelId: cfg.youtubeChannelId, trendsRegions: cfg.trendsRegions,
     gscServiceAccountJson: cfg.gscServiceAccountJson, gscSiteUrl: cfg.gscSiteUrl, siteUrl: cfg.siteUrl,
   },
 });
 director.editors.set('content_item', marketing);
+director.editors.set('article', marketing); // «Править» on an article = a remark, the article is written again
+for (const name of ['profile', 'article']) director.commands.set(name, { dept: 'marketing', run: (arg) => marketing.command(name, arg) });
 const support = new SupportHead({
   hq, llm, reporter, monitor: new MonitoringWorker(cfg.monitor), finance: new FinanceWorker({ fixedCosts: cfg.fixedCostsUsdMonth }),
   cs: new CustomerSupportWorker({ slaHours: cfg.supportSlaHours }),

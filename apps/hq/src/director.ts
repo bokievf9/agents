@@ -104,6 +104,7 @@ export const HELP = [
   '/reply &lt;id&gt;, /kp &lt;лид или описание&gt;, /referral, /referrals: продажи',
   '/ticket, /tickets, /client, /clients, /invoice, /invoices, /sub, /onboard, /paid &lt;счёт или id&gt;: сопровождение',
   '/project, /pstatus, /target, /mdone: производство; /doc, /lesson, /kb: документы и знания',
+  '/profile: настройка профиля Instagram (один раз); /article &lt;ниша&gt;: статья в блог сайта',
   '/builders, /builder &lt;id&gt;: задачи строителям; /topics: темы в группе; /drill: учения; /skip: отменить ожидание правки',
   '',
   '<i>Статусы на сайте офиса: работает, ждёт (ответ за вами), застрял (/retry), спит (ночь или тихие часы), офлайн.</i>',
@@ -137,7 +138,7 @@ export class Director {
   /** Set by the drill: `/drill [dept|report|clear]`. Returns the reply. */
   onDrillCommand: ((arg: string) => Promise<string>) | null = null;
   /** Commands of the Production and Back Office heads (`/project`, `/doc`...): name -> handler returning the reply. */
-  readonly commands = new Map<string, { dept: 'production' | 'backoffice'; run: (arg: string) => Promise<string> }>();
+  readonly commands = new Map<string, { dept: 'production' | 'backoffice' | 'marketing'; run: (arg: string) => Promise<string> }>();
   /** Extra lines of the morning summary from heads (overdue milestones, pending documents); null: nothing to say. */
   readonly summaryLines: (() => string | null)[] = [];
   private jobs: Cron[] = [];

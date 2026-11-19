@@ -48,6 +48,26 @@ describe('aggregate', () => {
     expect(n).toMatchObject({ approved: 3, published: 2, publishedByPlatform: { tiktok: 1, instagram: 1 }, leads: 2, leadsPrev: 0, costUsd: 1.25, subscribers: null, subscribersDelta: null, funnel: { new: 2, sent: 1 } });
   });
 
+  it('articles of the week: proposed, approved, published (builder issue closed); no line without articles', () => {
+    const w = world();
+    w.db.exec(`
+      CREATE TABLE cm_articles (id INTEGER PRIMARY KEY, niche TEXT, status TEXT, created_at INTEGER, decided_at INTEGER, task_id INTEGER);
+    `);
+    const art = (status: string, created: number, decided: number | null, task: number | null) => w.db.prepare('INSERT INTO cm_articles (niche, status, created_at, decided_at, task_id) VALUES (?, ?, ?, ?, ?)').run('barber', status, created, decided, task);
+    const t1 = w.hq.createTask({ title: 'Статья 1', dept: 'marketing', creator: 'head', meta: { builderClosed: true } });
+    const t2 = w.hq.createTask({ title: 'Статья 2', dept: 'marketing', creator: 'head', meta: { issue: { number: 7 } } });
+    art('approved', inWeek, inWeek, t1.id);
+    art('approved', inWeek, inWeek, t2.id);
+    art('rejected', inWeek, inWeek, null);
+    art('proposed', inWeek, null, null);
+    art('approved', inWeek - 30 * DAY, inWeek - 30 * DAY, t1.id); // old: not this week
+    const n = aggregate(w.db, '2026-11-16', '2026-11-22', NOW, 'Asia/Tashkent', null, null);
+    expect(n.articles).toEqual({ proposed: 4, approved: 2, published: 1 });
+    expect(numbersText(n)).toContain('6. Статьи блога: предложено 4, одобрено 2, опубликовано 1');
+    const none = world();
+    expect(aggregate(none.db, '2026-11-16', '2026-11-22', NOW, 'Asia/Tashkent', null, null).articles).toBeNull();
+  });
+
   it('tables that do not exist yet give zeros and no funnel, never an error', () => {
     const db = openDb(':memory:');
     new Hq(db);
@@ -55,7 +75,7 @@ describe('aggregate', () => {
   });
 
   it('five numbers in text, with and without YouTube', () => {
-    const base = { approved: 8, published: 5, publishedByPlatform: { instagram: 3, tiktok: 2 }, leads: 2, leadsPrev: 1, costUsd: 0.5, funnel: null };
+    const base = { approved: 8, published: 5, publishedByPlatform: { instagram: 3, tiktok: 2 }, leads: 2, leadsPrev: 1, costUsd: 0.5, funnel: null, articles: null };
     const text = numbersText({ ...base, subscribers: 120, subscribersDelta: 15 });
     expect(text.split('\n')).toHaveLength(5);
     expect(text).toContain('2. Опубликовано (отмечено вручную): 5 (Instagram 3, TikTok 2)');
@@ -106,6 +126,6 @@ describe('Analyst report', () => {
   });
 
   it('fallback recommendations are never more than three', () => {
-    expect(fallbackRecommendations({ approved: 7, published: 1, publishedByPlatform: {}, leads: 0, leadsPrev: 2, costUsd: 0, subscribers: null, subscribersDelta: null, funnel: null })).toHaveLength(3);
+    expect(fallbackRecommendations({ approved: 7, published: 1, publishedByPlatform: {}, leads: 0, leadsPrev: 2, costUsd: 0, subscribers: null, subscribersDelta: null, funnel: null, articles: null })).toHaveLength(3);
   });
 });

@@ -44,6 +44,6 @@ describe('topic rotation', () => {
   it('records topics of a pack in the SQLite history', async () => {
     const { worker, ctx, task } = setup();
     await worker.plan(task({ action: 'pack' }), ctx);
-    expect(storeFor(ctx).history().size).toBe(8);
+    expect(storeFor(ctx).history().size).toBe(17);
   });
 });
