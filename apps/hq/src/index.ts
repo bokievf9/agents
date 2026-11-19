@@ -1,6 +1,6 @@
 import { Api } from 'grammy';
 import {
-  ApprovalQueue, GatewayWatch, OutboxMessenger, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, setupBotMenu, startPolling, startPricesRefresh,
+  ApprovalQueue, GatewayWatch, OutboxMessenger, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, safeGetJson, setupBotMenu, startPolling, startPricesRefresh,
 } from '@fir/core';
 import { HeartbeatWorker, Hq, meterLlm, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
@@ -14,7 +14,7 @@ import { BACKOFFICE, BACKOFFICE_HEAD_ID, BackofficeHead, seedBackoffice } from '
 import { SUPPORT, SUPPORT_HEAD_ID, SupportHead, seedSupport } from './heads/support.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { BillingWorker } from '@fir/worker-billing';
+import { BillingWorker, CHAIN_HOSTS, PaymentWatcher } from '@fir/worker-billing';
 import { CustomerSupportWorker } from '@fir/worker-customer-support';
 import { FinanceWorker } from '@fir/worker-finance';
 import { OnboardingWorker } from '@fir/worker-onboarding';
@@ -24,6 +24,7 @@ import { TopicManager } from './topics.js';
 import { createWebhook } from './webhook.js';
 import { AuditGate, AuditStore, submitAudit } from './audit-shared.js';
 import { blogApi } from './blog.js';
+import { payApi } from './pay.js';
 import { cachedStatus } from './status.js';
 import { createAdmin } from './admin.js';
 import { OwnerChannel } from './presence.js';
@@ -137,10 +138,18 @@ director.onPackButton = (op, id, at) => marketing.onPackButton(op, id, at); // t
 for (const name of routedTo('marketing')) director.commands.set(name, { dept: 'marketing', run: (arg) => marketing.command(name, arg) });
 const monitor = new MonitoringWorker(cfg.monitor);
 if (clientBot) monitor.watchBot(clientBot.probe()); // getMe, polling errors and silence of @firtech_bot go to the checks and to /status
+const billing = new BillingWorker({ prefix: cfg.invoicePrefix, paymentDetails: cfg.paymentDetails, siteUrl: cfg.siteUrl });
+// On-chain USDT check: only the two indexer hosts, resolved once to a public address, 8 s, 1 MB (core `safeGetJson`).
+const payWatch = new PaymentWatcher({
+  addresses: billing.chainAddresses(),
+  get: (url, headers) => safeGetJson(url, { allowHosts: CHAIN_HOSTS, headers, timeoutMs: 8000 }),
+  keys: { ...(cfg.trongridApiKey ? { trongrid: cfg.trongridApiKey } : {}), ...(cfg.toncenterApiKey ? { toncenter: cfg.toncenterApiKey } : {}) },
+  tolerancePct: cfg.payTolerancePct,
+});
 const support = new SupportHead({
   hq, llm, reporter, monitor, finance: new FinanceWorker({ fixedCosts: cfg.fixedCostsUsdMonth }),
   cs: new CustomerSupportWorker({ slaHours: cfg.supportSlaHours }),
-  billing: new BillingWorker({ prefix: cfg.invoicePrefix, paymentDetails: cfg.paymentDetails }),
+  billing, payWatch,
   onboarding: new OnboardingWorker(), messenger, ownerId: cfg.ownerId, ...(clientBot ? { client: clientBot } : {}),
 });
 director.onSupportCommand = (name, args) => support.onCommand(name, args);
@@ -385,6 +394,7 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
           : {}),
         status: { get: cachedStatus(db) },
         blog: blogApi(db, hq.now, () => hq.tz),
+        pay: payApi(db, billing, hq.now, () => hq.tz),
       },
     ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort, lead: Boolean(cfg.leadWebhookToken), chat: Boolean(webChat), admin: Boolean(admin) }))
   : null;

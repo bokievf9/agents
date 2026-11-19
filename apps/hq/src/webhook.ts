@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { errMsg, log } from '@fir/core';
 import type { AdminReply, AdminRequest } from './admin.js';
 import type { BlogApi } from './blog.js';
+import type { PayApi } from './pay.js';
 import { auditInputSchema, type AuditInput, type AuditOutcome } from './audit-shared.js';
 import { chatSchema, type ChatOutcome, type ChatRequest } from './client/web.js';
 
@@ -128,12 +129,15 @@ export function createWebhook(
     status?: { get: () => unknown };
     /** Public `GET /blog?lang=all` and `GET /blog/:slug` (no token, per-IP rate limit, 60 s cache header). Without it the routes answer 404. */
     blog?: BlogApi;
+    /** Public `GET /pay/:number?k=<key>` (no token, per-IP rate limit, the key is the protection). Without it the route answers 404. */
+    pay?: PayApi;
   } = {},
 ): Server {
   const hits: number[] = [];
   const auditHits: number[] = [];
   const statusHits = new Map<string, number[]>();
   const blogHits = new Map<string, number[]>();
+  const payByIp = new KeyedLimit(60, 60_000);
   const auditByIp = new KeyedLimit(10, 3_600_000);
   const leadByIp = new KeyedLimit(20, 3_600_000);
   return createServer((req, res) => {
@@ -188,6 +192,23 @@ export function createWebhook(
           const found = m ? extra.blog.get(m[1]!) : null;
           if (!found) return json(res, 404, { ok: false, error: 'not_found' });
           res.setHeader('cache-control', 'public, max-age=60');
+          return json(res, 200, found);
+        }
+        if (req.method === 'GET' && extra.pay && /^\/pay\//.test(req.url ?? '')) {
+          const url = new URL(req.url!, 'http://hq.local');
+          const fwd = req.headers['x-forwarded-for'];
+          const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+          if (!payByIp.take(ip, now())) return json(res, 429, { ok: false, error: 'rate_limited' });
+          res.setHeader('cache-control', 'no-store');
+          const m = /^\/pay\/([^/]{1,40})$/.exec(url.pathname);
+          let number = '';
+          try {
+            number = m ? decodeURIComponent(m[1]!) : '';
+          } catch {
+            /* a broken escape is just an unknown number */
+          }
+          const found = extra.pay.get(number, url.searchParams.get('k') ?? '');
+          if (!found) return json(res, 404, { ok: false, error: 'not_found' });
           return json(res, 200, found);
         }
         if (req.method === 'POST' && req.url === '/audit' && extra.audit) {

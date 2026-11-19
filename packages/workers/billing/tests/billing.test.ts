@@ -64,14 +64,20 @@ describe('invoice numbering and text', () => {
     const text = String(r.staged[0]!.payload.text);
     expect(text).toContain('Счёт FT-2026-001');
     expect(text).toContain('Сумма: $120');
-    expect(text).toContain('USDT (сеть TRC20): TXyz');
-    expect(text).toContain('USDT (сеть TON): UQabc');
+    // USDT goes through the pay page: the exact sum and the link, never the raw addresses in the chat
+    expect(text).toContain('Сумма к переводу: 120.00 USDT');
+    expect(text).toMatch(/USDT \(TRC20 или TON\): переведите ровно 120\.00 USDT, адрес и QR на странице оплаты: https:\/\/firtech\.pro\/ru\/pay\/FT-2026-001\?k=[A-Za-z0-9_-]{32}/);
+    expect(text).not.toContain('TXyz');
+    expect(text).not.toContain('UQabc');
     expect(text).toContain('Онлайн-кошелёк из сметы: Payeer P1234567');
+    expect(r.staged[0]!.summary).toMatch(/Ссылка на оплату: https:\/\/firtech\.pro\/ru\/pay\/FT-2026-001\?k=/);
+    expect(r.staged[0]!.summary).toContain('Сумма к переводу: 120.00 USDT');
     expect(text).toContain('предоплата 50% до старта работы, остальные 50% после приёмки');
     expect(text).not.toMatch(/Kaspi|Payme|Click|карт/i);
     const only = String(r.staged[1]!.payload.text);
-    expect(only).toContain('TON');
+    expect(only).toContain('USDT (TON)');
     expect(only).not.toContain('TRC20');
+    expect(only).not.toContain('Payeer');
     expect(a.dueDate).toBe('2026-11-25');
     expect(r.specs[KIND_INVOICE]).toMatchObject({ initialLevel: 0, locked: true });
     r.clock.t = Date.UTC(2027, 0, 5);
@@ -160,7 +166,8 @@ describe('paid and revenue', () => {
     expect(r.store.revenue(NOW - 1, NOW + DAY)).toBe(100);
     r.worker.markPaid(r.ctx, '#2');
     expect(r.store.revenue(NOW - 1, NOW + DAY)).toBe(150);
-    expect(r.worker.invoicesText(r.ctx)).toBe('Неоплаченных счетов нет.');
+    expect(r.worker.invoicesText(r.ctx)).toBe('Неоплаченных счетов нет.\n\nПоследние оплаченные:\nFT-2026-002 B: $50, вручную (/paid)\nFT-2026-001 A: $100, вручную (/paid)');
+    expect(r.store.invoice(a.id)).toMatchObject({ paidVia: 'manual', txId: null });
     expect(a.number).toBe('FT-2026-001');
   });
 });

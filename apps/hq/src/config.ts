@@ -1,7 +1,7 @@
 import { Cron } from 'croner';
 import { DEFAULT_PRICES_URL, loadBaseConfig, optional, required, type BaseConfig } from '@fir/core';
 import { loadMonitorConfig, type MonitorConfig } from '@fir/worker-monitoring';
-import { parsePaymentDetails, type PaymentDetails } from '@fir/worker-billing';
+import { parsePaymentDetails, parseTolerance, type PaymentDetails } from '@fir/worker-billing';
 import { parseFixedCosts } from '@fir/worker-finance';
 import { z } from 'zod';
 
@@ -35,6 +35,11 @@ export interface Config extends BaseConfig {
   /** Invoice number prefix (`FT` gives FT-2026-001) and the payment details printed in invoices. */
   invoicePrefix: string;
   paymentDetails: PaymentDetails;
+  /** Optional API keys of the two indexers the payment watcher reads (higher rate limits); without them the free tier is used. */
+  trongridApiKey: string | undefined;
+  toncenterApiKey: string | undefined;
+  /** `PAY_TOLERANCE`: under-payment the watcher accepts, percent 0..0.5; default 0 (exact). */
+  payTolerancePct: number;
   /** Sales bot token (@firtech_leads_bot). Without it the Sales head is silent (no group posts). */
   salesBotToken: string | undefined;
   /** Shared secret of `POST /lead` (header `x-lead-token`); without it the webhook server does not start. */
@@ -143,6 +148,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     supportSlaHours: num(env, 'SUPPORT_SLA_HOURS', 4, 0.25, 168),
     invoicePrefix: (optional(env, 'INVOICE_PREFIX') ?? 'FT').toUpperCase().replace(/[^A-Z0-9]/g, '') || 'FT',
     paymentDetails: parsePaymentDetails(optional(env, 'PAYMENT_DETAILS_JSON')),
+    trongridApiKey: optional(env, 'TRONGRID_API_KEY'),
+    toncenterApiKey: optional(env, 'TONCENTER_API_KEY'),
+    payTolerancePct: parseTolerance(optional(env, 'PAY_TOLERANCE')),
     salesBotToken: optional(env, 'SALES_BOT_TOKEN'),
     leadWebhookToken: optional(env, 'LEAD_WEBHOOK_TOKEN'),
     officeToken: optional(env, 'OFFICE_TOKEN'),

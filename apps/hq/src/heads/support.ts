@@ -1,6 +1,6 @@
 import { errMsg, log, schedule, zonedParts, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type WorkerCtx } from '@fir/hq';
-import { BillingWorker, parseInvoiceArgs, parseSubArgs, type Invoice } from '@fir/worker-billing';
+import { BillingWorker, parseInvoiceArgs, parseSubArgs, usdt, type Invoice, type PaymentWatcher } from '@fir/worker-billing';
 import { CustomerSupportWorker, csStoreFor, parseClientArgs, parseTicketArgs, type TicketDelivery } from '@fir/worker-customer-support';
 import { FinanceWorker } from '@fir/worker-finance';
 import { MonitoringWorker, type MonEvent } from '@fir/worker-monitoring';
@@ -14,6 +14,12 @@ export const SUPPORT_HEAD_ID = 'support-head';
 export const MONITOR_CRON = '*/5 * * * *';
 /** Hourly SLA check of client tickets (the head's own cron, like monitoring: no task per run). */
 export const SLA_CRON = '0 * * * *';
+/**
+ * On-chain payment check (`billing-payment-watch`): every 2 minutes, day and night (payments come any time). Like monitoring it is the
+ * head's own cron, not a routine: a routine would create 720 tasks a day. A found payment gets its own «Оплата» task.
+ */
+export const PAYMENT_WATCH_CRON = '*/2 * * * *';
+export const PAYMENT_WATCH_NAME = 'billing-payment-watch';
 /** Owner commands the Director passes through to the Support head (`support_command`). */
 export const SUPPORT_COMMANDS = ['ticket', 'tickets', 'client', 'clients', 'invoice', 'invoices', 'sub', 'paid', 'onboard'] as const;
 
@@ -61,6 +67,8 @@ export interface SupportDeps {
   ownerId?: number;
   /** The public client bot: approved answers to tickets that came from it go back into the client's chat. */
   client?: ClientChannel;
+  /** The on-chain USDT watcher; without it (or without USDT addresses) only `/paid` marks payments. */
+  payWatch?: PaymentWatcher;
 }
 
 type Action = 'monitor_add' | 'daily' | 'weekly' | 'status' | 'none' | 'ticket' | 'billing' | 'invoice' | 'kp_invoice' | 'paid' | 'onboard' | 'sub' | 'client';
@@ -93,6 +101,7 @@ export function guessAction(task: Task): Action {
 export class SupportHead {
   private jobs: Cron[] = [];
   private checking = false;
+  private watching = false;
   /**
    * Set by the app: an invoice was marked paid (`/paid`, later the on-chain check). Production starts the reserved project and Sales asks the
    * referral payout; the returned lines are added to the owner's answer. Only a FIRST payment of a new project starts anything.
@@ -130,6 +139,7 @@ export class SupportHead {
     this.jobs = [
       schedule('support-monitor', MONITOR_CRON, this.hq.tz, async () => void (await this.monitorTick())),
       schedule('support-sla', SLA_CRON, this.hq.tz, async () => void (await this.slaTick())),
+      ...(this.d.payWatch?.enabled ? [schedule(PAYMENT_WATCH_NAME, PAYMENT_WATCH_CRON, this.hq.tz, async () => void (await this.paymentTick()))] : []),
     ];
   }
 
@@ -195,6 +205,75 @@ export class SupportHead {
     } finally {
       this.checking = false;
     }
+  }
+
+  // ---- on-chain payments: every 2 minutes, no task per run ----
+  /**
+   * One watcher cycle: alerts (unmatched transfers, a provider down for 30 minutes) go to the owner; every matched payment runs the same
+   * steps as `/paid` in its own task and the owner gets the «оплачено» text with the tx id. Returns the texts sent (tests).
+   */
+  async paymentTick(): Promise<string[]> {
+    const w = this.d.payWatch;
+    if (!w?.enabled || this.watching) return [];
+    this.watching = true;
+    const sent: string[] = [];
+    try {
+      const store = this.billing.store({ db: this.hq.db, now: this.hq.now });
+      const r = await w.cycle(store, this.hq.now());
+      for (const a of r.alerts) {
+        this.hq.log(SUPPORT_HEAD_ID, 'payment_watch_alert');
+        await this.d.reporter.post(SUPPORT, a);
+        await this.hq.alert(a);
+      }
+      for (const m of r.matched) {
+        const inv = m.invoice;
+        this.hq.log(SUPPORT_HEAD_ID, 'payment_found', 'invoice', inv.number, m.transfer.method);
+        const t = this.hq.createTask({ title: `Оплата: ${inv.number} (${m.transfer.method === 'usdt_trc20' ? 'USDT TRC20' : 'USDT TON'})`, dept: SUPPORT, assigneeId: SUPPORT_HEAD_ID, creator: 'routine', priority: 1, meta: { action: 'chain_paid', invoice: inv.number, txId: m.transfer.txId } });
+        let text: string;
+        if (this.hq.claim(t.id, SUPPORT_HEAD_ID)) {
+          try {
+            const after = this.billing.afterPaid(store, inv.id);
+            text = await this.paidSteps(this.ctx(this.hq.task(t.id)!), after.invoice, after.nextDue);
+            await this.finish(t.id, text, false);
+          } catch (e) {
+            await this.crash(t, e);
+            text = `Счёт ${inv.number} оплачен (USDT, tx ${m.transfer.txId}), но следующие шаги не запустились: задача #${t.id} заблокирована, подробности в журнале.`;
+          }
+        } else text = `Счёт ${inv.number} оплачен (USDT, tx ${m.transfer.txId}).`;
+        await this.d.reporter.post(SUPPORT, text);
+        if (this.d.messenger && this.d.ownerId !== undefined) await this.d.messenger.send(this.d.ownerId, text);
+        sent.push(text);
+      }
+      return sent;
+    } catch (e) {
+      log('error', 'payment watch failed', { err: errMsg(e) });
+      return sent;
+    } finally {
+      this.watching = false;
+    }
+  }
+
+  /**
+   * What follows a payment, for `/paid` and the watcher alike: the «оплачено» line (with the tx for an on-chain payment), Production starts
+   * the reserved project, Sales asks the referral payout, a new project starts onboarding. A failing hook never undoes the payment.
+   */
+  private async paidSteps(ctx: WorkerCtx, inv: Invoice, nextDue?: string): Promise<string> {
+    const chain = inv.paidVia === 'usdt_trc20' || inv.paidVia === 'usdt_ton';
+    let text = chain
+      ? `Оплачено: счёт ${inv.number} (${inv.client}, $${inv.amountUsd}), пришло ${usdt(inv.payAmountUsd)} USDT в сети ${inv.paidVia === 'usdt_trc20' ? 'TRC20' : 'TON'}, tx ${inv.txId}. Выручка попадёт в отчёты Финансиста.`
+      : `Счёт ${inv.number} (${inv.client}, $${inv.amountUsd}) оплачен. Выручка попадёт в отчёты Финансиста.`;
+    if (nextDue) text += ` Следующая оплата по подписке: ${nextDue}.`;
+    if (this.onPaid) {
+      try {
+        const started = await this.onPaid(inv);
+        if (started.length) text += `\n${started.join('\n')}`;
+      } catch (e) {
+        log('error', 'paid hook failed', { invoice: inv.number, err: errMsg(e) });
+        text += '\nОплата отмечена, но следующие шаги (проект, выплата) не запустились: подробности в журнале, повторите /project вручную.';
+      }
+    }
+    if (inv.newProject) text += `\n\n${await this.startOnboarding(ctx, inv.client, inv.what, inv.number)}`;
+    return text;
   }
 
   // ---- client tickets: hourly SLA check ----
@@ -378,21 +457,9 @@ export class SupportHead {
         const r = this.billing.markPaid(ctx, args);
         if (!r) return `Не нашёл счёт «${args}». Список: /invoices.`;
         const { invoice: inv } = r;
-        if (r.already) return `Счёт ${inv.number} уже отмечен оплаченным.`;
-        let text = `Счёт ${inv.number} (${inv.client}, $${inv.amountUsd}) оплачен. Выручка попадёт в отчёты Финансиста.`;
-        if (r.nextDue) text += ` Следующая оплата по подписке: ${r.nextDue}.`;
+        if (r.already) return `Счёт ${inv.number} уже отмечен оплаченным${inv.paidVia && inv.paidVia !== 'manual' ? ` (USDT, tx ${inv.txId})` : ''}.`;
         // the first payment of a КП: Production starts the reserved project, Sales asks the referral payout (a failure here never undoes the payment)
-        if (this.onPaid) {
-          try {
-            const started = await this.onPaid(inv);
-            if (started.length) text += `\n${started.join('\n')}`;
-          } catch (e) {
-            log('error', 'paid hook failed', { invoice: inv.number, err: errMsg(e) });
-            text += '\nОплата отмечена, но следующие шаги (проект, выплата) не запустились: подробности в журнале, повторите /project вручную.';
-          }
-        }
-        if (inv.newProject) text += `\n\n${await this.startOnboarding(ctx, inv.client, inv.what, inv.number)}`;
-        return text;
+        return this.paidSteps(ctx, inv, r.nextDue);
       }
       case 'onboard': {
         const o = parseOnboardArgs(args)!;
