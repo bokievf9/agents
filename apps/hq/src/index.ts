@@ -21,6 +21,7 @@ import { OnboardingWorker } from '@fir/worker-onboarding';
 import { MonitoringWorker } from '@fir/worker-monitoring';
 import { Reporter, type TopicSender } from './reporter.js';
 import { TopicManager } from './topics.js';
+import { resolveMedia } from '@fir/worker-publisher';
 import { createWebhook } from './webhook.js';
 import { AuditGate, AuditStore, submitAudit } from './audit-shared.js';
 import { blogApi } from './blog.js';
@@ -128,7 +129,7 @@ const marketing = new MarketingHead({
   postsPerWeek: cfg.postsPerWeek, storiesPerWeek: cfg.storiesPerWeek, rendersDir: cfg.rendersDir, renderReels: cfg.renderReels,
   ...(clientBot ? { audit: clientBot.engine } : {}), lost,
   integrations: {
-    youtubeApiKey: cfg.youtubeApiKey, youtubeChannelId: cfg.youtubeChannelId, ytOauthClientJson: cfg.ytOauthClientJson, ytRefreshToken: cfg.ytRefreshToken, ytPrivacy: cfg.ytPrivacy, trendsRegions: cfg.trendsRegions,
+    youtubeApiKey: cfg.youtubeApiKey, youtubeChannelId: cfg.youtubeChannelId, ytOauthClientJson: cfg.ytOauthClientJson, ytRefreshToken: cfg.ytRefreshToken, ytPrivacy: cfg.ytPrivacy, igUserId: cfg.igUserId, igAccessToken: cfg.igAccessToken, igPublicBase: cfg.igPublicBase, igTokenIssuedAt: cfg.igTokenIssuedAt, mediaSecret: cfg.mediaSecret, trendsRegions: cfg.trendsRegions,
     gscServiceAccountJson: cfg.gscServiceAccountJson, gscSiteUrl: cfg.gscSiteUrl, siteUrl: cfg.siteUrl,
   },
 });
@@ -370,7 +371,7 @@ const admin = cfg.adminToken
 const presenceTimer = setInterval(() => void channel.sync().catch((e) => log('error', 'presence sync failed', { err: errMsg(e) })), 60_000);
 presenceTimer.unref();
 
-const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
+const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cfg.mediaSecret
   ? createWebhook(
       // the form gets its error when the task cannot be made, but the person's contact is kept for the owner (guardedLead)
       guardedLead(lost, ({ name, contact, service, budget, message, estimate, locale, slot, source, telegramSent, hasDomain, hasHosting }) =>
@@ -395,6 +396,7 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
         status: { get: cachedStatus(db) },
         blog: blogApi(db, hq.now, () => hq.tz),
         pay: payApi(db, billing, hq.now, () => hq.tz),
+        ...(cfg.mediaSecret ? { media: { resolve: (sig: string, rel: string) => resolveMedia(cfg.rendersDir, cfg.mediaSecret!, sig, rel) } } : {}),
       },
     ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort, lead: Boolean(cfg.leadWebhookToken), chat: Boolean(webChat), admin: Boolean(admin) }))
   : null;

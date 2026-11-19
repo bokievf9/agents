@@ -3,3 +3,7 @@ export * from './poster.js';
 export * from './store.js';
 export * from './worker.js';
 export * from './youtube.js';
+export * from './media.js';
+export * from './instagram.js';
+export * from './ig-daily.js';
+export * from './ig-insights.js';

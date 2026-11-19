@@ -20,8 +20,8 @@ export interface VideoMeta {
 
 /** Thrown when today's quota is spent: the caller falls back to the manual flow and says so in the day header. */
 export class QuotaExceeded extends Error {
-  constructor() {
-    super('квота YouTube на сегодня исчерпана (лимит 9000 из 10 000)');
+  constructor(message = 'квота YouTube на сегодня исчерпана (лимит 9000 из 10 000)') {
+    super(message);
   }
 }
 
@@ -82,6 +82,10 @@ export class YouTubePoster implements PlatformPoster {
 
   constructor(private readonly o: YouTubePosterOptions) {
     this.post_ = o.post ?? safePost;
+  }
+
+  canPost(pack: PublishPack): boolean {
+    return pack.files.some(isVideo);
   }
 
   async post(pack: PublishPack): Promise<{ url: string }> {

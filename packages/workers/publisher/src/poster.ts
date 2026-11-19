@@ -9,6 +9,15 @@ export interface PlatformPoster {
   readonly platform: PublishPack['platform'];
   /** Posts the pack; resolves to the public URL. Must throw on any failure and never retry blindly. */
   post(pack: PublishPack): Promise<{ url: string }>;
+  /** Does the pack have what this poster needs (a video, pictures)? Default: a video file. A pack it cannot post stays manual, silently. */
+  canPost?(pack: PublishPack): boolean;
+}
+
+/** Thrown by a poster whose post is accepted but not finished yet (a Reel still processing): not an error, the next run finishes it. */
+export class PostPending extends Error {
+  constructor(readonly platformLabel: string) {
+    super(`${platformLabel}: видео ещё обрабатывается, публикация завершится при следующем запуске`);
+  }
 }
 
 /** Stage 1: no API. `post` always refuses, so a caller falls back to the manual flow. */

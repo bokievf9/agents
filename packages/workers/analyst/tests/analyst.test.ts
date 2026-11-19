@@ -168,3 +168,17 @@ describe('YouTube with the owner token', () => {
     expect(res.result).not.toContain('YouTube за неделю');
   });
 });
+
+describe('Instagram line', () => {
+  it('is added to the weekly report when the Marketing head wires it; a failure becomes a note, not a failed report', async () => {
+    const w = world();
+    let win: { fromMs: number; toMs: number; day: string } | null = null;
+    const ok = await new AnalystWorker({ instagramLine: (x) => { win = x; return Promise.resolve('Instagram за неделю: 2 публикаций, охват 10, подписчиков 5'); } }).run(w.task, w.ctx);
+    expect(ok.result).toContain('\nInstagram за неделю: 2 публикаций, охват 10, подписчиков 5');
+    expect(ok.result).toContain('TikTok: статистики пока нет');
+    expect(win).toMatchObject({ day: '2026-11-23' });
+    const bad = await new AnalystWorker({ instagramLine: () => Promise.reject(new Error('Instagram: HTTP 400')) }).run(w.task, w.ctx);
+    expect(bad.ok).toBe(true);
+    expect(bad.result).toContain('Instagram: Instagram: HTTP 400');
+  });
+});

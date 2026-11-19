@@ -22,6 +22,8 @@ export interface AnalystOptions {
   fetch?: FetchFn;
   /** Owner access (refresh-token flow): channel stats of the channel behind the token and per-video stats of the week's Shorts. */
   oauth?: { accessToken(): Promise<string> };
+  /** Instagram insights line for the week (the window in epoch ms and the HQ day); wired by the Marketing head when the Graph API is set up. */
+  instagramLine?: (w: { fromMs: number; toMs: number; day: string }) => Promise<string>;
   /** Tests: replaces `safeGetJson` for the OAuth calls. */
   get?: (url: string, headers: Record<string, string>) => Promise<unknown>;
 }
@@ -252,7 +254,18 @@ export class AnalystWorker implements Worker {
         note = `${note ? `${note}\n` : ''}YouTube: ${errMsg(e)}`;
       }
     }
-    const text = numbersText(n) + ytLine;
+    let igLine = '';
+    if (this.opts.instagramLine) {
+      const p3 = zonedParts(ctx.now(), ctx.tz);
+      const off3 = Date.UTC(p3.y, p3.mo - 1, p3.d, p3.h, p3.mi) - Math.floor(ctx.now() / 60_000) * 60_000;
+      try {
+        igLine = `\n${await this.opts.instagramLine({ fromMs: Date.parse(`${from}T00:00:00Z`) - off3, toMs: Date.parse(`${to}T00:00:00Z`) + DAY - off3, day: today })}`;
+      } catch (e) {
+        note = `${note ? `${note}\n` : ''}Instagram: ${errMsg(e)}`;
+        log('warn', 'analyst: instagram failed', { err: errMsg(e) });
+      }
+    }
+    const text = numbersText(n) + ytLine + igLine;
     const funnel = n.funnel ? `\nВоронка разведчика: ${Object.entries(n.funnel).map(([k, v]) => `${k} ${v}`).join(', ')}.` : '';
     const llm = await tryJson(
       ctx.llm,
@@ -264,7 +277,7 @@ export class AnalystWorker implements Worker {
       recsSchema,
     );
     const recs = llm?.recommendations ?? fallbackRecommendations(n);
-    const result = `Недельный отчёт маркетинга, ${from.slice(8)}.${from.slice(5, 7)} - ${to.slice(8)}.${to.slice(5, 7)}\n${text}${funnel}\n\nРекомендации:\n${recs.map((r, i) => `${i + 1}. ${r}`).join('\n')}\n\nInstagram и TikTok: статистики пока нет (этап 2).${note ? `\n${note}` : ''}`;
+    const result = `Недельный отчёт маркетинга, ${from.slice(8)}.${from.slice(5, 7)} - ${to.slice(8)}.${to.slice(5, 7)}\n${text}${funnel}\n\nРекомендации:\n${recs.map((r, i) => `${i + 1}. ${r}`).join('\n')}\n\n${igLine ? 'TikTok' : 'Instagram и TikTok'}: статистики пока нет (этап 2).${note ? `\n${note}` : ''}`;
     return { ok: true, result };
   }
 }

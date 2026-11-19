@@ -3,7 +3,7 @@ import { errMsg, log, zonedParts } from '@fir/core';
 import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { PLATFORM_LABEL, dayLabel, storeFor, todayReport } from '@fir/worker-content-maker';
 import { assemblePacks, groupByItem, isVideo, type PublishPack, type RenderLookup, type RenderNote } from './pack.js';
-import type { PlatformPoster } from './poster.js';
+import { PostPending, type PlatformPoster } from './poster.js';
 import { PublishStore } from './store.js';
 import { QuotaExceeded } from './youtube.js';
 
@@ -37,6 +37,8 @@ export interface AutoResult {
   error?: string;
   /** The day's quota is spent: manual for the rest. */
   quota?: boolean;
+  /** Accepted by the platform, finishes on the next run (a Reel still processing). */
+  pending?: boolean;
 }
 
 /**
@@ -72,10 +74,10 @@ export class PublisherWorker implements Worker {
     const out: AutoResult[] = [];
     for (const p of assemblePacks(ctx, today, this.opts.render, this.opts.renderNote)) {
       const poster = posters.find((x) => x.platform === p.platform);
-      const video = p.files.find(isVideo);
-      if (!poster || !video || !exists(video)) continue;
+      if (!poster || !(poster.canPost ? poster.canPost(p) : p.files.some(isVideo)) || p.files.length === 0 || !p.files.every((f) => exists(f))) continue;
       const prev = store.get(p.readyId);
-      if (prev?.publishedAt != null || store.auto(p.readyId).autoOn === today) continue;
+      // a container waiting at the platform is finished on a later day too (it is the same attempt)
+      if (prev?.publishedAt != null || (store.auto(p.readyId).autoOn === today && store.container(p.readyId) === null)) continue;
       const base = { readyId: p.readyId, itemId: p.itemId, platform: p.platform, title: p.title };
       store.markAttempt(p.readyId, p.itemId, p.platform, today);
       try {
@@ -85,6 +87,10 @@ export class PublisherWorker implements Worker {
         content.markPublished(p.readyId);
         out.push({ ...base, url });
       } catch (e) {
+        if (e instanceof PostPending) {
+          out.push({ ...base, pending: true });
+          continue;
+        }
         const quota = e instanceof QuotaExceeded;
         const error = errMsg(e);
         store.setError(p.readyId, error);
