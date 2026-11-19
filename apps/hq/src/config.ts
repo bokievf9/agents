@@ -85,6 +85,8 @@ export interface Config extends BaseConfig {
   /** Instagram Graph API publishing and insights (all optional): professional account id, long-lived token, public base URL of the media route, token issue date (ISO). */
   igUserId: string | undefined;
   igAccessToken: string | undefined;
+  /** Graph host: graph.facebook.com (Facebook login) or graph.instagram.com (Instagram login product). */
+  igApiHost: 'graph.facebook.com' | 'graph.instagram.com';
   igPublicBase: string | undefined;
   igTokenIssuedAt: string | undefined;
   /** Signs the public `/media/<sig>/<path>` URLs: `MEDIA_SECRET`, else `WEB_CHAT_TOKEN`. Without both the route answers 404. */
@@ -191,6 +193,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ytPrivacy: optional(env, 'YT_PRIVACY'),
     igUserId: optional(env, 'IG_USER_ID'),
     igAccessToken: optional(env, 'IG_ACCESS_TOKEN'),
+    igApiHost: optional(env, 'IG_API_HOST') === 'graph.instagram.com' ? 'graph.instagram.com' : 'graph.facebook.com',
     igPublicBase: optional(env, 'IG_PUBLIC_BASE')?.replace(/\/+$/, ''),
     igTokenIssuedAt: optional(env, 'IG_TOKEN_ISSUED_AT'),
     mediaSecret: optional(env, 'MEDIA_SECRET') ?? optional(env, 'WEB_CHAT_TOKEN'),

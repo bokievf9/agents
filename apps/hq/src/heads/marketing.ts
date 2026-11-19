@@ -71,6 +71,7 @@ export interface Integrations {
   /** Instagram Graph API (all optional; without IG_USER_ID and IG_ACCESS_TOKEN Instagram stays manual). */
   igUserId?: string | undefined;
   igAccessToken?: string | undefined;
+  igApiHost?: 'graph.facebook.com' | 'graph.instagram.com' | undefined;
   igPublicBase?: string | undefined;
   igTokenIssuedAt?: string | undefined;
   mediaSecret?: string | undefined;
@@ -157,7 +158,7 @@ export class MarketingHead implements ApprovalEditor {
     const yt = youtubeAuth(i);
     const pstore = new PublishStore(d.hq.db);
     const pday = () => publishDay({ now: d.hq.now, tz: d.hq.tz });
-    const ig = i.igUserId && i.igAccessToken ? new IgApi({ token: i.igAccessToken }) : null;
+    const ig = i.igUserId && i.igAccessToken ? new IgApi({ token: i.igAccessToken, ...(i.igApiHost ? { host: i.igApiHost } : {}) }) : null;
     const posters = [
       ...(yt ? [new YouTubePoster({ auth: yt, store: pstore, day: pday, now: d.hq.now, privacy: parsePrivacy(i.ytPrivacy) })] : []),
       ...(ig && i.igUserId ? [new InstagramPoster({ api: ig, userId: i.igUserId, store: pstore, day: pday, publicBase: i.igPublicBase, mediaSecret: i.mediaSecret, rendersDir: d.rendersDir ?? '' })] : []),
