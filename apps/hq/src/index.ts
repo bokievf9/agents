@@ -28,6 +28,7 @@ import { payApi } from './pay.js';
 import { cachedStatus } from './status.js';
 import { createAdmin } from './admin.js';
 import { serveFile } from './pult-files.js';
+import { eventsApi } from './pult-events.js';
 import { OwnerChannel } from './presence.js';
 import { cachedOffice } from './office.js';
 import { Drill } from './drill.js';
@@ -366,14 +367,14 @@ webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePre
 
 const admin = cfg.adminToken
   ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: botCommands, drill: (arg) => drill.command(arg), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram),
-      billing, marketing, rendersDir: cfg.rendersDir, ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
+      billing, marketing, rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
     })
   : null;
 // Presence: the site pings while it is open; without pings the owner counts as away and a digest goes to Telegram.
 const presenceTimer = setInterval(() => void channel.sync().catch((e) => log('error', 'presence sync failed', { err: errMsg(e) })), 60_000);
 presenceTimer.unref();
 
-const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
+const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cfg.siteEventsToken
   ? createWebhook(
       // the form gets its error when the task cannot be made, but the person's contact is kept for the owner (guardedLead)
       guardedLead(lost, ({ name, contact, service, budget, message, estimate, locale, slot, source, telegramSent, hasDomain, hasHosting }) =>
@@ -398,6 +399,7 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
         status: { get: cachedStatus(db) },
         blog: blogApi(db, hq.now, () => hq.tz),
         pay: payApi(db, billing, hq.now, () => hq.tz),
+        ...(cfg.siteEventsToken ? { events: { token: cfg.siteEventsToken, handle: eventsApi(db, hq.now, () => hq.tz).handle } } : {}),
       },
     ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort, lead: Boolean(cfg.leadWebhookToken), chat: Boolean(webChat), admin: Boolean(admin) }))
   : null;
@@ -405,6 +407,7 @@ const missingTokens = [
   ...(cfg.leadWebhookToken ? [] : ['LEAD_WEBHOOK_TOKEN: POST /lead and POST /audit answer 404']),
   ...(cfg.webChatToken ? [] : ['WEB_CHAT_TOKEN: POST /chat answers 404']),
   ...(cfg.adminToken ? [] : ['ADMIN_TOKEN: /admin/* answers 404']),
+  ...(cfg.siteEventsToken ? [] : ['SITE_EVENTS_TOKEN (or WEB_CHAT_TOKEN): POST /events answers 404']),
 ];
 if (missingTokens.length) log('warn', `routes switched off, tokens are required (no fallback to another token): ${missingTokens.join('; ')}`);
 

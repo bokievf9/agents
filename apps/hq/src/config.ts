@@ -47,6 +47,8 @@ export interface Config extends BaseConfig {
   webhookPort: number;
   /** Secret of `POST /chat` (header `x-chat-token`). Required for the route: without it `/chat` answers 404 (no fallback to another token). */
   webChatToken: string | undefined;
+  /** Secret of `POST /events` (header `x-site-token`, the site's page counters). `SITE_EVENTS_TOKEN`, else `WEB_CHAT_TOKEN` (the same site-to-HQ trust level); none: the route answers 404. */
+  siteEventsToken: string | undefined;
   /** Shared secret of `GET /office` (header `x-office-token`); without it the route answers 404. */
   officeToken: string | undefined;
   /** Secret of `/admin/*` (header `x-admin-token`). Required for the routes: without it `/admin/*` answers 404 (no fallback to `OFFICE_TOKEN`, which the public hero uses). */
@@ -161,6 +163,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     adminToken: optional(env, 'ADMIN_TOKEN'),
     presenceAwayAfterMin: num(env, 'PRESENCE_AWAY_AFTER_MIN', 20, 1, 1440),
     webChatToken: optional(env, 'WEB_CHAT_TOKEN'),
+    siteEventsToken: optional(env, 'SITE_EVENTS_TOKEN') ?? optional(env, 'WEB_CHAT_TOKEN'),
     webhookPort: Math.round(num(env, 'WEBHOOK_PORT', 8787, 1, 65_535)),
     batchSize: Math.round(num(env, 'BATCH_SIZE', 10, 1, 100)),
     slotHours: [hours[0]!, hours[1]!],

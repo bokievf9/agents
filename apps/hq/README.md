@@ -530,6 +530,15 @@ firtech.pro на том же хосте читает его через `/api/adm
 | `GET /admin/crm/{summary,prospects,leads,clients,tickets,documents,projects,referrals,reviews}`, `POST /admin/crm/prospects/:id`, `POST /admin/crm/tickets/:id` | CRM-панели «Пульта» (`src/admin-crm.ts`): списки с `limit/cursor/q`, статусы разведки и тикетов; панель без таблицы отдаёт `available: false`. Ответ клиенту из тикета не уходит (только через одобрения). Контракт: `docs/admin-crm-api.md` |
 | `POST /admin/clients`, `GET /admin/clients/by-email?email=`, `POST /admin/clients/:id/tickets` | кабинет клиента на сайте (`src/admin-crm.ts`): upsert аккаунта и привязка лидов, свои проекты, счета, документы, тикеты и рефералы клиента, обращение в Поддержку. Контракт: `docs/admin-crm-api.md`, раздел «Кабинет клиента» |
 
+### Пульт v3 (2026-11-20): хаб, воронка, контент, цифры, компания
+Контракт и формы ответов: `docs/admin-crm-api.md`, раздел «Пульт v3». Код: `src/pult.ts` (маршрутизатор, подключён в `admin.ts`) и модули `pult-hub.ts`, `pult-crm.ts`, `pult-content.ts`, `pult-files.ts`,
+`pult-events.ts`, `pult-company.ts`, `lead-stage.ts`. Запись всегда идёт тем же кодом, что Telegram, а не копией: одобрение материала через `queue.handle` (`decide` в `admin.ts`, повтор безопасен),
+`mark_paid` как `/paid`, `complete_milestone` как `/mdone`, уровень доверия как `/level` (`Director.levelCommand`), рутины через `Hq.setRoutineEnabled` и `Hq.runRoutine`.
+- `GET /admin/hub`: сводка отделов и 50 входящих, по запросу на таблицу, кэш 5 с. `GET /admin/content`, `POST /admin/content/:id`: календарь контента по ISO-неделям. `GET /admin/files/<path>`: только `DATA_DIR/renders` (realpath, `Range` для видео).
+- Лиды: стадия выводится из КП, договоров, счетов и проектов, ручной ход в `li_leads.stage_override` (выведенная стадия побеждает, только когда она дальше). Ответ лиду владелец пишет сам: Telegram-лиду через клиентский бот, веб-лиду через очередь `web_chat_owner_replies` (приходит в следующем ответе `/chat` полем `ownerReplies`).
+- `POST /events` (токен `SITE_EVENTS_TOKEN`, иначе `WEB_CHAT_TOKEN`, 120 в минуту с IP): счётчики в `site_events` без персональных данных; `GET /admin/metrics/week` складывает их с блогом, YouTube Аналитика, воронкой и счетами.
+- `GET /admin/company`: рутины с ближайшим запуском, расходы по отделам и дням, доверие, исполнители; переключение рутины, «запустить сейчас», уровень доверия. Плейбуки пока `[]` (ждём `loadPlaybook`).
+
 ## Запуск
 `pnpm --filter hq dev` (`.env.local`). Docker: `apps/hq/Dockerfile`, сервис `hq` в `compose.yaml` (единственный порт `127.0.0.1:8787` для webhook лидов, `read_only`,
 данные `/opt/fir-agents/data/hq`), образ `agents-hq` в CI. Экспорт оргструктуры:

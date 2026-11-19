@@ -256,3 +256,49 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 - Расширения: `png`, `mp4`, `jpg`/`jpeg`, `webp`, `json` (иначе 400); `content-type` по расширению, `cache-control: private, max-age=300`, `accept-ranges: bytes`.
 - `Range: bytes=a-b|a-|-n` даёт 206 с `content-range` (видео для плеера); за пределами файла 416; нечитаемый `Range` игнорируется.
 - Только GET. У файлов своё окно лимита (3000 за 10 минут), общие 600 запросов `/admin/*` они не тратят: страница календаря грузит десятки картинок.
+
+## POST /events (публичный, токен сайта)
+Счётчики действий посетителей для цифр маркетинга. Не `/admin/*`: заголовок `x-site-token` = `SITE_EVENTS_TOKEN` (если не задан, то `WEB_CHAT_TOKEN`; нет ни того, ни другого: маршрут 404, один раз предупреждение при старте).
+Сайт зовёт с сервера и передаёт IP посетителя в `x-visitor-ip` (верим только с loopback или шлюза docker при верном токене, как у `/chat`).
+- Тело `{ "name": "chat_open|builder_done|estimate_pdf|lead_sent|audit_sent|ref_click|cabinet_signup|pay_view|blog_view", "path"?, "ref"?, "locale"? }`. Ответ `{ "ok": true }`.
+- Не из списка, плохое тело или не JSON: 400 `invalid` + `allowed` (имена). Без токена 401. Больше 120 событий в минуту с одного IP: 429 `rate_limited` (событие не считается). Тело до 16 КБ.
+- Таблица `site_events(day, name, path, ref, locale, count)`: счётчик на день (часы компании), имя, страницу, слаг реферала и язык. Персональных данных нет: IP в таблицу не попадает, `path` очищается до пути страницы (без query, хеша и хоста, `/pay/<номер>` и `/cabinet/<что угодно>` становятся `:id`, длинные и нестандартные сегменты тоже), `ref` только `[a-z0-9_-]{1,32}`, `locale` только `ru` или `en`, остальное пустая строка. Строки старше 400 дней удаляются.
+
+## GET /admin/metrics/week
+`?week=YYYY-Www` (по умолчанию текущая неделя компании, плохая 400 `invalid`).
+```json
+{ "ok": true, "week": "2026-W47",
+  "site": { "chat_open": 0, "builder_done": 0, "estimate_pdf": 0, "lead_sent": 0, "audit_sent": 0, "ref_click": 0, "cabinet_signup": 0, "pay_view": 0, "blog_view": 0 },
+  "blog": { "hits": 0, "published": 0 },
+  "youtube": { "shorts": 0, "views": 0, "subscribers": 0, "delta": 0 },
+  "funnel": { "leads": 0, "qualified": 0, "proposals": 0, "contracts": 0, "paid": 0, "projects": 0 },
+  "money": { "invoicedUsd": 0, "paidUsd": 0 },
+  "prevWeek": { "week": "2026-W46", "site": {}, "blog": {}, "youtube": {}, "funnel": {}, "money": {} } }
+```
+`prevWeek` повторяет те же ключи за предыдущую неделю (плюс `week`). Нет данных: нули, не `null`. Неделя считается по часам компании (понедельник 00:00 .. воскресенье 24:00).
+- `site`: сумма `site_events` за дни недели, все девять имён всегда есть.
+- `blog`: `hits` = обращения к публичному `/blog` (`cm_kv` `blog_hits:<дата>`) и `published` = статьи, одобренные и опубликованные за неделю: функция `aggregate` Аналитика, как в его недельном отчёте.
+- `youtube`: `shorts` = Shorts, выложенные Публикатором за неделю (`weekVideoIds` Аналитика по `pb_posts.url`); `subscribers` = подписчики по снимку Аналитика (`an_snapshots`) недели, `delta` = разница с прошлым снимком, `views` = прирост просмотров канала между этими снимками (за неделю по каждому видео Аналитик считает только в тексте отчёта). Нет снимка: нули.
+- `funnel`: `leads` = лиды, пришедшие за неделю; `qualified` = из них квалифицированные (по данным, `isQualified` и дальше); `proposals` = одобренные за неделю КП; `contracts` = договоры бэк-офиса, созданные за неделю (не отклонённые); `paid` = счета, оплаченные за неделю; `projects` = запущенные проекты (не черновики-резервы), созданные за неделю.
+- `money`: `invoicedUsd` = счета выставленные (`issued`, `paid`) за неделю, `paidUsd` = оплаченные за неделю (сумма `amountUsd`, не `payAmountUsd`).
+
+## Компания
+`GET /admin/company`:
+```json
+{ "ok": true,
+  "routines": [ { "name": "marketing-weekly-pack", "dept": "marketing", "title": "...", "cron": "0 6 * * 1", "tz": "Asia/Kuala_Lumpur", "enabled": true, "lastRunAt": null, "lastStatus": null, "nextRunAt": "..." } ],
+  "costs": { "byDept": { "marketing": { "todayUsd": 0, "monthUsd": 0, "limitUsd": 0 } }, "byDay": [ { "date": "2026-11-18", "usd": 0 } ] },
+  "trust": [ { "kind": "content_item", "level": 0, "locked": false, "approvals": 0 } ],
+  "playbooks": [],
+  "workers": [ { "id": "content-maker", "dept": "marketing", "title": "Контент-мейкер", "state": "idle" } ] }
+```
+- `routines`: все рутины. `tz` = зона, в которой идёт cron (часы владельца или компании), `lastStatus` = статус задачи последнего запуска (`null`, пока не запускалась), `nextRunAt` = следующий запуск по cron в этой зоне (`null` у выключенной).
+- `costs.byDept`: по каждому отделу траты сегодня и в месяце (USD) и месячный лимит (`0` = без лимита); `byDay` = последние 30 суток по часам компании, все дни есть, старые первыми.
+- `trust`: уровни доверия по типам одобрений; `locked` = деньги, цены, документы (не растёт сам), `approvals` = сколько раз владелец одобрил (или тип отработал сам на уровне 1).
+- `playbooks`: **пока всегда `[]`** (в этом клоне нет `loadPlaybook` пакета знаний; место помечено TODO в `pult-company.ts`). Форма по контракту `{ role, updatedAt, lines }`.
+- `workers`: исполнители со статусом офиса (`working|waiting|blocked|idle|sleeping|paused|offline`, как на странице офиса).
+
+`POST /admin/company/routines/:name` тело `{ "enabled": true|false }` → `{ ok, item }` (рутина как в списке). Выключение запоминается как правка владельца: следующий старт не включает рутину обратно. После переключения HQ перезапускает cron-задачи.
+`POST /admin/company/routines/:name/run` → `{ ok, taskId }`: `Hq.runRoutine`, задача и пробуждение головы как у обычного срабатывания. Выключенная: 409 `not_started` + `reason: "disabled"`; прошлая задача рутины ещё идёт (политика `skip`): 409 `not_started` + `reason: "busy"`.
+`POST /admin/company/trust/:kind` тело `{ "level": 0 | 1 }` → `{ ok, item }` (запись списка `trust`): тот же код, что `/level <тип> <0|1>`, в том числе для типа с замком (так его и снимают). Неизвестный тип 404, другой уровень 400 `invalid` + `allowed: [0, 1]`.
+Плохое тело 400 `invalid`, неизвестная рутина 404.

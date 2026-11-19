@@ -32,6 +32,8 @@ export interface AdminDeps {
   /** «Пульт v3» content calendar: the Marketing head (approve/reject/revise/rerender run its code) and the folder of rendered files (`DATA_DIR/renders`). */
   marketing?: MarketingHead;
   rendersDir?: string;
+  /** A routine was switched on or off from the workplace: the app restarts its cron jobs. */
+  onRoutinesChange?: () => void;
 }
 
 export interface AdminRequest {
@@ -65,7 +67,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));
   const pult = createPult({
     hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply,
-    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action),
+    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange,
   });
 
   const maxTaskId = () => (hq.db.prepare('SELECT COALESCE(MAX(id), 0) m FROM tasks').get() as { m: number }).m;

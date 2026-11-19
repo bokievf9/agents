@@ -640,6 +640,18 @@ export class Hq {
     return this.routineByName(r.name)!;
   }
 
+  /**
+   * The owner switches a routine on or off from the workplace. Switching it off also marks it as edited by the owner, so the next start
+   * (`syncRoutines`) does not turn it back on; switching it on leaves that mark (the owner has taken the routine into his hands).
+   * Returns the routine, or undefined for an unknown name.
+   */
+  setRoutineEnabled(name: string, enabled: boolean): Routine | undefined {
+    if (!this.routineByName(name)) return undefined;
+    this.db.prepare(`UPDATE routines SET enabled = ?${enabled ? '' : ', edited_by_owner = 1'} WHERE name = ?`).run(enabled ? 1 : 0, name);
+    this.log('owner', enabled ? 'routine_enabled' : 'routine_disabled', 'routine', name);
+    return this.routineByName(name);
+  }
+
   routineByName(name: string): Routine | undefined {
     const r = this.db.prepare('SELECT * FROM routines WHERE name = ?').get(name) as RoutineRow | undefined;
     return r ? toRoutine(r) : undefined;

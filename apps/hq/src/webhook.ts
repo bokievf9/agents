@@ -7,6 +7,7 @@ import type { AdminReply, AdminRequest } from './admin.js';
 import type { BlogApi } from './blog.js';
 import type { PayApi } from './pay.js';
 import type { FileReply } from './pult-files.js';
+import { EVENT_NAMES } from './pult-events.js';
 import { auditInputSchema, type AuditInput, type AuditOutcome } from './audit-shared.js';
 import { chatSchema, type ChatOutcome, type ChatRequest } from './client/web.js';
 
@@ -135,6 +136,8 @@ export function createWebhook(
     status?: { get: () => unknown };
     /** Public `GET /blog?lang=all` and `GET /blog/:slug` (no token, per-IP rate limit, 60 s cache header). Without it the routes answer 404. */
     blog?: BlogApi;
+    /** `POST /events` (header `x-site-token`, site page counters, 120 a minute per visitor IP). Without it the route answers 404. */
+    events?: { token: string; handle: (data: unknown) => 'ok' | 'invalid' };
     /** Public `GET /pay/:number?k=<key>` (no token, per-IP rate limit, the key is the protection). Without it the route answers 404. */
     pay?: PayApi;
   } = {},
@@ -147,6 +150,7 @@ export function createWebhook(
   const payByIp = new KeyedLimit(60, 60_000);
   const auditByIp = new KeyedLimit(10, 3_600_000);
   const leadByIp = new KeyedLimit(20, 3_600_000);
+  const eventsByIp = new KeyedLimit(120, 60_000);
   return createServer((req, res) => {
     void (async () => {
       try {
@@ -257,6 +261,20 @@ export function createWebhook(
           if (out === 'rate_limited') return json(res, 429, { ok: false, error: 'rate_limited' });
           if (out === 'invalid') return json(res, 400, { ok: false, error: 'invalid' });
           return json(res, 200, out === 'duplicate' ? { ok: true, duplicate: true } : { ok: true });
+        }
+        if (req.method === 'POST' && req.url === '/events' && extra.events) {
+          if (!tokenOk(req.headers['x-site-token'] as string | undefined, extra.events.token)) return json(res, 401, { ok: false, error: 'unauthorized' });
+          if (!eventsByIp.take(visitorIp(req, true), now())) return json(res, 429, { ok: false, error: 'rate_limited' });
+          const raw = await readBody(req);
+          if (raw === null) return json(res, 413, { ok: false, error: 'too_large' });
+          let data: unknown = null;
+          try {
+            data = JSON.parse(raw);
+          } catch {
+            /* falls through to invalid */
+          }
+          if (extra.events.handle(data) !== 'ok') return json(res, 400, { ok: false, error: 'invalid', allowed: EVENT_NAMES });
+          return json(res, 200, { ok: true });
         }
         if (req.method === 'GET' && req.url === '/office' && office) {
           if (!tokenOk(req.headers['x-office-token'] as string | undefined, office.token)) return json(res, 401, { ok: false, error: 'unauthorized' });
