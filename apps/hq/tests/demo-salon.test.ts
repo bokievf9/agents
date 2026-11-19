@@ -207,7 +207,7 @@ describe('/audit in the client bot', () => {
     expect(calls).toHaveLength(0);
     await w.engine.onText(w.from, '/audit lime.example');
     expect(calls).toEqual([{ url: 'https://lime.example', contact: '@dilnoza', locale: 'ru', chatId: CHAT }]);
-    expect(w.transport.sent.at(-1)!.html).toContain('24 часов');
+    expect(w.transport.sent.at(-1)!.html).toContain('в течение рабочего дня');
     outcome = 'duplicate';
     await w.engine.onText(w.from, '/audit lime.example');
     expect(w.transport.sent.at(-1)!.html).toContain('уже в работе');

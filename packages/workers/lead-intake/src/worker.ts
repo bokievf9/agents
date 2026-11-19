@@ -28,6 +28,8 @@ export const webLeadSchema = z.object({
   /** Set when the lead came through the public client bot: the approved texts go back to this private chat. */
   chatId: z.number().int().positive().optional(),
   username: z.string().trim().max(40).optional(),
+  /** The site sets it when its own Telegram bot already sent this lead to the owner: the HQ card is a copy. */
+  telegramSent: z.boolean().optional(),
 });
 export type WebLead = z.output<typeof webLeadSchema>;
 
@@ -80,9 +82,9 @@ export function nextSlots(now: number, tz: string, hours: [string, string]): [nu
 }
 
 /** Lead card for the owner (what the head puts above the reply draft and into the task result). */
-export function leadCard(l: Lead, tz: string, service: string, slotText: string, viaBot = false, product = ''): string {
+export function leadCard(l: Lead, tz: string, service: string, slotText: string, viaBot = false, product = '', siteBotCopy = false): string {
   return [
-    `Лид #${l.id}: ${TEMP_RU[l.temperature].toUpperCase()}`,
+    `Лид #${l.id}: ${TEMP_RU[l.temperature].toUpperCase()}${siteBotCopy ? ' (копия: бот сайта тоже прислал)' : ''}`,
     viaBot ? `Источник: Telegram, клиентский бот (${service})` : `Источник: форма firtech.pro (${service})`,
     `Имя: ${l.name || '-'}`,
     `Контакт: ${l.contact || '-'}`,
@@ -209,7 +211,7 @@ export class LeadIntakeWorker implements Worker {
     const t = tpl(lang);
     const slotText = chosenSlot ? formatSlot(chosenSlot, ctx.tz, 'ru') : `предложены: ${slots.map((s) => formatSlot(s, ctx.tz, 'ru')).join(' / ')}`;
     const viaBot = w.chatId !== undefined;
-    const card = leadCard(lead, ctx.tz, w.service, slotText, viaBot, w.product);
+    const card = leadCard(lead, ctx.tz, w.service, slotText, viaBot, w.product, w.telegramSent === true && !viaBot);
     const route = viaBot ? { chatId: w.chatId } : {};
     const slotLines = chosenSlot ? t.slotChosen(formatSlot(chosenSlot, ctx.tz, lang)) : slots.map((s) => formatSlot(s, ctx.tz, lang)).join('\n');
     const slotsText = chosenSlot ? slotLines : t.slots(formatSlot(slots[0]!, ctx.tz, lang), formatSlot(slots[1]!, ctx.tz, lang));

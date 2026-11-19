@@ -14,7 +14,7 @@ const GOOD = `<!doctype html><html lang="ru"><head>
 <link rel="alternate" hreflang="ru" href="https://firtech.pro/ru"><link rel="alternate" hreflang="en" href="https://firtech.pro/en">
 <meta property="og:title" content="Fir Tech">
 <script type="application/ld+json">{"@type":"Organization"}</script>
-</head><body><h1>Боты и ИИ-агенты</h1><p>Бот-администратор от $250, приёмщик заявок от $300, автоматизация от $150, контент от $60, Mini App от $500, агент от $400, внедрение от $800, обучение от $150.</p></body></html>`;
+</head><body><h1>Боты и ИИ-агенты</h1><p>Бот-администратор от $290, приёмщик заявок от $220, автоматизация от $230, контент от $90, Mini App от $660, агент от $100, внедрение от $550, сайт от $150.</p></body></html>`;
 
 const BAD = `<html><head><title>Hi</title></head><body><h1>A</h1><h1>B</h1><script>var price = "$999"</script></body></html>`;
 
@@ -56,11 +56,11 @@ describe('llms.txt and the services table', () => {
   });
 
   it('every direction price from the table must appear in the site text', () => {
-    expect(checkServices('от $250 от $300 от $150 от $60 от $500 от $400 от $800')).toEqual([]);
-    const missing = checkServices('от $250 от $300 от $150 от $60 от $500');
+    expect(checkServices('от $290 от $220 от $230 от $90 от $660 от $100 от $550 от $150')).toEqual([]);
+    const missing = checkServices('от $290 от $220 от $230 от $90 от $660 от $150');
     expect(missing.map((f) => f.key)).toEqual(['service_missing:agent', 'service_missing:implementation']);
-    expect(missing[0]!.problem).toContain('от $400');
-    expect(checkServices('250 USD 300$ 150 $ 60 $ 500 $ 400 $ 800 $ 150')).toEqual([]);
+    expect(missing[0]!.problem).toContain('от $100');
+    expect(checkServices('290 USD 220$ 230 $ 90 $ 660 $ 100 $ 550 $ 150')).toEqual([]);
   });
 
   it('sitemap: same host only, no nested sitemaps, capped', () => {

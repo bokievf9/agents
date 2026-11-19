@@ -148,10 +148,10 @@ describe('Scout: daily cards', () => {
     await w.decide('reject', b!.id);
     expect(w.store.get(5)!.status).toBe('skipped');
     await w.decide('edit', c!.id);
-    await w.queue.submitEdit(OWNER, 'Мой текст от $250. Идёт?');
+    await w.queue.submitEdit(OWNER, 'Мой текст от $290. Идёт?');
     expect(w.messenger.last()!.buttons!.flat().map((x) => x.text)).toContain('Отправлено'); // the card comes back with the same buttons
     await w.decide('approve', c!.id);
-    expect(w.store.get(2)).toMatchObject({ status: 'sent', sentText: 'Мой текст от $250. Идёт?' });
+    expect(w.store.get(2)).toMatchObject({ status: 'sent', sentText: 'Мой текст от $290. Идёт?' });
     // never promoted by the counter: «Отправлено» only records what the owner sent himself
     expect(w.queue.trustTable().find((r) => r.kind === 'prospect_first')).toMatchObject({ locked: true, level: 0 });
   });
@@ -160,7 +160,7 @@ describe('Scout: daily cards', () => {
     const w = salesWorld({ llm: routedLlm(), batchSize: 2 });
     w.hq.runRoutine('sales-daily-cards');
     await cycle(w);
-    expect(w.store.get(3)!.draft).toContain('от $250');
+    expect(w.store.get(3)!.draft).toContain('от $290');
     expect(w.hq.queuedApprovals()).toHaveLength(2);
   });
 

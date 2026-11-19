@@ -63,10 +63,24 @@ async function server(w: ReturnType<typeof world>, gate = new AuditGate(w.hq.now
   await once(s, 'listening');
   return { s, url: `http://127.0.0.1:${(s.address() as AddressInfo).port}` };
 }
-const post = (url: string, token: string | null, b: unknown) =>
-  fetch(`${url}/audit`, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { 'x-lead-token': token } : {}) }, body: JSON.stringify(b) });
+const post = (url: string, token: string | null, b: unknown, extra: Record<string, string> = {}) =>
+  fetch(`${url}/audit`, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { 'x-lead-token': token } : {}), ...extra }, body: JSON.stringify(b) });
 
 describe('POST /audit', () => {
+  it('limits per visitor IP (x-visitor-ip from the site), one visitor cannot use up the shared hour', async () => {
+    const w = world();
+    const { s, url } = await server(w);
+    try {
+      for (let i = 0; i < 10; i++) expect((await post(url, 'secret', { ...OK, contact: `@same_visitor${i}` }, { 'x-visitor-ip': '198.51.100.4' })).status).toBe(200);
+      expect((await post(url, 'secret', { ...OK, contact: '@same_visitor_x' }, { 'x-visitor-ip': '198.51.100.4' })).status).toBe(429);
+      // another visitor is fine; without the header the socket address (loopback here) is one more bucket
+      expect((await post(url, 'secret', { ...OK, contact: '@other_visitor_1' }, { 'x-visitor-ip': '198.51.100.5' })).status).toBe(200);
+      expect((await post(url, 'secret', { ...OK, contact: '@no_header_user' })).status).toBe(200);
+    } finally {
+      s.close();
+    }
+  });
+
   it('token, validation, task and row, duplicate answer', async () => {
     const w = world();
     const { s, url } = await server(w);
@@ -89,12 +103,12 @@ describe('POST /audit', () => {
     }
   });
 
-  it('the 21st request within an hour answers 429', async () => {
+  it('the 21st request within an hour answers 429 (20 visitors, each from their own IP)', async () => {
     const w = world();
     const { s, url } = await server(w);
     try {
-      for (let i = 0; i < 20; i++) expect((await post(url, 'secret', { ...OK, contact: `@user_number${i}` })).status).toBe(200);
-      expect((await post(url, 'secret', { ...OK, contact: '@one_more_user' })).status).toBe(429);
+      for (let i = 0; i < 20; i++) expect((await post(url, 'secret', { ...OK, contact: `@user_number${i}` }, { 'x-visitor-ip': `203.0.113.${i + 1}` })).status).toBe(200);
+      expect((await post(url, 'secret', { ...OK, contact: '@one_more_user' }, { 'x-visitor-ip': '203.0.113.99' })).status).toBe(429);
     } finally {
       s.close();
     }
@@ -127,12 +141,14 @@ describe('the audit through the Marketing head', () => {
     await cycle(w);
     expect(w.hq.task(taskId)).toMatchObject({ status: 'approval' });
     expect(new AuditStore(w.db, w.hq.now).get(id)!.status).toBe('proposed');
-    const q = w.hq.queuedApprovals();
-    expect(q).toHaveLength(1);
-    expect(q[0]!.kind).toBe('audit');
-    expect(q[0]!.summary).toContain('Находка 1');
-    expect(w.messenger.sent).toHaveLength(0); // the head never writes to the owner by itself
-    await w.director.sendApprovalBatch(false);
+    // urgent kind: the card goes out at once as a single card, it does not wait for the 10:00 batch
+    expect(w.hq.queuedApprovals()).toHaveLength(0);
+    expect(w.queue.pending()).toHaveLength(1);
+    expect(w.messenger.sent).toHaveLength(1);
+    expect(w.messenger.sent[0]!.text).toContain('Срочно, marketing');
+    expect(w.messenger.sent[0]!.text).toContain('Находка 1');
+    expect(w.messenger.sent[0]!.buttons).toBeTruthy();
+    expect(await w.hq.releaseApprovals()).toBe(0);
     await w.decide('approve', w.queue.pending()[0]!.id);
     expect(sent).toHaveLength(1);
     expect(sent[0]!.chatId).toBe(4242);
@@ -149,7 +165,6 @@ describe('the audit through the Marketing head', () => {
     });
     const { id } = w.marketing.requestAudit({ ...OK, contact: '+998901234567' });
     await cycle(w);
-    await w.director.sendApprovalBatch(false);
     const before = w.messenger.sent.length;
     await w.decide('approve', w.queue.pending()[0]!.id);
     const note = w.messenger.sent.slice(before).find((m) => m.text.includes('отправьте вручную'))!;
@@ -166,7 +181,6 @@ describe('the audit through the Marketing head', () => {
     const a = w.marketing.requestAudit(OK);
     const b = w.marketing.requestAudit({ ...OK, contact: '@other_person' });
     await cycle(w);
-    await w.director.sendApprovalBatch(false);
     const [first, second] = w.queue.pending();
     await w.decide('approve', first!.id);
     await w.decide('reject', second!.id);
@@ -178,10 +192,27 @@ describe('the audit through the Marketing head', () => {
     const w = world({ llm: new MockLlm(() => 'не json'), integrations: { fetch: () => Promise.reject(new Error('ECONNREFUSED')) } });
     w.marketing.requestAudit({ ...OK, url: 'https://dead.example/' });
     await cycle(w);
-    const q = w.hq.queuedApprovals()[0]!;
+    const q = w.queue.pending()[0]!;
     expect(q.kind).toBe('audit');
     expect(String(q.payload.text)).toContain('Instagram');
     expect(String(q.payload.text).match(/^\d\. /gm)).toHaveLength(5);
+  });
+
+  it('an audit not delivered 20 hours after the request raises one alert to the owner; a delivered one does not', async () => {
+    const w = world({ llm: auditLlm(), integrations: { fetch: () => Promise.resolve(new Response(PAGE)) } });
+    const alerts: string[] = [];
+    w.hq.onAlert((t) => void alerts.push(t));
+    const a = w.marketing.requestAudit(OK);
+    const b = w.marketing.requestAudit({ ...OK, contact: '@other_person' });
+    new AuditStore(w.db, w.hq.now).setStatus(b.id, 'delivered');
+    w.clock.t += 19 * 3_600_000;
+    expect(await w.marketing.auditWatch()).toBe(0);
+    w.clock.t += 2 * 3_600_000;
+    expect(await w.marketing.auditWatch()).toBe(1);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toContain(`Аудит #${a.id}`);
+    expect(alerts[0]).toContain('в течение рабочего дня');
+    expect(await w.marketing.auditWatch()).toBe(0); // never repeated
   });
 });
 
@@ -217,16 +248,30 @@ describe('/status aggregation from mon_* rows', () => {
     expect(mapCheck('omniroute')?.service).toBe('omniroute');
     expect(mapCheck('disk')?.service).toBe('hq');
     expect(mapCheck('docker')?.service).toBe('hq');
+    expect(mapCheck('bot')).toEqual({ service: 'bot', kind: 'bot' });
+    expect(mapCheck('bot:silence')).toEqual({ service: 'bot', kind: 'botsilence' });
+  });
+
+  it('the bot service: ok, degraded after silence, down on a polling failure (from the monitoring rows)', () => {
+    const state = (checkId: string, status: 'ok' | 'down', fails: number) => ({ checkId, status, fails, failSince: status === 'down' || fails ? NOW - 600_000 : 0 });
+    const bot = (states: ReturnType<typeof state>[]) => aggregate({ states, perCheck: [], incidents: [], lastSampleAt: NOW }, NOW).services.find((x) => x.id === 'bot')!;
+    expect(bot([state('bot', 'ok', 0), state('bot:silence', 'ok', 0)])).toMatchObject({ state: 'up' });
+    expect(bot([state('bot', 'ok', 0), state('bot:silence', 'down', 2)])).toMatchObject({ state: 'degraded', note: 'The bot has been silent for a while' });
+    expect(bot([state('bot', 'down', 2), state('bot:silence', 'ok', 0)])).toMatchObject({ state: 'down', note: 'The bot is not receiving updates' });
+    expect(bot([state('bot', 'down', 2), state('bot:silence', 'down', 2)]).state).toBe('down');
   });
 
   it('states, uptime and incidents', () => {
     const s = buildStatus(seed(), NOW);
     const by = Object.fromEntries(s.services.map((x) => [x.id, x]));
-    expect(s.services.map((x) => x.id)).toEqual(['site', 'hq', 'bot', 'omniroute', 'polly', 'dono']);
+    expect(s.services.map((x) => x.id)).toEqual(['site', 'hq', 'bot', 'omniroute']); // Polly and Dono are not studio services
     expect(by.site).toMatchObject({ state: 'up' });
     expect(by.omniroute).toMatchObject({ state: 'down', since: new Date(NOW - 20 * 60_000).toISOString(), note: 'The health check is failing' });
     expect(by.hq).toMatchObject({ state: 'degraded' }); // disk check failing intermittently
-    for (const id of ['bot', 'polly', 'dono']) expect(by[id]).toMatchObject({ state: 'unknown' });
+    expect(by.bot).toMatchObject({ state: 'unknown' });
+    expect(by.polly).toBeUndefined();
+    expect(by.dono).toBeUndefined();
+    expect(JSON.stringify(s)).not.toMatch(/polly|dono/i);
     expect(s.uptime30d.site).toBe(90.9);
     expect(s.uptime30d.omniroute).toBe(80);
     expect(s.uptime30d.bot).toBeUndefined();
@@ -239,7 +284,7 @@ describe('/status aggregation from mon_* rows', () => {
 
   it('HQ is up without any rows (it is answering); stalled checks degrade it; empty monitoring leaves the rest unknown', () => {
     const empty = aggregate({ states: [], perCheck: [], incidents: [], lastSampleAt: null }, NOW);
-    expect(empty.services.map((x) => x.state)).toEqual(['unknown', 'up', 'unknown', 'unknown', 'unknown', 'unknown']);
+    expect(empty.services.map((x) => x.state)).toEqual(['unknown', 'up', 'unknown', 'unknown']);
     const stale = aggregate({ states: [], perCheck: [], incidents: [], lastSampleAt: NOW - 3_600_000 }, NOW);
     expect(stale.services.find((x) => x.id === 'hq')).toMatchObject({ state: 'degraded', note: 'Health checks are not running' });
   });

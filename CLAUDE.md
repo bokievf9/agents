@@ -102,6 +102,15 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 очередь `cm_render_jobs` в SQLite HQ, образ `agents-renderer` в CI. Одобренный рилс ставится в очередь, утром Публикатор шлёт MP4; `/render <id>`; `REELS_RENDER=off`
 возвращает путь через `builder`. `packages/clips` (локальный инструмент на Mac) остаётся как есть. Подробно: `packages/renderer/README.md`.
 
+## Цены, токены, аудит (2026-11-19, по аудиту)
+- Цены в одном месте: прайс-лист сайта `GET https://firtech.pro/api/prices`. `packages/core/src/prices.ts` (`getPrices()`, `loadPrices()`, снимок `prices.fallback.json`):
+  HQ грузит его при старте и каждые 6 часов (`PRICES_URL`), последняя хорошая копия лежит в `settings.prices_json`. Исполнители и клиентский бот читают `getPrices()`,
+  суммы в коде не пишем (тест `packages/core/tests/prices.test.ts` это проверяет). Оплата: USDT TRC20/TON или онлайн-кошелёк из сметы (`PAYMENT_DETAILS_JSON`: `usdt_trc20`,
+  `usdt_ton`, `wallet`), 50% до старта и 50% после приёмки.
+- `ADMIN_TOKEN` и `WEB_CHAT_TOKEN` обязательны для своих маршрутов (`/admin/*`, `/chat`), без них 404, фолбэков на `OFFICE_TOKEN` и `LEAD_WEBHOOK_TOKEN` нет. IP посетителя: `x-visitor-ip`
+  (верим только с loopback и шлюза docker при верном токене).
+- Аудит: карточка `audit` уходит сразу (`urgent`), алерт через 20 часов, при старте `running` возвращается в `assigned`. Образ OmniRoute закреплён по digest: `docs/omniroute-image.md`.
+
 ## Данные и секреты
 `.env*` и `data/` не коммитятся (в `data/` контакты клиентов). Секреты: `.env.local` (dev), `/opt/fir-agents/.env`
 (сервер, 600). Секреты с `$` в `.env` брать в одинарные кавычки (compose раскрывает `$`).

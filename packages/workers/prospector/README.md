@@ -14,4 +14,4 @@
 Кнопки карточки: `cardButtons` (Скопировать `pc:<id>:c`, Править, Пропустить, Отправлено), `kindSpecs` регистрирует голова,
 `onDecision` возвращает бизнес в `skipped` или в очередь новых при сбое. Статусы: `new → proposed → sent → replied / no_reply / skipped`.
 Таблица `pr_prospects` в общей SQLite HQ. Загрузка CSV: `ProspectStore.importCsv` (дедуп по «название + город»),
-CLI `apps/hq`: `import-prospects <csv>`. Промпты: `prompts/*.md`. Цены `src/offers.ts` копируют `directions.ts`, правятся вручную.
+CLI `apps/hq`: `import-prospects <csv>`. Промпты: `prompts/*.md`. Цены `src/offers.ts` читает из прайс-листа сайта (`getPrices()` из `@fir/core`), руками суммы не правятся.

@@ -222,10 +222,10 @@ export class SupportHead {
         if (!parseClientArgs(a)) return 'Формат: /client Имя | контакт | продукт | тариф | с какой даты (после имени всё необязательно)';
         return this.runCommand('client', `Клиент: ${a.slice(0, 60)}`, a);
       case 'invoice':
-        if (!parseInvoiceArgs(a)) return 'Формат: /invoice <клиент> <сумма USD> <за что> [due=ГГГГ-ММ-ДД] [method=payme] [new]. «new» значит новый проект: после оплаты начнётся онбординг.';
+        if (!parseInvoiceArgs(a)) return 'Формат: /invoice <клиент> <сумма USD> <за что> [due=ГГГГ-ММ-ДД] [method=usdt_trc20|usdt_ton|wallet] [new]. «new» значит новый проект: после оплаты начнётся онбординг.';
         return this.runCommand('invoice', `Счёт: ${a.slice(0, 60)}`, a);
       case 'sub':
-        if (!parseSubArgs(a)) return 'Формат: /sub <клиент> <сумма USD> <month|year> <kaspi|payme|click|card|usdt> <ГГГГ-ММ-ДД следующей оплаты> [тариф]';
+        if (!parseSubArgs(a)) return 'Формат: /sub <клиент> <сумма USD> <month|year> <usdt_trc20|usdt_ton|wallet> <ГГГГ-ММ-ДД следующей оплаты> [тариф]';
         return this.runCommand('sub', `Подписка: ${a.slice(0, 60)}`, a);
       case 'paid':
         if (!a) return 'Формат: /paid <номер счёта>, например /paid FT-2026-001 или /paid 1';

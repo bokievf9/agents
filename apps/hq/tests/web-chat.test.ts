@@ -1,4 +1,5 @@
 import { once } from 'node:events';
+import type { IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -11,13 +12,13 @@ import { ProspectorWorker } from '@fir/worker-prospector';
 import { describe, expect, it } from 'vitest';
 import { RateLimiter } from '../src/client/sanitize.js';
 import { clientSinks } from '../src/client/sinks.js';
-import { parseContact, WebChatEngine, type ChatRequest } from '../src/client/web.js';
+import { chatSchema, parseContact, WebChatEngine, type ChatRequest } from '../src/client/web.js';
 import { Director } from '../src/director.js';
 import { SalesHead, seedSales } from '../src/heads/sales.js';
 import { SupportHead, seedSupport } from '../src/heads/support.js';
 import { seedOrg } from '../src/org.js';
 import { Reporter } from '../src/reporter.js';
-import { createWebhook } from '../src/webhook.js';
+import { createWebhook, isTrustedPeer, visitorIp } from '../src/webhook.js';
 import { instructionsDir, NOW, OWNER, routedLlm } from './sales-helpers.js';
 
 const RULES = 'Правила этого ответа';
@@ -352,6 +353,43 @@ describe('sessions', () => {
   });
 });
 
+describe('referral in the web chat', () => {
+  const finishIntake = async (w: ReturnType<typeof world>, extra: Partial<ChatRequest> = {}) => {
+    await w.say('/start', extra);
+    await w.say('/btn intake', extra);
+    await w.say('/btn need:site', extra);
+    await w.say('/btn deadline:urgent', extra);
+    await w.say('/btn budget:mid', extra);
+    return w.say('@dilnoza_salon', extra);
+  };
+
+  it('ref in the request is stored for the session and the lead carries source ref:<slug> (also when later messages omit it)', async () => {
+    const w = world();
+    await w.say('/start', { ref: 'dilnoza-77' });
+    await w.say('/btn intake');
+    await w.say('/btn need:site');
+    await w.say('/btn deadline:urgent');
+    await w.say('/btn budget:mid');
+    const r = await w.say('@dilnoza_salon');
+    expect(r.leadCreated).toBe(true);
+    expect(w.leadTasks()[0]!.meta.lead).toMatchObject({ source: 'ref:dilnoza-77', contact: '@dilnoza_salon' });
+  });
+
+  it('without ref the source stays web; the first slug wins; a wrong pattern is rejected at the schema', async () => {
+    const w = world();
+    await finishIntake(w);
+    expect(w.leadTasks()[0]!.meta.lead).toMatchObject({ source: 'web' });
+    const v = world();
+    await v.say('/start', { ref: 'first_one' });
+    await finishIntake(v, { ref: 'second_one' });
+    expect(v.leadTasks()[0]!.meta.lead).toMatchObject({ source: 'ref:first_one' });
+    const ok = { sessionId: SID, locale: 'ru', message: 'hi' };
+    expect(chatSchema.safeParse({ ...ok, ref: 'ab-c_9' }).success).toBe(true);
+    expect(chatSchema.safeParse(ok).success).toBe(true);
+    for (const ref of ['', 'Upper', 'has space', 'a'.repeat(33), 'sl/ash', 'ё']) expect(chatSchema.safeParse({ ...ok, ref }).success, ref).toBe(false);
+  });
+});
+
 describe('contact parsing', () => {
   it('accepts a Telegram username, a t.me link, a phone and an email; rejects the rest', () => {
     expect(parseContact('@dilnoza_salon')).toBe('@dilnoza_salon');
@@ -359,6 +397,31 @@ describe('contact parsing', () => {
     expect(parseContact('+998 (90) 123-45-67')).toBe('+998 (90) 123-45-67');
     expect(parseContact('a@b.co')).toBe('a@b.co');
     for (const bad of ['dilnoza', '@ab', '12345', 'hello world', '', '1'.repeat(30)]) expect(parseContact(bad)).toBeNull();
+  });
+});
+
+describe('visitor IP', () => {
+  const fake = (peer: string | undefined, headers: Record<string, string> = {}) => ({ socket: { remoteAddress: peer }, headers }) as unknown as IncomingMessage;
+
+  it('x-visitor-ip counts only from loopback or the docker gateway AND with a valid site token', () => {
+    for (const peer of ['127.0.0.1', '::1', '::ffff:127.0.0.1', '172.18.0.1', '172.17.0.1', '::ffff:172.20.0.1', '192.168.16.1']) {
+      expect(isTrustedPeer(peer), peer).toBe(true);
+      expect(visitorIp(fake(peer, { 'x-visitor-ip': '203.0.113.7' }), true), peer).toBe('203.0.113.7');
+      // no valid token: the header is not believed
+      expect(visitorIp(fake(peer, { 'x-visitor-ip': '203.0.113.7' }), false), peer).toBe(peer.replace('::ffff:', ''));
+    }
+    // any other peer: the header is ignored even with a valid token
+    for (const peer of ['203.0.113.50', '8.8.8.8', '172.32.0.1', '172.15.0.1', '10.0.0.5', '2001:db8::1', undefined]) {
+      expect(isTrustedPeer(peer), String(peer)).toBe(false);
+      expect(visitorIp(fake(peer, { 'x-visitor-ip': '1.2.3.4' }), true)).toBe(peer ?? 'unknown');
+    }
+  });
+
+  it('a missing or malformed x-visitor-ip falls back to the socket address; x-forwarded-for is never used', () => {
+    expect(visitorIp(fake('127.0.0.1'), true)).toBe('127.0.0.1');
+    for (const bad of ['', 'not-an-ip', '1.2.3.4, 5.6.7.8', '999.1.1.1', '<script>']) expect(visitorIp(fake('127.0.0.1', { 'x-visitor-ip': bad }), true)).toBe('127.0.0.1');
+    expect(visitorIp(fake('127.0.0.1', { 'x-forwarded-for': '5.5.5.5' }), true)).toBe('127.0.0.1');
+    expect(visitorIp(fake('172.18.0.1', { 'x-visitor-ip': '2001:db8::7' }), true)).toBe('2001:db8::7');
   });
 });
 
@@ -405,14 +468,14 @@ describe('POST /chat over HTTP', () => {
     }
   });
 
-  it('503 when the engine is not wired, and the lead route is off without its token', async () => {
+  it('404 without WEB_CHAT_TOKEN (the route does not exist), and the lead route is off without its token', async () => {
     const server = createWebhook(() => Promise.resolve(0), undefined);
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       const r = await fetch(`${url}/chat`, { method: 'POST', headers: { 'x-chat-token': 'x' }, body: JSON.stringify(body) });
-      expect(r.status).toBe(503);
+      expect(r.status).toBe(404);
       expect((await fetch(`${url}/lead`, { method: 'POST', body: '{}' })).status).toBe(404);
     } finally {
       server.close();
@@ -425,19 +488,19 @@ describe('POST /chat over HTTP', () => {
     expect(await bare.handle({ sessionId: SID, locale: 'ru', message: 'hi' }, '1.1.1.1')).toEqual({ kind: 'unavailable' });
   });
 
-  it('429 after 30 messages an hour per session (and the hour passes), 429 per IP, x-forwarded-for first value wins', async () => {
+  it('429 after 30 messages an hour per session (and the hour passes), 429 per visitor IP from x-visitor-ip, x-forwarded-for is ignored', async () => {
     const { server, post, clock } = await start({ perIpHour: 40 });
     try {
-      for (let i = 0; i < 30; i++) expect((await post('chat-secret', { ...body, message: `/start` }, { 'x-forwarded-for': '9.9.9.9, 10.0.0.1' })).status).toBe(200);
-      expect((await post('chat-secret', body, { 'x-forwarded-for': '9.9.9.9' })).status).toBe(429);
+      for (let i = 0; i < 30; i++) expect((await post('chat-secret', { ...body, message: `/start` }, { 'x-visitor-ip': '9.9.9.9', 'x-forwarded-for': '1.1.1.1' })).status).toBe(200);
+      expect((await post('chat-secret', body, { 'x-visitor-ip': '9.9.9.9', 'x-forwarded-for': '2.2.2.2' })).status).toBe(429);
       // another session from the same IP still has room, until the IP limit
       let last = 200;
-      for (let i = 0; i < 12; i++) last = (await post('chat-secret', { ...body, sessionId: `other-session-${i}-xx` }, { 'x-forwarded-for': '9.9.9.9' })).status;
+      for (let i = 0; i < 12; i++) last = (await post('chat-secret', { ...body, sessionId: `other-session-${i}-xx` }, { 'x-visitor-ip': '9.9.9.9', 'x-forwarded-for': '2.2.2.2' })).status;
       expect(last).toBe(429);
       // a different IP is unaffected
-      expect((await post('chat-secret', { ...body, sessionId: 'another-visitor-01' }, { 'x-forwarded-for': '8.8.8.8' })).status).toBe(200);
+      expect((await post('chat-secret', { ...body, sessionId: 'another-visitor-01' }, { 'x-visitor-ip': '8.8.8.8' })).status).toBe(200);
       clock.t += 3_700_000;
-      expect((await post('chat-secret', body, { 'x-forwarded-for': '9.9.9.9' })).status).toBe(200);
+      expect((await post('chat-secret', body, { 'x-visitor-ip': '9.9.9.9', 'x-forwarded-for': '2.2.2.2' })).status).toBe(200);
     } finally {
       server.close();
     }

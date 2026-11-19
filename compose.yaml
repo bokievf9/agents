@@ -101,8 +101,11 @@ services:
   # LLM gateway: internal network only, no published ports. Secrets (JWT_SECRET, API_KEY_SECRET, provider keys)
   # live in /opt/fir-agents/omniroute.env; the agents authenticate with LLM_API_KEY from .env.
   # Not read_only: the image is not verified for it yet (tighten after the first run on the server).
+  # The image is pinned by digest, never by a moving tag (audit 2026-11-19): everything the agents say passes through it
+  # and it holds the provider keys. Digest of diegosouzapw/omniroute:latest on 2026-11-19 (multi-arch index, linux/amd64
+  # and arm64). Update only by hand after reading the changelog: docs/omniroute-image.md.
   omniroute:
-    image: diegosouzapw/omniroute:latest
+    image: diegosouzapw/omniroute@sha256:2c4c755a54f8ce5341bc1856580b71f47a0f16a9afab4a55f84d540810631f68
     restart: unless-stopped
     user: "__AGENTS_UID__:__AGENTS_GID__"
     env_file:

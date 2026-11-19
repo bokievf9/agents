@@ -2,12 +2,13 @@ import { openDb, type Payload } from '@fir/core';
 import type { WorkerCtx } from '@fir/hq';
 import { describe, expect, it } from 'vitest';
 import { addMonths, dateStr, diffDays } from '../src/dates.js';
+import { parseMethod } from '../src/store.js';
 import { BillingWorker, KIND_INVOICE, KIND_REMINDER, parseInvoiceArgs, parsePaymentDetails, parseSubArgs, type BillingDelivery } from '../src/worker.js';
 
 const NOW = Date.UTC(2026, 10, 18, 4, 30); // Wed 09:30 Tashkent
 const DAY = 86_400_000;
 
-function setup(details = { payme: '+998 90 000 00 00', kaspi: '4400 0000 0000 0000', usdt: 'TXyz' }) {
+function setup(details = { usdt_trc20: 'TXyz', usdt_ton: 'UQabc', wallet: 'Payeer P1234567' }) {
   const db = openDb(':memory:');
   const clock = { t: NOW };
   const staged: { kind: string; payload: Payload; summary: string }[] = [];
@@ -24,8 +25,8 @@ function setup(details = { payme: '+998 90 000 00 00', kaspi: '4400 0000 0000 00
 
 describe('parsing', () => {
   it('parses /invoice with a multi-word client, flags and the description', () => {
-    expect(parseInvoiceArgs('Салон Роза 120 сайт под ключ due=2026-12-01 method=payme new')).toEqual({
-      client: 'Салон Роза', amountUsd: 120, what: 'сайт под ключ', dueDate: '2026-12-01', method: 'payme', newProject: true,
+    expect(parseInvoiceArgs('Салон Роза 120 сайт под ключ due=2026-12-01 method=usdt_ton new')).toEqual({
+      client: 'Салон Роза', amountUsd: 120, what: 'сайт под ключ', dueDate: '2026-12-01', method: 'usdt_ton', newProject: true,
     });
     expect(parseInvoiceArgs('Dilnoza $49,5 поддержка')).toMatchObject({ client: 'Dilnoza', amountUsd: 49.5, newProject: false });
     expect(parseInvoiceArgs('Dilnoza поддержка')).toBeNull();
@@ -33,11 +34,15 @@ describe('parsing', () => {
   });
 
   it('parses /sub and payment details', () => {
-    expect(parseSubArgs('Dilnoza 30 month payme 2026-12-01 базовый тариф')).toMatchObject({ client: 'Dilnoza', amountUsd: 30, period: 'month', method: 'payme', plan: 'базовый тариф' });
-    expect(parseSubArgs('Dilnoza 30 week payme 2026-12-01')).toBeNull();
-    expect(parsePaymentDetails('{"Payme":"1","kaspi":"2"}')).toEqual({ payme: '1', kaspi: '2' });
+    expect(parseSubArgs('Dilnoza 30 month usdt_trc20 2026-12-01 базовый тариф')).toMatchObject({ client: 'Dilnoza', amountUsd: 30, period: 'month', method: 'usdt_trc20', plan: 'базовый тариф' });
+    expect(parseSubArgs('Dilnoza 30 week usdt_trc20 2026-12-01')).toBeNull();
+    expect(parsePaymentDetails('{"usdt_trc20":"1","usdt_ton":"2","wallet":"3"}')).toEqual({ usdt_trc20: '1', usdt_ton: '2', wallet: '3' });
     expect(parsePaymentDetails(undefined)).toEqual({});
     expect(() => parsePaymentDetails('{"stripe":"x"}')).toThrow(/unknown method/);
+    for (const old of ['payme', 'kaspi', 'click', 'card']) expect(() => parsePaymentDetails(`{"${old}":"x"}`), old).toThrow(/usdt_trc20, usdt_ton, wallet/);
+    expect(parseInvoiceArgs('Roza 10 x method=kaspi')).toBeNull(); // no longer accepted
+    expect(parseMethod('USDT')).toBe('usdt_trc20');
+    expect(parseMethod('кошелёк')).toBe('wallet');
     expect(() => parsePaymentDetails('nope')).toThrow(/PAYMENT_DETAILS_JSON/);
   });
 
@@ -53,18 +58,20 @@ describe('invoice numbering and text', () => {
   it('numbers FT-YYYY-NNN per year, stages one locked invoice item with payment details', async () => {
     const r = setup();
     const a = await r.worker.createInvoice(r.ctx, { client: 'Dilnoza', amountUsd: 120, what: 'сайт' });
-    const b = await r.worker.createInvoice(r.ctx, { client: 'Roza', amountUsd: 60, what: 'бот', method: 'payme' });
+    const b = await r.worker.createInvoice(r.ctx, { client: 'Roza', amountUsd: 60, what: 'бот', method: 'usdt_ton' });
     expect([a.number, b.number]).toEqual(['FT-2026-001', 'FT-2026-002']);
     expect(r.staged[0]!.kind).toBe(KIND_INVOICE);
     const text = String(r.staged[0]!.payload.text);
     expect(text).toContain('Счёт FT-2026-001');
     expect(text).toContain('Сумма: $120');
-    expect(text).toContain('Payme: +998 90 000 00 00');
-    expect(text).toContain('Kaspi: 4400');
-    expect(text).toContain('USDT: TXyz');
+    expect(text).toContain('USDT (сеть TRC20): TXyz');
+    expect(text).toContain('USDT (сеть TON): UQabc');
+    expect(text).toContain('Онлайн-кошелёк из сметы: Payeer P1234567');
+    expect(text).toContain('предоплата 50% до старта работы, остальные 50% после приёмки');
+    expect(text).not.toMatch(/Kaspi|Payme|Click|карт/i);
     const only = String(r.staged[1]!.payload.text);
-    expect(only).toContain('Payme');
-    expect(only).not.toContain('Kaspi');
+    expect(only).toContain('TON');
+    expect(only).not.toContain('TRC20');
     expect(a.dueDate).toBe('2026-11-25');
     expect(r.specs[KIND_INVOICE]).toMatchObject({ initialLevel: 0, locked: true });
     r.clock.t = Date.UTC(2027, 0, 5);
@@ -73,8 +80,8 @@ describe('invoice numbering and text', () => {
 
   it('missing payment details become a placeholder that blocks sending; approved invoice becomes issued', async () => {
     const r = setup({} as never);
-    const inv = await r.worker.createInvoice(r.ctx, { client: 'A', amountUsd: 10, what: 'x', method: 'kaspi' });
-    expect(String(r.staged[0]!.payload.text)).toContain('[реквизиты Kaspi]');
+    const inv = await r.worker.createInvoice(r.ctx, { client: 'A', amountUsd: 10, what: 'x', method: 'usdt_trc20' });
+    expect(String(r.staged[0]!.payload.text)).toContain('[реквизиты USDT (сеть TRC20)]');
     await expect(r.specs[KIND_INVOICE]!.execute(r.staged[0]!.payload, 1)).rejects.toThrow(/placeholder/);
     const ok = setup();
     const i2 = await ok.worker.createInvoice(ok.ctx, { client: 'A', amountUsd: 10, what: 'x' });
@@ -126,7 +133,7 @@ describe('reminders', () => {
 
   it('subscription invoice drafts appear 7 days before the due date, once; paying moves the due date', async () => {
     const r = setup();
-    const sub = r.store.addSubscription({ client: 'Roza', plan: 'базовый', amountUsd: 30, period: 'month', nextDue: '2026-11-30', method: 'payme' });
+    const sub = r.store.addSubscription({ client: 'Roza', plan: 'базовый', amountUsd: 30, period: 'month', nextDue: '2026-11-30', method: 'usdt_trc20' });
     expect((await r.worker.daily(r.ctx)).lines).toEqual([]); // 12 days ahead
     r.clock.t += 5 * DAY;
     const d = await r.worker.daily(r.ctx);

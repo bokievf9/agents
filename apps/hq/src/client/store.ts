@@ -142,6 +142,11 @@ export class ChatStore {
     return (this.db.prepare('SELECT * FROM cb_chats ORDER BY last_at DESC LIMIT ?').all(limit) as Row[]).map(toChat);
   }
 
+  /** When any person last wrote to the bot (the latest `last_at`), null when nobody ever did. */
+  lastActivity(): number | null {
+    return (this.db.prepare('SELECT MAX(last_at) AS t FROM cb_chats').get() as { t: number | null }).t;
+  }
+
   count(): number {
     return (this.db.prepare('SELECT COUNT(*) AS n FROM cb_chats').get() as { n: number }).n;
   }
@@ -154,5 +159,48 @@ export class ChatStore {
 
   noticeChat(msgId: number): number | undefined {
     return (this.db.prepare('SELECT chat_id FROM cb_notices WHERE msg_id = ?').get(msgId) as { chat_id: number } | undefined)?.chat_id;
+  }
+}
+
+/** The referral slug a person arrived with: `?start=ref_<slug>` in the bot, `ref` in the website chat. */
+export const REF_SLUG = /^[a-z0-9_-]{1,32}$/;
+
+/** A valid slug in canonical (lower-case) form, or null. */
+export function parseRefSlug(raw: string | undefined): string | null {
+  const s = (raw ?? '').trim().toLowerCase();
+  return REF_SLUG.test(s) ? s : null;
+}
+
+/** The slug of a Telegram `/start` payload `ref_<slug>`, or null for any other payload. */
+export function refFromStartArg(arg: string): string | null {
+  const m = /^ref_(.+)$/i.exec(arg.trim());
+  return m ? parseRefSlug(m[1]) : null;
+}
+
+const REF_SCHEMA = `
+CREATE TABLE IF NOT EXISTS cb_refs (
+  who TEXT PRIMARY KEY,
+  slug TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+`;
+
+/**
+ * Who brought a person: kept per chat (`tg:<chatId>`) or website session (`web:<sessionId>`) apart from the intake
+ * draft, which is wiped often. The first referrer wins; the lead made later carries `origin: ref:<slug>`. 30 days.
+ */
+export class RefStore {
+  constructor(private readonly db: Db, private readonly now: () => number) {
+    migrate(db, REF_SCHEMA);
+  }
+
+  /** Remembers the slug unless the person already has one. Returns whether it was stored. */
+  set(who: string, slug: string): boolean {
+    this.db.prepare('DELETE FROM cb_refs WHERE at < ?').run(this.now() - 30 * 86_400_000);
+    return this.db.prepare('INSERT OR IGNORE INTO cb_refs (who, slug, at) VALUES (?, ?, ?)').run(who, slug, this.now()).changes === 1;
+  }
+
+  get(who: string): string | null {
+    return (this.db.prepare('SELECT slug FROM cb_refs WHERE who = ?').get(who) as { slug: string } | undefined)?.slug ?? null;
   }
 }

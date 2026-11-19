@@ -94,6 +94,15 @@ export class AuditStore {
     return Boolean(this.db.prepare('SELECT 1 FROM mk_audits WHERE contact = ? AND created >= ?').get(normContact(contact), this.now() - 86_400_000));
   }
 
+  /** Audits asked more than `olderThanMs` ago and still not delivered or handed to the owner (nor rejected). */
+  undelivered(olderThanMs: number): AuditRow[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM mk_audits WHERE status NOT IN ('delivered', 'handed_off', 'rejected') AND created <= ? ORDER BY id")
+        .all(this.now() - olderThanMs) as R[]
+    ).map(toRow);
+  }
+
   setStatus(id: number, status: AuditStatus): void {
     this.db.prepare('UPDATE mk_audits SET status = ?, delivered = CASE WHEN ? IN (\'delivered\', \'handed_off\') THEN ? ELSE delivered END WHERE id = ?').run(status, status, this.now(), id);
   }

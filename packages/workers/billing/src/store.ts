@@ -1,18 +1,24 @@
 import { migrate, type Db } from '@fir/core';
 
-export type PayMethod = 'kaspi' | 'payme' | 'click' | 'card' | 'usdt';
-export const METHOD_LABEL: Record<PayMethod, string> = { kaspi: 'Kaspi', payme: 'Payme', click: 'Click', card: 'Карта', usdt: 'USDT' };
+/**
+ * The studio's payment methods (owner decision 2026-11-19): USDT on TRC20 or TON, or the online wallet named in the
+ * estimate. Kaspi, Payme, Click and cards are not accepted: `parseMethod` refuses them and old rows read as «any method».
+ */
+export type PayMethod = 'usdt_trc20' | 'usdt_ton' | 'wallet';
+export const PAY_METHODS: PayMethod[] = ['usdt_trc20', 'usdt_ton', 'wallet'];
+export const METHOD_LABEL: Record<PayMethod, string> = { usdt_trc20: 'USDT (сеть TRC20)', usdt_ton: 'USDT (сеть TON)', wallet: 'Онлайн-кошелёк из сметы' };
 
-/** "Kaspi", "карта", "usdt" and so on to the key; null when unknown. */
+/** "usdt_trc20", "trc20", "ton", "кошелёк" and so on to the key; a bare "usdt" means TRC20; null when unknown or not accepted. */
 export function parseMethod(s: string): PayMethod | null {
-  const t = s.trim().toLowerCase();
-  if (/^(kaspi|каспи)$/.test(t)) return 'kaspi';
-  if (/^(payme|пейми|пайме)$/.test(t)) return 'payme';
-  if (/^(click|клик)$/.test(t)) return 'click';
-  if (/^(card|карта|картой)$/.test(t)) return 'card';
-  if (/^(usdt|юсдт)$/.test(t)) return 'usdt';
+  const t = s.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (/^(usdt_?trc20|trc20|usdt_?tron|tron|usdt|юсдт)$/.test(t)) return 'usdt_trc20';
+  if (/^(usdt_?ton|ton|тон|юсдт_?тон)$/.test(t)) return 'usdt_ton';
+  if (/^(wallet|кошелёк|кошелек|онлайн_?кошелёк|онлайн_?кошелек)$/.test(t)) return 'wallet';
   return null;
 }
+
+/** A method read from the database: rows made before 2026-11-19 may hold a method that is no longer accepted. */
+const storedMethod = (m: string | null): PayMethod | null => (m && (PAY_METHODS as string[]).includes(m) ? (m as PayMethod) : null);
 
 export type Period = 'month' | 'year';
 export type InvoiceStatus = 'draft' | 'issued' | 'paid' | 'void';
@@ -91,10 +97,10 @@ interface InvRow {
 }
 
 const toSub = (r: SubRow): Subscription => ({
-  id: r.id, client: r.client, plan: r.plan, amountUsd: r.amount_usd, period: r.period as Period, nextDue: r.next_due, method: r.method as PayMethod | null, active: r.active === 1,
+  id: r.id, client: r.client, plan: r.plan, amountUsd: r.amount_usd, period: r.period as Period, nextDue: r.next_due, method: storedMethod(r.method), active: r.active === 1,
 });
 const toInv = (r: InvRow): Invoice => ({
-  id: r.id, number: r.number, client: r.client, amountUsd: r.amount_usd, what: r.what, method: r.method as PayMethod | null, dueDate: r.due_date,
+  id: r.id, number: r.number, client: r.client, amountUsd: r.amount_usd, what: r.what, method: storedMethod(r.method), dueDate: r.due_date,
   status: r.status as InvoiceStatus, subscriptionId: r.subscription_id, newProject: r.new_project === 1, remind3: r.remind3 === 1, remind0: r.remind0 === 1,
   overdueAlerted: r.overdue_alerted === 1, createdAt: r.created_at, paidAt: r.paid_at,
 });

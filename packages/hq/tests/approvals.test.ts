@@ -13,6 +13,23 @@ function kindSetup(level: 0 | 1 = 0) {
   return { ...s, executed, task };
 }
 
+describe('urgent kinds', () => {
+  it('an urgent kind goes to the owner at once as a single card, not with the batch; other kinds still wait', async () => {
+    const { hq, messenger, queue, task } = kindSetup();
+    hq.registerKind('rush', { initialLevel: 0, locked: true, execute: async () => undefined }, { urgent: true });
+    const a = task('A');
+    const b = task('B');
+    await hq.requestApproval(a.id, 'marketing-head', 'post', { text: 'later' }, 'normal');
+    await hq.requestApproval(b.id, 'marketing-head', 'rush', { text: 'now' }, 'client waits');
+    expect(messenger.sent).toHaveLength(1);
+    expect(messenger.sent[0]!.text).toContain('Срочно, marketing, задача #' + b.id);
+    expect(messenger.sent[0]!.buttons).toBeTruthy();
+    expect(queue.pending()).toHaveLength(1);
+    expect(hq.queuedApprovals().map((l) => l.kind)).toEqual(['post']);
+    expect(await hq.releaseApprovals()).toBe(1);
+  });
+});
+
 describe('approvals through the Director batch', () => {
   it('queues without messaging the owner; the batch sends one numbered series with buttons', async () => {
     const { hq, messenger, task } = kindSetup();

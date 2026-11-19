@@ -3,7 +3,7 @@ import type { KindSpec, Payload } from '@fir/core';
 import { zonedParts } from '@fir/core';
 import type { WorkerCtx } from '@fir/hq';
 import { addDays, addMonths, dateStr, diffDays, isDate, ruDate } from './dates.js';
-import { BillingStore, METHOD_LABEL, parseMethod, type Invoice, type PayMethod, type Period, type Subscription } from './store.js';
+import { BillingStore, METHOD_LABEL, PAY_METHODS, parseMethod, type Invoice, type PayMethod, type Period, type Subscription } from './store.js';
 
 /** `billing_invoice`: invoice text for the owner to send. Money: locked at level 0. */
 export const KIND_INVOICE = 'billing_invoice';
@@ -20,19 +20,22 @@ export type PaymentDetails = Partial<Record<PayMethod, string>>;
 
 const detailsSchema = z.record(z.string(), z.string());
 
-/** `PAYMENT_DETAILS_JSON`: `{"payme":"...","kaspi":"...","usdt":"..."}`; keys: kaspi, payme, click, card, usdt. Empty is fine; garbage is an error. */
+/**
+ * `PAYMENT_DETAILS_JSON`: `{"usdt_trc20":"T...","usdt_ton":"UQ...","wallet":"Payeer P123..."}`; the three keys are the studio's
+ * methods. Empty is fine; garbage and the old Kaspi, Payme, Click, card keys are errors.
+ */
 export function parsePaymentDetails(raw: string | undefined): PaymentDetails {
   if (!raw?.trim()) return {};
   let parsed: Record<string, string>;
   try {
     parsed = detailsSchema.parse(JSON.parse(raw));
   } catch {
-    throw new Error('PAYMENT_DETAILS_JSON must be JSON like {"payme":"...","kaspi":"...","usdt":"..."}');
+    throw new Error('PAYMENT_DETAILS_JSON must be JSON like {"usdt_trc20":"...","usdt_ton":"...","wallet":"..."}');
   }
   const out: PaymentDetails = {};
   for (const [k, v] of Object.entries(parsed)) {
     const m = parseMethod(k);
-    if (!m) throw new Error(`PAYMENT_DETAILS_JSON: unknown method "${k}" (kaspi, payme, click, card, usdt)`);
+    if (!m) throw new Error(`PAYMENT_DETAILS_JSON: unknown method "${k}" (usdt_trc20, usdt_ton, wallet)`);
     if (v.trim()) out[m] = v.trim();
   }
   return out;
@@ -52,6 +55,8 @@ export interface BillingDelivery {
 }
 
 const usd = (n: number): string => `$${Number.isInteger(n) ? n : n.toFixed(2)}`;
+/** The studio's payment rule (owner decision 2026-11-19), printed in every invoice. */
+export const PAYMENT_TERMS = 'Условия: предоплата 50% до старта работы, остальные 50% после приёмки. Комиссии сети и платёжных сервисов оплачивает плательщик. Деньги пришли на счёт студии: оплата засчитана.';
 export const hasPlaceholder = (text: string): boolean => /\[[^\]]*\]/.test(text);
 
 const stores = new WeakMap<object, BillingStore>();
@@ -150,7 +155,7 @@ export class BillingWorker {
 
   /** Payment instructions block; a missing method becomes a `[placeholder]` that blocks sending until the owner fills it. */
   paymentLines(method: PayMethod | null): string {
-    const methods = method ? [method] : (Object.keys(this.details) as PayMethod[]);
+    const methods = method ? [method] : PAY_METHODS.filter((m) => this.details[m]);
     if (methods.length === 0) return '- [реквизиты оплаты]';
     return methods.map((m) => `- ${METHOD_LABEL[m]}: ${this.details[m] ?? `[реквизиты ${METHOD_LABEL[m]}]`}`).join('\n');
   }
@@ -165,6 +170,8 @@ export class BillingWorker {
       '',
       `Как оплатить${inv.method ? '' : ' (любой способ)'}:`,
       this.paymentLines(inv.method),
+      '',
+      PAYMENT_TERMS,
       '',
       'После оплаты пришлите чек или скриншот в этот чат. Спасибо!',
     ].join('\n');

@@ -41,7 +41,7 @@ function world() {
   const llm = new MockLlm(() => '');
   const director = new Director({ hq, llm, messenger, queue, ownerId: OWNER, reporter });
   const head = new SupportHead({ hq, llm, reporter, monitor: new MonitoringWorker({ ...cfg, omnirouteUrl: 'http://omniroute:20128/health' }, deps), finance: new FinanceWorker({ fixedCosts: { droplet: 30 } }),
-    billing: new BillingWorker({ paymentDetails: { payme: '+998 00' } }), messenger, ownerId: OWNER });
+    billing: new BillingWorker({ paymentDetails: { usdt_trc20: 'TXyz00' } }), messenger, ownerId: OWNER });
   director.onSupportCommand = (name, args) => head.onCommand(name, args);
   return { clock, hq, messenger, posted, director, head };
 }
@@ -141,7 +141,7 @@ describe('Support head', () => {
     const msgs = w.messenger.sent.map((m) => m.text).join('\n');
     expect(msgs).toContain('Тикет #1');
     expect(msgs).toContain('ответ утверждён, отправьте клиенту @dil');
-    expect(msgs).toContain('Kaspi');
+    expect(msgs).toContain('TRC20');
     await w.director.onCommand('tickets', '');
     expect(w.messenger.sent.at(-1)!.text).toContain('#1 отвечен');
     await w.director.onCommand('ticket', 'без двоеточия');

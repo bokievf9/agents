@@ -1,5 +1,5 @@
 import type { Button } from '@fir/core';
-import { isCatalogueId, KIND_LABELS, PRODUCT_IDS, PRODUCTS, PUBLIC_PRICES, type CatalogueId } from './products.js';
+import { isCatalogueId, KIND_LABELS, PRODUCT_IDS, PRODUCTS, publicPrices, startingPrices, type CatalogueId } from './products.js';
 
 export type Lang = 'ru' | 'en';
 
@@ -100,15 +100,16 @@ const RU: Texts = {
   human: (night) =>
     `<b>Зову человека</b>\n${night ? 'Сейчас ночь, команда ответит утром, здесь же.' : 'Ответим здесь же, обычно в течение часа в рабочее время.'} Пока можно писать дальше: всё передам.`,
   humanAlready: 'Человек уже в курсе и ответит здесь. Всё, что вы пишете, я передаю.',
-  priceAnswer:
-    '<b>Про стоимость</b>\nСчитаем под задачу: многое зависит от того, что именно должно уметь решение. Ответьте на три коротких вопроса, и мы вернёмся с предложением и ценой в течение рабочего дня.',
+  get priceAnswer() {
+    return `<b>Про стоимость</b>\n${esc(startingPrices('ru'))}.\n\nТочную цену и срок считаем под задачу и записываем в смете. Ответьте на три коротких вопроса, и мы вернёмся с предложением в течение рабочего дня.`;
+  },
   night: '<b>Сообщение у команды</b>\nСейчас у нас ночь, человек ответит утром, здесь же. Если хотите, оставьте заявку: это три коротких вопроса.',
   fallback: '<b>Передал команде</b>\nОтвечу точнее, когда уточню у коллег. Ответ придёт сюда, в этот чат.',
   textOnly: 'Пока читаю только текст. Напишите, пожалуйста, словами.',
   slow: 'Сообщений много, я передал разговор команде. Человек ответит здесь.',
   slotPicked: (slot) => `<b>Записал звонок</b>\n${esc(slot)}. Подтвердим время здесь, в этом чате.`,
   help:
-    '<b>Что умеет этот бот</b>\n/start: начало и меню\n/demo: демо бота-администратора для салона\n/audit &lt;сайт&gt;: бесплатный аудит за 24 часа\n/human: позвать человека\n/lang: English\n\nМожно просто написать вопрос: отвечу сразу или передам команде.',
+    '<b>Что умеет этот бот</b>\n/start: начало и меню\n/demo: демо бота-администратора для салона\n/audit &lt;сайт&gt;: бесплатный аудит в течение рабочего дня\n/human: позвать человека\n/lang: English\n\nМожно просто написать вопрос: отвечу сразу или передам команде.',
   stale: 'Уже неактуально',
   priceNote: 'Стоимость и сроки назовём после короткого разговора с командой.',
   langSwitched: 'Русский',
@@ -141,15 +142,16 @@ const EN: Texts = {
   human: (night) =>
     `<b>Calling a person</b>\n${night ? 'It is night here, the team will answer in the morning, right here.' : 'We will answer right here, usually within an hour during working hours.'} Feel free to keep writing: I pass everything on.`,
   humanAlready: 'A person already knows and will answer here. I pass on everything you write.',
-  priceAnswer:
-    '<b>About the price</b>\nWe price each task separately: a lot depends on what exactly the solution should do. Answer three short questions and we will come back with a proposal and a price within one working day.',
+  get priceAnswer() {
+    return `<b>About the price</b>\n${esc(startingPrices('en'))}.\n\nWe set the exact price and timing for each task and write them in the estimate. Answer three short questions and we will come back with a proposal within one working day.`;
+  },
   night: '<b>Message is with the team</b>\nIt is night here now, a person will answer in the morning, right here. If you like, leave a request: it is three short questions.',
   fallback: '<b>Passed to the team</b>\nI will answer more precisely once I check with my colleagues. The answer will arrive here, in this chat.',
   textOnly: 'For now I only read text. Please write it in words.',
   slow: 'That is a lot of messages, so I passed the conversation to the team. A person will answer here.',
   slotPicked: (slot) => `<b>Call noted</b>\n${esc(slot)}. We will confirm the time here, in this chat.`,
   help:
-    '<b>What this bot does</b>\n/start: start and menu\n/demo: demo of the booking bot for a salon\n/audit &lt;site&gt;: free audit within 24 hours\n/human: talk to a person\n/lang: Русский\n\nYou can also just type a question: I answer right away or pass it to the team.',
+    '<b>What this bot does</b>\n/start: start and menu\n/demo: demo of the booking bot for a salon\n/audit &lt;site&gt;: free audit within a working day\n/human: talk to a person\n/lang: Русский\n\nYou can also just type a question: I answer right away or pass it to the team.',
   stale: 'No longer relevant',
   priceNote: 'We will name the price and timing after a short talk with the team.',
   langSwitched: 'English',
@@ -199,7 +201,7 @@ export function productCardHtml(lang: Lang, id: CatalogueId): string {
     ...(whom ? [`\n<b>${c.forWhom}:</b> ${esc(whom)}`] : []),
     `\n<b>${c.inside}:</b>\n${p.inside[lang].map((x) => `• ${esc(x)}`).join('\n')}`,
     `\n<b>${c.pairs}:</b> ${esc(pair)}`,
-    `${esc(p.demo[lang])}${id === 'agent' ? ` ${esc(PUBLIC_PRICES[lang])}` : ''}`,
+    `${esc(p.demo[lang])}${id === 'agent' ? ` ${esc(publicPrices(lang))}` : ''}`,
   ].join('\n');
 }
 
@@ -218,7 +220,7 @@ export const COMMANDS: Record<Lang, { command: string; description: string }[]> 
   ru: [
     { command: 'start', description: 'Начало и меню' },
     { command: 'demo', description: 'Демо: бот-администратор для салона' },
-    { command: 'audit', description: 'Бесплатный аудит сайта за 24 часа' },
+    { command: 'audit', description: 'Бесплатный аудит сайта' },
     { command: 'human', description: 'Позвать человека' },
     { command: 'lang', description: 'English' },
     { command: 'help', description: 'Что умеет бот' },
@@ -226,7 +228,7 @@ export const COMMANDS: Record<Lang, { command: string; description: string }[]> 
   en: [
     { command: 'start', description: 'Start and menu' },
     { command: 'demo', description: 'Demo: booking bot for a salon' },
-    { command: 'audit', description: 'Free site audit within 24 hours' },
+    { command: 'audit', description: 'Free site audit' },
     { command: 'human', description: 'Talk to a person' },
     { command: 'lang', description: 'Русский' },
     { command: 'help', description: 'What this bot does' },
@@ -257,16 +259,16 @@ export const PROFILE: Record<Lang, { short: string; description: string }> = {
 /** Texts of the demo entry and the free audit command (the demo itself lives in `demo.ts`). */
 export const X: Record<Lang, { auditUsage: string; auditOk: string; auditDup: string; auditBusy: string; auditOff: string }> = {
   ru: {
-    auditUsage: 'Пришлите адрес сайта после команды, например: /audit example.com. Я разберу его и вернусь с пятью находками в течение 24 часов.',
-    auditOk: '<b>Принял</b>\nРазберём сайт и пришлём пять находок и что исправить, в течение 24 часов. Ответ придёт сюда.',
-    auditDup: 'Аудит для вас уже в работе, повторно не нужен: результат придёт в течение 24 часов.',
+    auditUsage: 'Пришлите адрес сайта после команды, например: /audit example.com. Я разберу его и вернусь с пятью находками в течение рабочего дня.',
+    auditOk: '<b>Принял</b>\nРазберём сайт и пришлём пять находок и что исправить, в течение рабочего дня. Ответ придёт сюда.',
+    auditDup: 'Аудит для вас уже в работе, повторно не нужен: результат придёт в течение рабочего дня.',
     auditBusy: 'Сегодня очень много заявок на аудит. Попробуйте чуть позже или напишите команде через /human.',
     auditOff: 'Аудит сейчас недоступен. Напишите нам через /human, сделаем вручную.',
   },
   en: {
-    auditUsage: 'Send a site address after the command, for example: /audit example.com. We will review it and come back with five findings within 24 hours.',
-    auditOk: '<b>Got it</b>\nWe will review the site and send five findings and what to fix within 24 hours. The answer will arrive here.',
-    auditDup: 'Your audit is already in progress, no need to ask again: the result arrives within 24 hours.',
+    auditUsage: 'Send a site address after the command, for example: /audit example.com. We will review it and come back with five findings within one working day.',
+    auditOk: '<b>Got it</b>\nWe will review the site and send five findings and what to fix within one working day. The answer will arrive here.',
+    auditDup: 'Your audit is already in progress, no need to ask again: the result arrives within one working day.',
     auditBusy: 'A lot of audit requests today. Please try again a bit later or write to the team with /human.',
     auditOff: 'The audit is unavailable right now. Write to us with /human and we will do it by hand.',
   },

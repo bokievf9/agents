@@ -1,5 +1,6 @@
 import { Bot, GrammyError, type Context } from 'grammy';
 import { createBot, errMsg, log, startPolling, type Button, type Db, type LlmClient } from '@fir/core';
+import type { BotProbe } from '@fir/worker-monitoring';
 import { ClientBlockedError, type ClientChannel } from './channel.js';
 import { ClientEngine, type ClientSinks, type ClientTransport, type From } from './engine.js';
 import { COMMANDS, OWNER_COMMANDS, PROFILE } from './texts.js';
@@ -66,9 +67,18 @@ export class ClientBot implements ClientChannel {
   readonly bot: Bot;
   readonly engine: ClientEngine;
   private readonly queues = new Map<number, Promise<void>>();
+  private startedAt: number | null = null;
+  private lastPollAt: number | null = null;
+  private pollError: string | null = null;
 
   constructor(private readonly o: ClientBotOptions) {
     this.bot = createBot(o.token);
+    // A completed getUpdates (also an empty one) is a sign that long polling is alive; a hung poll shows as silence.
+    this.bot.api.config.use(async (prev, method, payload, signal) => {
+      const res = await prev(method, payload, signal);
+      if (method === 'getUpdates' && res.ok) this.lastPollAt = o.now();
+      return res;
+    });
     this.engine = new ClientEngine({
       db: o.db, now: o.now, tz: o.tz, transport: grammyTransport(this.bot), llm: o.llm, ownerId: o.ownerId, instructions: o.instructions,
       quietHours: o.quietHours, perHour: o.perHour, dailyCap: o.dailyCap, ...(o.ownerFallback ? { ownerFallback: o.ownerFallback } : {}),
@@ -147,7 +157,22 @@ export class ClientBot implements ClientChannel {
 
   start(): Promise<void> {
     void this.setup();
-    return startPolling(this.bot);
+    this.startedAt = this.o.now();
+    this.pollError = null;
+    return startPolling(this.bot).catch((e: unknown) => {
+      this.pollError = errMsg(e);
+      throw e;
+    });
+  }
+
+  /** What the monitoring worker asks: last sign of life, `getMe`, and whether polling has crashed. */
+  probe(): BotProbe {
+    return {
+      lastUpdateAt: () => Math.max(this.engine.store.lastActivity() ?? 0, this.lastPollAt ?? 0) || null,
+      startedAt: () => this.startedAt,
+      getMe: () => this.bot.api.getMe(),
+      pollingError: () => this.pollError,
+    };
   }
 
   async stop(): Promise<void> {

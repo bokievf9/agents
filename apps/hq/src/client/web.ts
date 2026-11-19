@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { ClientSinks } from './engine.js';
 import { inWindow, linksOnly, RateLimiter } from './sanitize.js';
 import { clip, freeAnswer, GREETING, intakeRecord, TurnHistory } from './shared.js';
-import type { Draft } from './store.js';
+import { parseRefSlug, RefStore, type Draft } from './store.js';
 import { BUDGETS, DEADLINES, NEEDS, T, type Budget, type Deadline, type Lang, type Need } from './texts.js';
 import { WebSessionStore, type WebSession, type WebState } from './web-store.js';
 import { isCatalogueId, nicheHint } from './products.js';
@@ -17,6 +17,8 @@ export const chatSchema = z.object({
   page: z.string().max(200).optional(),
   /** `demo`: a scripted description of the salon demo with the Telegram deep link (no sandbox on the website). */
   mode: z.enum(['demo']).optional(),
+  /** Referral slug (the site sends it from `?ref=` or its stored value): who brought the visitor. */
+  ref: z.string().trim().regex(/^[a-z0-9_-]{1,32}$/).optional(),
 });
 export type ChatRequest = z.output<typeof chatSchema>;
 
@@ -70,6 +72,7 @@ type Step = { reply: string; buttons?: WebButton[]; created?: boolean };
  */
 export class WebChatEngine {
   readonly store: WebSessionStore;
+  private readonly refs: RefStore;
   private readonly sessionLimiter: RateLimiter;
   private readonly ipLimiter: RateLimiter;
   private readonly history: TurnHistory<string>;
@@ -78,6 +81,7 @@ export class WebChatEngine {
 
   constructor(private readonly d: WebChatDeps) {
     this.store = new WebSessionStore(d.db, d.now);
+    this.refs = new RefStore(d.db, d.now);
     // Daily cap is not used here: the shared gate holds the LLM counter.
     this.sessionLimiter = new RateLimiter(d.perSessionHour ?? 30, 0, d.now, d.tz);
     this.ipLimiter = new RateLimiter(d.perIpHour ?? 60, 0, d.now, d.tz);
@@ -123,6 +127,8 @@ export class WebChatEngine {
       s = this.store.create(req.sessionId, lang);
       log('info', 'web chat session', { sessionId: s.id, total: this.store.count() });
     }
+    const ref = parseRefSlug(req.ref);
+    if (ref) this.refs.set(`web:${s.id}`, ref);
     this.store.update(s.id, { locale: lang, messages: s.messages + 1, ...(req.page && !s.draft.page ? { draft: { ...s.draft, page: req.page.slice(0, 200) } } : {}) });
     s = this.store.get(s.id)!;
 
@@ -250,7 +256,8 @@ export class WebChatEngine {
     const night = this.isNight();
     const page = d.page ?? '';
     const pageLine = page ? `\nСтраница: ${page}` : '';
-    const base = { name: 'Посетитель веб-чата', contact, estimate: '', locale: lang, slot: '', source: 'web', page };
+    const ref = this.refs.get(`web:${s.id}`);
+    const base = { name: 'Посетитель веб-чата', contact, estimate: '', locale: lang, slot: '', source: ref ? `ref:${ref}` : 'web', page };
     if (d.pending === 'client') {
       const question = d.question ?? '';
       if (d.client) {

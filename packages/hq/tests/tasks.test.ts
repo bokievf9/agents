@@ -52,6 +52,24 @@ describe('tasks', () => {
     expect(hq.task(t.id)!.status).toBe('inbox');
   });
 
+  it('recoverInterrupted puts tasks left running by a restart back to assigned, others stay', () => {
+    const { hq } = setup();
+    const cut = hq.createTask({ title: 'cut off', dept: 'marketing', creator: 'owner' });
+    hq.claim(cut.id, 'marketing-head');
+    const waiting = hq.createTask({ title: 'waiting', dept: 'marketing', creator: 'owner' });
+    const done = hq.createTask({ title: 'done', dept: 'marketing', creator: 'owner' });
+    hq.claim(done.id, 'marketing-head');
+    hq.complete(done.id, 'marketing-head', 'ok');
+    expect(hq.recoverInterrupted()).toEqual([cut.id]);
+    expect(hq.task(cut.id)).toMatchObject({ status: 'assigned', assigneeId: 'marketing-head' });
+    expect(hq.events(cut.id).at(-1)!.body).toContain('interrupted by a restart');
+    expect(hq.task(waiting.id)!.status).toBe('inbox');
+    expect(hq.task(done.id)!.status).toBe('done');
+    expect(hq.recoverInterrupted()).toEqual([]);
+    // the same head can take it again
+    expect(hq.claim(cut.id, 'marketing-head')).toBe(true);
+  });
+
   it('filters, orders by priority, and counts', () => {
     const { hq } = setup();
     hq.createTask({ title: 'low', dept: 'marketing', creator: 'owner' });
