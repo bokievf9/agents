@@ -1,4 +1,4 @@
-import { errMsg, zonedParts, zonedToMs, type ApprovalQueue, type Db, type KindSpec, type Payload } from '@fir/core';
+import { MODEL_PRICES, errMsg, priceFor, usdFor, zonedParts, zonedToMs, type ApprovalQueue, type Db, type KindSpec, type Payload, type PriceTable } from '@fir/core';
 import { SCHEMA } from './schema.js';
 import type {
   Agent, ApprovalState, Creator, Heartbeat, NewRoutine, NewTask, Role, Routine, Task, TaskApproval, TaskEvent, TaskStatus,
@@ -69,24 +69,19 @@ export interface CostInput {
   model: string;
   inputTokens: number;
   outputTokens: number;
-  /** Explicit price; otherwise from the price table (0 for free providers). */
+  /** Explicit price; otherwise from the price table (`priceFor`). */
   usd?: number;
+  /** A client is waiting on this call: the department's money limit alerts but does not block it. */
+  urgent?: boolean;
 }
 
-/** USD per million tokens, by model name prefix (the longest matching prefix wins). Gateway aliases and free models cost 0. */
-export type PriceTable = Record<string, { in: number; out: number }>;
+export type { PriceTable } from '@fir/core';
 
 /**
- * Known Anthropic list prices, USD per 1M tokens, written into the `prices` table once (never overwritten, the owner
- * edits them with `setPrice`). Check them against the current price list: a wrong row only skews the report.
- * Gateway aliases ("auto") and free provider models stay at 0.
+ * Prices written into the `prices` table once (never overwritten: the owner edits them with `setPrice`). The same numbers are
+ * the built-in table of `@fir/core` (`MODEL_PRICES`); models neither know are counted at `UNKNOWN_MODEL_PRICE`, not at 0.
  */
-export const DEFAULT_PRICES: PriceTable = {
-  'claude-haiku': { in: 1, out: 5 },
-  'claude-sonnet': { in: 3, out: 15 },
-  'claude-opus': { in: 5, out: 25 },
-  auto: { in: 0, out: 0 },
-};
+export const DEFAULT_PRICES: PriceTable = MODEL_PRICES;
 
 export interface TaskFilter {
   dept?: string;
@@ -119,6 +114,8 @@ export class Hq {
     this.now = opts.now ?? Date.now;
     const seed = db.prepare('INSERT OR IGNORE INTO prices (prefix, in_usd, out_usd) VALUES (?, ?, ?)');
     for (const [prefix, p] of Object.entries(DEFAULT_PRICES)) seed.run(prefix, p.in, p.out);
+    // an old seed priced the gateway alias `auto` at 0: a model nobody resolved is not free (the owner can set it back with setPrice)
+    db.prepare("DELETE FROM prices WHERE prefix = 'auto' AND in_usd = 0 AND out_usd = 0").run();
     this.prices = opts.prices ?? this.loadPrices();
   }
 
@@ -738,33 +735,58 @@ export class Hq {
     return limit > 0 && this.monthSpend(dept) >= limit;
   }
 
+  /** A task or call the owner cannot wait on: a client is waiting, or priority 2. Such work is never stopped by a money limit (it only alerts). */
+  isUrgent(taskId?: number | null, urgent?: boolean): boolean {
+    if (urgent) return true;
+    const t = taskId ? this.task(taskId) : undefined;
+    return (t?.priority ?? 0) >= 2;
+  }
+
   /**
-   * Records token usage. When the department's month spend reaches its limit, the task is put into `blocked`
-   * and the owner gets one alert per department and month.
+   * Records token usage, priced by the model that really answered (`priceFor`: the owner's rows, the built-in table, `:free`
+   * models, else the unknown-model estimate). The owner gets one alert per department and month at 80% of the limit and one
+   * at 100%; at 100% a non-urgent task is put into `blocked` (and `meterLlm` refuses its next calls), urgent work goes on.
    */
   recordCost(c: CostInput): { usd: number; blocked: boolean } {
     const agent = this.agent(c.agentId);
     if (!agent) throw new Error(`Unknown agent ${c.agentId}`);
-    const price = Object.entries(this.prices)
-      .filter(([prefix]) => c.model.startsWith(prefix))
-      .sort((a, b) => b[0].length - a[0].length)[0]?.[1];
-    const usd = c.usd ?? (price ? (c.inputTokens * price.in + c.outputTokens * price.out) / 1_000_000 : 0);
+    const priced = priceFor(c.model, this.prices);
+    if (priced.source === 'unknown' && c.usd === undefined) {
+      const key = `unknown_model:${c.model.slice(0, 80)}`;
+      if (!this.db.prepare('SELECT 1 FROM settings WHERE key = ?').get(key)) {
+        this.setSetting(key, '1');
+        this.log('hq', 'cost_unknown_model', 'model', c.model.slice(0, 80), 'priced at the unknown-model estimate; setPrice to fix');
+      }
+    }
+    const usd = c.usd ?? usdFor(priced.price, c.inputTokens, c.outputTokens);
     this.db
       .prepare('INSERT INTO costs (task_id, agent_id, dept, model, input_tokens, output_tokens, usd, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run(c.taskId ?? null, c.agentId, agent.dept, c.model, c.inputTokens, c.outputTokens, usd, this.now());
     if (c.taskId) this.db.prepare('UPDATE tasks SET cost_usd = cost_usd + ? WHERE id = ?').run(usd, c.taskId);
-    if (!this.overBudget(agent.dept)) return { usd, blocked: false };
+    const limit = this.deptBudget(agent.dept);
+    if (!(limit > 0)) return { usd, blocked: false };
+    const spent = this.monthSpend(agent.dept);
+    const p = zonedParts(this.now(), this.tz);
+    if (spent < limit) {
+      if (spent >= limit * 0.8) {
+        const warn = `budget_warn:${agent.dept}:${p.y}-${p.mo}`;
+        if (!this.db.prepare('SELECT 1 FROM settings WHERE key = ?').get(warn)) {
+          this.setSetting(warn, '1');
+          void this.alert(`Отдел ${agent.dept}: потрачено ${Math.round((spent / limit) * 100)}% лимита на месяц ($${spent.toFixed(2)} из $${limit}). На 100% обычные задачи отдела остановятся, срочные пойдут.`);
+        }
+      }
+      return { usd, blocked: false };
+    }
     let blocked = false;
     const t = c.taskId ? this.task(c.taskId) : undefined;
-    if (t && !TERMINAL.includes(t.status) && t.status !== 'blocked' && TRANSITIONS[t.status].includes('blocked')) {
+    if (t && !this.isUrgent(t.id, c.urgent) && !TERMINAL.includes(t.status) && t.status !== 'blocked' && TRANSITIONS[t.status].includes('blocked')) {
       this.block(t.id, 'hq', `Лимит расходов отдела ${agent.dept} исчерпан`);
       blocked = true;
     }
-    const p = zonedParts(this.now(), this.tz);
     const key = `budget_alert:${agent.dept}:${p.y}-${p.mo}`;
     if (!this.db.prepare('SELECT 1 FROM settings WHERE key = ?').get(key)) {
       this.setSetting(key, '1');
-      void this.alert(`Отдел ${agent.dept}: лимит расходов на месяц ($${this.deptBudget(agent.dept)}) исчерпан, новые задачи отдела блокируются.`);
+      void this.alert(`Отдел ${agent.dept}: лимит расходов на месяц ($${limit}) исчерпан, обычные задачи отдела останавливаются, срочные (клиент ждёт, приоритет 2) продолжаются.`);
     }
     return { usd, blocked };
   }

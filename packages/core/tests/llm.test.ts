@@ -77,3 +77,17 @@ describe('usage', () => {
     expect(m.calls).toHaveLength(1);
   });
 });
+
+describe('usage and prices', () => {
+  it('parseUsage reads Anthropic and OpenAI style usage with the resolved model', async () => {
+    const { parseUsage, priceFor, usdFor } = await import('../src/index.js');
+    expect(parseUsage({ model: 'gemini-2.5-flash', usage: { input_tokens: 10, output_tokens: 5 } })).toEqual({ inputTokens: 10, outputTokens: 5, model: 'gemini-2.5-flash' });
+    expect(parseUsage({ model: 'x', usage: { prompt_tokens: 7, completion_tokens: 3 } })).toEqual({ inputTokens: 7, outputTokens: 3, model: 'x' });
+    expect(parseUsage({ usage: { input_tokens: 0, output_tokens: 0 } })).toBeNull();
+    expect(priceFor('claude-sonnet-5-5').source).toBe('table');
+    expect(priceFor('glm-4.6').source).toBe('unknown');
+    expect(priceFor('qwen3:free')).toMatchObject({ source: 'free', price: { in: 0, out: 0 } });
+    expect(priceFor('claude-sonnet-5-5', { 'claude-sonnet-5': { in: 1, out: 2 } }).source).toBe('override');
+    expect(usdFor({ in: 3, out: 15 }, 1_000_000, 100_000)).toBeCloseTo(4.5);
+  });
+});

@@ -4,14 +4,14 @@ import { Hq, exportOrg, importOrg, meterLlm } from '../src/index.js';
 import { setup } from './helpers.js';
 
 describe('costs and budget', () => {
-  it('records usage per task and agent with a price table (free by default)', () => {
+  it('records usage per task and agent with a price table (a model nobody knows is estimated, not free)', () => {
     const { hq } = setup();
     hq.prices = { sonnet: { in: 3, out: 15 } };
     const t = hq.createTask({ title: 'A', dept: 'marketing', creator: 'owner' });
     expect(hq.recordCost({ taskId: t.id, agentId: 'content-maker', model: 'sonnet', inputTokens: 1_000_000, outputTokens: 100_000 }).usd).toBeCloseTo(4.5);
-    expect(hq.recordCost({ taskId: t.id, agentId: 'content-maker', model: 'haiku', inputTokens: 500, outputTokens: 500 }).usd).toBe(0);
-    expect(hq.task(t.id)!.costUsd).toBeCloseTo(4.5);
-    expect(hq.costSummary(0)).toEqual([{ dept: 'marketing', usd: 4.5, inputTokens: 1_000_500, outputTokens: 100_500 }]);
+    expect(hq.recordCost({ taskId: t.id, agentId: 'content-maker', model: 'haiku', inputTokens: 500, outputTokens: 500 }).usd).toBeCloseTo(0.0025); // 500 * 1 + 500 * 4 per 1M
+    expect(hq.task(t.id)!.costUsd).toBeCloseTo(4.5025);
+    expect(hq.costSummary(0)[0]).toMatchObject({ dept: 'marketing', inputTokens: 1_000_500, outputTokens: 100_500 });
   });
 
   it('over the department limit: the task is blocked, one alert per month, calls refused', async () => {
@@ -59,10 +59,16 @@ describe('real usage and prices', () => {
     expect(llm.completeDetailed).toBeDefined();
   });
 
-  it('a free gateway model costs 0 and an unknown one too; the longest prefix wins; setPrice persists', () => {
+  it('a :free model costs 0, an unknown one the estimate (and says so once); the longest prefix wins; setPrice persists', () => {
     const { hq, db } = setup();
     const rec = (model: string) => hq.recordCost({ agentId: 'content-maker', model, inputTokens: 1_000_000, outputTokens: 0 }).usd;
-    expect(rec('auto')).toBe(0);
+    expect(rec('qwen/qwen3:free')).toBe(0);
+    expect(rec('glm-4.6')).toBeCloseTo(1); // unknown: 1M input at the estimate (in $1)
+    expect(rec('auto')).toBeCloseTo(1); // the alias itself tells nothing about the model
+    expect(hq.activity().filter((a) => a.action === 'cost_unknown_model')).toHaveLength(2); // once per model
+    rec('glm-4.6');
+    expect(hq.activity().filter((a) => a.action === 'cost_unknown_model')).toHaveLength(2);
+    hq.setPrice('glm', 0, 0);
     expect(rec('glm-4.6')).toBe(0);
     expect(rec('claude-haiku-5-5')).toBeCloseTo(1);
     hq.setPrice('claude-haiku-5', 0.5, 2.5);
@@ -101,5 +107,51 @@ describe('export and import', () => {
     expect(() => importOrg(hq, `${base}    bot: "123456:AAEhBP0av28"\n`)).toThrow();
     expect(() => importOrg(hq, 'version: 1\nsettings:\n  hq_secret: x\n')).toThrow(/not importable/);
     expect(importOrg(hq, base)).toMatchObject({ agents: 1 });
+  });
+});
+
+describe('limits: 80% alert, 100% soft stop, urgent work goes on', () => {
+  const limited = () => {
+    const w = setup();
+    w.hq.upsertAgent({ ...w.hq.agent('marketing-head')!, budgetUsdMonth: 10 });
+    const alerts: string[] = [];
+    w.hq.onAlert((t) => void alerts.push(t));
+    const rec = (usd: number, taskId?: number, urgent = false) => w.hq.recordCost({ taskId: taskId ?? null, agentId: 'content-maker', model: 'm', inputTokens: 0, outputTokens: 0, usd, ...(urgent ? { urgent } : {}) });
+    return { ...w, alerts, rec };
+  };
+
+  it('one alert at 80% and one at 100% per month', async () => {
+    const { rec, alerts } = limited();
+    rec(7.9);
+    expect(alerts).toHaveLength(0);
+    rec(0.2); // 8.1
+    rec(0.5);
+    await Promise.resolve();
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toContain('81%');
+    rec(2); // 10.6: over
+    await Promise.resolve();
+    expect(alerts).toHaveLength(2);
+    expect(alerts[1]).toContain('исчерпан');
+    rec(1);
+    expect(alerts).toHaveLength(2);
+  });
+
+  it('at 100% a routine task is blocked, a priority-2 task and a client-bot call are not', async () => {
+    const { hq, rec } = limited();
+    const normal = hq.createTask({ title: 'n', dept: 'marketing', creator: 'routine' });
+    const rush = hq.createTask({ title: 'r', dept: 'marketing', creator: 'owner', priority: 2 });
+    hq.claim(normal.id, 'marketing-head');
+    hq.claim(rush.id, 'marketing-head');
+    rec(10.5);
+    expect(rec(0.1, normal.id).blocked).toBe(true);
+    expect(rec(0.1, rush.id).blocked).toBe(false);
+    expect(hq.task(rush.id)!.status).toBe('running');
+    const refused = meterLlm(new MockLlm(() => 'x'), hq, { agentId: 'content-maker', taskId: normal.id });
+    await expect(refused.complete({ tier: 'haiku', system: 's', messages: [{ role: 'user', content: 'u' }] })).rejects.toThrow(/Лимит/);
+    const urgent = meterLlm(new MockLlm(() => 'x'), hq, { agentId: 'content-maker', urgent: true });
+    expect(await urgent.complete({ tier: 'haiku', system: 's', messages: [{ role: 'user', content: 'u' }] })).toBe('x');
+    const prio = meterLlm(new MockLlm(() => 'x'), hq, { agentId: 'content-maker', taskId: rush.id });
+    expect(await prio.complete({ tier: 'haiku', system: 's', messages: [{ role: 'user', content: 'u' }] })).toBe('x');
   });
 });

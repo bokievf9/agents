@@ -25,6 +25,7 @@ const PROSPECTOR_ID = 'prospector';
 const LEADS_ID = 'lead-intake';
 const PRESALES_ID = 'presales';
 const REFERRAL_ID = 'referral';
+export const CLIENT_BOT_ID = 'client-bot';
 const AWAIT_KEY = 'sales_await_reply';
 
 export interface SalesDeps {
@@ -84,6 +85,8 @@ export function seedSales(hq: Hq, cfg: { instructionsDir: string; salesBudgetUsd
   hq.ensureAgent({ id: LEADS_ID, dept: SALES, role: 'worker', title: 'Приёмщик лидов', bossId: HEAD_ID });
   hq.ensureAgent({ id: PRESALES_ID, dept: SALES, role: 'worker', title: 'Пресейл', bossId: HEAD_ID });
   hq.ensureAgent({ id: REFERRAL_ID, dept: SALES, role: 'worker', title: 'Рекомендации', bossId: HEAD_ID });
+  // the public client bot and the website chat: their LLM calls are metered under this agent
+  hq.ensureAgent({ id: CLIENT_BOT_ID, dept: SALES, role: 'worker', title: 'Клиентский бот', bossId: HEAD_ID });
   const routines = [
     { name: 'sales-daily-cards', cron: '0 10 * * *', dept: SALES, title: 'Карточки Разведчика на сегодня', meta: { action: 'batch' } },
     { name: 'sales-followups', cron: '5 10 * * *', dept: SALES, title: 'Дожимы Разведчика', meta: { action: 'followups' } },

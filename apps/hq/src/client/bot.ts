@@ -2,6 +2,7 @@ import { Bot, GrammyError, type Context } from 'grammy';
 import { createBot, errMsg, log, startPolling, type Button, type Db, type LlmClient } from '@fir/core';
 import type { BotProbe } from '@fir/worker-monitoring';
 import { ClientBlockedError, type ClientChannel } from './channel.js';
+import type { CounterStore } from './sanitize.js';
 import { ClientEngine, type ClientSinks, type ClientTransport, type From } from './engine.js';
 import { COMMANDS, OWNER_COMMANDS, PROFILE } from './texts.js';
 
@@ -50,6 +51,7 @@ export interface ClientBotOptions {
   quietHours: string;
   perHour: number;
   dailyCap: number;
+  counter?: CounterStore;
   ownerFallback?: (text: string) => Promise<void>;
 }
 
@@ -81,7 +83,7 @@ export class ClientBot implements ClientChannel {
     });
     this.engine = new ClientEngine({
       db: o.db, now: o.now, tz: o.tz, transport: grammyTransport(this.bot), llm: o.llm, ownerId: o.ownerId, instructions: o.instructions,
-      quietHours: o.quietHours, perHour: o.perHour, dailyCap: o.dailyCap, ...(o.ownerFallback ? { ownerFallback: o.ownerFallback } : {}),
+      quietHours: o.quietHours, perHour: o.perHour, dailyCap: o.dailyCap, ...(o.counter ? { counter: o.counter } : {}), ...(o.ownerFallback ? { ownerFallback: o.ownerFallback } : {}),
     });
     this.wire();
   }

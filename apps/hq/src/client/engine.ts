@@ -1,6 +1,6 @@
 import { errMsg, formatSlot, log, type Button, type Db, type LlmClient } from '@fir/core';
 import { ClientBlockedError, type ClientChannel } from './channel.js';
-import { inWindow, linksOnly, RateLimiter } from './sanitize.js';
+import { inWindow, linksOnly, RateLimiter, type CounterStore } from './sanitize.js';
 import { clip, freeAnswer, GREETING, intakeRecord, TurnHistory } from './shared.js';
 import { ChatStore, maskUsername, RefStore, refFromStartArg, textHash, type Chat, type Draft } from './store.js';
 import {
@@ -57,6 +57,8 @@ export interface ClientEngineDeps {
   /** Messages per chat per hour, LLM calls per day for all chats. */
   perHour?: number;
   dailyCap?: number;
+  /** Where the daily LLM counter is kept between restarts (HQ settings). */
+  counter?: CounterStore;
   sinks?: ClientSinks;
   /** Plain text to the owner through the Director when the client bot cannot write to him (he never opened it). */
   ownerFallback?: (text: string) => Promise<void>;
@@ -87,7 +89,7 @@ export class ClientEngine implements ClientChannel {
       { send: (chatId, html, buttons) => this.say(chatId, html, buttons), edit: (chatId, id, html, buttons) => this.edit(chatId, id, html, buttons) },
       d.schedule ?? ((ms, job) => void setTimeout(job, ms).unref()),
     );
-    this.limiter = new RateLimiter(d.perHour ?? 20, d.dailyCap ?? 300, d.now, d.tz);
+    this.limiter = new RateLimiter(d.perHour ?? 20, d.dailyCap ?? 300, d.now, d.tz, d.counter);
     this.sinks = d.sinks;
     this.history = new TurnHistory(d.now);
   }

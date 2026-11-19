@@ -2,7 +2,7 @@ import { Api } from 'grammy';
 import {
   ApprovalQueue, OutboxMessenger, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, schedule, setupBotMenu, startPolling, startPricesRefresh,
 } from '@fir/core';
-import { HeartbeatWorker, Hq, startRoutines } from '@fir/hq';
+import { HeartbeatWorker, Hq, meterLlm, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
 import { Director } from './director.js';
 import { HEAD_ID, MARKETING, MarketingHead } from './heads/marketing.js';
@@ -68,6 +68,11 @@ hq.attachQueue(queue);
 const cutOff = queue.recoverInterrupted();
 if (cutOff.length) log('warn', 'approvals interrupted by a restart marked failed', { ids: cutOff });
 const llm = createLlm(cfg.llm);
+// The public client bot and the website chat are the biggest spend and had no meter: every call now lands in `costs` (agent
+// `client-bot`, department sales; a customer is waiting, so the money limit alerts but never silences it). The daily call cap
+// lives in HQ settings, so a deploy does not reset it.
+const clientLlm = meterLlm(llm, hq, { agentId: 'client-bot', urgent: true });
+const counter = { get: (k: string) => hq.setting(k) || undefined, set: (k: string, v: string) => hq.setSetting(k, v) };
 
 // Department bots only post into their topic of the HQ group (no polling, no private chats). Without a token, silent.
 const senders = new Map<string, TopicSender>();
@@ -99,7 +104,7 @@ const readClientInstructions = (): string => {
 };
 const clientBot = cfg.clientBotToken
   ? new ClientBot({
-      token: cfg.clientBotToken, db, now: hq.now, tz: () => hq.tz, llm, ownerId: cfg.ownerId, instructions: readClientInstructions(),
+      token: cfg.clientBotToken, db, now: hq.now, tz: () => hq.tz, llm: clientLlm, counter, ownerId: cfg.ownerId, instructions: readClientInstructions(),
       quietHours: cfg.clientQuietHours, perHour: cfg.clientRatePerHour, dailyCap: cfg.clientLlmDailyCap,
       ownerFallback: (text) => messenger.send(cfg.ownerId, text),
     })
@@ -302,9 +307,9 @@ for (const dept of hq.departments()) {
 
 // POST /lead from firtech.pro (same host): a Sales task per lead. No token, no server.
 // POST /chat (website chat): the same conversation engine as the client bot, its LLM daily cap shared with the Telegram counter.
-const chatGate = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz);
+const chatGate = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
 const webChat = cfg.webChatToken
-  ? new WebChatEngine({ db, now: hq.now, tz: () => hq.tz, llm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate })
+  ? new WebChatEngine({ db, now: hq.now, tz: () => hq.tz, llm: clientLlm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate })
   : null;
 webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix }));
 

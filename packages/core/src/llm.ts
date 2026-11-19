@@ -43,7 +43,7 @@ export interface LlmClient {
   completeDetailed?(req: LlmRequest): Promise<LlmResult>;
 }
 
-/** Usage from an Anthropic-format response (`usage.input_tokens`, `usage.output_tokens`, `model`). Null when missing. */
+/** Usage from a response (`usage` in Anthropic or OpenAI format, and the `model` that really answered). Null when missing. */
 export function parseUsage(res: unknown, fallbackModel = ''): LlmUsage | null {
   if (typeof res !== 'object' || res === null) return null;
   const r = res as { usage?: unknown; model?: unknown };
@@ -51,8 +51,9 @@ export function parseUsage(res: unknown, fallbackModel = ''): LlmUsage | null {
   const u = r.usage as Record<string, unknown>;
   const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : 0);
   // Cache reads and writes are billed input too; count them so the total is not understated.
-  const input = n(u.input_tokens) + n(u.cache_creation_input_tokens) + n(u.cache_read_input_tokens);
-  const output = n(u.output_tokens);
+  // Anthropic format (`input_tokens`/`output_tokens`) or OpenAI format (`prompt_tokens`/`completion_tokens`): a gateway may return either
+  const input = n(u.input_tokens ?? u.prompt_tokens) + n(u.cache_creation_input_tokens) + n(u.cache_read_input_tokens);
+  const output = n(u.output_tokens ?? u.completion_tokens);
   if (input === 0 && output === 0) return null;
   return { inputTokens: input, outputTokens: output, model: typeof r.model === 'string' && r.model ? r.model : fallbackModel };
 }

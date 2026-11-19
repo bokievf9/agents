@@ -125,20 +125,31 @@ export function linksOnly(text: string): boolean {
 }
 
 /**
- * Per-chat limit (messages per sliding hour) and a global daily cap on LLM calls. In memory: a restart forgets the
- * windows, which only makes the bot more generous for a moment. Counts only, never texts.
+ * Per-chat limit (messages per sliding hour) and a global daily cap on LLM calls. The hourly windows are in memory (a
+ * restart forgets them, which only makes the bot more generous for a moment); the daily call counter is kept in `store`
+ * (HQ settings) so that a deploy does not reset it. Counts only, never texts.
  */
+export interface CounterStore {
+  get(key: string): string | undefined;
+  set(key: string, value: string): void;
+}
+
+const COUNTER_KEY = 'llm_daily';
+const HITS_SWEEP_AT = 2000;
+
 export class RateLimiter {
   private readonly hits = new Map<number | string, number[]>();
   private readonly warned = new Set<number | string>();
   private day = '';
   private llmCalls = 0;
+  private loaded = false;
 
   constructor(
     private readonly perHour: number,
     private readonly dailyCap: number,
     private readonly now: () => number,
     private readonly tz: () => string,
+    private readonly store?: CounterStore,
   ) {}
 
   /** 'ok', 'warn' (first message over the limit: answer once) or 'drop' (stay silent). */
@@ -147,6 +158,10 @@ export class RateLimiter {
     const list = (this.hits.get(chatId) ?? []).filter((x) => x > t - 3600_000);
     list.push(t);
     this.hits.set(chatId, list);
+    // every chat or session id stays in the map: sweep the ones that have gone quiet for an hour
+    if (this.hits.size > HITS_SWEEP_AT) {
+      for (const [k, v] of this.hits) if ((v.at(-1) ?? 0) <= t - 3600_000) (this.hits.delete(k), this.warned.delete(k));
+    }
     if (list.length <= this.perHour) {
       this.warned.delete(chatId);
       return 'ok';
@@ -161,17 +176,45 @@ export class RateLimiter {
     return `${p.y}-${p.mo}-${p.d}`;
   }
 
-  llmAllowed(): boolean {
-    if (this.today() !== this.day) {
-      this.day = this.today();
-      this.llmCalls = 0;
+  /** Rolls the day over and, once, restores today's count from the store (a restart or deploy in the middle of the day). */
+  private sync(): void {
+    const today = this.today();
+    if (!this.loaded) {
+      this.loaded = true;
+      try {
+        const saved = JSON.parse(this.store?.get(COUNTER_KEY) ?? 'null') as { day?: unknown; n?: unknown } | null;
+        if (saved && saved.day === today && typeof saved.n === 'number' && saved.n >= 0) {
+          this.day = today;
+          this.llmCalls = saved.n;
+        }
+      } catch {
+        // a damaged value counts as no value
+      }
     }
+    if (today !== this.day) {
+      this.day = today;
+      this.llmCalls = 0;
+      this.save();
+    }
+  }
+
+  private save(): void {
+    try {
+      this.store?.set(COUNTER_KEY, JSON.stringify({ day: this.day, n: this.llmCalls }));
+    } catch {
+      // the counter is a safety net, never a reason to fail an answer
+    }
+  }
+
+  llmAllowed(): boolean {
+    this.sync();
     return this.llmCalls < this.dailyCap;
   }
 
   llmUsed(): void {
-    this.llmAllowed();
+    this.sync();
     this.llmCalls++;
+    this.save();
   }
 
   get llmToday(): number {
