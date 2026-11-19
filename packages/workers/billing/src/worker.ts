@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { KindSpec, Payload } from '@fir/core';
-import { zonedParts } from '@fir/core';
+import { costsLine, zonedParts, type Infrastructure } from '@fir/core';
 import type { WorkerCtx } from '@fir/hq';
 import { addDays, addMonths, dateStr, diffDays, isDate, ruDate } from './dates.js';
 import { BillingStore, METHOD_LABEL, PAY_METHODS, parseMethod, type Invoice, type PayMethod, type Period, type Subscription } from './store.js';
@@ -170,13 +170,18 @@ export class BillingWorker {
     return methods.map((m) => `- ${METHOD_LABEL[m]}: ${this.details[m] ?? `[реквизиты ${METHOD_LABEL[m]}]`}`).join('\n');
   }
 
-  invoiceText(inv: Invoice): string {
+  /**
+   * The invoice for the owner to send. A project invoice (not a subscription payment) carries the fixed conditions line: domain, hosting,
+   * server and paid third-party services are not in the sum. `infra` is what the client already has (from the lead's brief); unknown is the default line.
+   */
+  invoiceText(inv: Invoice, infra: Infrastructure = {}): string {
     return [
       `Счёт ${inv.number}`,
       `Клиент: ${inv.client}`,
       `За что: ${inv.what}`,
       `Сумма: ${usd(inv.amountUsd)}`,
       `Оплатить до: ${ruDate(inv.dueDate)}`,
+      ...(inv.subscriptionId === null ? ['', `Что не входит в сумму: ${costsLine(infra)}`] : []),
       '',
       `Как оплатить${inv.method ? '' : ' (любой способ)'}:`,
       this.paymentLines(inv.method),
@@ -193,7 +198,7 @@ export class BillingWorker {
   }
 
   /** Creates an invoice and stages its text for the owner (locked, level 0). */
-  async createInvoice(ctx: WorkerCtx, a: { client: string; amountUsd: number; what: string; dueDate?: string | null; method?: PayMethod | null; newProject?: boolean; subscriptionId?: number | null; link?: InvoiceLink }): Promise<Invoice> {
+  async createInvoice(ctx: WorkerCtx, a: { client: string; amountUsd: number; what: string; dueDate?: string | null; method?: PayMethod | null; newProject?: boolean; subscriptionId?: number | null; link?: InvoiceLink; infra?: Infrastructure }): Promise<Invoice> {
     const store = this.store(ctx);
     const year = zonedParts(ctx.now(), ctx.tz).y;
     const due = a.dueDate ?? addDays(dateStr(ctx.now(), ctx.tz), DEFAULT_DUE_DAYS);
@@ -206,8 +211,8 @@ export class BillingWorker {
     );
     await ctx.requestApproval(
       KIND_INVOICE,
-      { text: this.invoiceText(inv), invoiceId: inv.id, name: inv.client },
-      `${a.link?.chain ? `${a.link.chain}\n` : ''}Счёт ${inv.number} для ${inv.client}: ${usd(inv.amountUsd)}, до ${ruDate(inv.dueDate)}. Одобрение = «счёт утверждён», отправьте его клиенту сами. Метка в скобках означает, что реквизитов нет в PAYMENT_DETAILS_JSON: нажмите «Править».${a.link?.totalUsd ? ` Сумма: предоплата от базовой цены направления (всего «от ${usd(a.link.totalUsd)}»), проверьте и поправьте текст.` : ''}`,
+      { text: this.invoiceText(inv, a.infra), invoiceId: inv.id, name: inv.client },
+      `${a.link?.chain ? `${a.link.chain}\n` : ''}Счёт ${inv.number} для ${inv.client}: ${usd(inv.amountUsd)}, до ${ruDate(inv.dueDate)}. Одобрение = «счёт утверждён», отправьте его клиенту сами. Метка в скобках означает, что реквизитов нет в PAYMENT_DETAILS_JSON: нажмите «Править».${a.link?.totalUsd ? ` Сумма: предоплата от точной цены пакета из КП (всего ${usd(a.link.totalUsd)}), проверьте и поправьте текст.` : ''}`,
     );
     ctx.log('invoice', inv.number);
     return inv;

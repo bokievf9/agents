@@ -23,6 +23,9 @@ export const webLeadSchema = z.object({
   website: z.string().max(200).optional().default(''),
   /** The site sends `true` when its own Telegram bot already delivered this lead to the owner (the HQ card then says it is a copy). */
   telegramSent: z.boolean().optional(),
+  /** The client already has a domain / hosting (the site's brief). Absent: not known. */
+  hasDomain: z.boolean().optional(),
+  hasHosting: z.boolean().optional(),
 });
 
 const MAX_BODY = 16 * 1024;

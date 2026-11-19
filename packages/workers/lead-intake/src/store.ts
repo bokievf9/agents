@@ -25,6 +25,11 @@ export interface Lead {
   priceAsked: boolean;
   priceApproved: boolean;
   createdAt: number;
+  /** The builder's summary from the site (the chosen package, its total, what the client already has), as the form sent it. */
+  estimate: string;
+  /** The client already has a domain: true or false when known (an answer in the bot, the site's brief), null when nobody asked. */
+  hasDomain: boolean | null;
+  hasHosting: boolean | null;
 }
 
 const SCHEMA = `
@@ -52,20 +57,26 @@ CREATE TABLE IF NOT EXISTS li_leads (
 interface Row {
   id: number; task_id: number; name: string; contact: string; service: string; niche: string; task: string; deadline: string;
   budget: string; origin: string; temperature: string; lang: string; slots: string; chosen_slot: number | null;
-  price_asked: number; price_approved: number; created_at: number;
+  price_asked: number; price_approved: number; created_at: number; estimate: string; has_domain: number | null; has_hosting: number | null;
 }
 
 const toLead = (r: Row): Lead => ({
   id: r.id, taskId: r.task_id, name: r.name, contact: r.contact, service: r.service, niche: r.niche, task: r.task, deadline: r.deadline,
   budget: r.budget, origin: r.origin, temperature: r.temperature as Temperature, lang: r.lang as Lang, slots: JSON.parse(r.slots) as number[],
   chosenSlot: r.chosen_slot, priceAsked: r.price_asked === 1, priceApproved: r.price_approved === 1, createdAt: r.created_at,
+  estimate: r.estimate ?? '', hasDomain: r.has_domain === null ? null : r.has_domain === 1, hasHosting: r.has_hosting === null ? null : r.has_hosting === 1,
 });
 
-export type LeadInput = Pick<Lead, 'name' | 'contact' | 'service' | 'niche' | 'task' | 'deadline' | 'budget' | 'origin' | 'temperature' | 'lang' | 'slots' | 'chosenSlot' | 'priceAsked'>;
+export type LeadInput = Pick<Lead, 'name' | 'contact' | 'service' | 'niche' | 'task' | 'deadline' | 'budget' | 'origin' | 'temperature' | 'lang' | 'slots' | 'chosenSlot' | 'priceAsked'> & Partial<Pick<Lead, 'estimate' | 'hasDomain' | 'hasHosting'>>;
 
 export class LeadStore {
   constructor(private readonly db: Db, private readonly now: () => number = Date.now) {
     migrate(db, SCHEMA);
+    // the brief gained the builder's summary and what the client already has (domain, hosting), see `docs/` and the КП conditions line
+    const cols = db.prepare('PRAGMA table_info(li_leads)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'estimate')) db.exec("ALTER TABLE li_leads ADD COLUMN estimate TEXT NOT NULL DEFAULT ''");
+    if (!cols.some((c) => c.name === 'has_domain')) db.exec('ALTER TABLE li_leads ADD COLUMN has_domain INTEGER');
+    if (!cols.some((c) => c.name === 'has_hosting')) db.exec('ALTER TABLE li_leads ADD COLUMN has_hosting INTEGER');
   }
 
   get(id: number): Lead | undefined {
@@ -82,15 +93,17 @@ export class LeadStore {
   upsert(taskId: number, l: LeadInput): Lead {
     this.db
       .prepare(
-        `INSERT INTO li_leads (task_id, name, contact, service, niche, task, deadline, budget, origin, temperature, lang, slots, chosen_slot, price_asked, created_at)
-         VALUES (@taskId, @name, @contact, @service, @niche, @task, @deadline, @budget, @origin, @temperature, @lang, @slots, @chosenSlot, @priceAsked, @createdAt)
+        `INSERT INTO li_leads (task_id, name, contact, service, niche, task, deadline, budget, origin, temperature, lang, slots, chosen_slot, price_asked, created_at, estimate, has_domain, has_hosting)
+         VALUES (@taskId, @name, @contact, @service, @niche, @task, @deadline, @budget, @origin, @temperature, @lang, @slots, @chosenSlot, @priceAsked, @createdAt, @estimate, @hasDomain, @hasHosting)
          ON CONFLICT(task_id) DO UPDATE SET niche=excluded.niche, task=excluded.task, deadline=excluded.deadline, temperature=excluded.temperature,
-           slots=excluded.slots, chosen_slot=excluded.chosen_slot, price_asked=excluded.price_asked`,
+           slots=excluded.slots, chosen_slot=excluded.chosen_slot, price_asked=excluded.price_asked, estimate=excluded.estimate,
+           has_domain=excluded.has_domain, has_hosting=excluded.has_hosting`,
       )
       .run({
         taskId, name: l.name, contact: l.contact, service: l.service, niche: l.niche, task: l.task, deadline: l.deadline, budget: l.budget,
         origin: l.origin, temperature: l.temperature, lang: l.lang, slots: JSON.stringify(l.slots), chosenSlot: l.chosenSlot,
         priceAsked: l.priceAsked ? 1 : 0, createdAt: this.now(),
+        estimate: l.estimate ?? '', hasDomain: l.hasDomain == null ? null : l.hasDomain ? 1 : 0, hasHosting: l.hasHosting == null ? null : l.hasHosting ? 1 : 0,
       });
     return this.byTask(taskId)!;
   }

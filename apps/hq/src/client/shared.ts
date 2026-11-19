@@ -71,6 +71,7 @@ export function intakeRecord(
     d.needText ? `Задача (словами клиента): ${d.needText}` : `Нужно: ${ru.needLabel[d.need ?? 'other']}`,
     ...(productOf(d.need) ? [`Продукт: ${productOf(d.need)}`] : []),
     `Срок: ${d.deadline ? ru.deadlineLabel[d.deadline] : d.deadlineText || 'не указан'}`,
+    ...(d.have ? [`Домен и хостинг: ${ru.have[d.have]}`] : []),
     origin,
   ].join('\n');
   const budget = d.budget ? (d.budget === 'unknown' ? '' : ru.budget[d.budget]) : d.budgetText ?? '';

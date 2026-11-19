@@ -178,3 +178,26 @@ describe('form schema', () => {
     expect(webLeadSchema.parse({ name: 'A', contact: '@abc' })).toMatchObject({ service: 'unknown', locale: 'ru', message: '' });
   });
 });
+
+
+describe('what the client already has: domain and hosting', () => {
+  it('an explicit answer (the bot\'s step 4) is stored; the site\'s scope sentence in the builder summary is read; no signal stays unknown', async () => {
+    const asked = setup();
+    await asked.run(asked.task(webLead({ hasDomain: true, hasHosting: false })));
+    expect(leadStoreFor(asked.ctx).get(1)).toMatchObject({ hasDomain: true, hasHosting: false });
+    const site = setup();
+    await site.run(site.task(webLead({ estimate: 'Лендинг: одна страница\nИтого: $150\nДомен и хостинг у вас уже есть, используем их; платные сторонние сервисы' })));
+    expect(leadStoreFor(site.ctx).get(1)).toMatchObject({ hasDomain: true, hasHosting: true, estimate: expect.stringContaining('Итого') });
+    const none = setup();
+    await none.run(none.task());
+    expect(leadStoreFor(none.ctx).get(1)).toMatchObject({ hasDomain: null, hasHosting: null, estimate: '' });
+    expect(webLeadSchema.parse({ name: 'A', contact: '@abcde', hasDomain: true }).hasDomain).toBe(true);
+  });
+
+  it('an old database gets the new columns without losing rows', () => {
+    const r = setup();
+    leadStoreFor(r.ctx);
+    const cols = (r.ctx.db.prepare('PRAGMA table_info(li_leads)').all() as { name: string }[]).map((c) => c.name);
+    expect(cols).toEqual(expect.arrayContaining(['estimate', 'has_domain', 'has_hosting']));
+  });
+});

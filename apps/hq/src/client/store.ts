@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { migrate, type Db } from '@fir/core';
-import type { Budget, Deadline, Lang, Need } from './texts.js';
+import type { Budget, Deadline, Have, Lang, Need } from './texts.js';
 
-export type ChatState = 'idle' | 'need' | 'need_text' | 'deadline' | 'budget' | 'client_name' | 'client_question';
+export type ChatState = 'idle' | 'need' | 'need_text' | 'deadline' | 'budget' | 'hosting' | 'client_name' | 'client_question';
 
 /**
  * The intake in progress. Free-text answers live here only until the lead or ticket is created (then the record holds
@@ -15,6 +15,8 @@ export interface Draft {
   deadlineText?: string;
   budget?: Budget;
   budgetText?: string;
+  /** Step 4: the client's own domain and hosting. */
+  have?: Have;
   /** «Я уже клиент»: the client name found in Support or billing, or null when not found. */
   client?: string | null;
   clientQuery?: string;

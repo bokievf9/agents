@@ -15,8 +15,42 @@ export const BUDGETS = ['lt300', 'mid', 'gt1000', 'unknown'] as const;
 export type Need = (typeof NEEDS)[number];
 export type Deadline = (typeof DEADLINES)[number];
 export type Budget = (typeof BUDGETS)[number];
+/** Intake step 4: does the client already have a domain and hosting (the КП and the contract say who pays for them). */
+export const HAVES = ['both', 'domain', 'hosting', 'none', 'unknown'] as const;
+export type Have = (typeof HAVES)[number];
+/** What the answer means for the lead: `null` when the person did not know. */
+export function haveFlags(h: Have | undefined): { hasDomain: boolean | null; hasHosting: boolean | null } {
+  if (h === 'both') return { hasDomain: true, hasHosting: true };
+  if (h === 'domain') return { hasDomain: true, hasHosting: false };
+  if (h === 'hosting') return { hasDomain: false, hasHosting: true };
+  if (h === 'none') return { hasDomain: false, hasHosting: false };
+  return { hasDomain: null, hasHosting: null };
+}
+/**
+ * A free-text answer to step 4 as a choice. Each of the two words is read with its own «нет»: «домен есть, хостинга нет» is `domain`.
+ * Anything unclear is `unknown`, which the КП reads as «nothing is the client's», the safe side for the price.
+ */
+export function parseHave(text: string): Have {
+  const t = text.toLowerCase();
+  if (/не знаю|не уверен|don'?t know|not sure/.test(t)) return 'unknown';
+  const word = (re: string) => {
+    if (!new RegExp(re).test(t)) return null;
+    const neg = new RegExp(`(?:${re})[а-яa-z]*\\s*(?:уже\\s*)?(?:нет|нету|не\\s*(?:\\p{L}+\\s*)?есть|no\\b)|(?:нет|нету|без|no|without)\\s+(?:${re})`, 'u').test(t);
+    return !neg;
+  };
+  const domain = word('домен|domain');
+  const hosting = word('хостинг|hosting');
+  if (domain !== null || hosting !== null) {
+    if (domain && hosting) return 'both';
+    if (domain) return 'domain';
+    if (hosting) return 'hosting';
+    return 'none';
+  }
+  if (/(^|\s)(оба|both)(\s|$)|все есть|всё есть/.test(t)) return 'both';
+  if (/(^|\s)(нет|нету|no|none)(\s|$|[.,!])/.test(t)) return 'none';
+  return 'unknown';
+}
 
-/** `service` of the lead (same values as the site form). */
 export const SERVICE: Record<Need, string> = {
   site: 'web', bot: 'bots', app: 'app', automation: 'automation', other: 'other',
   admin: 'bots', receptionist: 'bots', content: 'other', miniapp: 'app', agent: 'bots', ai: 'automation',
@@ -36,10 +70,12 @@ interface Texts {
   deadline: Record<Deadline, string>;
   deadlineLabel: Record<Deadline, string>;
   budget: Record<Budget, string>;
+  have: Record<Have, string>;
   step1: string;
   step1Text: string;
   step2: string;
   step3: string;
+  step4: string;
   done(need: string, deadline: string, budget: string): string;
   doneNight: string;
   askClient: string;
@@ -88,10 +124,12 @@ const RU: Texts = {
   deadline: { urgent: '⚡ Срочно', month: '📅 В этом месяце', norush: '🕊 Не горит' },
   deadlineLabel: { urgent: 'срочно', month: 'в этом месяце', norush: 'не горит' },
   budget: { lt300: 'до $300', mid: '$300–1000', gt1000: '$1000+', unknown: 'Пока не знаю' },
-  step1: '<b>Новый проект · 1 из 3</b>\nЧто нужно сделать?\n\nВыберите вариант или опишите задачу своими словами.',
-  step1Text: '<b>Новый проект · 1 из 3</b>\nОпишите задачу одним сообщением: что за бизнес и что должно получиться.',
-  step2: '<b>Новый проект · 2 из 3</b>\nКогда нужно запустить?',
-  step3: '<b>Новый проект · 3 из 3</b>\nНа какой бюджет ориентируетесь?\n\nЭто поможет предложить подходящее решение, а не самое дорогое.',
+  have: { both: 'Есть и домен, и хостинг', domain: 'Только домен', hosting: 'Только хостинг', none: 'Ничего нет', unknown: 'Не знаю' },
+  step1: '<b>Новый проект · 1 из 4</b>\nЧто нужно сделать?\n\nВыберите вариант или опишите задачу своими словами.',
+  step1Text: '<b>Новый проект · 1 из 4</b>\nОпишите задачу одним сообщением: что за бизнес и что должно получиться.',
+  step2: '<b>Новый проект · 2 из 4</b>\nКогда нужно запустить?',
+  step3: '<b>Новый проект · 3 из 4</b>\nНа какой бюджет ориентируетесь?\n\nЭто поможет предложить подходящее решение, а не самое дорогое.',
+  step4: '<b>Новый проект · 4 из 4</b>\nУ вас уже есть домен и хостинг?\n\nЕсли нет, мы подскажем, что выбрать: за них платите вы напрямую, в цену проекта они не входят.',
   done: (need, deadline, budget) =>
     `<b>Готово, заявка принята</b>\nЗадача: ${esc(need)}\nСрок: ${esc(deadline)}\nБюджет: ${esc(budget)}\n\nМы вернёмся с предложением в течение рабочего дня. Ответ придёт сюда, в этот чат.`,
   doneNight: 'Сейчас у нас ночь, поэтому ответ придёт утром.',
@@ -131,10 +169,12 @@ const EN: Texts = {
   deadline: { urgent: '⚡ Urgent', month: '📅 This month', norush: '🕊 No rush' },
   deadlineLabel: { urgent: 'urgent', month: 'this month', norush: 'no rush' },
   budget: { lt300: 'under $300', mid: '$300–1000', gt1000: '$1000+', unknown: 'Not sure yet' },
-  step1: '<b>New project · 1 of 3</b>\nWhat do you need?\n\nPick an option or describe the task in your own words.',
-  step1Text: '<b>New project · 1 of 3</b>\nDescribe the task in one message: what the business is and what should come out of it.',
-  step2: '<b>New project · 2 of 3</b>\nWhen do you need it live?',
-  step3: '<b>New project · 3 of 3</b>\nWhat budget do you have in mind?\n\nIt helps us suggest the right solution, not the most expensive one.',
+  have: { both: 'Domain and hosting', domain: 'Domain only', hosting: 'Hosting only', none: 'Neither', unknown: 'Not sure' },
+  step1: '<b>New project · 1 of 4</b>\nWhat do you need?\n\nPick an option or describe the task in your own words.',
+  step1Text: '<b>New project · 1 of 4</b>\nDescribe the task in one message: what the business is and what should come out of it.',
+  step2: '<b>New project · 2 of 4</b>\nWhen do you need it live?',
+  step3: '<b>New project · 3 of 4</b>\nWhat budget do you have in mind?\n\nIt helps us suggest the right solution, not the most expensive one.',
+  step4: '<b>New project · 4 of 4</b>\nDo you already have a domain and hosting?\n\nIf not, we will help you choose: you pay for them directly, they are not part of the project price.',
   done: (need, deadline, budget) =>
     `<b>Done, request received</b>\nTask: ${esc(need)}\nTiming: ${esc(deadline)}\nBudget: ${esc(budget)}\n\nWe will come back with a proposal within one working day. The answer will arrive here, in this chat.`,
   doneNight: 'It is night here now, so the answer will come in the morning.',
@@ -216,6 +256,15 @@ export const budgetButtons = (lang: Lang): Button[][] => {
   return [
     [{ text: b.lt300, data: 'b:lt300' }, { text: b.mid, data: 'b:mid' }],
     [{ text: b.gt1000, data: 'b:gt1000' }, { text: b.unknown, data: 'b:unknown' }],
+  ];
+};
+
+export const haveButtons = (lang: Lang): Button[][] => {
+  const h = T[lang].have;
+  return [
+    [{ text: h.both, data: 'h:both' }],
+    [{ text: h.domain, data: 'h:domain' }, { text: h.hosting, data: 'h:hosting' }],
+    [{ text: h.none, data: 'h:none' }, { text: h.unknown, data: 'h:unknown' }],
   ];
 };
 

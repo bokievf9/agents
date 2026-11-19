@@ -164,3 +164,18 @@ describe('paid and revenue', () => {
     expect(a.number).toBe('FT-2026-001');
   });
 });
+
+describe('the conditions line in the invoice', () => {
+  it('a project invoice says what is not in the sum and keeps the 50/50 rule; the client\'s own domain and hosting change the line; a subscription invoice has none', async () => {
+    const r = setup();
+    const inv = await r.worker.createInvoice(r.ctx, { client: 'Dilnoza', amountUsd: 145, what: 'Предоплата 50% по КП', newProject: true });
+    const text = String(r.staged[0]!.payload.text);
+    expect(text).toContain('Что не входит в сумму: Домен, хостинг, сервер и платные сторонние сервисы (SMS, API, платежи) в сумму не входят: заказчик оплачивает их напрямую, цена у всех разная. Для ориентира: домен $10-15 в год, хостинг от $5 в месяц.');
+    expect(text).toContain('предоплата 50% до старта работы, остальные 50% после приёмки');
+    const own = r.worker.invoiceText(inv, { hasDomain: true, hasHosting: true });
+    expect(own).toContain('Что не входит в сумму: Домен и хостинг у заказчика есть, используем их; платные сторонние сервисы (SMS, API, платежи) оплачиваются отдельно.');
+    const sub = r.store.addSubscription({ client: 'Roza', plan: 'поддержка', amountUsd: 20, period: 'month', method: null, nextDue: '2026-12-01' });
+    const subInv = await r.worker.createInvoice(r.ctx, { client: 'Roza', amountUsd: 20, what: 'Подписка', subscriptionId: sub.id });
+    expect(r.worker.invoiceText(subInv)).not.toContain('Что не входит в сумму');
+  });
+});

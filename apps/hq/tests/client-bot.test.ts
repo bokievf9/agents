@@ -118,6 +118,7 @@ function world(o: Opts = {}) {
     await engine.onButton(ME, `n:${need}`, card());
     await engine.onButton(ME, `d:${deadline}`, card());
     await engine.onButton(ME, `b:${budget}`, card());
+    await engine.onButton(ME, 'h:none', card());
   };
   return { clock, db, messenger, hq, queue, llm, director, transport, engine, sales, support, decide, leadTasks, llmCalls, card, intake };
 }
@@ -210,6 +211,7 @@ describe('referral link ?start=ref_<slug>', () => {
     await other.engine.onButton(ME, 'n:bot', other.card());
     await other.engine.onButton(ME, 'd:urgent', other.card());
     await other.engine.onButton(ME, 'b:mid', other.card());
+    await other.engine.onButton(ME, 'h:none', other.card());
     expect(other.leadTasks()[0]!.meta.lead).toMatchObject({ source: 'ref:ali' });
   });
 
@@ -221,16 +223,19 @@ describe('referral link ?start=ref_<slug>', () => {
   });
 });
 
-describe('the 3-step intake', () => {
+describe('the intake (3 steps and one short question about domain and hosting)', () => {
   it('buttons edit one card in place and end with «Готово»; exactly one lead task, source telegram, with the chat id', async () => {
     const w = world();
     await w.intake();
     // one welcome message, everything after it was edited in place
     expect(w.transport.to(CLIENT)).toHaveLength(1);
     const steps = w.transport.edits.map((e) => e.html);
-    expect(steps[0]).toContain('1 из 3');
-    expect(steps[1]).toContain('2 из 3');
-    expect(steps[2]).toContain('3 из 3');
+    expect(steps[0]).toContain('1 из 4');
+    expect(steps[1]).toContain('2 из 4');
+    expect(steps[2]).toContain('3 из 4');
+    expect(steps[3]).toContain('4 из 4');
+    expect(steps[3]).toContain('домен и хостинг');
+    expect(buttonTexts(w.transport.edits[3]!.buttons)).toEqual(['Есть и домен, и хостинг', 'Только домен', 'Только хостинг', 'Ничего нет', 'Не знаю']);
     expect(buttonTexts(w.transport.edits[2]!.buttons)).toEqual(['до $300', '$300–1000', '$1000+', 'Пока не знаю']);
     const done = w.transport.edits.at(-1)!;
     expect(done.html).toContain('Готово');
@@ -240,7 +245,7 @@ describe('the 3-step intake', () => {
     const tasks = w.leadTasks();
     expect(tasks).toHaveLength(1);
     expect(tasks[0]!.title).toBe('Лид из Telegram (bots)');
-    expect(tasks[0]!.meta.lead).toMatchObject({ source: 'telegram', chatId: CLIENT, username: 'dilnoza_salon', contact: '@dilnoza_salon', budget: '$300–1000', locale: 'ru' });
+    expect(tasks[0]!.meta.lead).toMatchObject({ source: 'telegram', chatId: CLIENT, username: 'dilnoza_salon', contact: '@dilnoza_salon', budget: '$300–1000', locale: 'ru', hasDomain: false, hasHosting: false });
     // per chat: a masked summary only, the draft is cleared
     const chat = w.engine.store.get(CLIENT)!;
     expect(chat.draft).toEqual({});
@@ -261,13 +266,16 @@ describe('the 3-step intake', () => {
     const first = w.card();
     await w.engine.onText(ME, 'Салон красоты, нужна онлайн-запись и напоминания');
     expect(w.transport.cleared).toContain(first);
-    expect(w.transport.last(CLIENT)!.html).toContain('2 из 3');
+    expect(w.transport.last(CLIENT)!.html).toContain('2 из 4');
     await w.engine.onText(ME, 'к декабрю');
     await w.engine.onText(ME, 'пока не знаю');
+    expect(w.transport.last(CLIENT)!.html).toContain('4 из 4');
+    await w.engine.onText(ME, 'домен есть, хостинга нет');
     expect(w.transport.last(CLIENT)!.html).toContain('Готово');
     const lead = w.leadTasks()[0]!.meta.lead as Record<string, unknown>;
     expect(lead.message).toContain('Салон красоты');
     expect(lead.service).toBe('other');
+    expect(lead).toMatchObject({ hasDomain: true, hasHosting: false }); // «домен есть, хостинга нет»
     expect(w.engine.store.get(CLIENT)!.summary).not.toContain('Салон'); // the summary is masked
   });
 });
@@ -312,6 +320,7 @@ describe('replies back to the client', () => {
     await w.engine.onText(ME, 'Сколько стоит бот для записи в салон?');
     await w.engine.onButton(ME, 'd:month', w.card());
     await w.engine.onButton(ME, 'b:unknown', w.card());
+    await w.engine.onButton(ME, 'h:none', w.card());
     await w.sales.onHeartbeat();
     await w.director.sendApprovalBatch(false);
     return w.queue.pending().find((p) => p.kind === 'lead_price')!;
@@ -678,9 +687,10 @@ describe('products in the chat', () => {
     expect(card.html).toContain('•');
     expect(card.buttons!.flat().map((b) => b.data)).toEqual(['pd:admin', 'm:products']);
     await w.engine.onButton(ME, 'pd:admin', welcome);
-    expect(w.transport.edits.at(-1)!.html).toContain('2 из 3'); // step 1 skipped
+    expect(w.transport.edits.at(-1)!.html).toContain('2 из 4'); // step 1 skipped
     await w.engine.onButton(ME, 'd:month', w.card());
     await w.engine.onButton(ME, 'b:mid', w.card());
+    await w.engine.onButton(ME, 'h:none', w.card());
     const lead = w.leadTasks()[0]!.meta.lead as Record<string, unknown>;
     expect(lead).toMatchObject({ product: 'Бот-администратор для услуг', service: 'bots' });
     expect(String(lead.message)).toContain('Продукт: Бот-администратор для услуг');
@@ -697,6 +707,7 @@ describe('products in the chat', () => {
     await w.engine.onButton(ME, 'n:miniapp', w.card());
     await w.engine.onButton(ME, 'd:month', w.card());
     await w.engine.onButton(ME, 'b:mid', w.card());
+    await w.engine.onButton(ME, 'h:none', w.card());
     expect(w.leadTasks()[0]!.meta.lead).toMatchObject({ product: 'Telegram Mini App', service: 'app' });
     await w.engine.onButton(ME, 'p:agent', w.card()).catch(() => undefined);
     const agent = (await import('../src/client/texts.js')).productCardHtml('ru', 'agent');
@@ -712,7 +723,7 @@ describe('products in the chat', () => {
     const step2 = w.transport.last(CLIENT)!;
     expect(step2.html).toContain('Для барбершопа обычно подходит «Бот-администратор для услуг»');
     expect(step2.html).toContain('Контент на автопилоте');
-    expect(step2.html).toContain('2 из 3');
+    expect(step2.html).toContain('2 из 4');
     expect(nicheHint('ru', 'кафе в центре')).toContain('Telegram Mini App');
     expect(nicheHint('en', 'we run a dental clinic')).toContain('Booking assistant bot');
     expect(nicheHint('ru', 'что-то непонятное')).toBe('');

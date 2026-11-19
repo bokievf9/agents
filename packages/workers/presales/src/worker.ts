@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { log, type Button, type KindSpec, type Payload } from '@fir/core';
+import { detectInfrastructure, log, usd, type Button, type KindSpec, type Payload } from '@fir/core';
 import type { ApprovalState, Task, TaskApproval, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { leadStoreFor, type Lead } from '@fir/worker-lead-intake';
-import { buildDocs, draftWording, type Brief } from './docs.js';
-import { guessDirection, OFFERS, priceLabel } from './offers.js';
+import { buildDocs, draftWording, exactLabel, splitPayment, type Brief } from './docs.js';
+import { guessDirection, OFFERS } from './offers.js';
+import { builderTotal, quotePackage } from './package.js';
 import { splitMessage } from './split.js';
 import { DOC_RU, PresalesStore, type PsDocument } from './store.js';
 import { loadTemplates, type Templates } from './template.js';
@@ -64,7 +65,7 @@ export function onDecision(ctx: Pick<WorkerCtx, 'db' | 'now'>, link: Pick<TaskAp
 }
 
 export function briefFromLead(l: Lead): Brief {
-  return { leadId: l.id, client: l.name || '____________', niche: l.niche, request: l.task };
+  return { leadId: l.id, client: l.name || '____________', niche: l.niche, request: l.task, estimate: l.estimate, hasDomain: l.hasDomain, hasHosting: l.hasHosting };
 }
 
 export interface PresalesOptions {
@@ -107,31 +108,37 @@ export class PresalesWorker implements Worker {
     } else {
       const text = typeof task.meta.text === 'string' ? task.meta.text.trim() : '';
       if (!text) return { ok: false, result: '', error: 'Нет ни номера лида, ни текста запроса' };
-      brief = { leadId: null, client: '____________', niche: '', request: text };
+      brief = { leadId: null, client: '____________', niche: '', request: text, estimate: '', ...detectInfrastructure(text) };
     }
-    const offer = OFFERS[guessDirection({ source, service, text: `${brief.request} ${brief.niche}` })];
+    const offer = OFFERS[guessDirection({ source, service, text: `${brief.request} ${brief.niche} ${brief.estimate ?? ''}` })];
+    const quote = quotePackage(offer.id, offer.title, `${brief.request} ${brief.niche} ${brief.estimate ?? ''}`);
     const wording = await draftWording(ctx.llm, this.prompt, brief, offer);
-    const docs = buildDocs(this.templates, offer, brief, wording, { prepaymentPercent: this.prepaymentPercent, validDays: this.validDays }, ctx.now(), ctx.tz);
+    const docs = buildDocs(this.templates, offer, quote, brief, wording, { prepaymentPercent: this.prepaymentPercent, validDays: this.validDays }, ctx.now(), ctx.tz);
     const saved = storeFor(ctx).createPack(brief.leadId, offer.id, docs);
     const packId = saved[0]!.packId;
-    // the numbers the sales chain needs after the approval (contract, invoice for the prepayment, the project): base price of the direction
-    const prepayUsd = Math.round((offer.fromUsd * this.prepaymentPercent) / 100);
+    // the numbers the sales chain needs after the approval (contract, invoice for the prepayment, the project): the exact price of the package
+    const { pre: prepayUsd } = splitPayment(quote.totalUsd, this.prepaymentPercent);
     const payload: Payload = {
       packId, leadId: brief.leadId, direction: offer.id, docIds: saved.map((d) => d.id),
       kp: saved[0]!.body, estimate: saved[1]!.body, contract: saved[2]!.body,
-      client: brief.client, what: offer.title, totalUsd: offer.fromUsd, prepayUsd, prepayPercent: this.prepaymentPercent, timeline: offer.timeline,
+      client: brief.client, what: offer.title, totalUsd: quote.totalUsd, prepayUsd, prepayPercent: this.prepaymentPercent, timeline: offer.timeline,
+      ...(quote.monthlyUsd ? { monthlyUsd: quote.monthlyUsd } : {}),
+      ...(brief.hasDomain != null ? { hasDomain: brief.hasDomain } : {}), ...(brief.hasHosting != null ? { hasHosting: brief.hasHosting } : {}),
     };
     const who = brief.leadId ? `лид #${brief.leadId} ${brief.client}` : 'по запросу владельца';
+    // the client's own builder total is only compared, never used as a price: the lead form is public
+    const seen = builderTotal(brief.estimate ?? '');
+    const mismatch = seen !== null && seen !== quote.totalUsd ? ` Внимание: в конструкторе клиент видел итог ${usd(seen)}, в КП ${usd(quote.totalUsd)}: сверьте состав.` : '';
     const summary = [
       `${DOC_RU.kp}, смета и черновик договора #${packId}: ${who}`,
-      `Направление: ${offer.title}, ${priceLabel(offer)}. Предоплата ${this.prepaymentPercent}%, КП действует ${this.validDays} дн.`,
+      `Направление: ${offer.title}, цена ${exactLabel(quote)}${quote.lines.length > 1 ? ` (${quote.lines.map((l) => l.label).join(' + ')})` : ''}. Предоплата ${this.prepaymentPercent}%, КП действует ${this.validDays} дн.${mismatch}`,
       'Тексты длинные: «Скопировать документы» пришлёт их сообщениями. «Утвердить» отмечает документы утверждёнными, отправляете клиенту сами.',
-      `Дальше после «Утвердить»: договор и счёт на ${this.prepaymentPercent}% ($${prepayUsd}) придут отдельными карточками, проект стартует после оплаты счёта.`,
+      `Дальше после «Утвердить»: договор и счёт на ${this.prepaymentPercent}% (${usd(prepayUsd)}) придут отдельными карточками, проект стартует после оплаты счёта.`,
     ].join('\n');
     await ctx.requestApproval(KIND_PACK, payload, summary);
     log('info', 'presales pack', { packId, lead: brief.leadId, direction: offer.id });
     ctx.log('pack', `pack ${packId}, lead ${brief.leadId ?? '-'}, ${offer.id}`);
-    return { ok: true, result: `КП, смета и черновик договора #${packId} (${offer.title}, ${priceLabel(offer)}) готовы, ждут одобрения.` };
+    return { ok: true, result: `КП, смета и черновик договора #${packId} (${offer.title}, ${exactLabel(quote)}) готовы, ждут одобрения.` };
   }
 }
 

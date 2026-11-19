@@ -1,4 +1,4 @@
-import { zonedParts, type KindSpec, type Payload } from '@fir/core';
+import { usd, zonedParts, type KindSpec, type Payload } from '@fir/core';
 import type { ApprovalState, SubtaskSpec, Task, TaskApproval, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { DocStore } from './store.js';
 import { DOC_RU, DOC_TYPES, fillTemplate, loadTemplate, openPlaceholders, type DocData, type DocType } from './templates.js';
@@ -27,6 +27,16 @@ export interface DocumentsOptions {
  * `meta.action` is `doc`, `meta.type` is a `DocType`, `meta.client`. No LLM: legal text is never rewritten by a model.
  * The result is a version in `bo_documents`; the owner sends the approved text himself.
  */
+/** The exact price and what the client already has, when the sales chain (an approved КП) made this task; a manual `/doc` has none. */
+function priceFromMeta(meta: Record<string, unknown>): Pick<DocData, 'price' | 'infra'> {
+  const total = Number(meta.priceUsd);
+  const monthly = Number(meta.monthlyUsd);
+  return {
+    ...(total > 0 ? { price: `${usd(total)}${monthly > 0 ? ` + ${usd(monthly)} в месяц` : ''}` } : {}),
+    infra: { hasDomain: typeof meta.hasDomain === 'boolean' ? meta.hasDomain : null, hasHosting: typeof meta.hasHosting === 'boolean' ? meta.hasHosting : null },
+  };
+}
+
 export class DocumentsWorker implements Worker {
   readonly id = WORKER_ID;
   constructor(private readonly o: DocumentsOptions = {}) {}
@@ -50,6 +60,7 @@ export class DocumentsWorker implements Worker {
     const data: DocData = {
       client, what: found?.what ?? '', date, number: '',
       milestones: found?.milestones ?? [],
+      ...priceFromMeta(task.meta),
     };
     // The number is the version row id, known after insert: fill twice.
     const template = loadTemplate(type, this.o.templatesDir);

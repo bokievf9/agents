@@ -364,8 +364,11 @@ presenceTimer.unref();
 const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
   ? createWebhook(
       // the form gets its error when the task cannot be made, but the person's contact is kept for the owner (guardedLead)
-      guardedLead(lost, ({ name, contact, service, budget, message, estimate, locale, slot, source, telegramSent }) =>
-        sales.createLeadTask({ name, contact, service, budget, message, estimate, locale, slot, source, ...(telegramSent ? { telegramSent: true } : {}) }, service)),
+      guardedLead(lost, ({ name, contact, service, budget, message, estimate, locale, slot, source, telegramSent, hasDomain, hasHosting }) =>
+        sales.createLeadTask({
+          name, contact, service, budget, message, estimate, locale, slot, source, ...(telegramSent ? { telegramSent: true } : {}),
+          ...(hasDomain !== undefined ? { hasDomain } : {}), ...(hasHosting !== undefined ? { hasHosting } : {}),
+        }, service)),
       cfg.leadWebhookToken,
       Date.now,
       cfg.officeToken ? { token: cfg.officeToken, get: cachedOffice(hq) } : undefined,

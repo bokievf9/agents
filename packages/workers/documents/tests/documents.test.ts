@@ -68,3 +68,19 @@ describe('document templates', () => {
     expect(parseDocType('счёт')).toBeNull();
   });
 });
+
+describe('exact price and the conditions line', () => {
+  it('the contract takes the exact price and the line from the approved КП; without them [цена] stays and the default line is printed', () => {
+    const chain = fillTemplate(loadTemplate('contract'), { ...data, price: '$350', infra: { hasDomain: true, hasHosting: true } });
+    expect(chain).toContain('Стоимость работ в долларах США: $350.');
+    expect(openPlaceholders(chain)).toEqual(['[срок]']);
+    expect(chain).toContain('Домен и хостинг у заказчика есть, используем их; платные сторонние сервисы (SMS, API, платежи) оплачиваются отдельно.');
+    const manual = fillTemplate(loadTemplate('contract'), data);
+    expect(manual).toContain('[цена]');
+    expect(manual).toContain('Домен, хостинг, сервер и платные сторонние сервисы (SMS, API, платежи) в сумму не входят');
+    expect(manual).toContain('Предоплата 50%');
+    expect(manual).toContain('Гарантия первого результата');
+    expect(fillTemplate(loadTemplate('contract'), { ...data, price: '$90 + $60 в месяц' })).toContain('$90 + $60 в месяц.');
+    expect(fillTemplate(loadTemplate('act'), { ...data, price: '$350' })).toContain('Стоимость работ: $350.');
+  });
+});

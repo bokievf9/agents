@@ -36,7 +36,8 @@ describe('/kp', () => {
     const docs = w.messenger.sent.slice(before).map((m) => m.text);
     expect(docs).toHaveLength(3);
     expect(docs[0]).toContain('# Коммерческое предложение');
-    expect(docs[0]).toContain('от $150');
+    expect(docs[0]).toContain('| Лендинг | $150 |');
+    expect(docs[0]).not.toMatch(/Стоимость: от/);
     expect(docs[1]).toContain('# Смета');
     expect(docs[2]).toContain('Договор оказания услуг');
 

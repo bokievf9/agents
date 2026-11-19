@@ -176,18 +176,21 @@ export class SalesHead implements ApprovalEditor {
     const what = (lead?.task || offer.title).trim() || 'по утверждённому КП';
     const pct = Number(pack.prepayPercent) || this.d.prepaymentPercent || 50;
     const totalUsd = Number(pack.totalUsd) || offer.fromUsd;
+    const monthlyUsd = Number(pack.monthlyUsd) || 0;
+    // what the client already has travels with the chain: the contract and the invoice carry the same conditions line as the КП
+    const infra = { ...(typeof pack.hasDomain === 'boolean' ? { hasDomain: pack.hasDomain } : {}), ...(typeof pack.hasHosting === 'boolean' ? { hasHosting: pack.hasHosting } : {}) };
     const prepayUsd = Number(pack.prepayUsd) || Math.round((totalUsd * pct) / 100);
     const project = new PmStore(hq.db, hq.now).reserve({ client, what, product: productOfDirection(direction), leadId: lead?.id ?? null, packId });
     const line = (here: 'contract' | 'invoice') =>
       `Цепочка: КП #${packId} (утверждено) → договор${here === 'contract' ? ' (эта карточка)' : ''} → счёт ${pct}%${here === 'invoice' ? ' (эта карточка)' : ''} → проект #${project.id} стартует после оплаты`;
     hq.createTask({
       title: `Договор: ${client}`, dept: 'backoffice', creator: 'head', priority: 1,
-      meta: { action: 'doc', type: 'contract', client, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project.id },
+      meta: { action: 'doc', type: 'contract', client, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project.id, priceUsd: totalUsd, ...(monthlyUsd > 0 ? { monthlyUsd } : {}), ...infra },
     });
     hq.wake('backoffice-head', 'task');
     hq.createTask({
       title: `Счёт ${pct}%: ${client}`, dept: 'support', creator: 'head', priority: 1,
-      meta: { action: 'kp_invoice', client, amountUsd: prepayUsd, totalUsd, what: `Предоплата ${pct}% по КП #${packId}: ${offer.title}`, packId, leadId: lead?.id ?? null, projectId: project.id, chain: line('invoice') },
+      meta: { action: 'kp_invoice', client, amountUsd: prepayUsd, totalUsd, what: `Предоплата ${pct}% по КП #${packId}: ${offer.title}`, packId, leadId: lead?.id ?? null, projectId: project.id, chain: line('invoice'), ...infra },
     });
     hq.wake('support-head', 'task');
     hq.log(HEAD_ID, 'kp_chain', 'pack', String(packId), `project ${project.id}`);

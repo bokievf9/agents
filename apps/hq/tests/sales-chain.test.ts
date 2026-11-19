@@ -177,6 +177,31 @@ describe('an approved КП: contract and invoice in one go, the project only res
     expect(billingStoreFor({ db: w.db, now: w.hq.now }).invoice(1)!.status).toBe('issued');
   });
 
+  it('the exact price and the conditions line travel with the chain: КП, contract and invoice say the same, and what the client already has changes the line', async () => {
+    const w = chainWorld();
+    await approvedKp(w, { ...QUALIFIED, hasDomain: true, hasHosting: true });
+    await w.beat();
+    await w.director.sendApprovalBatch(false);
+    const pack = presalesStore({ db: w.db, now: w.hq.now }).pack(1);
+    const total = OFFERS[pack[0]!.direction as keyof typeof OFFERS].fromUsd; // the base package of a bot-administrator costs what the price list says
+    const short = 'Домен и хостинг у заказчика есть, используем их; платные сторонние сервисы (SMS, API, платежи) оплачиваются отдельно.';
+    expect(pack[0]!.body).toContain(short);
+    const text = (w: W, kind: string) => String(w.queue.pending().find((p) => p.kind === kind)!.payload.text);
+    const contract = text(w, 'bo_document');
+    expect(contract).toContain(short);
+    expect(contract).not.toContain('[цена]'); // the exact price is filled, the owner has nothing to type
+    expect(contract).toContain(`в долларах США: $${total}.`);
+    expect(text(w, 'billing_invoice')).toContain(`Что не входит в сумму: ${short}`);
+    // a lead that never said anything about them gets the default line everywhere
+    const w2 = chainWorld();
+    await approvedKp(w2);
+    await w2.beat();
+    await w2.director.sendApprovalBatch(false);
+    const dflt = 'Домен, хостинг, сервер и платные сторонние сервисы (SMS, API, платежи) в сумму не входят: заказчик оплачивает их напрямую, цена у всех разная. Для ориентира: домен $10-15 в год, хостинг от $5 в месяц.';
+    expect(text(w2, 'bo_document')).toContain(dflt);
+    expect(text(w2, 'billing_invoice')).toContain(dflt);
+  });
+
   it('a drill КП never makes a real project, contract or invoice', async () => {
     const w = chainWorld();
     w.sales.createLeadTask(QUALIFIED, 'bots');

@@ -4,8 +4,8 @@ import { inWindow, linksOnly, RateLimiter, type CounterStore } from './sanitize.
 import { clip, freeAnswer, GREETING, intakeRecord, TurnHistory } from './shared.js';
 import { ChatStore, maskUsername, RefStore, refFromStartArg, textHash, type Chat, type Draft } from './store.js';
 import {
-  BUDGETS, budgetButtons, DEADLINES, deadlineButtons, esc, menuButtons, NEEDS, needButtons, productCardButtons, productCardHtml, productListButtons,
-  productListHtml, T, X, type Budget, type Deadline, type Lang, type Need,
+  BUDGETS, budgetButtons, DEADLINES, deadlineButtons, esc, haveButtons, HAVES, haveFlags, parseHave, menuButtons, NEEDS, needButtons, productCardButtons, productCardHtml, productListButtons,
+  productListHtml, T, X, type Budget, type Deadline, type Have, type Lang, type Need,
 } from './texts.js';
 import { isCatalogueId, nicheHint } from './products.js';
 import { DemoSalon, DEMO_START } from './demo.js';
@@ -202,7 +202,9 @@ export class ClientEngine implements ClientChannel {
       case 'deadline':
         return this.afterDeadline(chat, { deadlineText: clip(text, 100) });
       case 'budget':
-        return this.finishIntake(chat, from, { budgetText: clip(text, 40) });
+        return this.afterBudget(chat, { budgetText: clip(text, 40) });
+      case 'hosting':
+        return this.finishIntake(chat, from, { have: parseHave(text) });
       case 'client_name':
         return this.afterClientName(chat, text);
       case 'client_question':
@@ -266,7 +268,11 @@ export class ClientEngine implements ClientChannel {
       return undefined;
     }
     if (kind === 'b' && chat.state === 'budget' && (BUDGETS as readonly string[]).includes(key)) {
-      await this.finishIntake(chat, from, { budget: key as Budget }, messageId);
+      await this.afterBudget(chat, { budget: key as Budget }, messageId);
+      return undefined;
+    }
+    if (kind === 'h' && chat.state === 'hosting' && (HAVES as readonly string[]).includes(key)) {
+      await this.finishIntake(chat, from, { have: key as Have }, messageId);
       return undefined;
     }
     return stale();
@@ -357,6 +363,12 @@ export class ClientEngine implements ClientChannel {
     await this.nextCard(chat, T[chat.lang].step3, budgetButtons(chat.lang), messageId);
   }
 
+  /** Step 4, the last short question: the client's own domain and hosting (the КП says who pays for them). */
+  private async afterBudget(chat: Chat, patch: Draft, messageId?: number): Promise<void> {
+    this.store.update(chat.chatId, { state: 'hosting', draft: { ...chat.draft, ...patch } });
+    await this.nextCard(chat, T[chat.lang].step4, haveButtons(chat.lang), messageId);
+  }
+
   private async nextCard(chat: Chat, html: string, buttons: Button[][], messageId?: number): Promise<void> {
     if (messageId !== undefined) return this.edit(chat.chatId, messageId, html, buttons);
     await this.dropCard(chat);
@@ -374,11 +386,11 @@ export class ClientEngine implements ClientChannel {
       await this.dropCard(chat);
       await this.say(chat.chatId, done);
     }
-    await this.createLead(chat, from, { message: rec.message, budget: rec.budget, service: rec.service, product: rec.product, ...(d.source ? { source: d.source } : {}) }, rec.masked);
+    await this.createLead(chat, from, { message: rec.message, budget: rec.budget, service: rec.service, product: rec.product, have: haveFlags(d.have), ...(d.source ? { source: d.source } : {}) }, rec.masked);
   }
 
   /** The lead goes to Sales exactly like a website form lead, with the chat id so replies come back here. */
-  private async createLead(chat: Chat, from: From, x: { message: string; budget: string; service: string; product?: string; source?: string }, masked: string): Promise<void> {
+  private async createLead(chat: Chat, from: From, x: { message: string; budget: string; service: string; product?: string; source?: string; have?: { hasDomain: boolean | null; hasHosting: boolean | null } }, masked: string): Promise<void> {
     this.store.update(chat.chatId, { state: 'idle', draft: {}, card: null });
     if (!this.sinks) {
       await this.forward(chat, x.message, 'Заявка (продажи не подключены)');
@@ -390,6 +402,7 @@ export class ClientEngine implements ClientChannel {
       name, contact: from.username ? `@${from.username}` : `Telegram id ${chat.chatId}`, service: x.service, budget: clip(x.budget, 40),
       message: clip(x.message, 2000), estimate: '', locale: chat.lang, slot: '', source: ref ? `ref:${ref}` : (x.source ?? 'telegram'), chatId: chat.chatId, product: x.product ?? '',
       ...(from.username ? { username: from.username.slice(0, 40) } : {}),
+      ...(x.have?.hasDomain != null ? { hasDomain: x.have.hasDomain } : {}), ...(x.have?.hasHosting != null ? { hasHosting: x.have.hasHosting } : {}),
     };
     let taskId: number;
     try {

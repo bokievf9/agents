@@ -1,8 +1,9 @@
-import { allowedAmounts as sitePrices, FALLBACK_PRICES, MockLlm, openDb, setPrices, type Payload } from '@fir/core';
+import { allowedAmounts as sitePrices, costsLine, FALLBACK_PRICES, MockLlm, openDb, setPrices, type Payload } from '@fir/core';
 import type { Task, WorkerCtx } from '@fir/hq';
 import { leadStoreFor } from '@fir/worker-lead-intake';
 import { describe, expect, it } from 'vitest';
 import { fillMarks, fallbackWording, wordingOk, type Wording } from '../src/docs.js';
+import { builderTotal, quotePackage } from '../src/package.js';
 import { DIRECTION_IDS, guessDirection, OFFERS, priceLabel, supportMonthlyUsd } from '../src/offers.js';
 import { splitMessage } from '../src/split.js';
 import { render } from '../src/template.js';
@@ -41,11 +42,17 @@ function rig(handler: ConstructorParameters<typeof MockLlm>[0] = () => JSON.stri
 
 /** Every dollar amount a proposal may contain, computed from the table only. */
 function allowedAmounts(): Set<number> {
-  const s = new Set<number>([supportMonthlyUsd(), ...sitePrices()]);
+  // 5, 10 and 15: the reference figures of the fixed conditions line (domain a year, hosting a month), not product prices
+  const s = new Set<number>([supportMonthlyUsd(), ...sitePrices(), 5, 10, 15]);
   for (const o of Object.values(OFFERS)) {
     s.add(o.fromUsd);
     s.add(Math.round(o.fromUsd / 2));
     s.add(o.fromUsd - Math.round(o.fromUsd / 2));
+    const q = quotePackage(o.id, o.title, '');
+    s.add(q.totalUsd);
+    s.add(Math.round(q.totalUsd / 2));
+    s.add(q.totalUsd - Math.round(q.totalUsd / 2));
+    if (q.monthlyUsd) s.add(q.monthlyUsd);
   }
   return s;
 }
@@ -58,7 +65,7 @@ describe('prices come from the price list only', () => {
       const r = rig();
       r.lead();
       await r.run({ leadId: 1 });
-      expect(r.staged[0]!.payload.kp).toContain('Стоимость: от $310');
+      expect(r.staged[0]!.payload.kp).toContain('Стоимость: $310,');
     } finally {
       setPrices(FALLBACK_PRICES);
     }
@@ -70,7 +77,7 @@ describe('prices come from the price list only', () => {
     const res = await r.run({ leadId: 1 });
     expect(res.ok).toBe(true);
     const kp = r.staged[0]!.payload.kp as string;
-    expect(kp).toContain('Стоимость: от $290, срок запуска 5-7 рабочих дней.');
+    expect(kp).toContain('Стоимость: $290, срок запуска 5-7 рабочих дней.');
     expect(kp).not.toMatch(/\[(цена|срок)\]/);
     expect(OFFERS.site.timeline).toBe('7-10 рабочих дней');
     expect(OFFERS.receptionist.timeline).toBe('7 рабочих дней');
@@ -84,7 +91,7 @@ describe('prices come from the price list only', () => {
     await r.run({ leadId: 1 });
     const docs = [r.staged[0]!.payload.kp, r.staged[0]!.payload.estimate, r.staged[0]!.payload.contract].join('\n');
     expect(docs).not.toContain('$99');
-    expect(docs).toContain('Предлагаем решение «Telegram-бот-администратор». Стоимость: от $290.');
+    expect(docs).toContain('Предлагаем решение «Telegram-бот-администратор». Стоимость: $290.');
     expect(wordingOk({ ...GOOD, problem: 'Это — проблема' })).toBe(false);
     expect(wordingOk({ ...GOOD, scope: [...GOOD.scope.slice(0, 5)] })).toBe(true);
   });
@@ -124,12 +131,12 @@ describe('prices come from the price list only', () => {
     expect(kp).not.toMatch(/Kaspi|Payme|Click|карт/i);
     expect(kp).toContain('$20 в месяц');
     expect(kp).toContain('Предложение действует 7 дней, до 27.11.2026');
-    expect(kp).toContain('| Предоплата 30% | от $87 |');
+    expect(kp).toContain('| Предоплата 30% | $87 |');
     const dflt = rig();
     dflt.lead();
     await dflt.run({ leadId: 1 });
     expect(dflt.staged[0]!.payload.kp).toContain('до 04.12.2026');
-    expect(dflt.staged[0]!.payload.kp).toContain('| Предоплата 50% | от $145 |');
+    expect(dflt.staged[0]!.payload.kp).toContain('| Предоплата 50% | $145 |');
   });
 });
 
@@ -142,7 +149,7 @@ describe('direction choice', () => {
     expect(guessDirection({})).toBe('admin');
   });
   it('fills marks only from the table', () => {
-    expect(fillMarks('[цена] / [срок]', OFFERS.site)).toBe('от $150 / 7-10 рабочих дней');
+    expect(fillMarks('[цена] / [срок]', OFFERS.site, quotePackage('site', OFFERS.site.title, ''))).toBe('$150 / 7-10 рабочих дней');
     expect(priceLabel(OFFERS.content)).toBe('от $90 + $60 в месяц');
     expect(priceLabel(OFFERS.agent)).toBe('от $100 + $10 в месяц');
     expect(fallbackWording({ leadId: null, client: 'X', niche: '', request: '' }, OFFERS.site).scope).toEqual(OFFERS.site.scope);
@@ -235,11 +242,125 @@ describe('the pack and its approval', () => {
     await r.run({ leadId: 1 });
     const c = r.staged[0]!.payload.contract as string;
     expect(c).toContain('Договор оказания услуг');
-    expect(c).toContain('Предоплата 50% (от $145)');
+    expect(c).toContain('Предоплата 50% ($145)');
     expect(c).toContain('USDT (сеть TRC20 или TON)');
     expect(c).toContain('30 дней');
     expect(c).toContain('Республика Таджикистан');
     expect(c).not.toMatch(/ИНН|______/);
     expect(c).not.toMatch(/\{\{/);
+  });
+});
+
+describe('exact figures (owner decision 2026-11-19): one price for the chosen package, «от» only while prospecting', () => {
+  it('the three documents state the exact price, the exact split and no «от»', async () => {
+    const r = rig();
+    r.lead();
+    await r.run({ leadId: 1 });
+    const p = r.staged[0]!.payload;
+    for (const doc of [p.kp, p.estimate, p.contract] as string[]) expect(doc.replace(costsLine(), '')).not.toMatch(/(^|[^\p{L}])от \$/u);
+    expect(p).toMatchObject({ totalUsd: 290, prepayUsd: 145, prepayPercent: 50 });
+    expect(p.kp).toContain('| Telegram-бот-администратор | $290 |');
+    expect(p.kp).toContain('| Оплата после приёмки 50% | $145 |');
+    expect(p.estimate).toContain('| Итого | $290 |');
+    expect(p.contract).toContain('Стоимость Услуги в долларах США: $290 (цена точная');
+    expect(p.contract).toContain('Предоплата 50% ($145)');
+    expect(r.staged[0]!.summary).toContain('цена $290');
+    expect(r.staged[0]!.summary).not.toContain('от $');
+  });
+
+  it('a site is the catalogue variant plus the add-ons the lead names, summed line by line', async () => {
+    const r = rig();
+    const lead2 = leadStoreFor(r.ctx).upsert(2, {
+      name: 'Ali', contact: '@ali', service: 'websites', niche: 'магазин одежды', task: 'интернет-магазин на двух языках с онлайн-оплатой', deadline: '', budget: '',
+      origin: 'site', temperature: 'warm', lang: 'ru', slots: [], chosenSlot: null, priceAsked: false,
+    });
+    await r.run({ leadId: lead2.id });
+    const p = r.staged[0]!.payload;
+    expect(p.totalUsd).toBe(700 + 40 + 60);
+    expect(p.kp).toContain('| Интернет-магазин | $700 |');
+    expect(p.kp).toContain('| Второй язык | $40 |');
+    expect(p.kp).toContain('| Онлайн-оплата | $60 |');
+    expect(p.kp).toContain('| Итого | $800 |');
+    expect(p.prepayUsd).toBe(400);
+    expect(quotePackage('site', 'Сайт', 'лендинг для салона').totalUsd).toBe(150);
+    expect(quotePackage('site', 'Сайт', 'сайт компании с панелью для правок').totalUsd).toBe(350 + 100);
+  });
+
+  it('subscriptions give an exact setup and an exact monthly fee; Polly by its words, Dono otherwise', () => {
+    expect(quotePackage('content', 'Контент', '')).toMatchObject({ totalUsd: 90, monthlyUsd: 60 });
+    expect(quotePackage('agent', 'Агент', 'хочу учителя языков Polly')).toMatchObject({ totalUsd: 100, monthlyUsd: 10 });
+    expect(quotePackage('agent', 'Агент', 'помощник для учёбы')).toMatchObject({ totalUsd: 150, monthlyUsd: 15 });
+  });
+
+  it('a subscription proposal shows the monthly fee in the table and in the contract', async () => {
+    const r = rig();
+    r.lead({ origin: 'content' });
+    await r.run({ leadId: 1 });
+    const p = r.staged[0]!.payload;
+    expect(p.monthlyUsd).toBe(60);
+    expect(p.kp).toContain('| Ежемесячно (подписка) | $60 в месяц |');
+    expect(p.contract).toContain('$90 + $60 в месяц');
+  });
+
+  it('the price changes with the price list, not with the code', async () => {
+    setPrices({ ...FALLBACK_PRICES, catalog: { ...FALLBACK_PRICES.catalog, websites: { ...FALLBACK_PRICES.catalog.websites, variants: { ...FALLBACK_PRICES.catalog.websites.variants, landing: 175 } } } });
+    try {
+      expect(quotePackage('site', 'Сайт', '').totalUsd).toBe(175);
+    } finally {
+      setPrices(FALLBACK_PRICES);
+    }
+  });
+
+  it('the builder total from the site is only compared: a different total is a warning on the card, never the price', async () => {
+    expect(builderTotal('Сайт: Лендинг\nИтого: $350\nТексты')).toBe(350);
+    expect(builderTotal('Total: $1,250')).toBe(1250);
+    expect(builderTotal('нет итога')).toBeNull();
+    const r = rig();
+    const lead3 = leadStoreFor(r.ctx).upsert(3, {
+      name: 'Dil', contact: '@dil', service: 'websites', niche: '', task: 'сайт', deadline: '', budget: '', origin: 'site', temperature: 'warm', lang: 'ru', slots: [], chosenSlot: null, priceAsked: false,
+      estimate: 'Лендинг: одна страница\nИтого: $1',
+    });
+    await r.run({ leadId: lead3.id });
+    expect(r.staged[0]!.payload.totalUsd).toBe(150);
+    expect(r.staged[0]!.summary).toContain('в конструкторе клиент видел итог $1, в КП $150');
+  });
+});
+
+describe('the conditions line: domain, hosting, server and paid third-party services are not in the price', () => {
+  it('КП, смета and договор carry the default line; the guarantee and the 50/50 rule stay', async () => {
+    const r = rig();
+    r.lead();
+    await r.run({ leadId: 1 });
+    const p = r.staged[0]!.payload;
+    for (const doc of [p.kp, p.estimate, p.contract] as string[]) expect(doc).toContain(costsLine());
+    expect(p.kp).toContain('## Что не входит в стоимость');
+    expect(p.contract).toContain('Гарантия первого результата');
+    expect(p.contract).toContain('Предоплата 50%');
+    expect(p.kp).toContain('Предоплата 50% до старта, оставшиеся 50% после приёмки');
+  });
+
+  it('a client who has a domain and hosting gets the short line instead', async () => {
+    const r = rig();
+    const lead4 = leadStoreFor(r.ctx).upsert(4, {
+      name: 'Own', contact: '@own', service: 'bots', niche: '', task: 'бот для записи', deadline: '', budget: '', origin: '', temperature: 'warm', lang: 'ru', slots: [], chosenSlot: null, priceAsked: false,
+      hasDomain: true, hasHosting: true,
+    });
+    await r.run({ leadId: lead4.id });
+    const p = r.staged[0]!.payload;
+    const line = 'Домен и хостинг у заказчика есть, используем их; платные сторонние сервисы (SMS, API, платежи) оплачиваются отдельно.';
+    for (const doc of [p.kp, p.estimate, p.contract] as string[]) {
+      expect(doc).toContain(line);
+      expect(doc).not.toContain('в сумму не входят');
+    }
+    expect(p).toMatchObject({ hasDomain: true, hasHosting: true });
+  });
+
+  it('a /kp text that says it is read for the same facts; no signal means the default line', async () => {
+    const r = rig();
+    await r.run({ text: 'Нужен сайт для кафе, домен и хостинг у меня есть' });
+    expect(r.staged[0]!.payload.kp).toContain('Домен и хостинг у заказчика есть');
+    const r2 = rig();
+    await r2.run({ text: 'Нужен сайт для кафе' });
+    expect(r2.staged[0]!.payload.kp).toContain(costsLine());
   });
 });

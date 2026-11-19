@@ -340,7 +340,8 @@ export class SupportHead {
           leadId: Number(m.leadId) || null, packId: Number(m.packId) || null, projectId: Number(m.projectId) || null, totalUsd: Number(m.totalUsd) || null,
           ...(typeof m.chain === 'string' ? { chain: m.chain } : {}),
         };
-        const inv = await this.billing.createInvoice(ctx, { client: m.client, amountUsd, what: typeof m.what === 'string' ? m.what : 'Предоплата по КП', newProject: true, link });
+        const infra = { hasDomain: typeof m.hasDomain === 'boolean' ? m.hasDomain : null, hasHosting: typeof m.hasHosting === 'boolean' ? m.hasHosting : null };
+        const inv = await this.billing.createInvoice(ctx, { client: m.client, amountUsd, what: typeof m.what === 'string' ? m.what : 'Предоплата по КП', newProject: true, link, infra });
         return `Счёт ${inv.number} для ${inv.client}, $${inv.amountUsd}, по утверждённому КП: текст на утверждении (деньги, одна карточка).`;
       }
       case 'sub': {

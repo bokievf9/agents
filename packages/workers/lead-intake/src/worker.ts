@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { formatSlot, log, tryComplete, tryJson, zonedParts, zonedToMs, type KindSpec, type Payload } from '@fir/core';
+import { detectInfrastructure, formatSlot, log, tryComplete, tryJson, zonedParts, zonedToMs, type KindSpec, type Payload } from '@fir/core';
 import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { LeadStore, type Lang, type Lead } from './store.js';
 import { guessDeadline, guessNiche, hasMoney, hasPlaceholder, isPriceQuestion, scoreLead, TEMP_RU, tpl } from './text.js';
@@ -23,6 +23,9 @@ export const webLeadSchema = z.object({
   locale: z.enum(['ru', 'en']).default('ru'),
   slot: z.string().trim().max(40).default(''),
   source: z.string().trim().max(40).default(''),
+  /** The client already has a domain / hosting (the bot asks one short question; the site's brief says it in the builder summary). Absent: not asked. */
+  hasDomain: z.boolean().optional(),
+  hasHosting: z.boolean().optional(),
   /** The product the visitor chose in the client bot or the web chat (catalogue name), empty when none. */
   product: z.string().trim().max(60).default(''),
   /** Set when the lead came through the public client bot: the approved texts go back to this private chat. */
@@ -206,7 +209,9 @@ export class LeadIntakeWorker implements Worker {
     const slots = chosenSlot ? [chosenSlot] : nextSlots(ctx.now(), ctx.tz, this.slotHours);
     const base = { name: clip(w.name, 80), contact: clip(w.contact, 120), service: w.service, ...c, budget: clip(w.budget, 40), origin: w.source, lang, slots, chosenSlot, priceAsked };
     const temperature = scoreLead({ ...base }, { estimate: Boolean(w.estimate) });
-    const lead = store.upsert(task.id, { ...base, temperature });
+    // domain and hosting: the explicit answer wins, otherwise what the site's summary or the person's words say, otherwise unknown
+    const seen = detectInfrastructure(`${w.message} ${w.estimate}`);
+    const lead = store.upsert(task.id, { ...base, temperature, estimate: w.estimate, hasDomain: w.hasDomain ?? seen.hasDomain, hasHosting: w.hasHosting ?? seen.hasHosting });
 
     const t = tpl(lang);
     const slotText = chosenSlot ? formatSlot(chosenSlot, ctx.tz, 'ru') : `предложены: ${slots.map((s) => formatSlot(s, ctx.tz, 'ru')).join(' / ')}`;

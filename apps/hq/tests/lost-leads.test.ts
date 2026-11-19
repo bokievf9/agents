@@ -348,6 +348,7 @@ describe('the gateway is down: the visitor gets the scripted answer and the requ
       await w.engine.onButton(ME, 'n:bot', w.engine.store.get(ME.chatId)!.card!);
       await w.engine.onButton(ME, 'd:urgent', w.engine.store.get(ME.chatId)!.card!);
       await w.engine.onButton(ME, 'b:mid', w.engine.store.get(ME.chatId)!.card!);
+      await w.engine.onButton(ME, 'h:none', w.engine.store.get(ME.chatId)!.card!);
       expect(w.lost.recent()[0]).toMatchObject({ source: 'bot', contact: '@dilnoza_salon' });
       expect(w.transport.to(OWNER).some((m) => m.html.includes('Заявка не дошла до продаж'))).toBe(true);
     });
