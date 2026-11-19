@@ -1,7 +1,7 @@
 import { zonedParts } from '@fir/core';
 import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { PLATFORM_LABEL, dayLabel, storeFor, todayReport } from '@fir/worker-content-maker';
-import { assemblePacks, groupByItem, type PublishPack, type RenderLookup } from './pack.js';
+import { assemblePacks, groupByItem, type PublishPack, type RenderLookup, type RenderNote } from './pack.js';
 import { PublishStore } from './store.js';
 
 const ymd = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
@@ -14,6 +14,8 @@ export function publishDay(ctx: Pick<WorkerCtx, 'now' | 'tz'>): string {
 export interface PublisherOptions {
   /** Stage 2: rendered files. Default: none. */
   render?: RenderLookup;
+  /** Stage 2: why a reel has no video yet. Default: nothing. */
+  renderNote?: RenderNote;
 }
 
 /**
@@ -30,7 +32,7 @@ export class PublisherWorker implements Worker {
   packsToSend(ctx: Pick<WorkerCtx, 'db' | 'now' | 'tz'>): PublishPack[][] {
     const today = publishDay(ctx);
     const store = new PublishStore(ctx.db);
-    return groupByItem(assemblePacks(ctx, today, this.opts.render).filter((p) => store.get(p.readyId)?.sentOn !== today));
+    return groupByItem(assemblePacks(ctx, today, this.opts.render, this.opts.renderNote).filter((p) => store.get(p.readyId)?.sentOn !== today));
   }
 
   /** The head calls this after a pack message went out. */
@@ -53,7 +55,7 @@ export class PublisherWorker implements Worker {
   run(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
     if (task.meta.action !== 'daily' && task.meta.action !== 'publish') return Promise.resolve({ ok: false, result: '', error: `Неизвестное действие: ${String(task.meta.action)}` });
     const today = publishDay(ctx);
-    const packs = assemblePacks(ctx, today, this.opts.render);
+    const packs = assemblePacks(ctx, today, this.opts.render, this.opts.renderNote);
     const head = todayReport(storeFor(ctx), today);
     if (packs.length === 0) return Promise.resolve({ ok: true, result: head });
     const items = groupByItem(packs);

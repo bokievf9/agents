@@ -104,7 +104,7 @@ export const HELP = [
   '/reply &lt;id&gt;, /kp &lt;лид или описание&gt;, /referral, /referrals: продажи',
   '/ticket, /tickets, /client, /clients, /invoice, /invoices, /sub, /onboard, /paid &lt;счёт или id&gt;: сопровождение',
   '/project, /pstatus, /target, /mdone: производство; /doc, /lesson, /kb: документы и знания',
-  '/profile: настройка профиля Instagram (один раз); /article &lt;ниша&gt;: статья в блог сайта',
+  '/profile: настройка профиля Instagram (один раз); /article &lt;ниша&gt;: статья в блог сайта; /render &lt;id&gt;: собрать видео рилса заново',
   '/builders, /builder &lt;id&gt;: задачи строителям; /topics: темы в группе; /drill: учения; /skip: отменить ожидание правки',
   '',
   '<i>Статусы на сайте офиса: работает, ждёт (ответ за вами), застрял (/retry), спит (ночь или тихие часы), офлайн.</i>',

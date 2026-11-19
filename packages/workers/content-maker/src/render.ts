@@ -30,7 +30,7 @@ export const SIZES: Record<FrameKind, { width: number; height: number }> = {
 
 type Font = { name: string; data: Buffer; weight: 400 | 700; style: 'normal' };
 let fontCache: Font[] | null = null;
-const FONT_DIR = new URL('../assets/fonts/', import.meta.url).pathname;
+export const FONT_DIR = new URL('../assets/fonts/', import.meta.url).pathname;
 
 /** Loads the font files once (they ship with the package). Throws when a file is missing. */
 export function loadFonts(dir = FONT_DIR): Font[] {

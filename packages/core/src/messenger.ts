@@ -37,6 +37,8 @@ export interface Messenger {
    * messenger without it cannot send pictures and the caller falls back to text only.
    */
   sendPhotos?(chatId: number, files: string[], caption?: string): Promise<void>;
+  /** A local MP4 as a streamable video (Telegram bots: up to 50 MB), caption up to 1024 characters, optional inline buttons. */
+  sendVideo?(chatId: number, file: string, caption?: string, buttons?: Button[][]): Promise<void>;
 }
 
 const ENTITIES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
@@ -62,6 +64,12 @@ export class MemoryMessenger implements Messenger {
   readonly photos: { chatId: number; files: string[]; caption?: string }[] = [];
   sendPhotos(chatId: number, files: string[], caption?: string): Promise<void> {
     this.photos.push(caption ? { chatId, files, caption } : { chatId, files });
+    return Promise.resolve();
+  }
+  /** Videos sent through `sendVideo`. */
+  readonly videos: { chatId: number; file: string; caption?: string; buttons?: Button[][] }[] = [];
+  sendVideo(chatId: number, file: string, caption?: string, buttons?: Button[][]): Promise<void> {
+    this.videos.push({ chatId, file, ...(caption ? { caption } : {}), ...(buttons ? { buttons } : {}) });
     return Promise.resolve();
   }
   private seq = 0;

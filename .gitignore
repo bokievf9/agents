@@ -10,3 +10,4 @@ logs/
 coverage/
 out/
 .claude/
+.public/

@@ -98,6 +98,10 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 и текст, публикует владелец вручную; `/profile` (разовый пакет настройки профиля); `/article` и рутина `marketing-article-weekly` (вт 10:00)
 пишут статью блога RU+EN, одобренная уходит строителю issue с JSON и путём `src/content/blog/<slug>.ts`. Telegram-канала нет (владелец отказался).
 
+Видео рилсов (2026-11-19): `packages/renderer` (Remotion + Piper `ru_RU-denis-medium`), сервис `renderer` в `compose.yaml` (1,5 ГБ, без сети, общий том с `hq`),
+очередь `cm_render_jobs` в SQLite HQ, образ `agents-renderer` в CI. Одобренный рилс ставится в очередь, утром Публикатор шлёт MP4; `/render <id>`; `REELS_RENDER=off`
+возвращает путь через `builder`. `packages/clips` (локальный инструмент на Mac) остаётся как есть. Подробно: `packages/renderer/README.md`.
+
 ## Данные и секреты
 `.env*` и `data/` не коммитятся (в `data/` контакты клиентов). Секреты: `.env.local` (dev), `/opt/fir-agents/.env`
 (сервер, 600). Секреты с `$` в `.env` брать в одинарные кавычки (compose раскрывает `$`).

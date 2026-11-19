@@ -77,6 +77,13 @@ export function grammyMessenger(bot: Bot): Messenger {
         if (!notModified(e)) throw e;
       }
     },
+    async sendVideo(chatId, file, caption, buttons) {
+      await bot.api.sendVideo(chatId, new InputFile(file), {
+        supports_streaming: true, width: 1080, height: 1920,
+        ...(caption ? { caption: caption.slice(0, 1024) } : {}),
+        ...(buttons ? { reply_markup: inline(buttons) } : {}),
+      });
+    },
     async sendPhotos(chatId, files, caption) {
       for (let i = 0; i < files.length; i += 10) {
         const chunk = files.slice(i, i + 10);

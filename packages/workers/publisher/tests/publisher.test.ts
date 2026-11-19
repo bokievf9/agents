@@ -2,7 +2,7 @@ import { MockLlm, openDb } from '@fir/core';
 import type { Task, WorkerCtx } from '@fir/hq';
 import { onApproved, renderCarousel, renderClip, storeFor, type Clip } from '@fir/worker-content-maker';
 import { describe, expect, it } from 'vitest';
-import { ManualPoster, PublishStore, PublisherWorker, assemblePacks, captionOf, dayHeader, filesOf, groupByItem, publishedButtons, renderItemMessage } from '../src/index.js';
+import { ManualPoster, PublishStore, PublisherWorker, assemblePacks, captionOf, dayHeader, filesOf, groupByItem, imagesOf, publishedButtons, renderItemMessage, videoCaption, videoOf } from '../src/index.js';
 
 // Mon 2026-11-23 09:00 Tashkent
 const NOW = Date.UTC(2026, 10, 23, 4, 0);
@@ -172,5 +172,49 @@ describe('Instagram page items: posts, stories, pictures', () => {
     expect(t.worker.markPublished(t.ctx, row.id)).toMatchObject({ ok: true });
     expect(t.worker.markPublished(t.ctx, row.id)).toMatchObject({ ok: false, text: 'Уже отмечено' });
     expect(assemblePacks(t.ctx, '2026-11-23')).toHaveLength(0);
+  });
+});
+
+describe('Publisher: rendered reels', () => {
+  it('a rendered mp4 is a video, not an image: videoOf finds it, imagesOf and filesOf skip it, the day header counts it', () => {
+    const t = setup();
+    const id = t.approved('Запись ночью', '2026-11-23');
+    const packs = assemblePacks(t.ctx, '2026-11-23', (item) => (item === id ? '/data/renders/1/reel.mp4' : null));
+    const group = groupByItem(packs)[0]!;
+    expect(videoOf(group)).toBe('/data/renders/1/reel.mp4');
+    expect(imagesOf(group)).toEqual([]);
+    expect(filesOf(group)).toEqual([]);
+    expect(dayHeader([group])).toBe('Сегодня публикуем: 1 рилс. Видео к отправке: 1.');
+    expect(renderItemMessage(group, '2026-11-23', { videoSent: true })).toContain('Видео собрано, оно пришло выше');
+    // when the video could not be sent the message falls back to naming the file
+    expect(renderItemMessage(group, '2026-11-23')).toContain('Файл: /data/renders/1/reel.mp4');
+  });
+
+  it('without a file the note «видео не собралось: …» goes into the message; the script text stays', () => {
+    const t = setup();
+    t.approved('Запись ночью', '2026-11-23');
+    const packs = assemblePacks(t.ctx, '2026-11-23', () => null, () => 'видео не собралось: piper exited with 1');
+    expect(packs.every((p) => p.note === 'видео не собралось: piper exited with 1')).toBe(true);
+    const text = renderItemMessage(groupByItem(packs)[0]!, '2026-11-23');
+    expect(text).toContain('Видео: видео не собралось: piper exited with 1');
+    expect(text).toContain('== TikTok ==');
+  });
+
+  it('the note is only for reels, not for carousels', () => {
+    const t = setup();
+    t.approved('Карусель', '2026-11-23', 'carousel');
+    expect(assemblePacks(t.ctx, '2026-11-23', () => null, () => 'x')[0]!.note).toBeUndefined();
+  });
+
+  it('the video caption is the whole message when it fits 1024 characters, else a short title', () => {
+    const t = setup();
+    t.approved('Запись ночью', '2026-11-23');
+    const group = groupByItem(assemblePacks(t.ctx, '2026-11-23', () => '/d/reel.mp4'))[0]!;
+    const long = videoCaption(group.map((p) => ({ ...p, caption: 'x'.repeat(500) })), '2026-11-23');
+    expect(long.withButtons).toBe(false);
+    expect(long.caption).toBe('клип «Запись ночью»');
+    const short = videoCaption([{ ...group[0]!, caption: 'коротко', hashtags: [] }], '2026-11-23');
+    expect(short.withButtons).toBe(true);
+    expect(short.caption).toContain('коротко');
   });
 });

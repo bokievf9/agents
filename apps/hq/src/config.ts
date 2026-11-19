@@ -20,6 +20,8 @@ export interface Config extends BaseConfig {
   storiesPerWeek: number;
   /** Rendered PNG files of posts, slides, stories and covers: `<DATA_DIR>/renders`. */
   rendersDir: string;
+  /** Videos of approved reels are rendered by the `renderer` service (REELS_RENDER=off disables the queue). */
+  renderReels: boolean;
   /** Monthly limit of the Marketing department in USD (0: none). Used only when the head is first created. */
   marketingBudgetUsd: number;
   /** Support bot token. Without it the Support head is silent in the group (checks and alerts still work). */
@@ -125,6 +127,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     postsPerWeek: Math.round(num(env, 'POSTS_PER_WEEK', 3, 0, 7)),
     storiesPerWeek: Math.round(num(env, 'STORIES_PER_WEEK', 5, 0, 7)),
     rendersDir: `${base.dataDir}/renders`,
+    renderReels: (env.REELS_RENDER ?? 'on').toLowerCase() !== 'off',
     marketingBudgetUsd: num(env, 'MARKETING_BUDGET_USD', 0, 0, 100_000),
     supportBotToken: optional(env, 'SUPPORT_BOT_TOKEN'),
     monitor: loadMonitorConfig(env, base.dataDir),

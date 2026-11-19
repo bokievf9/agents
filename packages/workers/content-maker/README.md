@@ -53,5 +53,7 @@
 ## Переменные (задаёт `apps/hq`)
 `CLIPS_PER_WEEK` (7), `CAROUSELS_PER_WEEK` (2), `POSTS_PER_WEEK` (3), `STORIES_PER_WEEK` (5). Промпты в `prompts/*.md` (русский, голос бренда), входят в пакет.
 
-## Этап 2
-Remotion (рендер рилса), TTS, Whisper для субтитров. Картинки постов, каруселей и историй уже рисуются (см. выше).
+## Видео рилса (этап 2)
+`parseReel(text)` читает одобренный текст клипа (хук, сцены «Голос/Субтитр», CTA, секунды, язык). `RenderQueue` (`render-queue.ts`, таблица
+`cm_render_jobs`): `enqueue` при одобрении, `claim` одной задачи, до 2 попыток, `requeue` для `/render`. Видео собирает сервис `packages/renderer`
+(Remotion, голос Piper), результат `DATA_DIR/renders/<материал>/reel.mp4`. Картинки постов, каруселей и историй рисуются здесь (см. выше).

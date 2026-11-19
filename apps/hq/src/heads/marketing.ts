@@ -1,12 +1,14 @@
+import { existsSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { errMsg, log, tryJson, zonedParts, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import {
   ARTICLE_KIND, KIND, ContentMakerWorker, TYPE_RU, articleSchema, articleTargetPath, builderInstruction, editableParts, nicheById, partLabel, replacePart,
-  findNiche, splitPlatforms, storeFor, titleOf, ymd,
+  findNiche, splitPlatforms, storeFor, titleOf, ymd, RenderQueue, parseReel, shortReason, type RenderJob,
   type PartId,
 } from '@fir/worker-content-maker';
 import { AnalystWorker } from '@fir/worker-analyst';
-import { PublisherWorker, dayHeader, filesOf, publishedButtons, renderItemMessage, publishDay } from '@fir/worker-publisher';
+import { PublisherWorker, dayHeader, imagesOf, publishedButtons, renderItemMessage, publishDay, videoCaption, videoOf } from '@fir/worker-publisher';
 import { AUDIT_KIND, KIND as SEO_KIND, SeoWorker, type AuditPayload, type SeoProposalPayload } from '@fir/worker-seo';
 import { TrendScoutWorker, latestTrendHints } from '@fir/worker-trend-scout';
 import { z } from 'zod';
@@ -40,6 +42,11 @@ export interface MarketingDeps {
   storiesPerWeek?: number;
   /** Where approved posts, slides and stories are rendered to PNG (`DATA_DIR/renders`). Absent: no pictures, text only. */
   rendersDir?: string;
+  /**
+   * Reels are rendered by the `renderer` service: an approved reel is queued in `cm_render_jobs` (instead of a builder
+   * task) and the morning message sends `DATA_DIR/renders/<item>/reel.mp4`. Default off (tests, local runs without it).
+   */
+  renderReels?: boolean;
   rng?: () => number;
   /** The client bot: an approved audit goes to the contact when that person already wrote to it (matched by username or chat id). */
   audit?: ClientChannel & { findChat(username: string): number | undefined };
@@ -61,6 +68,8 @@ const splitSchema = z.object({
   topic: z.string().max(300).optional(),
   type: z.enum(['clip', 'carousel', 'post', 'story']).optional(),
 });
+/** Telegram bots upload videos up to 50 MB. */
+const MAX_VIDEO_BYTES = 49 * 1024 * 1024;
 const reviewSchema = z.object({ ok: z.boolean(), issues: z.array(z.string()).max(10).default([]) });
 
 type Action = 'pack' | 'topic' | 'daily' | 'trends' | 'trends_weekly' | 'seo' | 'report' | 'profile' | 'article' | 'audit' | 'none';
@@ -93,12 +102,15 @@ export class MarketingHead implements ApprovalEditor {
   readonly publisher: PublisherWorker;
   readonly seo: Worker;
   readonly analyst: Worker;
+  /** Video render jobs (shared SQLite, the `renderer` service claims them). */
+  readonly renderQueue: RenderQueue;
 
   constructor(private readonly d: MarketingDeps) {
     const i = d.integrations ?? {};
     const net = i.fetch ? { fetch: i.fetch } : {};
     this.trendScout = d.trendScout ?? new TrendScoutWorker({ youtubeApiKey: i.youtubeApiKey, regions: i.trendsRegions ?? ['KZ', 'UZ', 'RU'], ...net });
-    this.publisher = d.publisher ?? new PublisherWorker({ render: (itemId) => this.renderedClip(itemId) });
+    this.renderQueue = new RenderQueue(d.hq.db, d.hq.now);
+    this.publisher = d.publisher ?? new PublisherWorker({ render: (itemId) => this.renderedClip(itemId), renderNote: (itemId) => this.reelNote(itemId) });
     this.seo = d.seo ?? new SeoWorker({ ...(i.siteUrl ? { siteUrl: i.siteUrl } : {}), gscServiceAccountJson: i.gscServiceAccountJson, gscSiteUrl: i.gscSiteUrl, ...net });
     this.analyst = d.analyst ?? new AnalystWorker({ youtubeApiKey: i.youtubeApiKey, youtubeChannelId: i.youtubeChannelId, ...net });
     this.worker =
@@ -120,7 +132,8 @@ export class MarketingHead implements ApprovalEditor {
         execute: async (payload, approvalId) => {
           await approve(payload, approvalId);
           try {
-            this.requestClipBuild(Number(payload.itemId), d.hq.approvalByCoreId(approvalId)?.taskId ?? null);
+            if (d.renderReels) this.queueReel(Number(payload.itemId));
+            else this.requestClipBuild(Number(payload.itemId), d.hq.approvalByCoreId(approvalId)?.taskId ?? null);
           } catch (e) {
             log('error', 'clip build task not created', { err: errMsg(e) });
           }
@@ -268,8 +281,53 @@ export class MarketingHead implements ApprovalEditor {
     }
   }
 
-  /** The rendered file of a clip (the builder's result path or URL), once its task reached review. */
+  /** Queues the video of an approved reel for the renderer (once: an active job is kept). */
+  private queueReel(itemId: number): RenderJob | null {
+    const item = this.store().item(itemId);
+    if (!item || item.type !== 'clip') return null;
+    if (!parseReel(item.text)) {
+      log('warn', 'reel not queued: script unreadable', { item: itemId });
+      return null;
+    }
+    const job = this.renderQueue.enqueue(itemId);
+    this.hq.log(HEAD_ID, 'render_queued', 'content_item', String(itemId));
+    return job;
+  }
+
+  private reelPath(itemId: number): string | null {
+    if (!this.d.renderReels || !this.d.rendersDir) return null;
+    const file = join(this.d.rendersDir, String(itemId), 'reel.mp4');
+    return existsSync(file) ? file : null;
+  }
+
+  /** Why a reel has no video yet, for the morning message. Null when renders are off (the old text stays). */
+  private reelNote(itemId: number): string | null {
+    if (!this.d.renderReels) return null;
+    const job = this.renderQueue.latest(itemId);
+    if (!job) return 'видео не собралось: задача не создана, поставлю в очередь';
+    if (job.status === 'failed' || (job.status === 'queued' && job.error)) return `видео не собралось: ${shortReason(job.error)}`;
+    if (job.status === 'done') return 'видео не собралось: файл не найден на сервере';
+    return 'видео ещё собирается, пришлю в следующем напоминании';
+  }
+
+  /** After the morning message: a reel without a video and without an active job is queued again (new job, attempts from 0). */
+  private retryReels(groups: { itemId: number; type: string }[][]): number {
+    if (!this.d.renderReels) return 0;
+    let n = 0;
+    for (const g of groups) {
+      const itemId = g[0]!.itemId;
+      if (g[0]!.type !== 'clip' || this.reelPath(itemId)) continue;
+      const job = this.renderQueue.latest(itemId);
+      if (job && (job.status === 'queued' || job.status === 'running')) continue;
+      if (this.queueReel(itemId)) n++;
+    }
+    return n;
+  }
+
+  /** The rendered file of a clip: the renderer's `reel.mp4`, else the builder's result path or URL once its task reached review. */
   private renderedClip(itemId: number): string | null {
+    const own = this.reelPath(itemId);
+    if (own) return own;
     const t = this.hq.tasks({ dept: MARKETING, status: ['review', 'done'], limit: 500 }).find((x) => x.meta.action === 'build_clip' && x.meta.itemId === itemId && typeof x.meta.result === 'string' && x.meta.result);
     return t ? (t.meta.result as string) : null;
   }
@@ -501,9 +559,27 @@ export class MarketingHead implements ApprovalEditor {
     }
     for (const g of groups) {
       try {
-        // pictures first, as one album (the owner forwards it to Instagram), then the text with the «Опубликовано» buttons
-        const files = filesOf(g);
+        // the reel's video first (with its caption and buttons when they fit), pictures as one album (the owner forwards
+        // them to Instagram), then the text with the «Опубликовано» buttons
+        const files = imagesOf(g);
+        const video = videoOf(g);
         let note = '';
+        let videoSent = false;
+        let textSent = false;
+        if (video) {
+          try {
+            if (!this.d.messenger.sendVideo) throw new Error('messenger cannot send video');
+            if (!existsSync(video)) throw new Error('file is not on this host');
+            if (statSync(video).size > MAX_VIDEO_BYTES) throw new Error('video is over 49 MB');
+            const vc = videoCaption(g, publishDay(tctx));
+            await this.d.messenger.sendVideo(this.d.ownerId, video, vc.caption, vc.withButtons ? publishedButtons(g) : undefined);
+            videoSent = true;
+            textSent = vc.withButtons;
+          } catch (e) {
+            log('warn', 'publish video not delivered', { err: errMsg(e) });
+            note = '\n\nВидео не отправилось в Telegram: публикуйте по тексту, файл лежит на сервере.';
+          }
+        }
         if (files.length) {
           try {
             if (!this.d.messenger.sendPhotos) throw new Error('messenger cannot send photos');
@@ -513,14 +589,15 @@ export class MarketingHead implements ApprovalEditor {
             note = '\n\nАльбом с картинками не отправился: публикуйте по тексту, картинки лежат на сервере.';
           }
         }
-        await this.d.messenger.send(this.d.ownerId, `${renderItemMessage(g, publishDay(tctx))}${note}`.slice(0, 4000), publishedButtons(g));
+        if (!textSent) await this.d.messenger.send(this.d.ownerId, `${renderItemMessage(g, publishDay(tctx), { videoSent })}${note}`.slice(0, 4000), publishedButtons(g));
         this.publisher.markSent(tctx, g);
         sent++;
       } catch (e) {
         log('warn', 'publish pack not delivered', { err: errMsg(e) });
       }
     }
-    const text = `${res.result}${groups.length ? `\nПакетов отправлено владельцу: ${sent} из ${groups.length}.` : ''}`;
+    const retried = this.retryReels(groups);
+    const text = `${res.result}${groups.length ? `\nПакетов отправлено владельцу: ${sent} из ${groups.length}.` : ''}${retried ? `\nВидео снова в очереди рендера: ${retried}.` : ''}`;
     this.hq.complete(task.id, HEAD_ID, text);
     await this.report(task.id, text);
   }
@@ -624,6 +701,7 @@ export class MarketingHead implements ApprovalEditor {
       this.hq.wake(HEAD_ID, 'task');
       return `Взял (задача #${t.id}): Контент-мейкер соберёт пакет настройки профиля, он придёт в одобрения одной карточкой, обложки Актуального отрисую после одобрения.`;
     }
+    if (name === 'render') return this.renderCommand(arg);
     const niche = arg.trim();
     const store = this.store();
     if (niche && !findNiche(niche)) return `Не нашёл нишу «${niche.slice(0, 60)}». Напишите как в конструкторе, например: /article барбершоп. Или /article без названия: возьму первую нишу без статьи.`;
@@ -631,6 +709,23 @@ export class MarketingHead implements ApprovalEditor {
     const t = this.hq.createTask({ title: `Статья в блог${niche ? `: ${niche}` : ''}`, body: niche, dept: MARKETING, creator: 'owner', meta: { action: 'article', ...(niche ? { niche } : {}) } });
     this.hq.wake(HEAD_ID, 'task');
     return `Взял (задача #${t.id}): Контент-мейкер пишет статью${niche ? ` для ниши «${findNiche(niche)!.name}»` : ' для следующей ниши без статьи'} (ниш со статьями сейчас ${covered}). Карточка придёт в одобрения.`;
+  }
+
+  /** `/render <id>`: queues the video of an approved reel again (a new job, attempts from 0). */
+  private renderCommand(arg: string): string {
+    if (!this.d.renderReels) return 'Рендер видео выключен (REELS_RENDER=off).';
+    const id = Number(arg.trim().replace(/^#/, ''));
+    if (!Number.isInteger(id) || id <= 0) return 'Напишите номер материала: /render 12 (он в карточке и в сообщении «Публикуем»).';
+    const item = this.store().item(id);
+    if (!item) return `Материал #${id} не найден.`;
+    if (item.type !== 'clip') return `Материал #${id}: это не рилс (${TYPE_RU[item.type]}), видео собирается только для рилсов.`;
+    if (item.status !== 'ready') return `Материал #${id} ещё не одобрен, видео соберу после одобрения.`;
+    if (!parseReel(item.text)) return `В сценарии #${id} не нашёл сцен (формат «1. Голос: … Субтитр: …»), поправьте текст.`;
+    const job = this.renderQueue.latest(id);
+    if (job && (job.status === 'queued' || job.status === 'running')) return `Материал #${id}: рендер уже ${job.status === 'running' ? 'идёт' : 'в очереди'} (задача ${job.id}).`;
+    const next = this.renderQueue.requeue(id);
+    this.hq.log('owner', 'render_requeued', 'content_item', String(id));
+    return `Поставил в очередь рендера (задача ${next.id}, материал #${id}). Видео придёт в утреннем сообщении «Публикуем».`;
   }
 
   parts(approvalId: number): { id: string; label: string }[] | null {

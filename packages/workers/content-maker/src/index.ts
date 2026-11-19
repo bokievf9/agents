@@ -8,3 +8,5 @@ export * from './worker.js';
 export * from './article.js';
 export * from './niches.js';
 export * from './render.js';
+export * from './reel.js';
+export * from './render-queue.js';

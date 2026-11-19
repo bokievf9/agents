@@ -67,6 +67,37 @@ services:
       options:
         max-size: 10m
         max-file: "5"
+  # Renderer: faceless reels (Remotion + Chromium + Piper voice) for the reels HQ queues in `cm_render_jobs`. Polls the HQ SQLite
+  # file in the shared data dir every RENDERER_POLL_SECONDS and writes data/renders/<item>/reel.mp4. One container, one job at a time.
+  # No secrets and no network: the browser, the voice and the fonts are baked into the image. Not verified on a server yet
+  # (Chromium needs its sandbox off inside the container, shm and tmpfs sizes are first guesses): see packages/renderer/README.md.
+  renderer:
+    image: ghcr.io/bokievf9/agents-renderer:latest
+    restart: unless-stopped
+    user: "__AGENTS_UID__:__AGENTS_GID__"
+    environment:
+      DATA_DIR: /app/data
+      RENDERER_POLL_SECONDS: "20"
+      PIPER_VOICE: ru_RU-denis-medium
+      TZ: Asia/Tashkent
+    volumes:
+      - /opt/fir-agents/data/hq:/app/data
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=384m,mode=1777
+    shm_size: 256m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1536m
+    cpus: 1.5
+    pids_limit: 512
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
   # LLM gateway: internal network only, no published ports. Secrets (JWT_SECRET, API_KEY_SECRET, provider keys)
   # live in /opt/fir-agents/omniroute.env; the agents authenticate with LLM_API_KEY from .env.
   # Not read_only: the image is not verified for it yet (tighten after the first run on the server).
