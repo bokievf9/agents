@@ -31,7 +31,8 @@ export function seedOrg(hq: Hq, cfg: Pick<Config, 'instructionsDir' | 'marketing
     { name: 'marketing-trends-daily', cron: '30 7 * * *', tz: 'owner' as const, dept: 'marketing', title: 'Хуки и форматы дня', meta: { action: 'trends' } },
     { name: 'marketing-trends-weekly', cron: '0 20 * * 0', tz: 'owner' as const, dept: 'marketing', title: 'Тренды ниши за неделю', meta: { action: 'trends_weekly' } },
     { name: 'marketing-analyst-weekly', cron: '0 7 * * 1', tz: 'owner' as const, dept: 'marketing', title: 'Недельный отчёт маркетинга', meta: { action: 'report' } },
-    { name: 'marketing-article-weekly', cron: '0 7 * * 2', tz: 'owner' as const, dept: 'marketing', title: 'Статья в блог сайта (ниша без статьи)', meta: { action: 'article' } },
+    // one article a day, 07:30 on the owner's clock: the «Статья дня» card is ready for the 08:00 digest window; Mon/Wed/Fri/Sun «ИИ для бизнеса», Tue/Thu/Sat a niche
+    { name: 'marketing-article-daily', cron: '30 7 * * *', tz: 'owner' as const, dept: 'marketing', title: 'Статья дня в блог сайта', meta: { action: 'article' } },
     { name: 'marketing-seo-weekly', cron: '30 7 * * 1', tz: 'owner' as const, dept: 'marketing', title: 'SEO и AI-SEO проверка сайта', meta: { action: 'seo' } },
   ];
   hq.syncRoutines('marketing', routines);

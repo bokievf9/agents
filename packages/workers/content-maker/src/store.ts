@@ -75,6 +75,8 @@ export interface Item {
   edited: boolean;
   plannedDate: string;
   comment: string | null;
+  /** Slug of the blog article this carousel or reel was made from (repurposing), null for ordinary items. */
+  sourceSlug: string | null;
 }
 
 export interface ReadyRow {
@@ -89,11 +91,19 @@ export interface ReadyRow {
   files: string[];
 }
 
-/** proposed: with the owner. approved: handed to a builder. rejected. failed: the model gave nothing. */
+/** proposed: with the owner. approved: published by HQ (`/blog`). rejected. failed: the model gave nothing. */
 export type ArticleStatus = 'draft' | 'proposed' | 'approved' | 'rejected' | 'failed';
+/** `ai`: «ИИ для бизнеса» (niche is `ai`), `niche`: an article for one business niche. */
+export type ArticleLine = 'ai' | 'niche';
 export interface ArticleRow {
   id: number;
   niche: string;
+  line: ArticleLine;
+  topicKey: string;
+  published: boolean;
+  /** Approval day, YYYY-MM-DD (the site's `date`). */
+  date: string | null;
+  packQueued: boolean;
   status: ArticleStatus;
   slug: string;
   title: string;
@@ -124,12 +134,13 @@ interface ItemDb {
   id: number; pack_id: number | null; seq: number; total: number; type: ItemType; topic_key: string; topic_text: string;
   title: string; text: string; status: ItemStatus; attempt: number; edited: number; planned_date: string;
   comment: string | null;
+  source_slug: string | null;
 }
 
 const toItem = (r: ItemDb): Item => ({
   id: r.id, packId: r.pack_id, seq: r.seq, total: r.total, type: r.type, topicKey: r.topic_key, topicText: r.topic_text,
   title: r.title, text: r.text, status: r.status, attempt: r.attempt, edited: r.edited === 1, plannedDate: r.planned_date,
-  comment: r.comment,
+  comment: r.comment, sourceSlug: r.source_slug,
 });
 
 export class ContentStore {
@@ -138,6 +149,19 @@ export class ContentStore {
     // `files` came later than the table
     const cols = db.prepare('PRAGMA table_info(cm_ready)').all() as { name: string }[];
     if (!cols.some((c) => c.name === 'files')) db.exec("ALTER TABLE cm_ready ADD COLUMN files TEXT NOT NULL DEFAULT '[]'");
+    // the daily blog (2026-11-19): an approved article is published by HQ itself (`published`, `date`), the line says AI or a niche,
+    // `topic_key` keeps the used topic for the 60-day window, `pack_queued` waits for the next weekly pack (carousel + reel from it)
+    const acols = db.prepare('PRAGMA table_info(cm_articles)').all() as { name: string }[];
+    const addArticle = (name: string, ddl: string) => {
+      if (!acols.some((c) => c.name === name)) db.exec(`ALTER TABLE cm_articles ADD COLUMN ${name} ${ddl}`);
+    };
+    addArticle('published', 'INTEGER NOT NULL DEFAULT 0');
+    addArticle('date', 'TEXT');
+    addArticle('line', "TEXT NOT NULL DEFAULT 'niche'");
+    addArticle('topic_key', "TEXT NOT NULL DEFAULT ''");
+    addArticle('pack_queued', 'INTEGER NOT NULL DEFAULT 0');
+    const icols = db.prepare('PRAGMA table_info(cm_items)').all() as { name: string }[];
+    if (!icols.some((c) => c.name === 'source_slug')) db.exec('ALTER TABLE cm_items ADD COLUMN source_slug TEXT');
   }
 
   history(): History {
@@ -157,10 +181,10 @@ export class ContentStore {
     return Number(this.db.prepare('INSERT INTO cm_packs (week_start, created_at) VALUES (?, ?)').run(weekStart, this.now()).lastInsertRowid);
   }
 
-  insertItem(i: { packId: number | null; seq: number; total: number; type: ItemType; topicKey: string; topicText: string; plannedDate: string; attempt?: number }): number {
+  insertItem(i: { packId: number | null; seq: number; total: number; type: ItemType; topicKey: string; topicText: string; plannedDate: string; attempt?: number; sourceSlug?: string }): number {
     const r = this.db
-      .prepare('INSERT INTO cm_items (pack_id, seq, total, type, topic_key, topic_text, status, attempt, planned_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(i.packId, i.seq, i.total, i.type, i.topicKey, i.topicText, 'draft', i.attempt ?? 0, i.plannedDate, this.now());
+      .prepare('INSERT INTO cm_items (pack_id, seq, total, type, topic_key, topic_text, status, attempt, planned_date, created_at, source_slug) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(i.packId, i.seq, i.total, i.type, i.topicKey, i.topicText, 'draft', i.attempt ?? 0, i.plannedDate, this.now(), i.sourceSlug ?? null);
     return Number(r.lastInsertRowid);
   }
 
@@ -247,8 +271,8 @@ export class ContentStore {
   }
 
   // ---- blog articles ----
-  insertArticle(niche: string): number {
-    return Number(this.db.prepare("INSERT INTO cm_articles (niche, status, created_at) VALUES (?, 'draft', ?)").run(niche, this.now()).lastInsertRowid);
+  insertArticle(niche: string, line: ArticleLine = 'niche', topicKey = ''): number {
+    return Number(this.db.prepare("INSERT INTO cm_articles (niche, line, topic_key, status, created_at) VALUES (?, ?, ?, 'draft', ?)").run(niche, line, topicKey, this.now()).lastInsertRowid);
   }
 
   article(id: number): ArticleRow | undefined {
@@ -260,10 +284,10 @@ export class ContentStore {
     return (this.db.prepare('SELECT * FROM cm_articles ORDER BY id').all() as ArticleDb[]).map(toArticle);
   }
 
-  setArticle(id: number, f: Partial<{ status: ArticleStatus; slug: string; title: string; json: string; comment: string; taskId: number; issueNumber: number }>): void {
+  setArticle(id: number, f: Partial<{ status: ArticleStatus; slug: string; title: string; json: string; comment: string; taskId: number; issueNumber: number; topicKey: string }>): void {
     const cols: string[] = [];
     const args: unknown[] = [];
-    const map: Record<string, string> = { status: 'status', slug: 'slug', title: 'title', json: 'json', comment: 'comment', taskId: 'task_id', issueNumber: 'issue_number' };
+    const map: Record<string, string> = { status: 'status', slug: 'slug', title: 'title', json: 'json', comment: 'comment', taskId: 'task_id', issueNumber: 'issue_number', topicKey: 'topic_key' };
     for (const [k, v] of Object.entries(f)) {
       cols.push(`${map[k]!} = ?`);
       args.push(v);
@@ -277,15 +301,71 @@ export class ContentStore {
 
   /** Niches that already have an article that is alive (anything but rejected and failed). */
   coveredNiches(): Set<string> {
-    return new Set((this.db.prepare("SELECT niche FROM cm_articles WHERE status IN ('draft', 'proposed', 'approved')").all() as { niche: string }[]).map((r) => r.niche));
+    return new Set((this.db.prepare("SELECT niche FROM cm_articles WHERE status IN ('draft', 'proposed', 'approved') AND line = 'niche'").all() as { niche: string }[]).map((r) => r.niche));
+  }
+
+  /** Topic keys of live articles (not rejected, not failed) with the time of their last use: the 60-day window reads this. */
+  recentArticleTopics(): Map<string, number> {
+    const rows = this.db.prepare("SELECT topic_key AS k, MAX(created_at) AS t FROM cm_articles WHERE topic_key != '' AND status IN ('draft', 'proposed', 'approved') GROUP BY topic_key").all() as { k: string; t: number }[];
+    return new Map(rows.map((r) => [r.k, r.t]));
+  }
+
+  /** Titles of live articles of one niche (so the next one takes another angle). */
+  titlesOfNiche(niche: string): string[] {
+    return (this.db.prepare("SELECT title FROM cm_articles WHERE niche = ? AND status IN ('proposed', 'approved') AND title != '' ORDER BY id DESC LIMIT 5").all(niche) as { title: string }[]).map((r) => r.title);
+  }
+
+  /** Cards the owner has not decided yet. */
+  proposedArticles(): number {
+    return (this.db.prepare("SELECT COUNT(*) c FROM cm_articles WHERE status = 'proposed'").get() as { c: number }).c;
+  }
+
+  /** Approved articles, newest first: what `/blog` serves. */
+  publishedArticles(): ArticleRow[] {
+    return (this.db.prepare("SELECT * FROM cm_articles WHERE published = 1 AND status = 'approved' ORDER BY date DESC, id DESC").all() as ArticleDb[]).map(toArticle);
+  }
+
+  articleBySlug(slug: string): ArticleRow | undefined {
+    const r = this.db.prepare("SELECT * FROM cm_articles WHERE published = 1 AND status = 'approved' AND slug = ?").get(slug) as ArticleDb | undefined;
+    return r ? toArticle(r) : undefined;
+  }
+
+  slugTaken(slug: string, exceptId: number): boolean {
+    return this.db.prepare("SELECT 1 FROM cm_articles WHERE published = 1 AND slug = ? AND id != ?").get(slug, exceptId) !== undefined;
+  }
+
+  /** The owner approved: the article is published on `date` with its final slug and waits for the next weekly pack. */
+  publishArticle(id: number, f: { slug: string; json: string; date: string }): void {
+    this.db.prepare("UPDATE cm_articles SET status = 'approved', published = 1, slug = ?, json = ?, date = ?, pack_queued = 1, decided_at = ? WHERE id = ?").run(f.slug, f.json, f.date, this.now(), id);
+  }
+
+  /** Approved articles whose carousel and reel are not in a pack yet, oldest first. */
+  queuedArticles(): ArticleRow[] {
+    return (this.db.prepare("SELECT * FROM cm_articles WHERE pack_queued = 1 AND published = 1 ORDER BY id").all() as ArticleDb[]).map(toArticle);
+  }
+
+  unqueueArticle(id: number): void {
+    this.db.prepare('UPDATE cm_articles SET pack_queued = 0 WHERE id = ?').run(id);
+  }
+
+  /** Items made from an article, newest first (carousel and reel). */
+  itemsOfSlug(slug: string): Item[] {
+    return (this.db.prepare('SELECT * FROM cm_items WHERE source_slug = ? ORDER BY id').all(slug) as ItemDb[]).map(toItem);
+  }
+
+  /** One more `/blog` request served on `date` (YYYY-MM-DD): the analyst's «обращений к блогу». */
+  bumpBlogHit(date: string): void {
+    this.db.prepare("INSERT INTO cm_kv (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)").run(`blog_hits:${date}`);
   }
 }
 
 interface ArticleDb {
   id: number; niche: string; status: ArticleStatus; slug: string; title: string; json: string; comment: string | null;
   task_id: number | null; issue_number: number | null; created_at: number; decided_at: number | null;
+  line: ArticleLine; topic_key: string; published: number; date: string | null; pack_queued: number;
 }
 const toArticle = (r: ArticleDb): ArticleRow => ({
   id: r.id, niche: r.niche, status: r.status, slug: r.slug, title: r.title, json: r.json, comment: r.comment, taskId: r.task_id,
   issueNumber: r.issue_number, createdAt: r.created_at, decidedAt: r.decided_at,
+  line: r.line === 'ai' ? 'ai' : 'niche', topicKey: r.topic_key, published: r.published === 1, date: r.date, packQueued: r.pack_queued === 1,
 });

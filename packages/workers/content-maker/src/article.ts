@@ -68,6 +68,7 @@ export function contentIssues(c: ArticleContent, lang: 'ru' | 'en'): string[] {
 
 export const articleSchema = z.object({
   slug: z.string().min(3).max(60).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, 'slug: latin letters, digits, hyphens'),
+  /** A niche id, or `ai` for the «ИИ для бизнеса» line. */
   niche: z.string().min(2).max(30),
   ru: contentSchema,
   en: contentSchema,
@@ -77,30 +78,73 @@ export type ArticleJson = z.infer<typeof articleSchema>;
 /** The RU content alone, to ask for it first (the English one is a translation of the approved shape). */
 export const ruPartSchema = z.object({ slug: articleSchema.shape.slug, ru: contentSchema });
 
-/** The owner's preview: title, description, headings, first characters. */
+/** The line of the day by weekday (1 = Monday ... 7 = Sunday): Mon, Wed, Fri, Sun «ИИ для бизнеса», Tue, Thu, Sat a niche. */
+export const articleLineOn = (dow: number): 'ai' | 'niche' => (dow % 2 === 1 ? 'ai' : 'niche');
+
+/** «ai», «ии», «ИИ для бизнеса»: the owner asks for the AI line instead of a niche. */
+export const isAiAsk = (s: string): boolean => /^(ai|ии|и-и)(?![\p{L}])/iu.test(s.trim());
+
+/** ASCII kebab-case slug from the English title, 3-60 characters. */
+export function slugFromTitle(title: string): string {
+  const base = title.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const cut = base.length > 60 ? base.slice(0, 60).replace(/-[^-]*$/, '') || base.slice(0, 60) : base;
+  return cut.length >= 3 ? cut.replace(/-+$/, '') : 'ai-article';
+}
+
+/** `base`, then `base-2`, `base-3`... until `taken` says the slug is free; always within 60 characters. */
+export function uniqueSlug(base: string, taken: (slug: string) => boolean): string {
+  let slug = base;
+  for (let n = 2; taken(slug); n++) {
+    const suffix = `-${n}`;
+    slug = `${base.slice(0, 60 - suffix.length).replace(/-+$/, '')}${suffix}`;
+  }
+  return slug;
+}
+
+/** An article exactly as the site's `Article` type (firtech/src/content/blog/types.ts). */
+export interface PublicArticle {
+  slug: string;
+  published: true;
+  date: string;
+  ru: ArticleContent;
+  en: ArticleContent;
+}
+
+/** What `/blog` serves for an approved row; null for a row that cannot be served (not published, unreadable JSON). */
+export function toPublicArticle(row: { slug: string; json: string; date: string | null; published: boolean }): PublicArticle | null {
+  if (!row.published || !row.date) return null;
+  try {
+    const a = articleSchema.parse(JSON.parse(row.json));
+    return { slug: row.slug, published: true, date: row.date, ru: a.ru, en: a.en };
+  } catch {
+    return null;
+  }
+}
+
+const firstParagraph = (c: ArticleContent): string => {
+  const p = c.blocks.find((b) => b.type === 'p');
+  return p && p.type === 'p' ? p.text : '';
+};
+
+/** The «Статья дня» card: line, title, description, the h2 outline. */
 export function articleSummary(a: ArticleJson, nicheName: string): string {
   const heads = a.ru.blocks.filter((b): b is Extract<Block, { type: 'h2' }> => b.type === 'h2').map((b) => `- ${b.text}`);
-  return `Статья для блога, ниша «${nicheName}», ${wordCount(a.ru)} слов RU и ${wordCount(a.en)} EN.\n${a.ru.title}\nОписание: ${a.ru.description}\nРазделы:\n${heads.join('\n')}`;
+  const line = a.niche === 'ai' ? 'ИИ для бизнеса' : `ниша «${nicheName}»`;
+  return `Статья дня, ${line}, ${wordCount(a.ru)} слов RU и ${wordCount(a.en)} EN.\n${a.ru.title}\nОписание: ${a.ru.description}\nРазделы:\n${heads.join('\n')}`;
 }
 
-/** What the card shows as the proposed text: the first 600 characters of the RU body. */
+/** What the card shows as the proposed text: the first paragraph of the RU body. */
 export function articlePreview(a: ArticleJson): string {
-  const body = a.ru.blocks.filter((b) => b.type === 'p' || b.type === 'h2').map((b) => blockText(b)).join('\n\n');
-  return body.length > 600 ? `${body.slice(0, 600).trimEnd()}…\n\n(полный текст RU и EN уйдёт строителю в issue)` : body;
+  const body = firstParagraph(a.ru);
+  return body.length > 600 ? `${body.slice(0, 600).trimEnd()}…` : body;
 }
 
-export const articleTargetPath = (slug: string): string => `src/content/blog/${slug}.ts`;
-
-/**
- * Instruction for the builder (the main window): turn the JSON into the site's typed article file, register it,
- * run the site checks. Written once here so the issue text is the same every time.
- */
-export function builderInstruction(a: ArticleJson, today: string): string {
+/** The article as a source for a carousel and a reel script: title, h2 outline, first paragraph, link. */
+export function articleSource(a: ArticleJson): string {
+  const heads = a.ru.blocks.filter((b): b is Extract<Block, { type: 'h2' }> => b.type === 'h2').map((b) => b.text).filter((t) => !FAQ_RE.test(t));
   return [
-    `Одобренная владельцем статья блога firtech.pro. Сделайте в репозитории сайта (firtech, ветка и проверки по его CLAUDE.md):`,
-    `1. Создайте файл \`${articleTargetPath(a.slug)}\`: \`export const <camelCase slug>: Article\` с полями из JSON ниже, \`published: true\`, \`date: '${today}'\`. Тексты без правок смысла; одну ссылку на \`/ru/solutions/${a.niche}\` (в EN \`/en/solutions/${a.niche}\`) добавьте в блок callout или cta, если блоки блога поддерживают ссылку, иначе упомяните в комментарии к issue.`,
-    `2. Добавьте статью в массив \`articles\` в \`src/content/blog/index.ts\`. Проверьте, что slug уникален.`,
-    `3. Прогоните тесты сайта (tests/blog.test.mjs: без длинных тире, цены только через \`price.*\`, 600-1300 слов), typecheck, lint, build. Не публикуйте в прод без решения владельца.`,
-    `4. Закройте issue комментарием с веткой или коммитом.`,
+    `Материал сделан из статьи блога «${a.ru.title}» (firtech.pro/ru/blog/${a.slug}). Опирайся на её содержание, не выдумывай новых фактов.`,
+    `Разделы статьи (h2): ${heads.join('; ')}.`,
+    `Первый абзац: ${firstParagraph(a.ru).slice(0, 500)}`,
   ].join('\n');
 }

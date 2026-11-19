@@ -41,7 +41,7 @@ export interface WeekNumbers {
   /** Prospector funnel counts by status, when the Sales tables exist. */
   funnel: Record<string, number> | null;
   /** Blog articles of the week (null: the content-maker has no article table or no article yet). */
-  articles: { proposed: number; approved: number; published: number } | null;
+  articles: { proposed: number; approved: number; published: number; fromArticles: number; hits: number | null } | null;
 }
 
 const recsSchema = z.object({ recommendations: z.array(z.string().min(5).max(300)).length(3) });
@@ -86,18 +86,28 @@ export function aggregate(db: Db, from: string, to: string, nowMs: number, tz: s
   }
   let articles: WeekNumbers['articles'] = null;
   if (hasTable(db, 'cm_articles') && (db.prepare('SELECT COUNT(*) c FROM cm_articles').get() as { c: number }).c > 0) {
-    const rows = db.prepare("SELECT created_at, decided_at, status, task_id FROM cm_articles").all() as { created_at: number; decided_at: number | null; status: string; task_id: number | null }[];
-    // published = the builder's issue is closed (the bridge marks the task `builderClosed`)
+    const published = hasColumn(db, 'cm_articles', 'published');
+    const rows = db.prepare(`SELECT created_at, decided_at, status, task_id${published ? ', published' : ''} FROM cm_articles`).all() as { created_at: number; decided_at: number | null; status: string; task_id: number | null; published?: number }[];
+    // since 2026-11-19 HQ publishes an approved article itself (`published`, endpoint /blog); older rows were handed to a builder (published = the issue was closed)
     const closed = (taskId: number | null): boolean => {
       if (taskId === null || !hasTable(db, 'tasks')) return false;
       const m = (db.prepare('SELECT meta FROM tasks WHERE id = ?').get(taskId) as { meta: string } | undefined)?.meta ?? '';
       return /"builderClosed":\s*true/.test(m);
     };
     const decided = rows.filter((r) => r.status === 'approved' && r.decided_at !== null && r.decided_at >= winFrom && r.decided_at < winTo);
+    const fromArticles = hasTable(db, 'cm_items') && hasColumn(db, 'cm_items', 'source_slug')
+      ? (db.prepare("SELECT COUNT(*) c FROM cm_items WHERE source_slug IS NOT NULL AND status = 'ready' AND created_at >= ? AND created_at < ?").get(winFrom, winTo) as { c: number }).c
+      : 0;
+    // `/blog` requests the endpoint counted per day (cm_kv `blog_hits:<date>`)
+    const hits = hasTable(db, 'cm_kv')
+      ? (db.prepare("SELECT COALESCE(SUM(CAST(value AS INTEGER)), 0) s, COUNT(*) n FROM cm_kv WHERE key >= ? AND key <= ?").get(`blog_hits:${from}`, `blog_hits:${to}`) as { s: number; n: number })
+      : null;
     articles = {
       proposed: rows.filter((r) => r.created_at >= winFrom && r.created_at < winTo && r.status !== 'draft').length,
       approved: decided.length,
-      published: decided.filter((r) => closed(r.task_id)).length,
+      published: decided.filter((r) => (published ? r.published === 1 : false) || closed(r.task_id)).length,
+      fromArticles,
+      hits: hits && hits.n > 0 ? hits.s : null,
     };
   }
   const leadCount = (a: number, b: number): number => {
@@ -129,7 +139,7 @@ export function numbersText(n: WeekNumbers): string {
     `3. Лидов: ${n.leads} (неделей ранее ${n.leadsPrev})`,
     `4. Расходы на ИИ за неделю: $${n.costUsd.toFixed(2)}`,
     `5. Подписчики YouTube: ${subs}`,
-    ...(n.articles ? [`6. Статьи блога: предложено ${n.articles.proposed}, одобрено ${n.articles.approved}, опубликовано ${n.articles.published} (опубликована = строитель закрыл issue; остальные переданы строителю)`] : []),
+    ...(n.articles ? [`6. Статьи блога: предложено ${n.articles.proposed}, одобрено ${n.articles.approved}, опубликовано ${n.articles.published} (одобренная публикуется сразу через /blog); из статей в материалах недели: ${n.articles.fromArticles}${n.articles.hits === null ? '' : `; обращений к /blog: ${n.articles.hits}`}`] : []),
   ].join('\n');
 }
 

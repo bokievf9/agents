@@ -104,7 +104,7 @@ export function setup(opts: { llm?: LlmClient; clipsPerWeek?: number; carouselsP
   const worker = new ContentMakerWorker({ promptsDir, rng: () => 0.1, ...(opts.clipsPerWeek !== undefined ? { clipsPerWeek: opts.clipsPerWeek } : {}), ...(opts.carouselsPerWeek !== undefined ? { carouselsPerWeek: opts.carouselsPerWeek } : {}), ...(opts.postsPerWeek !== undefined ? { postsPerWeek: opts.postsPerWeek } : {}), ...(opts.storiesPerWeek !== undefined ? { storiesPerWeek: opts.storiesPerWeek } : {}), ...(opts.rendersDir ? { rendersDir: opts.rendersDir } : {}) });
   let n = 0;
   const task = (meta: Record<string, unknown>, title = 'T'): Task => ({
-    id: ++n, title, body: '', dept: 'marketing', assigneeId: 'content-maker', creator: 'routine', parentId: null, status: 'running', priority: 0,
+    id: ++n, title, body: '', dept: 'marketing', assigneeId: 'content-maker', creator: 'owner', parentId: null, status: 'running', priority: 0,
     dueAt: null, result: null, costUsd: 0, meta, tags: [], routineId: null, createdAt: 0, updatedAt: 0,
   });
   return { worker, ctx, db, staged, clock, logs, task, llm };

@@ -191,7 +191,7 @@ describe('org and config', () => {
     expect(w.hq.agent('marketing-head')).toMatchObject({ bot: 'MARKETING_BOT_TOKEN', bossId: 'director' });
     expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([
       ['marketing-weekly-pack', '0 6 * * 1'], ['marketing-daily-today', '0 9 * * *'], ['marketing-trends-daily', '30 7 * * *'],
-      ['marketing-trends-weekly', '0 20 * * 0'], ['marketing-analyst-weekly', '0 7 * * 1'], ['marketing-article-weekly', '0 7 * * 2'], ['marketing-seo-weekly', '30 7 * * 1'],
+      ['marketing-trends-weekly', '0 20 * * 0'], ['marketing-analyst-weekly', '0 7 * * 1'], ['marketing-article-daily', '30 7 * * *'], ['marketing-seo-weekly', '30 7 * * 1'],
     ]);
     w.hq.setInstructions('marketing-head', 'edited');
     w.hq.scheduleRoutine({ ...w.hq.routineByName('marketing-daily-today')!, cron: '0 10 * * *' });

@@ -3,10 +3,11 @@ import type { SubtaskSpec, Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq
 import { fill, generateItem, loadPrompts, noTrends, type Prompts, type TrendHint, type TrendsProvider } from './generate.js';
 import { PLATFORM_LABEL, splitPlatforms, type ItemType, type Platform } from './format.js';
 import { ContentStore } from './store.js';
-import { ALL_TOPICS, freeTopic, pickFormatTopics, pickTopics, type Topic } from './topics.js';
+import { AI_TOPICS, ALL_TOPICS, ARTICLE_WINDOW_DAYS, freeTopic, freshWindowMs, pickAiTopic, pickFormatTopics, pickTopics, type Topic } from './topics.js';
 import { renderItem } from './render.js';
-import { articleSchema, articleSummary, articlePreview, contentIssues, ruPartSchema, contentSchema, type ArticleJson } from './article.js';
+import { articleLineOn, articlePreview, articleSchema, articleSource, articleSummary, contentIssues, contentSchema, isAiAsk, ruPartSchema, slugFromTitle, uniqueSlug, type ArticleJson } from './article.js';
 import { findNiche, TOPIC_NICHES, nicheById } from './niches.js';
+import type { ArticleRow } from './store.js';
 import { tryJson } from '@fir/core';
 import { z } from 'zod';
 
@@ -48,6 +49,7 @@ export const hasCarousel = (week: number, r: number): boolean => carouselCount(w
 /** `n` days spread over Mon-Sun starting from `offset`, never past Sunday. */
 const spread = (n: number, offset = 0): number[] => Array.from({ length: n }, (_, i) => Math.min(6, offset + Math.floor((i * 7) / n)));
 
+type PlanEntry = { type: ItemType; day: number; article?: ArticleRow };
 const TYPE_ORDER: ItemType[] = ['clip', 'post', 'carousel', 'story', 'profile'];
 
 /**
@@ -198,17 +200,43 @@ export class ContentMakerWorker implements Worker {
     const store = storeFor(ctx);
     const week = this.weekStart(ctx.now(), ctx.tz);
     if (!task.meta.force && store.packExists(week)) return [];
-    const plan = buildPackPlan(week, this.cadence);
-    const classic = plan.filter((p) => p.type === 'clip' || p.type === 'carousel').length;
+    const plan: PlanEntry[] = buildPackPlan(week, this.cadence);
+    const carouselSlots = plan.filter((p) => p.type === 'carousel').length;
+    // Repurposing (daily blog): every approved article waiting for a pack gives one reel and one carousel. Reels take the place of
+    // ordinary reels, carousels of ordinary carousels (a pack never grows past its cadence by more than two extra carousels);
+    // an article that does not fit both stays queued for the next pack.
+    const taken: ArticleRow[] = [];
+    let extraCarousels = 0;
+    for (const a of store.queuedArticles()) {
+      const reel = plan.find((p) => p.type === 'clip' && !p.article);
+      if (!reel) break;
+      let carousel = plan.find((p) => p.type === 'carousel' && !p.article);
+      if (!carousel) {
+        if (carouselSlots + extraCarousels >= Math.max(carouselSlots, 2)) break;
+        carousel = { type: 'carousel', day: reel.day };
+        plan.push(carousel);
+        extraCarousels++;
+      }
+      reel.article = a;
+      carousel.article = a;
+      taken.push(a);
+    }
+    plan.sort((x, y) => x.day - y.day || TYPE_ORDER.indexOf(x.type) - TYPE_ORDER.indexOf(y.type));
+    const classic = plan.filter((p) => (p.type === 'clip' || p.type === 'carousel') && !p.article).length;
     const classicTopics = pickTopics(store.history(), classic, ctx.now(), this.rng);
-    const formatTopics = pickFormatTopics(store.history(), plan.length - classic, this.rng);
+    const formatTopics = pickFormatTopics(store.history(), plan.filter((p) => p.type !== 'clip' && p.type !== 'carousel').length, this.rng);
     const packId = store.createPack(week);
-    return plan.map((p, i) => {
-      const topic = (p.type === 'clip' || p.type === 'carousel' ? classicTopics : formatTopics).shift()!;
-      const itemId = store.insertItem({ packId, seq: i + 1, total: plan.length, type: p.type, topicKey: topic.key, topicText: topic.text, plannedDate: addDays(week, p.day) });
-      store.recordTopic(topic.key);
-      return { title: `Материал ${i + 1} из ${plan.length}: ${TYPE_RU[p.type]}, ${dayLabel(addDays(week, p.day))}`, meta: { action: 'item', itemId } };
+    const specs = plan.map((p, i) => {
+      const own = p.article ? { key: `article:${p.article.slug}`, text: `Статья блога «${p.article.title}»` } : (p.type === 'clip' || p.type === 'carousel' ? classicTopics : formatTopics).shift()!;
+      const itemId = store.insertItem({
+        packId, seq: i + 1, total: plan.length, type: p.type, topicKey: own.key, topicText: own.text, plannedDate: addDays(week, p.day),
+        ...(p.article ? { sourceSlug: p.article.slug } : {}),
+      });
+      if (!p.article) store.recordTopic(own.key);
+      return { title: `Материал ${i + 1} из ${plan.length}: ${TYPE_RU[p.type]}, ${dayLabel(addDays(week, p.day))}${p.article ? ' (из статьи)' : ''}`, meta: { action: 'item', itemId } };
     });
+    for (const a of taken) store.unqueueArticle(a.id);
+    return specs;
   }
 
   async run(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
@@ -232,21 +260,23 @@ export class ContentMakerWorker implements Worker {
     if (!item) return { ok: false, result: '', error: `Материал ${itemId} не найден` };
     const topic: Topic = ALL_TOPICS.find((t) => t.key === item.topicKey) ?? { key: item.topicKey, directionId: null, text: item.topicText };
     const feedback = typeof task.meta.feedback === 'string' ? task.meta.feedback : '';
+    const source = item.sourceSlug ? store.articleBySlug(item.sourceSlug) : undefined;
     let trends: TrendHint[] = [];
     try {
-      trends = item.type === 'clip' || item.type === 'carousel' ? pickTrends(this.trends({ db: ctx.db, now: ctx.now }), topic.directionId) : [];
+      trends = source ? [] : item.type === 'clip' || item.type === 'carousel' ? pickTrends(this.trends({ db: ctx.db, now: ctx.now }), topic.directionId) : [];
     } catch (e) {
       log('warn', 'trends provider failed, continuing without trends', { err: errMsg(e) });
     }
     try {
       const gen = await generateItem(ctx.llm, this.prompts, {
         type: item.type, topic, week: item.packId ? `с ${ddmm(item.plannedDate)}` : '', ...(feedback ? { comment: feedback, previous: item.text } : {}), ...(trends.length ? { trends } : {}),
+        ...(source ? { source: articleSource(articleSchema.parse(JSON.parse(source.json))) } : {}),
       });
       if (!gen) {
         store.setStatus(itemId, 'failed');
         return { ok: false, result: '', error: `Материал ${item.seq} из ${item.total} (${TYPE_RU[item.type]}, ${topic.text}): модель не дала валидный ответ` };
       }
-      const head = `${item.packId ? `Пакет, материал ${item.seq} из ${item.total}` : 'Отдельный материал'}${feedback ? ' (вторая версия)' : ''}. ${TYPE_RU[item.type]}, ${PLATFORMS[item.type].map((p) => PLATFORM_LABEL[p]).join(' + ')}. Выход: ${dayLabel(item.plannedDate)}. Тема: ${topic.text}`;
+      const head = `${item.packId ? `Пакет, материал ${item.seq} из ${item.total}` : 'Отдельный материал'}${feedback ? ' (вторая версия)' : ''}. ${TYPE_RU[item.type]}, ${PLATFORMS[item.type].map((p) => PLATFORM_LABEL[p]).join(' + ')}. Выход: ${dayLabel(item.plannedDate)}. Тема: ${topic.text}${item.sourceSlug ? `. Из статьи: ${item.sourceSlug}` : ''}`;
       const warn = gen.issues.length ? `\nПроверка тона нашла: ${gen.issues.join('; ')}.` : '';
       store.setProposed(itemId, gen.text, gen.title);
       await ctx.requestApproval(KIND, { text: gen.text, itemId }, head + warn);
@@ -260,42 +290,70 @@ export class ContentMakerWorker implements Worker {
   }
 
   /**
-   * `article`: one blog article. `meta.niche` (id or a name fragment) picks the niche, otherwise the first niche without
-   * an article. `meta.articleId` + `meta.feedback`: a rework of a row the owner sent back. RU first, then the English
-   * version from it, each as strict JSON with the site's rules checked; one repair pass per language.
+   * `article`: one blog article of the day. Two lines alternate by weekday (`articleLineOn`, the head passes `meta.line` computed on the
+   * owner's clock): «ИИ для бизнеса» (`ai`, a theme not used for 60 days, Trend Scout's hooks as a nudge) and a niche (`meta.niche` asks
+   * for one, otherwise the niche unused for the longest time, none within 60 days). `meta.articleId` + `meta.feedback`: a rework of a row
+   * the owner sent back. RU first, then the English version from it, each as strict JSON with the site's rules checked; one repair pass
+   * per language. A routine run stops while three cards wait for the owner.
    */
   async runArticle(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
     const store = storeFor(ctx);
     let id = Number(task.meta.articleId) || 0;
+    const asked = typeof task.meta.niche === 'string' ? task.meta.niche.trim() : '';
+    if (!id && task.creator === 'routine' && store.proposedArticles() >= 3) return { ok: true, result: 'Три статьи уже ждут решения владельца, новую не пишу.' };
+    let line: 'ai' | 'niche' = id ? (store.article(id)?.line ?? 'niche') : task.meta.line === 'ai' || task.meta.line === 'niche' ? task.meta.line : articleLineOn(zonedParts(ctx.now(), ctx.tz).dow);
+    if (!id && asked) line = isAiAsk(asked) ? 'ai' : 'niche';
+    const used = store.recentArticleTopics();
+    let topic: Topic | null = null;
+    let nicheName = '';
     let nicheId = id ? store.article(id)?.niche : undefined;
-    if (!nicheId) {
-      const asked = typeof task.meta.niche === 'string' ? task.meta.niche.trim() : '';
+    if (line === 'ai') {
+      nicheId = 'ai';
+      const keep = id ? store.article(id)?.topicKey : '';
+      topic = (keep ? AI_TOPICS.find((t) => t.key === keep) : undefined) ?? pickAiTopic(used, ctx.now(), this.rng);
+    } else if (!nicheId) {
       if (asked) {
         const n = findNiche(asked);
         if (!n) return { ok: false, result: '', error: `Не нашёл нишу «${asked.slice(0, 60)}». Нужна ниша из каталога конструктора, например барбершоп, стоматология, автосервис.` };
         nicheId = n.id;
       } else {
-        const covered = store.coveredNiches();
-        const free = TOPIC_NICHES.filter((n) => !covered.has(n.id));
-        if (free.length === 0) return { ok: true, result: 'Все ниши каталога уже покрыты статьями, новой не делаю.' };
-        nicheId = free[Math.floor(this.rng() * free.length)]!.id;
+        const age = (n: { id: string }) => used.get(`niche:${n.id}`) ?? 0;
+        const free = TOPIC_NICHES.filter((n) => ctx.now() - age(n) >= freshWindowMs()).sort((x, y) => age(x) - age(y));
+        if (free.length === 0) return { ok: true, result: `Все ниши каталога использованы за последние ${ARTICLE_WINDOW_DAYS} дней, новую не делаю.` };
+        const never = free.filter((n) => age(n) === 0);
+        const pool = never.length > 0 ? never : free.slice(0, 5);
+        nicheId = pool[Math.floor(this.rng() * pool.length)]!.id;
       }
     }
-    const niche = nicheById(nicheId)!;
-    if (!id) id = store.insertArticle(niche.id);
+    if (line === 'niche') nicheName = nicheById(nicheId!)!.name;
+    const label = line === 'ai' ? 'ИИ для бизнеса' : nicheName;
+    if (!id) id = store.insertArticle(nicheId!, line, line === 'ai' ? topic!.key : `niche:${nicheId}`);
     const feedback = typeof task.meta.feedback === 'string' ? task.meta.feedback : '';
     const prev = store.article(id)?.json;
     const fail = (why: string): WorkerResult => {
       store.setArticle(id, { status: 'failed', comment: why });
-      return { ok: false, result: '', error: `Статья «${niche.name}»: ${why}` };
+      return { ok: false, result: '', error: `Статья «${label}»: ${why}` };
     };
     try {
+      let trendsText = '';
+      if (line === 'ai') {
+        try {
+          const hints = this.trends({ db: ctx.db, now: ctx.now }).slice(0, 3);
+          if (hints.length) trendsText = `Сигналы Трендвотчера (если один из них про ИИ и подходит теме, возьмите его поводом, остальное игнорируйте; чужие тексты не копировать):\n${hints.map((t) => `- ${t.hook}; почему растёт: ${t.why}`).join('\n')}\n`;
+        } catch (e) {
+          log('warn', 'trends provider failed for the article', { err: errMsg(e) });
+        }
+      }
+      const earlier = line === 'niche' ? store.titlesOfNiche(nicheId!).filter((t) => t !== store.article(id)?.title) : [];
       const extra = [
+        earlier.length ? `Для этой ниши уже есть статьи: ${earlier.join('; ')}. Возьми другой угол и другое название.` : '',
         feedback ? `Прошлый вариант вернули с замечанием владельца: ${feedback}\nУчти его и напиши заново.${prev ? `\nПрошлый вариант (не повторяй его):\n${prev.slice(0, 6000)}` : ''}` : '',
       ].filter(Boolean).join('\n\n');
+      const ruTemplate = line === 'ai' ? this.prompts.articleAiRu : this.prompts.articleRu;
+      const enTemplate = line === 'ai' ? this.prompts.articleAiEn : this.prompts.articleEn;
       const ruReq = (fix?: string) => ({
         tier: 'sonnet' as const, system: this.prompts.articleSystem, maxTokens: 12_000,
-        messages: [{ role: 'user' as const, content: fill(this.prompts.articleRu, { niche: niche.name, nicheId: niche.id, extra: [extra, fix ? `В черновике найдено: ${fix}. Исправь и верни полный JSON.` : ''].filter(Boolean).join('\n\n') }) }],
+        messages: [{ role: 'user' as const, content: fill(ruTemplate, { niche: nicheName, nicheId: nicheId!, topic: topic?.text ?? '', trends: trendsText, extra: [extra, fix ? `В черновике найдено: ${fix}. Исправь и верни полный JSON.` : ''].filter(Boolean).join('\n\n') }) }],
       });
       let ru = await tryJson(ctx.llm, ruReq(), ruPartSchema);
       let ruIssues = ru ? contentIssues(ru.ru, 'ru') : [];
@@ -312,7 +370,7 @@ export class ContentMakerWorker implements Worker {
       if (!ru) return fail('модель не дала валидный русский текст');
       const enReq = (fix?: string) => ({
         tier: 'sonnet' as const, system: this.prompts.articleSystem, maxTokens: 12_000,
-        messages: [{ role: 'user' as const, content: fill(this.prompts.articleEn, { nicheId: niche.id, ru: JSON.stringify(ru!.ru), extra: fix ? `The previous draft had problems: ${fix}. Fix them and return the full JSON.` : '' }) }],
+        messages: [{ role: 'user' as const, content: fill(enTemplate, { nicheId: nicheId!, ru: JSON.stringify(ru!.ru), extra: fix ? `The previous draft had problems: ${fix}. Fix them and return the full JSON.` : '' }) }],
       });
       const enSchema = z.object({ en: contentSchema });
       let en = await tryJson(ctx.llm, enReq(), enSchema);
@@ -325,10 +383,11 @@ export class ContentMakerWorker implements Worker {
         }
       }
       if (!en) return fail('модель не дала валидный английский текст');
-      const article: ArticleJson = articleSchema.parse({ slug: ru.slug, niche: niche.id, ru: ru.ru, en: en.en });
+      // the final slug is made on approval from the English title; until then the model's one is kept
+      const article: ArticleJson = articleSchema.parse({ slug: ru.slug, niche: nicheId, ru: ru.ru, en: en.en });
       store.setArticle(id, { status: 'proposed', slug: article.slug, title: article.ru.title, json: JSON.stringify(article) });
       const warn = [...ruIssues, ...enIssues];
-      const summary = `${articleSummary(article, niche.name)}${warn.length ? `\nПроверка нашла: ${warn.join('; ')}.` : ''}`;
+      const summary = `${articleSummary(article, nicheName)}${warn.length ? `\nПроверка нашла: ${warn.join('; ')}.` : ''}`;
       await ctx.requestApproval(ARTICLE_KIND, { text: articlePreview(article), articleId: id }, summary);
       ctx.log('article_drafted', `article ${id}`);
       return { ok: true, result: summary };
@@ -337,6 +396,20 @@ export class ContentMakerWorker implements Worker {
       return fail(errMsg(e));
     }
   }
+}
+
+/**
+ * The owner approved the article: it is published by HQ (`/blog`) under `date` with a unique ASCII slug made from the English title,
+ * and queued for the next weekly pack (one carousel and one reel from it). Idempotent. Returns the published row.
+ */
+export function approveArticle(store: ContentStore, articleId: number, date: string): ArticleRow {
+  const row = store.article(articleId);
+  if (!row) throw new Error(`article ${articleId} not found`);
+  if (row.published) return row;
+  const a = articleSchema.parse(JSON.parse(row.json));
+  const slug = uniqueSlug(slugFromTitle(a.en.title), (s) => store.slugTaken(s, articleId));
+  store.publishArticle(articleId, { slug, json: JSON.stringify({ ...a, slug }), date });
+  return store.article(articleId)!;
 }
 
 /** One-line summary of what is ready to publish on `date`, for the daily "what do we publish today" report. */

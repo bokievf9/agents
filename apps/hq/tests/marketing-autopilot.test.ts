@@ -2,8 +2,8 @@ import { mkdtempSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { articleSchema, storeFor } from '@fir/worker-content-maker';
-import { issueBody } from '../src/bridge.js';
+import { storeFor } from '@fir/worker-content-maker';
+import { blogApi } from '../src/blog.js';
 import { DIRECTOR_COMMANDS } from '../src/tg.js';
 import { COMMAND_NAMES } from '../src/commands.js';
 import { OWNER, openPack, world } from './helpers.js';
@@ -132,7 +132,8 @@ describe('Blog articles', () => {
   it('/article <ниша> writes one article for that niche; the card has title, description, headings and a short start', async () => {
     const w = await proposed('барбершоп');
     const card = w.messenger.sent.find((m) => m.buttons?.flat().some((b) => /^ap:\d+:a$/.test(b.data)))!;
-    expect(card.text).toContain('Статья для блога, ниша «Барбершоп»');
+    expect(card.text).toContain('Статья дня, ниша «Барбершоп»');
+    expect(card.buttons!.flat().map((b) => b.text)).toEqual(expect.arrayContaining(['✅ Одобрить', '✏️ Переписать', '❌ Отклонить']));
     expect(card.text).toContain('Разделы:');
     expect(card.text).toContain('Описание:');
     expect(store(w).articles()[0]).toMatchObject({ niche: 'barber', status: 'proposed' });
@@ -147,34 +148,32 @@ describe('Blog articles', () => {
     expect(w.hq.tasks({ dept: 'marketing' })).toHaveLength(0);
   });
 
-  it('approval creates a builder task whose issue body holds the article JSON in a fenced block, the file path and the instruction', async () => {
+  it('approval publishes the article at once: published, the approval day, a slug from the English title, no builder task, a carousel and a reel queued for the pack', async () => {
     const w = await proposed('барбершоп');
     await w.decide('approve', w.queue.pending()[0]!.id);
     const row = store(w).articles()[0]!;
-    expect(row.status).toBe('approved');
-    const t = w.hq.task(row.taskId!)!;
-    expect(t).toMatchObject({ status: 'blocked', tags: ['builder'], dept: 'marketing' });
-    const body = issueBody(w.hq, t);
-    expect(body).toContain('`src/content/blog/bot-dlya-barber.ts`');
-    expect(body).toContain('```json');
-    const json = /```json\n([\s\S]*?)\n```/.exec(body)![1]!;
-    const article = articleSchema.parse(JSON.parse(json));
-    expect(article.slug).toBe('bot-dlya-barber');
-    expect(article.ru.title).toBeTruthy();
-    expect(article.en.title).toBeTruthy();
-    expect(body).toContain('src/content/blog/index.ts');
-    expect(body).toContain('/ru/solutions/barber');
-    expect(body).toContain(`HQ-TASK: ${t.id}`);
+    expect(row).toMatchObject({ status: 'approved', published: true, date: '2026-11-18', packQueued: true, slug: 'a-booking-bot-for-your-business-where-to-start' });
+    expect(row.taskId).toBeNull();
+    expect(w.hq.tasks({ dept: 'marketing' }).filter((t) => t.meta.action === 'publish_article' || t.tags.includes('builder'))).toHaveLength(0);
+    const api = blogApi(w.db, w.hq.now, () => w.hq.tz);
+    const list = api.list();
+    expect(list.articles.map((a) => a.slug)).toEqual([row.slug]);
+    expect(list.articles[0]).toMatchObject({ published: true, date: '2026-11-18' });
+    expect(api.get(row.slug)!.article.en.title).toBeTruthy();
+    expect(api.get('no-such')).toBeNull();
+    // the next weekly pack takes it
+    w.hq.runRoutine('marketing-weekly-pack');
+    await cycle(w);
+    expect(store(w).itemsOfSlug(row.slug).map((i) => i.type).sort()).toEqual(['carousel', 'clip']);
+    expect(store(w).queuedArticles()).toHaveLength(0);
   });
 
-  it('the issue number lands in cm_articles once the bridge made the issue; no second builder task for the same article', async () => {
-    const w = await proposed('барбершоп');
-    await w.decide('approve', w.queue.pending()[0]!.id);
-    const row = store(w).articles()[0]!;
-    w.hq.setMeta(row.taskId!, { issue: { number: 42, url: 'https://github.com/x/y/issues/42' } });
-    w.marketing.syncArticles();
-    expect(store(w).article(row.id)!.issueNumber).toBe(42);
-    expect(w.hq.tasks({ dept: 'marketing', open: true }).filter((t) => t.meta.action === 'publish_article')).toHaveLength(1);
+  it('/article ии writes the «ИИ для бизнеса» line; without an argument the weekday decides (Wednesday: AI)', async () => {
+    const w = await proposed('ии');
+    expect(store(w).articles()[0]).toMatchObject({ line: 'ai', niche: 'ai', status: 'proposed' });
+    expect(w.messenger.sent.find((m) => m.buttons?.flat().some((b) => /^ap:\d+:a$/.test(b.data)))!.text).toContain('Статья дня, ИИ для бизнеса');
+    const w2 = await proposed('');
+    expect(store(w2).articles()[0]!.line).toBe('ai');
   });
 
   it('a rejected article closes its row and frees the niche', async () => {
@@ -184,7 +183,7 @@ describe('Blog articles', () => {
     expect(store(w).coveredNiches().has('barber')).toBe(false);
   });
 
-  it('«Править» on an article takes a remark: the card closes, the same row is written again and comes back as a new card', async () => {
+  it('«Переписать» on an article takes a remark: the card closes, the same row is written again and comes back as a new card', async () => {
     const w = await proposed('барбершоп');
     const aid = w.queue.pending()[0]!.id;
     expect(await w.director.onEditPressed(aid)).toBe('Жду замечание');
@@ -197,12 +196,14 @@ describe('Blog articles', () => {
     expect(w.llm instanceof Object).toBe(true);
   });
 
-  it('the weekly routine exists on Tuesday 07:00 (the owner clock, before his batch) and runs the article action', async () => {
+  it('the daily routine runs at 07:30 on the owner clock (the card is ready for his 08:00 digest), the weekly one is off, the action makes one article', async () => {
     const w = world();
-    expect(w.hq.routineByName('marketing-article-weekly')).toMatchObject({ cron: '0 7 * * 2', tz: 'owner', dept: 'marketing', meta: { action: 'article' } });
-    w.hq.runRoutine('marketing-article-weekly');
+    expect(w.hq.routineByName('marketing-article-daily')).toMatchObject({ cron: '30 7 * * *', tz: 'owner', dept: 'marketing', meta: { action: 'article' }, enabled: true });
+    expect(w.hq.routineByName('marketing-article-weekly')?.enabled ?? false).toBe(false);
+    w.hq.runRoutine('marketing-article-daily');
     await cycle(w);
     expect(store(w).articles()).toHaveLength(1);
+    expect(store(w).articles()[0]!.line).toBe('ai');
     expect(w.hq.queuedApprovals()[0]!.kind).toBe('article');
   });
 });

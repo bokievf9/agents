@@ -95,8 +95,8 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 Образ `agents-hq`, сервис `hq` (данные `/opt/fir-agents/data/hq`). Подробно: `packages/hq/README.md`, `apps/hq/README.md`.
 Маркетинг на автопилоте, этап 1 (2026-11-19): пакет недели покрывает всю страницу Instagram (7 рилсов, 3 поста, 2 карусели, 5 историй;
 `POSTS_PER_WEEK`, `STORIES_PER_WEEK`), после одобрения PNG рисуются `satori` + `@resvg/resvg-js` в `DATA_DIR/renders`, Публикатор шлёт альбом
-и текст, публикует владелец вручную; `/profile` (разовый пакет настройки профиля); `/article` и рутина `marketing-article-weekly` (вт 07:00 по времени владельца)
-пишут статью блога RU+EN, одобренная уходит строителю issue с JSON и путём `src/content/blog/<slug>.ts`. Telegram-канала нет (владелец отказался).
+и текст, публикует владелец вручную; `/profile` (разовый пакет настройки профиля); `/article [ниша|ии]` и рутина `marketing-article-daily` (ежедневно 07:30 по времени владельца)
+пишут статью дня RU+EN (пн, ср, пт, вс «ИИ для бизнеса», вт, чт, сб ниша); одобренная публикуется самим HQ (публичный `GET /blog`, `docs/public-api.md`), в пакет недели из неё идут карусель и рилс. Telegram-канала нет (владелец отказался).
 
 Видео рилсов (2026-11-19): `packages/renderer` (Remotion + Piper `ru_RU-denis-medium`), сервис `renderer` в `compose.yaml` (1,5 ГБ, без сети, общий том с `hq`),
 очередь `cm_render_jobs` в SQLite HQ, образ `agents-renderer` в CI. Одобренный рилс ставится в очередь, утром Публикатор шлёт MP4; `/render <id>`; `REELS_RENDER=off`

@@ -16,11 +16,13 @@ export interface Prompts {
   articleSystem: string;
   articleRu: string;
   articleEn: string;
+  articleAiRu: string;
+  articleAiEn: string;
 }
 
 export function loadPrompts(dir: string): Prompts {
   const read = (f: string) => readFileSync(join(dir, f), 'utf8').trim();
-  return { system: read('system.md'), clip: read('clip.md'), carousel: read('carousel.md'), post: read('post.md'), story: read('story.md'), profile: read('profile.md'), articleSystem: read('article.md'), articleRu: read('article-ru.md'), articleEn: read('article-en.md') };
+  return { system: read('system.md'), clip: read('clip.md'), carousel: read('carousel.md'), post: read('post.md'), story: read('story.md'), profile: read('profile.md'), articleSystem: read('article.md'), articleRu: read('article-ru.md'), articleEn: read('article-en.md'), articleAiRu: read('article-ai-ru.md'), articleAiEn: read('article-ai-en.md') };
 }
 
 export interface GenSpec {
@@ -34,6 +36,8 @@ export interface GenSpec {
   previous?: string;
   /** Latest niche trends (hooks and formats) as inspiration; empty or absent: none. */
   trends?: TrendHint[];
+  /** The blog article a carousel or a reel is made from (title, h2 outline, first paragraph): the structure to follow. */
+  source?: string;
 }
 
 /** One trend from the Trend scout, reduced to what a script needs. */
@@ -71,6 +75,7 @@ function userPrompt(p: Prompts, spec: GenSpec, fix?: { text: string; issues: str
         .join('\n')}`,
     );
   }
+  if (spec.source) extra.push(spec.source);
   if (spec.previous) extra.push(`Отклонённый вариант (не повторяй его):\n${spec.previous}`);
   if (fix) extra.push(`В черновике найдены нарушения правил: ${fix.issues.join('; ')}. Исправь их и верни полный JSON.\nЧерновик:\n${fix.text}`);
   return fill(p[spec.type], {

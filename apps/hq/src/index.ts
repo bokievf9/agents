@@ -23,6 +23,7 @@ import { Reporter, type TopicSender } from './reporter.js';
 import { TopicManager } from './topics.js';
 import { createWebhook } from './webhook.js';
 import { AuditGate, AuditStore, submitAudit } from './audit-shared.js';
+import { blogApi } from './blog.js';
 import { cachedStatus } from './status.js';
 import { createAdmin } from './admin.js';
 import { OwnerChannel } from './presence.js';
@@ -380,6 +381,7 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
             }
           : {}),
         status: { get: cachedStatus(db) },
+        blog: blogApi(db, hq.now, () => hq.tz),
       },
     ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort, lead: Boolean(cfg.leadWebhookToken), chat: Boolean(webChat), admin: Boolean(admin) }))
   : null;

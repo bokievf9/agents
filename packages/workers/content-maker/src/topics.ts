@@ -103,3 +103,76 @@ export function pickFormatTopics(history: History, count: number, rng: () => num
   }
   return picked;
 }
+
+// ---- blog: the «ИИ для бизнеса» line and the 60-day window ----
+export const ARTICLE_WINDOW_DAYS = 60;
+
+/**
+ * Evergreen themes of the «ИИ для бизнеса» line, used when Trend Scout has nothing current. A plain-language explainer of one AI
+ * capability and how a small business in the CIS (salon, shop, delivery, clinic) can apply it this month. Four articles a week
+ * use the 60-day window up with about 34 of them, so the list is longer than that.
+ */
+const AI_THEMES: [string, string][] = [
+  ['assistant-24-7', 'ИИ-ассистент в мессенджере отвечает клиентам ночью и в выходные'],
+  ['voice-messages', 'Голосовые сообщения клиентов: ИИ превращает их в текст и заявку'],
+  ['photo-requests', 'Клиент присылает фото, а ИИ понимает, что ему нужно: ремонт, меню, заказ'],
+  ['faq-from-chats', 'Как собрать базу ответов из старой переписки и не писать её вручную'],
+  ['booking-reminders', 'Умные напоминания о записи, которые снижают неявки'],
+  ['review-replies', 'Ответы на отзывы на картах и в соцсетях: черновик от ИИ, решение за владельцем'],
+  ['product-cards', 'Описания товаров для магазина за вечер вместо месяца'],
+  ['menu-translate', 'Перевод меню и прайса на русский, узбекский, таджикский и английский'],
+  ['daily-report', 'Утренняя сводка владельцу: что произошло вчера, одним сообщением'],
+  ['lead-scoring', 'Какие заявки горячие: ИИ расставляет приоритет входящим'],
+  ['follow-up', 'Дожим без навязчивости: ИИ напоминает клиенту о незакрытой заявке'],
+  ['invoices-docs', 'Счета, акты и договоры из шаблона за минуту'],
+  ['inventory-alerts', 'Остатки на складе: ИИ предупреждает, что заканчивается ходовой товар'],
+  ['staff-onboarding', 'Обучение нового сотрудника: ИИ-наставник отвечает на вопросы по регламенту'],
+  ['social-posts', 'Контент-план и посты для соцсетей: что отдать ИИ, а что оставить себе'],
+  ['short-video', 'Короткие видео для Instagram и Reels без съёмочной группы'],
+  ['google-maps', 'Карточка на картах: ИИ помогает с описанием, ответами и обновлениями'],
+  ['price-questions', 'Вопрос «сколько стоит»: как бот отвечает точно и не придумывает цены'],
+  ['no-show', 'Неявки и отмены: как ИИ заполняет освободившиеся окна'],
+  ['call-notes', 'Расшифровка звонков: ИИ записывает, о чём договорились с клиентом'],
+  ['email-sorting', 'Входящая почта и заявки: ИИ сортирует и готовит ответы'],
+  ['table-data', 'Таблица продаж: задайте вопрос обычными словами и получите ответ'],
+  ['ai-agents', 'ИИ-агент и чат-бот: в чём разница и что нужно малому бизнесу'],
+  ['privacy', 'Данные клиентов и ИИ: что можно отправлять в модель, а что нельзя'],
+  ['mistakes', 'Почему ИИ иногда ошибается и как построить проверку человеком'],
+  ['start-small', 'С какой одной задачи начать внедрение ИИ в маленьком бизнесе'],
+  ['measure', 'Как понять, что ИИ окупается: что считать за месяц без сложной аналитики'],
+  ['local-language', 'ИИ и местные языки: что уже работает в узбекском, таджикском и казахском'],
+  ['payments-bot', 'Приём оплаты в чате: от ссылки на оплату до подтверждения'],
+  ['catalog-search', 'Поиск по каталогу обычными словами: «что-нибудь недорогое на подарок»'],
+  ['delivery-status', 'Статус заказа без звонков: бот сообщает, где курьер'],
+  ['clinic-intake', 'Предварительная запись в клинику: ИИ собирает жалобы и подбирает врача, не ставя диагноз'],
+  ['loyalty', 'Программа лояльности без приложения: баллы и напоминания в мессенджере'],
+  ['seasonal', 'Сезонные акции: ИИ готовит рассылку и текст под ваш сезон'],
+  ['competitor-watch', 'Мониторинг конкурентов: ИИ следит за ценами и новостями'],
+  ['vision-checks', 'Проверка по фото: чеки, документы, состояние товара'],
+  ['agents-team', 'Команда из нескольких ИИ-помощников: кто чем занимается'],
+  ['ai-search', 'Как клиенты ищут вас через ИИ-поиск и что поправить на сайте'],
+  ['small-model-cost', 'Почему ИИ в бизнесе дешевле, чем кажется: из чего складываются расходы'],
+  ['human-handoff', 'Когда бот зовёт человека: как настроить передачу диалога менеджеру'],
+];
+
+export const AI_TOPICS: Topic[] = AI_THEMES.map(([id, text]) => ({ key: `ai:${id}`, directionId: null, text }));
+
+/** `used` maps a topic key to the last time it was used (ms). */
+export function freshWindowMs(days = ARTICLE_WINDOW_DAYS): number {
+  return days * DAY;
+}
+
+/**
+ * A topic of the «ИИ для бизнеса» line that was not used in the last 60 days; when all are used the least recently used one.
+ * `rng` breaks ties among never-used topics.
+ */
+export function pickAiTopic(used: Map<string, number>, now: number, rng: () => number = Math.random): Topic {
+  const age = (t: Topic) => used.get(t.key) ?? 0;
+  const fresh = AI_TOPICS.filter((t) => now - age(t) >= freshWindowMs());
+  if (fresh.length > 0) {
+    const never = fresh.filter((t) => age(t) === 0);
+    const pool = never.length > 0 ? never : fresh.sort((a, b) => age(a) - age(b)).slice(0, 5);
+    return pool[Math.floor(rng() * pool.length)]!;
+  }
+  return [...AI_TOPICS].sort((a, b) => age(a) - age(b))[0]!;
+}

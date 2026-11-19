@@ -12,10 +12,10 @@ export interface Trigger {
 }
 
 export const WORKER_TRIGGERS: Record<string, Trigger> = {
-  'content-maker': { routines: ['marketing-weekly-pack'], commands: ['profile', 'article'], events: ['просьба владельца: «пакет», «рилс», «пост» (Директор)'] },
+  'content-maker': { routines: ['marketing-weekly-pack', 'marketing-article-daily'], commands: ['profile', 'article'], events: ['просьба владельца: «пакет», «рилс», «пост» (Директор)'] },
   'trend-scout': { routines: ['marketing-trends-daily', 'marketing-trends-weekly'] },
   publisher: { routines: ['marketing-daily-today'] },
-  seo: { routines: ['marketing-seo-weekly', 'marketing-article-weekly'], events: ['заявка на аудит: POST /audit и /audit в клиентском боте'] },
+  seo: { routines: ['marketing-seo-weekly'], events: ['заявка на аудит: POST /audit и /audit в клиентском боте'] },
   analyst: { routines: ['marketing-analyst-weekly'] },
   'lead-intake': { events: ['заявка с сайта (POST /lead)', 'анкета в клиентском боте', 'контакт в веб-чате'] },
   prospector: { routines: ['sales-daily-cards', 'sales-followups'], commands: ['reply'] },

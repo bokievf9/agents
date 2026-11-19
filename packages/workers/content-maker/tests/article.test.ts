@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ARTICLE_KIND, articleSchema, articleTargetPath, builderInstruction, contentIssues, contentSchema, faqItems, storeFor, wordCount } from '../src/index.js';
+import { AI_TOPICS, ARTICLE_KIND, approveArticle, articleLineOn, articleSchema, contentIssues, contentSchema, faqItems, isAiAsk, slugFromTitle, storeFor, toPublicArticle, uniqueSlug, wordCount } from '../src/index.js';
 import { articleLlm, contentOf, enJson, ruJson } from './article-helpers.js';
 import { setup } from './helpers.js';
 
@@ -35,21 +35,28 @@ describe('article schema (the site format)', () => {
     expect(wordCount(short)).toBeLessThan(wordCount(contentSchema.parse(base)));
   });
 
-  it('the builder instruction names the file path, the index and the niche link', () => {
-    const a = articleSchema.parse({ slug: 'bot-dlya-barber', niche: 'barber', ru: contentOf('ru'), en: contentOf('en') });
-    const text = builderInstruction(a, '2026-11-24');
-    expect(articleTargetPath(a.slug)).toBe('src/content/blog/bot-dlya-barber.ts');
-    expect(text).toContain('src/content/blog/bot-dlya-barber.ts');
-    expect(text).toContain('src/content/blog/index.ts');
-    expect(text).toContain('/ru/solutions/barber');
-    expect(text).toContain("date: '2026-11-24'");
+  it('slugs are ASCII kebab-case from the English title, unique with a numeric suffix', () => {
+    expect(slugFromTitle('How a Booking Bot Works: Where to Start!')).toBe('how-a-booking-bot-works-where-to-start');
+    expect(slugFromTitle('Café "Bot" для записи')).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
+    expect(slugFromTitle('Бот')).toBe('ai-article');
+    expect(slugFromTitle('x'.repeat(100)).length).toBeLessThanOrEqual(60);
+    const taken = new Set(['a-b', 'a-b-2']);
+    expect(uniqueSlug('a-b', (s) => taken.has(s))).toBe('a-b-3');
+    expect(uniqueSlug('a-b', () => false)).toBe('a-b');
+  });
+
+  it('the line follows the weekday: Mon, Wed, Fri, Sun AI, Tue, Thu, Sat niche; «ии» asks for the AI line', () => {
+    expect([1, 2, 3, 4, 5, 6, 7].map(articleLineOn)).toEqual(['ai', 'niche', 'ai', 'niche', 'ai', 'niche', 'ai']);
+    expect(isAiAsk('ИИ')).toBe(true);
+    expect(isAiAsk('ai for business')).toBe(true);
+    expect(isAiAsk('барбершоп')).toBe(false);
   });
 });
 
 describe('article generation', () => {
   it('picks an uncovered niche, writes RU then EN, stores the row and stages an `article` approval', async () => {
     const { worker, ctx, task, staged } = setup({ llm: articleLlm() });
-    const res = await worker.run(task({ action: 'article' }), ctx);
+    const res = await worker.run(task({ action: 'article', line: 'niche' }), ctx);
     expect(res.ok).toBe(true);
     expect(staged).toHaveLength(1);
     expect(staged[0]!.kind).toBe(ARTICLE_KIND);
@@ -66,8 +73,8 @@ describe('article generation', () => {
 
   it('a second run takes another niche; a named niche is honoured; an unknown one is refused', async () => {
     const { worker, ctx, task } = setup({ llm: articleLlm() });
-    await worker.run(task({ action: 'article' }), ctx);
-    await worker.run(task({ action: 'article' }), ctx);
+    await worker.run(task({ action: 'article', line: 'niche' }), ctx);
+    await worker.run(task({ action: 'article', line: 'niche' }), ctx);
     const niches = storeFor(ctx).articles().map((a) => a.niche);
     expect(new Set(niches).size).toBe(2);
     const named = await worker.run(task({ action: 'article', niche: 'стоматология' }), ctx);
@@ -98,9 +105,71 @@ describe('article generation', () => {
     expect(storeFor(ctx).coveredNiches().has('barber')).toBe(false);
   });
 
+  it('an AI-line article picks an unused evergreen theme, uses the AI prompts and records the topic (60-day window)', async () => {
+    const llm = articleLlm();
+    const { worker, ctx, task, staged } = setup({ llm });
+    const res = await worker.run(task({ action: 'article', line: 'ai' }), ctx);
+    expect(res.ok).toBe(true);
+    const row = storeFor(ctx).articles()[0]!;
+    expect(row).toMatchObject({ line: 'ai', niche: 'ai', status: 'proposed' });
+    expect(AI_TOPICS.map((t) => t.key)).toContain(row.topicKey);
+    expect(llm.calls[0]!.messages[0]!.content).toContain('ИИ для бизнеса');
+    expect(staged[0]!.summary).toContain('ИИ для бизнеса');
+    // the next AI article takes another theme
+    await worker.run(task({ action: 'article', line: 'ai' }), ctx);
+    const keys = storeFor(ctx).articles().map((a) => a.topicKey);
+    expect(new Set(keys).size).toBe(2);
+    // all themes used within 60 days: the least recently used one comes back
+    for (let i = 0; i < AI_TOPICS.length; i++) await worker.run(task({ action: 'article', line: 'ai', ...{} }), ctx);
+    expect(storeFor(ctx).articles().length).toBeGreaterThan(AI_TOPICS.length);
+  });
+
+  it('without a line the weekday decides (Wednesday: AI); a niche asked by name wins', async () => {
+    const { worker, ctx, task } = setup({ llm: articleLlm() });
+    await worker.run(task({ action: 'article' }), ctx);
+    expect(storeFor(ctx).articles()[0]!.line).toBe('ai');
+    await worker.run(task({ action: 'article', niche: 'барбершоп' }), ctx);
+    expect(storeFor(ctx).articles()[1]).toMatchObject({ line: 'niche', niche: 'barber' });
+    await worker.run(task({ action: 'article', niche: 'ии' }), ctx);
+    expect(storeFor(ctx).articles()[2]!.line).toBe('ai');
+  });
+
+  it('a niche used in the last 60 days is not taken again; a routine run stops while three cards wait', async () => {
+    const { worker, ctx, task } = setup({ llm: articleLlm() });
+    for (let i = 0; i < 3; i++) await worker.run(task({ action: 'article', line: 'niche' }), ctx);
+    const niches = storeFor(ctx).articles().map((a) => a.niche);
+    expect(new Set(niches).size).toBe(3);
+    const routine = { ...task({ action: 'article', line: 'niche' }), creator: 'routine' as const };
+    const res = await worker.run(routine, ctx);
+    expect(res.ok).toBe(true);
+    expect(res.result).toContain('Три статьи');
+    expect(storeFor(ctx).articles()).toHaveLength(3);
+  });
+
+  it('approval publishes: published, date, a slug from the English title, unique, the public shape of the site', async () => {
+    const { worker, ctx, task } = setup({ llm: articleLlm() });
+    await worker.run(task({ action: 'article', line: 'niche', niche: 'barber' }), ctx);
+    await worker.run(task({ action: 'article', line: 'niche', niche: 'salon' }), ctx);
+    const store = storeFor(ctx);
+    const [a, b] = store.articles();
+    const first = approveArticle(store, a!.id, '2026-11-19');
+    const second = approveArticle(store, b!.id, '2026-11-20');
+    expect(first).toMatchObject({ status: 'approved', published: true, date: '2026-11-19', slug: 'a-booking-bot-for-your-business-where-to-start', packQueued: true });
+    expect(second.slug).toBe('a-booking-bot-for-your-business-where-to-start-2');
+    expect(approveArticle(store, a!.id, '2026-12-01').date).toBe('2026-11-19'); // idempotent
+    expect(store.publishedArticles().map((r) => r.id)).toEqual([b!.id, a!.id]); // newest first
+    const pub = toPublicArticle(store.articleBySlug(first.slug)!)!;
+    expect(Object.keys(pub).sort()).toEqual(['date', 'en', 'published', 'ru', 'slug']);
+    expect(pub).toMatchObject({ published: true, date: '2026-11-19' });
+    expect(Object.keys(pub.ru).sort()).toEqual(['blocks', 'description', 'title']);
+    expect(articleSchema.safeParse({ ...pub, niche: 'barber' }).success).toBe(true);
+    expect(toPublicArticle({ slug: 'x', json: '{}', date: '2026-11-19', published: true })).toBeNull();
+    expect(toPublicArticle({ slug: 'x', json: JSON.stringify(pub), date: null, published: false })).toBeNull();
+  });
+
   it('LLM off: no row, an error', async () => {
     const { worker, ctx, task } = setup({ llm: new (await import('./helpers.js')).OffLlm() });
-    const res = await worker.run(task({ action: 'article' }), ctx);
+    const res = await worker.run(task({ action: 'article', line: 'niche' }), ctx);
     expect(res.ok).toBe(false);
     expect(storeFor(ctx).articles()).toHaveLength(0);
   });

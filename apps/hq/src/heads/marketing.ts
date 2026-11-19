@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { errMsg, escapeHtml, log, tryJson, zonedParts, type ApprovalQueue, type Button, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import {
-  ARTICLE_KIND, KIND, ContentMakerWorker, TYPE_RU, dayLabel, articleSchema, articleTargetPath, builderInstruction, editableParts, nicheById, partLabel, replacePart,
+  ARTICLE_KIND, KIND, ContentMakerWorker, TYPE_RU, approveArticle, articleLineOn, dayLabel, editableParts, isAiAsk, partLabel, replacePart,
   findNiche, splitPlatforms, storeFor, titleOf, ymd, RenderQueue, parseReel, shortReason, type RenderJob,
   type PartId,
 } from '@fir/worker-content-maker';
@@ -173,11 +173,12 @@ export class MarketingHead implements ApprovalEditor {
       buttons: (id, payload) => packButtons(id, Number(payload.previews ?? 0)),
       execute: (payload, approvalId) => this.decidePack(payload, approvalId),
     });
-    // An approved article becomes a `builder` task whose issue carries the article JSON and the target file path.
+    // An approved article is published by HQ itself (`GET /blog`, the site reads it) and queued for the next pack's carousel and reel.
     d.hq.registerKind(ARTICLE_KIND, {
       initialLevel: 0, locked: true,
-      execute: (payload, approvalId) => {
-        this.requestArticleBuild(Number(payload.articleId), d.hq.approvalByCoreId(approvalId)?.taskId ?? null);
+      execute: (payload) => {
+        const row = approveArticle(this.store(), Number(payload.articleId), this.today());
+        d.hq.log('head', 'article_published', 'article', row.slug);
         return Promise.resolve();
       },
     });
@@ -300,38 +301,6 @@ export class MarketingHead implements ApprovalEditor {
     return t;
   }
 
-  /**
-   * An approved article becomes a blocked `builder` task «Статья в блог»; the builder bridge turns it into an issue with
-   * the article JSON in a fenced block, the target file path and the instruction. Once per article.
-   */
-  private requestArticleBuild(articleId: number, parentId: number | null): Task | null {
-    const store = this.store();
-    const row = store.article(articleId);
-    if (!row || row.taskId) return null;
-    const article = articleSchema.parse(JSON.parse(row.json));
-    const t = this.hq.createTask({
-      title: `Статья в блог: ${article.ru.title}`.slice(0, 200),
-      body: `Добавить одобренную владельцем статью (ниша «${nicheById(article.niche)?.name ?? article.niche}») в блог сайта firtech.pro.`,
-      dept: MARKETING, creator: 'head', ...(parentId ? { parentId } : {}),
-      meta: {
-        action: 'publish_article', articleId, articleJson: JSON.stringify(article, null, 2), targetPath: articleTargetPath(article.slug),
-        instruction: builderInstruction(article, this.today()),
-      },
-    });
-    this.hq.block(t.id, HEAD_ID, 'Нужен строитель: добавить статью в блог сайта', ['builder']);
-    store.setArticle(articleId, { status: 'approved', taskId: t.id });
-    return t;
-  }
-
-  /** Copies the issue number of an article's builder task into `cm_articles` once the bridge has made the issue. */
-  syncArticles(): void {
-    const store = this.store();
-    for (const a of store.articles().filter((x) => x.status === 'approved' && x.taskId && !x.issueNumber)) {
-      const issue = this.hq.task(a.taskId!)?.meta.issue as { number?: number } | undefined;
-      if (typeof issue?.number === 'number') store.setArticle(a.id, { issueNumber: issue.number });
-    }
-  }
-
   /** Queues the video of an approved reel for the renderer (once: an active job is kept). */
   private queueReel(itemId: number): RenderJob | null {
     const item = this.store().item(itemId);
@@ -412,7 +381,6 @@ export class MarketingHead implements ApprovalEditor {
       await this.runChild(t).catch((e) => this.crash(t, e));
     }
     await this.finalizeParents();
-    this.syncArticles();
   }
 
   private async crash(task: Task, e: unknown): Promise<void> {
@@ -479,7 +447,9 @@ export class MarketingHead implements ApprovalEditor {
       return;
     }
     if (action === 'article') {
-      this.hq.setMeta(task.id, { action: 'article', ...(topic ? { niche: topic } : {}) });
+      // the line of the day is decided on the owner's clock (the routine fires at 07:30 his time); a named niche or «ии» wins
+      const line = topic ? (isAiAsk(topic) ? 'ai' : 'niche') : articleLineOn(zonedParts(this.hq.now(), this.hq.ownerTz).dow);
+      this.hq.setMeta(task.id, { action: 'article', line, ...(topic ? { niche: topic } : {}) });
       // no checklist review here: the article is checked by its own schema and the owner's card, and a second run would take another niche
       return this.runDirect(task.id, this.worker);
     }
@@ -864,12 +834,12 @@ export class MarketingHead implements ApprovalEditor {
     }
     if (name === 'render') return this.renderCommand(arg);
     const niche = arg.trim();
-    const store = this.store();
-    if (niche && !findNiche(niche)) return `Не нашёл нишу «${niche.slice(0, 60)}». Напишите как в конструкторе, например: /article барбершоп. Или /article без названия: возьму первую нишу без статьи.`;
-    const covered = store.coveredNiches().size;
-    const t = this.hq.createTask({ title: `Статья в блог${niche ? `: ${niche}` : ''}`, body: niche, dept: MARKETING, creator: 'owner', meta: { action: 'article', ...(niche ? { niche } : {}) } });
+    const ai = isAiAsk(niche);
+    if (niche && !ai && !findNiche(niche)) return `Не нашёл нишу «${niche.slice(0, 60)}». Напишите как в конструкторе, например: /article барбершоп. /article ии: статья «ИИ для бизнеса». /article без названия: линия сегодняшнего дня.`;
+    const t = this.hq.createTask({ title: `Статья дня${niche ? `: ${niche}` : ''}`, body: niche, dept: MARKETING, creator: 'owner', meta: { action: 'article', ...(niche ? { niche } : {}) } });
     this.hq.wake(HEAD_ID, 'task');
-    return `Взял (задача #${t.id}): Контент-мейкер пишет статью${niche ? ` для ниши «${findNiche(niche)!.name}»` : ' для следующей ниши без статьи'} (ниш со статьями сейчас ${covered}). Карточка придёт в одобрения.`;
+    const what = ai ? ' «ИИ для бизнеса»' : niche ? ` для ниши «${findNiche(niche)!.name}»` : ' сегодняшней линии (ИИ для бизнеса или ниша по дню недели)';
+    return `Взял (задача #${t.id}): Контент-мейкер пишет статью${what}. Карточка «Статья дня» придёт в одобрения; после «Одобрить» она сразу попадает в блог, из неё сделаю карусель и рилс в пакет недели.`;
   }
 
   /** `/render <id>`: queues the video of an approved reel again (a new job, attempts from 0). */

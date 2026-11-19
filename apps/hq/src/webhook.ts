@@ -4,6 +4,7 @@ import { isIP } from 'node:net';
 import { z } from 'zod';
 import { errMsg, log } from '@fir/core';
 import type { AdminReply, AdminRequest } from './admin.js';
+import type { BlogApi } from './blog.js';
 import { auditInputSchema, type AuditInput, type AuditOutcome } from './audit-shared.js';
 import { chatSchema, type ChatOutcome, type ChatRequest } from './client/web.js';
 
@@ -119,11 +120,17 @@ export function createWebhook(
    * `POST /audit` (header `x-lead-token`, the same token as `/lead`) and the public `GET /status` (no token, per-IP rate limit).
    * Without `audit` the route answers 404; without `status` too.
    */
-  extra: { audit?: { token: string; handle: (a: AuditInput) => Promise<AuditOutcome> }; status?: { get: () => unknown } } = {},
+  extra: {
+    audit?: { token: string; handle: (a: AuditInput) => Promise<AuditOutcome> };
+    status?: { get: () => unknown };
+    /** Public `GET /blog?lang=all` and `GET /blog/:slug` (no token, per-IP rate limit, 60 s cache header). Without it the routes answer 404. */
+    blog?: BlogApi;
+  } = {},
 ): Server {
   const hits: number[] = [];
   const auditHits: number[] = [];
   const statusHits = new Map<string, number[]>();
+  const blogHits = new Map<string, number[]>();
   const auditByIp = new KeyedLimit(10, 3_600_000);
   const leadByIp = new KeyedLimit(20, 3_600_000);
   return createServer((req, res) => {
@@ -157,6 +164,28 @@ export function createWebhook(
           if (statusHits.size > 5000) for (const [k, v] of statusHits) if (!v.some((x) => x > t - 60_000)) statusHits.delete(k);
           res.setHeader('cache-control', 'public, max-age=60');
           return json(res, 200, extra.status.get());
+        }
+        if (req.method === 'GET' && extra.blog && /^\/blog(?:\/|$)/.test(req.url?.split('?')[0] ?? '')) {
+          const url = new URL(req.url!, 'http://hq.local');
+          const fwd = req.headers['x-forwarded-for'];
+          const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+          const t = now();
+          const mine = (blogHits.get(ip) ?? []).filter((x) => x > t - 60_000);
+          if (mine.length >= 60) return json(res, 429, { ok: false, error: 'rate_limited' });
+          mine.push(t);
+          blogHits.set(ip, mine);
+          if (blogHits.size > 5000) for (const [k, v] of blogHits) if (!v.some((x) => x > t - 60_000)) blogHits.delete(k);
+          if (url.pathname === '/blog') {
+            const lang = url.searchParams.get('lang');
+            if (lang !== null && lang !== 'all') return json(res, 400, { ok: false, error: 'invalid' });
+            res.setHeader('cache-control', 'public, max-age=60');
+            return json(res, 200, extra.blog.list());
+          }
+          const m = /^\/blog\/([a-z0-9]+(?:-[a-z0-9]+)*)$/.exec(url.pathname);
+          const found = m ? extra.blog.get(m[1]!) : null;
+          if (!found) return json(res, 404, { ok: false, error: 'not_found' });
+          res.setHeader('cache-control', 'public, max-age=60');
+          return json(res, 200, found);
         }
         if (req.method === 'POST' && req.url === '/audit' && extra.audit) {
           if (!tokenOk(req.headers['x-lead-token'] as string | undefined, extra.audit.token)) return json(res, 401, { ok: false, error: 'unauthorized' });

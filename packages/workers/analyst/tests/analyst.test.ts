@@ -51,19 +51,25 @@ describe('aggregate', () => {
   it('articles of the week: proposed, approved, published (builder issue closed); no line without articles', () => {
     const w = world();
     w.db.exec(`
-      CREATE TABLE cm_articles (id INTEGER PRIMARY KEY, niche TEXT, status TEXT, created_at INTEGER, decided_at INTEGER, task_id INTEGER);
+      CREATE TABLE cm_articles (id INTEGER PRIMARY KEY, niche TEXT, status TEXT, created_at INTEGER, decided_at INTEGER, task_id INTEGER, published INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE cm_items (id INTEGER PRIMARY KEY, status TEXT, created_at INTEGER, source_slug TEXT);
+      CREATE TABLE cm_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     `);
-    const art = (status: string, created: number, decided: number | null, task: number | null) => w.db.prepare('INSERT INTO cm_articles (niche, status, created_at, decided_at, task_id) VALUES (?, ?, ?, ?, ?)').run('barber', status, created, decided, task);
+    const art = (status: string, created: number, decided: number | null, task: number | null, published = 0) => w.db.prepare('INSERT INTO cm_articles (niche, status, created_at, decided_at, task_id, published) VALUES (?, ?, ?, ?, ?, ?)').run('barber', status, created, decided, task, published);
+    w.db.prepare('INSERT INTO cm_items (status, created_at, source_slug) VALUES (?, ?, ?)').run('ready', inWeek, 'a-b');
+    w.db.prepare('INSERT INTO cm_items (status, created_at, source_slug) VALUES (?, ?, ?)').run('ready', inWeek, null);
+    w.db.prepare("INSERT INTO cm_kv (key, value) VALUES ('blog_hits:2026-11-17', '40'), ('blog_hits:2026-11-18', '2'), ('blog_hits:2026-10-01', '99')").run();
     const t1 = w.hq.createTask({ title: 'Статья 1', dept: 'marketing', creator: 'head', meta: { builderClosed: true } });
     const t2 = w.hq.createTask({ title: 'Статья 2', dept: 'marketing', creator: 'head', meta: { issue: { number: 7 } } });
     art('approved', inWeek, inWeek, t1.id);
-    art('approved', inWeek, inWeek, t2.id);
+    art('approved', inWeek, inWeek, t2.id, 1); // published by HQ itself
     art('rejected', inWeek, inWeek, null);
     art('proposed', inWeek, null, null);
     art('approved', inWeek - 30 * DAY, inWeek - 30 * DAY, t1.id); // old: not this week
     const n = aggregate(w.db, '2026-11-16', '2026-11-22', NOW, 'Asia/Tashkent', null, null);
-    expect(n.articles).toEqual({ proposed: 4, approved: 2, published: 1 });
-    expect(numbersText(n)).toContain('6. Статьи блога: предложено 4, одобрено 2, опубликовано 1');
+    expect(n.articles).toEqual({ proposed: 4, approved: 2, published: 2, fromArticles: 1, hits: 42 });
+    expect(numbersText(n)).toContain('6. Статьи блога: предложено 4, одобрено 2, опубликовано 2');
+    expect(numbersText(n)).toContain('из статей в материалах недели: 1; обращений к /blog: 42');
     const none = world();
     expect(aggregate(none.db, '2026-11-16', '2026-11-22', NOW, 'Asia/Tashkent', null, null).articles).toBeNull();
   });
