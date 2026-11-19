@@ -1,49 +1,162 @@
 {
   "currency": "USD",
   "updatedAt": "2026-11-19",
-  "startingPrice": { "websites": 150, "bots": 100, "apps": 800, "automation": 200 },
+  "startingPrice": {
+    "websites": 150,
+    "bots": 100,
+    "apps": 800,
+    "automation": 200
+  },
   "catalog": {
     "websites": {
-      "variants": { "landing": 150, "company": 350, "shop": 700 },
-      "addons": { "language": 40, "telegram": 20, "payments": 60, "cms": 100 }
+      "variants": {
+        "landing": 150,
+        "company": 350,
+        "shop": 700
+      },
+      "addons": {
+        "language": 40,
+        "telegram": 20,
+        "payments": 60,
+        "cms": 100
+      }
     },
     "bots": {
-      "variants": { "faq": 100, "booking": 250, "miniapp": 600 },
-      "addons": { "payments": 60, "broadcasts": 40, "admin": 100, "ai": 120 }
+      "variants": {
+        "faq": 100,
+        "booking": 250,
+        "miniapp": 600
+      },
+      "addons": {
+        "payments": 60,
+        "broadcasts": 40,
+        "admin": 100,
+        "ai": 120
+      }
     },
     "apps": {
-      "variants": { "pwa": 800, "mobile": 2000, "internal": 1200 },
-      "addons": { "accounts": 150, "payments": 100, "push": 60, "admin": 200 }
+      "variants": {
+        "pwa": 800,
+        "mobile": 2000,
+        "internal": 1200
+      },
+      "addons": {
+        "accounts": 150,
+        "payments": 100,
+        "push": 60,
+        "admin": 200
+      }
     },
     "automation": {
-      "variants": { "integration": 200, "crm": 450, "assistant": 500 },
-      "addons": { "sheets": 50, "alerts": 30, "training": 50, "support": 90 }
+      "variants": {
+        "integration": 200,
+        "crm": 450,
+        "assistant": 500
+      },
+      "addons": {
+        "sheets": 50,
+        "alerts": 30,
+        "training": 50,
+        "support": 90
+      }
     }
   },
   "extraPrice": {
-    "ai": { "from": 500, "page": "automation" },
-    "support": { "from": 20, "monthly": true },
-    "payments": { "from": 60, "page": "bots" },
-    "seo": { "from": 50 },
-    "crm": { "from": 450, "page": "automation" },
-    "design": { "from": 90 },
-    "rescue": { "from": 60 },
-    "internal": { "from": 1200, "page": "apps" }
+    "ai": {
+      "from": 500,
+      "page": "automation"
+    },
+    "support": {
+      "from": 20,
+      "monthly": true
+    },
+    "payments": {
+      "from": 60,
+      "page": "bots"
+    },
+    "seo": {
+      "from": 50
+    },
+    "crm": {
+      "from": 450,
+      "page": "automation"
+    },
+    "design": {
+      "from": 90
+    },
+    "rescue": {
+      "from": 60
+    },
+    "internal": {
+      "from": 1200,
+      "page": "apps"
+    }
   },
   "agentPlans": [
-    { "id": "dono", "setup": 150, "monthly": 15 },
-    { "id": "polly", "setup": 100, "monthly": 10 }
+    {
+      "id": "dono",
+      "setup": 150,
+      "monthly": 15
+    },
+    {
+      "id": "polly",
+      "setup": 100,
+      "monthly": 10
+    }
   ],
-  "contentPlans": [{ "id": "content", "setup": 90, "monthly": 60 }],
+  "contentPlans": [
+    {
+      "id": "content",
+      "setup": 90,
+      "monthly": 60
+    }
+  ],
   "referralPercent": 10,
   "products": {
-    "admin": 290,
-    "intake": 220,
-    "automation": 230,
-    "miniapp": 660,
-    "aiteam": 550,
-    "site": 150,
-    "bot": 100,
-    "app": 800
+    "admin": {
+      "kind": "from",
+      "from": 290
+    },
+    "receptionist": {
+      "kind": "from",
+      "from": 220
+    },
+    "automation": {
+      "kind": "from",
+      "from": 230
+    },
+    "content": {
+      "kind": "plans",
+      "plans": [
+        {
+          "id": "content",
+          "setup": 90,
+          "monthly": 60
+        }
+      ]
+    },
+    "miniapp": {
+      "kind": "from",
+      "from": 660
+    },
+    "agent": {
+      "kind": "plans",
+      "plans": [
+        {
+          "id": "dono",
+          "setup": 150,
+          "monthly": 15
+        },
+        {
+          "id": "polly",
+          "setup": 100,
+          "monthly": 10
+        }
+      ]
+    },
+    "implementation": {
+      "kind": "from",
+      "from": 550
+    }
   }
 }

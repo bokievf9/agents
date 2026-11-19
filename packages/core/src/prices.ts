@@ -27,13 +27,29 @@ export const pricesSchema = z
     agentPlans: z.array(plan),
     contentPlans: z.array(plan),
     referralPercent: z.number().min(0).max(100),
-    // A product is a number, or `{from}` (the site may grow the shape); both are read as the starting price.
-    products: z.record(z.string(), z.union([amount, z.object({ from: amount })]).transform((v) => (typeof v === 'number' ? v : v.from))),
+    // The site's shape: `{kind:'from', from}`, `{kind:'plans', plans}` or `{kind:'quote'}`. A bare number or `{from}` is read too
+    // (our own normalised copy, older shapes). Normalised below to the HQ keys.
+    products: z.record(z.string(), z.unknown()),
   })
-  .superRefine((p, ctx) => {
-    for (const k of PRODUCT_KEYS) if (!(k in p.products)) ctx.addIssue({ code: 'custom', message: `products.${k} is missing` });
+  .transform((p, ctx) => {
+    // site id -> HQ key
+    const ID: Record<string, string> = { receptionist: 'intake', implementation: 'aiteam' };
+    const products: Record<string, number> = {};
+    for (const [id, v] of Object.entries(p.products)) {
+      let from: number | undefined;
+      if (typeof v === 'number') from = v;
+      else if (v && typeof v === 'object' && typeof (v as { from?: unknown }).from === 'number') from = (v as { from: number }).from;
+      // kind 'plans' (content, agent) comes from contentPlans/agentPlans, kind 'quote' has no price
+      if (from !== undefined && Number.isFinite(from) && from >= 0) products[ID[id] ?? id] = from;
+      else if (from !== undefined) ctx.addIssue({ code: 'custom', message: `products.${id} is not a valid price` });
+    }
+    products.site ??= p.startingPrice.websites;
+    products.bot ??= p.startingPrice.bots;
+    products.app ??= p.startingPrice.apps;
+    for (const k of PRODUCT_KEYS) if (!(k in products)) ctx.addIssue({ code: 'custom', message: `products.${k} is missing` });
     for (const id of ['dono', 'polly']) if (!p.agentPlans.some((x) => x.id === id)) ctx.addIssue({ code: 'custom', message: `agentPlans.${id} is missing` });
     if (!p.contentPlans.some((x) => x.id === 'content')) ctx.addIssue({ code: 'custom', message: 'contentPlans.content is missing' });
+    return { ...p, products };
   });
 export type Prices = z.infer<typeof pricesSchema>;
 

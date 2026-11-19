@@ -34,6 +34,27 @@ describe('the bundled fallback snapshot', () => {
     expect(supportMonthly()).toBe(20);
   });
 
+  it('parses the exact live shape of firtech.pro/api/prices (site ids, plans and quotes mapped to HQ keys)', () => {
+    const live = {
+      currency: 'USD', updatedAt: '2026-11-19', startingPrice: { websites: 150, bots: 100, apps: 800, automation: 200 },
+      catalog: fallbackJson.catalog, extraPrice: fallbackJson.extraPrice,
+      agentPlans: [{ id: 'dono', setup: 150, monthly: 15 }, { id: 'polly', setup: 100, monthly: 10 }], contentPlans: [{ id: 'content', setup: 90, monthly: 60 }], referralPercent: 10,
+      products: {
+        admin: { kind: 'from', from: 290 }, receptionist: { kind: 'from', from: 220 }, automation: { kind: 'from', from: 230 },
+        content: { kind: 'plans', plans: [{ id: 'content', setup: 90, monthly: 60 }] }, miniapp: { kind: 'from', from: 660 },
+        agent: { kind: 'plans', plans: [{ id: 'dono', setup: 150, monthly: 15 }, { id: 'polly', setup: 100, monthly: 10 }] },
+        implementation: { kind: 'from', from: 550 }, custom: { kind: 'quote' },
+      },
+    };
+    const p = parsePrices(live)!;
+    expect(p).not.toBeNull();
+    expect(p.products).toMatchObject({ admin: 290, intake: 220, automation: 230, miniapp: 660, aiteam: 550, site: 150, bot: 100, app: 800 });
+    expect(planOf('dono', p)).toEqual({ setup: 150, monthly: 15 });
+    expect(planOf('content', p)).toEqual({ setup: 90, monthly: 60 });
+    expect(parsePrices(p)?.products.intake).toBe(220); // the normalised copy kept in the database parses again
+    expect(parsePrices({ ...live, products: { ...live.products, receptionist: { kind: 'from', from: -1 } } })).toBeNull();
+  });
+
   it('allowedAmounts is every amount of the list and nothing else', () => {
     const a = allowedAmounts(FALLBACK_PRICES);
     for (const n of [290, 220, 230, 660, 550, 150, 100, 800, 90, 60, 15, 10, 20, 2000, 1200, 700, 40]) expect(a.has(n), String(n)).toBe(true);
@@ -42,9 +63,9 @@ describe('the bundled fallback snapshot', () => {
 
   it('is validated: a broken shape is rejected', () => {
     expect(parsePrices({ ...fallbackJson, currency: 'EUR' })).toBeNull();
-    expect(parsePrices({ ...fallbackJson, products: { admin: 1 } })).toBeNull();
+    expect(parsePrices({ ...fallbackJson, products: { admin: { kind: 'from', from: 1 } } })).toBeNull();
     expect(parsePrices({ ...fallbackJson, agentPlans: [] })).toBeNull();
-    expect(parsePrices({ ...fallbackJson, products: { ...fallbackJson.products, admin: -5 } })).toBeNull();
+    expect(parsePrices({ ...fallbackJson, products: { ...fallbackJson.products, admin: { kind: 'from', from: -5 } } })).toBeNull();
     expect(parsePrices(null)).toBeNull();
     // a product may be `{ from }` too
     const grown = parsePrices({ ...fallbackJson, products: { ...fallbackJson.products, admin: { from: 295, title: 'x' } } });
