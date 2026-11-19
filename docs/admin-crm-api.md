@@ -5,7 +5,7 @@ Read-mostly представления над таблицами исполни�
 
 ## Общее
 - Транспорт, токен и формат как у остальных `/admin/*`: `x-admin-token`, порт webhook HQ (`127.0.0.1:8787`), без токена 401, без `ADMIN_TOKEN` 404.
-  Общий лимит 600 запросов за 10 минут.
+  Общий лимит 6000 запросов за 10 минут (поднят с 600 2026-11-20: Пульт опрашивает офис и хаб с каждой вкладки).
 - Успех: `{ "ok": true, ... }`. Ошибка: `{ "ok": false, "error": "<код>", ... }`. Коды: `not_found` (404, неизвестный id или путь),
   `invalid` / `invalid_status` (400, в ответе `allowed` со списком допустимых статусов), `illegal_transition` (409, `from`, `allowed`),
   `reply_not_supported` (400), `rate_limited` (429), `internal` (500).
@@ -116,8 +116,12 @@ Read-mostly представления над таблицами исполни�
 В `summary` `reviews: { available: false, pending: 0 }`. Панель показывает заглушку, пока агент отзывов не появится.
 
 ## Кабинет клиента (`/admin/clients/*`)
+Заявки с сайта отправляют только вошедшие в кабинет клиенты (решение владельца 2026-11-20): `POST /lead` принимает необязательные `clientEmail` (нижний регистр; битое значение игнорируется),
+`cabinetId` (id Supabase, до 64) и `clientName` (до 120). С `clientEmail`: аккаунт создаётся или обновляется по email (`cab_clients`, `supabase_id` из `cabinetId`), лид привязывается сразу
+(`li_leads.client_id`, строка лида создаётся в момент запроса, Приёмщик дополняет её позже), email становится контактом, если в форме его не было (поле `contact` тогда необязательно).
+Ответ `{ ok: true, id, leadId }`. В карточке лида владельцу «Кабинет: да», в `GET /admin/crm/leads` поле `cabinet`.
 Клиенты регистрируются на сайте через Supabase (email и пароль, Google, Apple), сайт зовёт HQ по loopback с тем же `x-admin-token`.
-Те же 401/404 и общий лимит 600 запросов за 10 минут. Код: `apps/hq/src/admin-crm.ts`, тесты: `apps/hq/tests/admin-cabinet.test.ts`.
+Те же 401/404 и общий лимит 6000 запросов за 10 минут. Код: `apps/hq/src/admin-crm.ts`, тесты: `apps/hq/tests/admin-cabinet.test.ts`.
 
 ### POST /admin/clients
 Тело `{ email, name, telegram, locale, supabaseId, marketingConsent }`: `email` обязателен (обрезается, нижний регистр, до 254), `name` и `telegram` до 120 (можно пустые),
@@ -154,6 +158,33 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 { "ok": true, "item": { "id": 7, "text": "Как оплатить?", "status": "open", "createdAt": "...", "answeredAt": null, "answer": null } }
 ```
 
+### Лиды клиента в `by-email` (`leads`)
+Лиды, привязанные к клиенту (`li_leads.client_id`), новые сверху, не больше 20. Внутренних текстов, промптов и заметок владельца нет.
+```json
+"leads": [{ "id": 12, "createdAt": "...", "service": "site", "summary": "Нужен сайт для салона", "estimateUsd": 1200, "hasDomain": true, "hasHosting": false,
+  "stage": "proposal", "nextStep": "КП отправлено, ждём вашего решения",
+  "timeline": [{ "at": "...", "kind": "lead", "title": "Заявка получена" }],
+  "replies": [{ "at": "...", "text": "Здравствуйте, Алиса!", "from": "manager" }] }]
+```
+- `stage`: этап Пульта (`new|qualified|proposal|contract|paid|project|lost`, с учётом ручного переноса владельца). `nextStep`: одно предложение на этап, на языке лида (`ru` по умолчанию):
+  new «Менеджер уточнит детали в течение рабочего дня», qualified «Готовим коммерческое предложение», proposal «КП отправлено, ждём вашего решения», contract «Договор и счёт на 50% готовы»,
+  paid «Оплата получена, запускаем проект», project «Проект в работе, этапы ниже», lost «Заявка закрыта».
+- `estimateUsd`: сумма выставленного счёта, иначе «Итого» из сметы сайта, иначе `null`. `summary`: до 200 знаков из слов самого клиента.
+- `timeline` по возрастанию времени, из того, что уже есть: заявка (`lead`), первый ответ менеджера (`reply`), утверждённое КП (`kp`, `ps_documents`), договор (`contract`, `ps_documents` или `bo_documents`),
+  счёт (`invoice`) и оплата (`paid`, `bl_invoices`), старт проекта (`project`, `pm_projects`), переносы владельца по этапам (`stage`, журнал `lead_stage`).
+- `replies`: переписка по лиду из `cab_messages` (`id, client_id, lead_id, from, text <= 2000, at`, плюс `ticket_id` для связи с тикетом): ответы владельца через `POST /admin/crm/leads/:id/reply`
+  (пишутся для лида с кабинетом даже если чат не принял), одобренные ответы головы продаж, сообщения клиента и одобренные ответы Поддержки на них. Для лида без кабинета строк нет.
+
+### POST /admin/clients/:id/leads/:leadId/messages
+Тело `{ text }` (1..2000 после обрезки). Клиент неизвестен или лид чужой/не найден: 404 `not_found` (чужой лид неотличим от несуществующего), плохой текст 400 `invalid`,
+больше 10 сообщений за час от одного клиента (и 10 обращений Поддержки, общий счётчик с тикетами) 429 `rate_limited`.
+Пишет `cab_messages` (`from: client`) и создаёт тикет Поддержки как `POST /admin/clients/:id/tickets` (`cs_tickets.lead_id`, в задаче Поддержки пометка «по заявке #N»): черновик ответа идёт через одобрения,
+одобренный ответ дописывается в тот же тред как `from: manager` (один раз на тикет). В журнал задачи лида (голова Продаж) идёт строка, владельцу во входящие без одобрения
+«Сообщение по заявке #N от <имя или email>».
+```json
+{ "ok": true, "item": { "at": "...", "text": "Когда будет КП?", "from": "client", "leadId": 12, "ticketId": 7 } }
+```
+
 ## Таблицы
 | Панель | Таблицы |
 |---|---|
@@ -165,12 +196,12 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 | projects | `pm_projects`, `pm_milestones` |
 | referrals | `rf_referrals` |
 | reviews | нет таблицы, `available: false` |
-| cabinet | `cab_clients`, `li_leads.client_id`, `cs_tickets` |
+| cabinet | `cab_clients`, `cab_messages`, `li_leads.client_id`, `cs_tickets` (+ `lead_id`) |
 
 # Пульт v3 (2026-11-20)
 
 Новые маршруты для хаба, воронки, клиентов 360, проектов, счетов, контента, цифр и «Компании». Код: `apps/hq/src/pult*.ts`, `apps/hq/src/lead-stage.ts`.
-Тесты: `apps/hq/tests/pult-*.test.ts`. Общее как выше: `x-admin-token`, 401/404, лимит 600/10 минут, `{ ok: true, ... }` / `{ ok: false, error, ... }`, времена ISO UTC, деньги `amountUsd`.
+Тесты: `apps/hq/tests/pult-*.test.ts`. Общее как выше: `x-admin-token`, 401/404, лимит 6000/10 минут, `{ ok: true, ... }` / `{ ok: false, error, ... }`, времена ISO UTC, деньги `amountUsd`.
 Каждая запись зовёт тот же код, что Telegram (очередь одобрений, `/paid`, `/mdone`, `/level`, методы рутин), а не копию. Сайт обязан переживать отсутствие любого поля.
 
 ## GET /admin/hub
@@ -233,7 +264,8 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 { "ok": true, "week": "2026-W48",
   "days": [ { "date": "2026-11-23", "items": [ { "id": 41, "kind": "clip|post|carousel|story|article", "platform": "instagram|blog", "status": "draft|pending|approved|rendering|ready|published|rejected",
     "title": "...", "hook": "...", "caption": { "instagram": "", "tiktok": "", "shorts": "", "dzen": "" },
-    "files": [ { "path": "41/1.png", "type": "png", "w": 1080, "h": 1350 } ], "sourceSlug": null, "approvalId": 91, "publishedUrl": null, "error": null } ] } ],
+    "files": [ { "path": "41/1.png", "type": "png", "w": 1080, "h": 1350 } ], "sourceSlug": null, "approvalId": 91, "publishedUrl": null, "error": null,
+    "publishedOn": ["instagram"], "igCaption": "подпись\n\n#теги" } ] } ],
   "summary": { "pending": 3, "approved": 2, "published": 1, "rendering": 1 } }
 ```
 - Всегда 7 дней (пн..вс), пустой день `items: []`. Строки: `cm_items` (рилс `clip`, пост, карусель, история; профильный пакет идёт как `post`) и статьи блога `cm_articles` (`kind: "article"`, `platform: "blog"`).
@@ -241,12 +273,15 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 - `status`: `draft` (пишется или модель ничего не дала, причина в `error`), `pending` (ждёт владельца), `approved` (одобрен, файлов ещё нет), `rendering` (рилс в очереди или в работе у рендерера), `ready` (есть PNG или `reel.mp4`), `published` (все платформы отмечены), `rejected`. Статья: `pending`, `published` (одобренная публикуется сразу), `rejected`.
 - `caption`: подписи платформ из строк `cm_ready` одобренного материала, пока не одобрен из текста материала; `dzen` всегда пустая строка (такой платформы нет). `hook` только у рилса.
 - `files[].path` относительно `DATA_DIR/renders`, отдаётся через `GET /admin/files/<path>`; `w` и `h` читаются из заголовка PNG, у видео 1080x1920. `approvalId`: номер одобрения ядра, когда карточка владельцу уже отправлена (иначе `null`; решать можно и без неё).
-- `publishedUrl`: адрес YouTube из `pb_posts.url`, у статьи `/blog/<slug>`.
+- `publishedUrl`: адрес YouTube или Instagram из `pb_posts.url`, у статьи `/blog/<slug>`.
+- `publishedOn`: платформы, строки которых уже отмечены опубликованными (у статьи `[]`). `igCaption`: подпись Instagram для вставки (текст, пустая строка, хештеги), пока не одобрен `""`. Оба поля для помощника на Маке (`packages/mac-poster`).
 
-`POST /admin/content/:itemId` тело `{ "action": "approve|reject|revise|published|rerender", "note"?: string (1..4000), "platform"?: "instagram|tiktok|shorts" }` → `{ ok, item }` (строка как в списке). Лишние поля и неизвестное действие 400 `invalid` + `allowed`, неизвестный id 404.
+`POST /admin/content/:itemId` тело `{ "action": "approve|reject|revise|published|rerender|failed", "note"?: string (1..4000), "platform"?: "instagram|tiktok|shorts", "url"?: "https://..." }` → `{ ok, item }` (строка как в списке). Лишние поля и неизвестное действие 400 `invalid` + `allowed`, неизвестный id 404.
 - `approve` и `reject` решают то же одобрение, что кнопки Telegram-карточки (`queue.handle`, затем задача и карточка в Telegram закрываются; элемент пакета недели, который ещё не рассылался карточкой, открывается как в «Посмотреть по одному»). Повтор того же решения безопасен: очередь забирает одобрение один раз, второй записи в журнале решений нет. Обратное решение 409 `already_decided`, материал не ждёт владельца (черновик) 409 `not_pending`. У `reject` `note` сохраняется комментарием материала.
 - `revise` требует `note`: для материала это новый текст одной части («Править» в Telegram): подписи платформы `platform` или, без `platform`, сценария/слайдов; карточка остаётся `pending`, счётчик чистых одобрений сбрасывается. Для статьи `note` это замечание: карточка закрывается, статья пишется заново. Не ждёт решения: 409 `not_pending`.
 - `published`: помечает опубликованными готовые строки платформ (кнопка «Опубликовано»), все или одну `platform`; повтор безопасен; до одобрения 409 `not_ready`; нет такой платформы у материала 400 + `allowed`. Для статьи 409 `not_applicable`.
+- `published` с `url` (только `https://`, до 500 символов, нужен `platform`): так отчитывается помощник на Маке. Строка помечается `pb_posts.via = 'mac'`, адрес сохраняется один раз (повтор не меняет), в журнале `mac-poster published` и `published_url`. `url` с другим действием 400.
+- `failed` (нужны `platform` и `note`, причина до 300 символов): помощник на Маке не смог опубликовать. Строка остаётся `ready` (ручная карточка в Telegram остаётся, в ней причина), причина видна в `error`, в журнале `mac-poster publish_failed` (повтор той же причины без новой записи). До одобрения 409 `not_ready`. Утренняя сводка Публикатора пишет «Instagram с Мака: опубликовано N, ошибок M» за последние 24 часа.
 - `rerender`: рилс ставится в очередь рендера (как `/render`), у поста, карусели и истории PNG рисуются заново. Нельзя (не одобрен, рендер выключен, не нарисовалось): 409 `cannot_rerender` + `reason`.
 - Без головы Маркетинга `revise`, `published`, `rerender` дают 503 `unavailable`.
 
@@ -255,7 +290,7 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 - Путь очищается: `..`, `.`, пустые сегменты, `\`, NUL, абсолютные пути и повторное кодирование дают 400; затем `realpath` файла и папки, префикс проверяется (симлинк наружу 404).
 - Расширения: `png`, `mp4`, `jpg`/`jpeg`, `webp`, `json` (иначе 400); `content-type` по расширению, `cache-control: private, max-age=300`, `accept-ranges: bytes`.
 - `Range: bytes=a-b|a-|-n` даёт 206 с `content-range` (видео для плеера); за пределами файла 416; нечитаемый `Range` игнорируется.
-- Только GET. У файлов своё окно лимита (3000 за 10 минут), общие 600 запросов `/admin/*` они не тратят: страница календаря грузит десятки картинок.
+- Только GET. У файлов своё окно лимита (3000 за 10 минут), общие 6000 запросов `/admin/*` они не тратят: страница календаря грузит десятки картинок.
 
 ## POST /events (публичный, токен сайта)
 Счётчики действий посетителей для цифр маркетинга. Не `/admin/*`: заголовок `x-site-token` = `SITE_EVENTS_TOKEN` (если не задан, то `WEB_CHAT_TOKEN`; нет ни того, ни другого: маршрут 404, один раз предупреждение при старте).

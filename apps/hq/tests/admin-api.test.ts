@@ -248,11 +248,11 @@ describe('admin API', () => {
     }
   });
 
-  it('rate limit: 600 requests per 10 minutes', async () => {
+  it('rate limit: 6000 requests per 10 minutes', async () => {
     const w = world({ presence: true });
     const admin = createAdmin({ hq: w.hq, queue: w.queue, director: w.director, channel: w.channel!, ownerId: OWNER, now: () => w.clock.t, commandNames: [] });
     const req = { method: 'GET', path: '/admin/state', query: new URLSearchParams(), body: null };
-    for (let i = 0; i < 600; i++) expect((await admin.handle(req)).status).toBe(200);
+    for (let i = 0; i < 6000; i++) expect((await admin.handle(req)).status).toBe(200);
     expect((await admin.handle(req)).status).toBe(429);
     w.clock.t += 11 * MIN;
     expect((await admin.handle(req)).status).toBe(200);

@@ -386,7 +386,7 @@ export class SupportHead {
    * A ticket written in the client cabinet on the site (the row already exists in cs_tickets, source `cabinet`): a support task so
    * the usual draft and approval follow. A Telegram chat is looked up by the client's handle, otherwise the stored answer is the channel.
    */
-  async cabinetTicket(ticketId: number, client: string, text: string, telegram = ''): Promise<number> {
+  async cabinetTicket(ticketId: number, client: string, text: string, telegram = '', leadId?: number): Promise<number> {
     const name = client.replace(/:/g, ' ').trim().slice(0, 80) || 'клиент';
     const handle = telegram.trim().replace(/^@/, '').toLowerCase();
     let chatId: number | undefined;
@@ -395,7 +395,7 @@ export class SupportHead {
         chatId = (this.hq.db.prepare('SELECT chat_id FROM cb_chats WHERE lower(username) = ? AND blocked = 0').get(handle) as { chat_id: number } | undefined)?.chat_id;
       } catch { /* no bot table: the stored answer is the only channel */ }
     }
-    const t = this.hq.createTask({ title: `Тикет из кабинета: ${name.slice(0, 60)}`, dept: SUPPORT, assigneeId: SUPPORT_HEAD_ID, creator: 'routine', meta: { action: 'ticket', args: `${name}: ${text}`, ticketId, ...(chatId !== undefined ? { chatId } : {}) } });
+    const t = this.hq.createTask({ title: `Тикет из кабинета: ${name.slice(0, 60)}`, dept: SUPPORT, assigneeId: SUPPORT_HEAD_ID, creator: 'routine', meta: { action: 'ticket', args: `${name}: ${leadId !== undefined ? `[по заявке #${leadId}] ` : ''}${text}`, ticketId, ...(leadId !== undefined ? { leadId } : {}), ...(chatId !== undefined ? { chatId } : {}) } });
     if (!this.hq.claim(t.id, SUPPORT_HEAD_ID)) return t.id;
     try {
       await this.finish(t.id, await this.ownerAction(this.hq.task(t.id)!, 'ticket'), false);

@@ -5,6 +5,7 @@ import { PmStore } from '@fir/worker-project-manager';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import type { createCrm } from './admin-crm.js';
+import { recordManagerReply } from './cabinet.js';
 import type { ClientChannel } from './client/channel.js';
 import type { Director } from './director.js';
 import { ensureStageColumn, isStage, rankOf, STAGES } from './lead-stage.js';
@@ -116,6 +117,8 @@ export function createPultCrm(d: PultCrmDeps) {
     // the lead's journal: its task and the activity log (ids and the channel, the text only in the task journal the owner reads)
     if (hq.task(row.task_id)) hq.comment(row.task_id, 'owner', `Ответ владельца (${via}${sent ? '' : ', не доставлен'}): ${text.slice(0, 2000)}`);
     hq.log('owner', 'lead_reply', 'lead', String(id), `${via}:${sent ? 'sent' : 'not_sent'}`);
+    // a cabinet client reads the reply in the lead's thread: the cabinet itself is a channel, so it is kept even when no chat took it
+    recordManagerReply(db, now(), id, text);
     return ok({ sent, via });
   }
 

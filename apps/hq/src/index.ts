@@ -23,6 +23,7 @@ import { Reporter, type TopicSender } from './reporter.js';
 import { TopicManager } from './topics.js';
 import { resolveMedia } from '@fir/worker-publisher';
 import { createWebhook } from './webhook.js';
+import { registerCabinetLead } from './cabinet.js';
 import { AuditGate, AuditStore, submitAudit } from './audit-shared.js';
 import { blogApi } from './blog.js';
 import { payApi } from './pay.js';
@@ -367,7 +368,7 @@ const webChat = cfg.webChatToken
 webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix }));
 
 const admin = cfg.adminToken
-  ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: botCommands, drill: (arg) => drill.command(arg), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram),
+  ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: botCommands, drill: (arg) => drill.command(arg), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),
       billing, marketing, rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
     })
   : null;
@@ -378,11 +379,21 @@ presenceTimer.unref();
 const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cfg.siteEventsToken || cfg.mediaSecret
   ? createWebhook(
       // the form gets its error when the task cannot be made, but the person's contact is kept for the owner (guardedLead)
-      guardedLead(lost, ({ name, contact, service, budget, message, estimate, locale, slot, source, telegramSent, hasDomain, hasHosting }) =>
-        sales.createLeadTask({
+      guardedLead(lost, ({ name, contact, service, budget, message, estimate, locale, slot, source, telegramSent, hasDomain, hasHosting, clientEmail, cabinetId, clientName }) => {
+        const id = sales.createLeadTask({
           name, contact, service, budget, message, estimate, locale, slot, source, ...(telegramSent ? { telegramSent: true } : {}),
           ...(hasDomain !== undefined ? { hasDomain } : {}), ...(hasHosting !== undefined ? { hasHosting } : {}),
-        }, service)),
+        }, service);
+        if (!clientEmail) return id;
+        // a signed-in cabinet client: the account and the lead row exist (and are linked) before the answer goes back to the site
+        try {
+          const r = registerCabinetLead(db, hq.now, id, { clientEmail, cabinetId, clientName, name, contact, service, budget, message, estimate, locale, source, hasDomain, hasHosting });
+          return { id, leadId: r.leadId };
+        } catch (e) {
+          log('warn', 'cabinet lead not linked', { task: id, err: errMsg(e) });
+          return id;
+        }
+      }),
       cfg.leadWebhookToken,
       Date.now,
       cfg.officeToken ? { token: cfg.officeToken, get: cachedOffice(hq) } : undefined,

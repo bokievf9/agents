@@ -59,6 +59,12 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 Не раздувай выжимку: тест держит потолок. Рилс до одобрения проходит `lintReelScript` в `review()` головы маркетинга (хук, один призыв, без штампов ИИ). `/playbook <роль>` присылает владельцу правила.
 Правки плейбуков только коммитом, без секретов и клиентских данных.
 
+## Заявки из кабинета (2026-11-20)
+Заявки с сайта шлют только вошедшие в кабинет клиенты: `POST /lead` с `clientEmail`/`cabinetId`/`clientName` создаёт или обновляет `cab_clients` и сразу привязывает лид (`li_leads.client_id`, «Кабинет: да» в карточке),
+`GET /admin/clients/by-email` отдаёт `leads` (этап Пульта, `nextStep`, `timeline` из `ps_documents`/`bo_documents`/`bl_invoices`/`pm_projects`/`activity`, `replies` из `cab_messages`).
+Сообщение клиента `POST /admin/clients/:id/leads/:leadId/messages` создаёт тикет Поддержки (`cs_tickets.lead_id`), одобренный ответ дописывается в тред; ответы владельца и головы продаж по лиду с кабинетом
+тоже пишутся в `cab_messages` (`apps/hq/src/cabinet.ts`). Контракт: `docs/admin-crm-api.md`.
+
 ## Как добавить нового агента («новая голова»)
 1. `apps/<имя>/`: `package.json` (зависимость `"@fir/core": "workspace:*"`, скрипты как у `lead-intake`),
    `tsconfig.json` (`customConditions: ["source"]`), `tsconfig.build.json`, `vitest.config.ts` (как у `lead-intake`),
@@ -108,6 +114,8 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 YouTube Shorts автоматом (2026-11-20, этап 2): при `YT_OAUTH_CLIENT_JSON` + `YT_REFRESH_TOKEN` Публикатор утром сам грузит одобренные Shorts с MP4 (`YouTubePoster`, resumable upload, квота 1600 из 10 000 в `pb_quota`, потолок 9000, одна попытка на строку в сутки, сбой остаётся ручным с причиной в `pb_posts.error`); `YT_PRIVACY=unlisted` для проб; токен один раз через `pnpm --filter hq yt-auth` (в буфер, не на экран); `safePost` в `packages/core/src/net.ts` (https, список хостов, без редиректов); Аналитик добавляет строку «YouTube за неделю». См. `packages/workers/publisher/README.md`.
 
 Instagram автоматом (2026-11-20, этап 2): при `IG_USER_ID` + `IG_ACCESS_TOKEN` Публикатор утром сам публикует рилсы, посты, карусели и истории через Meta Graph API (`InstagramPoster` в `packages/workers/publisher/src/instagram.ts`, `IgApi` поверх `safeGetJson`/`safePost`, хосты `META_HOSTS` в core, токен только в заголовке). Файлы Graph API берёт по публичному URL: `GET /media/<hmac32>/<путь>` на вебхуке HQ (`resolveMedia`, только `DATA_DIR/renders`, секрет `MEDIA_SECRET` или `WEB_CHAT_TOKEN`, база `IG_PUBLIC_BASE`, nginx проксирует `/media/` на 127.0.0.1:8787, блок в README публикатора). Рилс, не успевший обработаться, держит `pb_posts.container_id` и завершается следующим запуском (`PostPending`); потолок 45 из 50 публикаций в сутки; `InstagramDaily` проверяет токен (раз в сутки алерт при истечении, предупреждение за 7 дней по `IG_TOKEN_ISSUED_AT`) и собирает комментарии в `pb_comments` (ответов пока нет, колонка `replied`); Аналитик добавляет строку «Instagram за неделю».
+
+Instagram с Мака (2026-11-20): Meta не пускает приложение к публикации без проверки бизнеса (нужно юрлицо, его нет), поэтому Instagram публикует `packages/mac-poster` на Маке владельца: Playwright в постоянном профиле Chromium (владелец входит руками, паролей помощник не знает), SSH-туннель к `127.0.0.1:8787` на время запуска, `GET /admin/content` + `/admin/files/*`, отчёт `POST /admin/content/:id` (`published` с `url` или `failed` с причиной, строка `pb_posts.via = 'mac'`, в утренней шапке «Instagram с Мака: опубликовано N, ошибок M», упавший материал остаётся ручной карточкой). launchd 10:00, 14:00, 19:00, не больше 10 в сутки. Как `packages/clips`, это локальный инструмент: в Docker-образы не входит. Путь через Graph API (`InstagramPoster`) остаётся в коде на будущее и без `IG_*` ничего не делает. Подробно: `packages/mac-poster/README.md`.
 
 Видео рилсов (2026-11-19): `packages/renderer` (Remotion + Piper `ru_RU-denis-medium`), сервис `renderer` в `compose.yaml` (1,5 ГБ, без сети, общий том с `hq`),
 очередь `cm_render_jobs` в SQLite HQ, образ `agents-renderer` в CI. Одобренный рилс ставится в очередь, утром Публикатор шлёт MP4; `/render <id>`; `REELS_RENDER=off`

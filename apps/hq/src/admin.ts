@@ -24,7 +24,7 @@ export interface AdminDeps {
   drill?: (arg: string) => Promise<string>;
   now?: () => number;
   /** The Support head drafts the answer to a cabinet ticket (the row is already stored). Fire and forget. */
-  cabinetTicket?: (t: { id: number; name: string; text: string; telegram: string }) => Promise<unknown>;
+  cabinetTicket?: (t: { id: number; name: string; text: string; telegram: string; leadId?: number }) => Promise<unknown>;
   /** «Пульт v3»: Billing (reminder text, pay links), the client bot (replies to Telegram leads), the website chat (replies to web leads). */
   billing?: BillingWorker;
   client?: Pick<ClientChannel, 'send'>;
@@ -48,7 +48,11 @@ export interface AdminReply {
 }
 
 const RATE_WINDOW_MS = 10 * 60_000;
-const RATE_MAX = 600;
+// The admin API is reached only from loopback by the site's server with a valid token, and the Пульт v3
+// polls it from every open tab (office 10 s, hub 15 s, panels 30-60 s). 600 per 10 minutes was hit by one
+// or two tabs and made the office go dark for minutes (2026-11-20); the limit now protects against a
+// runaway client, not against normal polling: 6000 per 10 minutes, about 10 requests a second.
+const RATE_MAX = 6000;
 const iso = (ms: number | null | undefined) => (ms === null || ms === undefined ? null : new Date(ms).toISOString());
 const fail = (status: number, error: string, extra: Record<string, unknown> = {}): AdminReply => ({ status, body: { ok: false, error, ...extra } });
 const ok = (body: Record<string, unknown> = {}): AdminReply => ({ status: 200, body: { ok: true, ...body } });
@@ -62,6 +66,14 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   const crm = createCrm(hq.db, now, {
     // a plain inbox line, not an approval: Telegram only through the away digest rules of the channel
     notifyOwner: (text) => void channel.notify('message', text).catch((e) => log('warn', 'cabinet notify failed', { err: errMsg(e) })),
+    // the Sales head's journal of the lead's task gets the client's message (the inbox line for the owner is made by the cabinet code)
+    leadJournal: (taskId, text) => {
+      try {
+        hq.comment(taskId, 'sales-head', text);
+      } catch (e) {
+        log('warn', 'cabinet lead journal failed', { err: errMsg(e) });
+      }
+    },
     ...(d.cabinetTicket ? { cabinetTicket: (t) => void d.cabinetTicket!(t).catch((e) => log('warn', 'cabinet ticket flow failed', { err: errMsg(e) })) } : {}),
   });
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));

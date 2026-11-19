@@ -30,6 +30,8 @@ export interface Lead {
   /** The client already has a domain: true or false when known (an answer in the bot, the site's brief), null when nobody asked. */
   hasDomain: boolean | null;
   hasHosting: boolean | null;
+  /** The cabinet account (cab_clients.id) the lead belongs to: the client sent it signed in, or registered later with the same contact. */
+  clientId?: number | null;
 }
 
 const SCHEMA = `
@@ -57,7 +59,7 @@ CREATE TABLE IF NOT EXISTS li_leads (
 interface Row {
   id: number; task_id: number; name: string; contact: string; service: string; niche: string; task: string; deadline: string;
   budget: string; origin: string; temperature: string; lang: string; slots: string; chosen_slot: number | null;
-  price_asked: number; price_approved: number; created_at: number; estimate: string; has_domain: number | null; has_hosting: number | null;
+  price_asked: number; price_approved: number; created_at: number; estimate: string; has_domain: number | null; has_hosting: number | null; client_id?: number | null;
 }
 
 const toLead = (r: Row): Lead => ({
@@ -65,6 +67,7 @@ const toLead = (r: Row): Lead => ({
   budget: r.budget, origin: r.origin, temperature: r.temperature as Temperature, lang: r.lang as Lang, slots: JSON.parse(r.slots) as number[],
   chosenSlot: r.chosen_slot, priceAsked: r.price_asked === 1, priceApproved: r.price_approved === 1, createdAt: r.created_at,
   estimate: r.estimate ?? '', hasDomain: r.has_domain === null ? null : r.has_domain === 1, hasHosting: r.has_hosting === null ? null : r.has_hosting === 1,
+  clientId: r.client_id ?? null,
 });
 
 export type LeadInput = Pick<Lead, 'name' | 'contact' | 'service' | 'niche' | 'task' | 'deadline' | 'budget' | 'origin' | 'temperature' | 'lang' | 'slots' | 'chosenSlot' | 'priceAsked'> & Partial<Pick<Lead, 'estimate' | 'hasDomain' | 'hasHosting'>>;
