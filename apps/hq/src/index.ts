@@ -27,6 +27,7 @@ import { blogApi } from './blog.js';
 import { payApi } from './pay.js';
 import { cachedStatus } from './status.js';
 import { createAdmin } from './admin.js';
+import { serveFile } from './pult-files.js';
 import { OwnerChannel } from './presence.js';
 import { cachedOffice } from './office.js';
 import { Drill } from './drill.js';
@@ -365,7 +366,7 @@ webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePre
 
 const admin = cfg.adminToken
   ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: botCommands, drill: (arg) => drill.command(arg), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram),
-      billing, ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
+      billing, marketing, rendersDir: cfg.rendersDir, ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
     })
   : null;
 // Presence: the site pings while it is open; without pings the owner counts as away and a digest goes to Telegram.
@@ -384,7 +385,7 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
       Date.now,
       cfg.officeToken ? { token: cfg.officeToken, get: cachedOffice(hq) } : undefined,
       webChat && cfg.webChatToken ? { token: cfg.webChatToken, handle: (r, ip) => webChat.handle(r, ip) } : undefined,
-      admin && cfg.adminToken ? { token: cfg.adminToken, handle: (r) => admin.handle(r) } : undefined,
+      admin && cfg.adminToken ? { token: cfg.adminToken, handle: (r) => admin.handle(r), file: (path, range) => serveFile(cfg.rendersDir, path, range) } : undefined,
       {
         ...(cfg.leadWebhookToken
           ? {

@@ -6,6 +6,8 @@ import type { createCrm } from './admin-crm.js';
 import type { ClientChannel } from './client/channel.js';
 import type { Director } from './director.js';
 import type { OwnerChannel } from './presence.js';
+import type { MarketingHead } from './heads/marketing.js';
+import { createPultContent } from './pult-content.js';
 import { createHub } from './pult-hub.js';
 import { createPultCrm, fail, ok } from './pult-crm.js';
 
@@ -25,16 +27,26 @@ export interface PultDeps {
   billing?: BillingWorker | undefined;
   client?: Pick<ClientChannel, 'send'> | undefined;
   webReply?: ((sessionId: string, text: string) => boolean) | undefined;
+  marketing?: MarketingHead | undefined;
+  rendersDir?: string | undefined;
+  /** The owner's decision on one open approval, as the Telegram buttons run it (`admin.ts`). */
+  decide: (approvalId: number, action: 'approve' | 'reject') => Promise<unknown>;
 }
 
 export function createPult(d: PultDeps) {
   const hub = createHub(d.hq.db, d.now);
   const crm = createPultCrm(d);
+  const content = createPultContent(d);
 
   /** `seg`: the path after `/admin/`. null: not a «Пульт v3» route. */
   async function handle(method: string, seg: string[], query: URLSearchParams, body: unknown): Promise<AdminReply | null> {
     const [a] = seg;
     if (a === 'hub') return method === 'GET' && seg.length === 1 ? ok(hub.get()) : fail(404, 'not_found');
+    if (a === 'content') {
+      if (method === 'GET' && seg.length === 1) return content.list(query);
+      if (method === 'POST' && seg.length === 2) return content.post(seg[1]!, body);
+      return fail(404, 'not_found');
+    }
     if (a === 'crm') return crm.handle(method, seg.slice(1), query, body);
     return null;
   }

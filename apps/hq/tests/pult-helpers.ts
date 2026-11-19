@@ -10,6 +10,7 @@ import { CsStore } from '@fir/worker-customer-support';
 import { createAdmin, type AdminDeps } from '../src/admin.js';
 import { PRODUCTION_HEAD_ID, ProductionHead, seedProduction } from '../src/heads/production.js';
 import { SupportHead, seedSupport } from '../src/heads/support.js';
+import { serveFile } from '../src/pult-files.js';
 import { createWebhook } from '../src/webhook.js';
 import { OWNER, world } from './helpers.js';
 
@@ -63,8 +64,8 @@ export function pultWorld(opts: Partial<Parameters<typeof world>[0]> & { admin?:
 export type PultWorld = ReturnType<typeof pultWorld>;
 
 /** The admin API behind the real webhook server (token, 401, rate-limit behaviour). */
-export async function serve(p: PultWorld, extra: Parameters<typeof createWebhook>[6] = {}) {
-  const server = createWebhook(() => Promise.resolve(0), undefined, Date.now, undefined, undefined, { token: TOKEN, handle: (r) => p.admin.handle(r) }, extra);
+export async function serve(p: PultWorld, extra: Parameters<typeof createWebhook>[6] = {}, rendersDir?: string) {
+  const server = createWebhook(() => Promise.resolve(0), undefined, Date.now, undefined, undefined, { token: TOKEN, handle: (r) => p.admin.handle(r), ...(rendersDir ? { file: (path: string, range: string | undefined) => serveFile(rendersDir, path, range) } : {}) }, extra);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

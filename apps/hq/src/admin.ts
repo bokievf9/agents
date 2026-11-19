@@ -63,7 +63,10 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
     ...(d.cabinetTicket ? { cabinetTicket: (t) => void d.cabinetTicket!(t).catch((e) => log('warn', 'cabinet ticket flow failed', { err: errMsg(e) })) } : {}),
   });
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));
-  const pult = createPult({ hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply });
+  const pult = createPult({
+    hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply,
+    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action),
+  });
 
   const maxTaskId = () => (hq.db.prepare('SELECT COALESCE(MAX(id), 0) m FROM tasks').get() as { m: number }).m;
   const firstOwnerTaskAfter = (id: number): number | undefined =>
@@ -131,6 +134,16 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
       await queue.settleCard(id).catch(() => false);
       return ok({ status: queue.get(id)!.status });
     }
+    const { status, message, notes } = await decide(id, action);
+    if (status === 'failed') return { status: 200, body: { ok: false, error: 'failed', status, message, notes } };
+    return ok({ status, message, notes });
+  }
+
+  /**
+   * The owner's decision on one open approval, the way the Telegram buttons run it (the queue's own `handle`, then tasks follow); the replies the
+   * heads would have sent to Telegram are collected. Idempotent: an approval that is not open any more answers «Уже обработано» and runs nothing.
+   */
+  async function decide(id: number, action: 'approve' | 'reject'): Promise<{ status: string; message: string; notes: string[] }> {
     const { result: message, replies } = await channel.capture(async () => {
       const answer = await queue.handle(action, id, d.ownerId);
       director.afterDecision();
@@ -139,9 +152,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
     channel.resolveApproval(id);
     // decided on the site: the Telegram card is edited to «Одобрено» / «Отклонено», no buttons left
     await queue.settleCard(id).catch(() => false);
-    const status = queue.get(id)!.status;
-    if (status === 'failed') return { status: 200, body: { ok: false, error: 'failed', status, message, notes: replies } };
-    return ok({ status, message, notes: replies });
+    return { status: queue.get(id)!.status, message, notes: replies };
   }
 
   async function route(req: AdminRequest): Promise<AdminReply> {

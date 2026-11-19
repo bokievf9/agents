@@ -6,6 +6,7 @@ import { errMsg, log } from '@fir/core';
 import type { AdminReply, AdminRequest } from './admin.js';
 import type { BlogApi } from './blog.js';
 import type { PayApi } from './pay.js';
+import type { FileReply } from './pult-files.js';
 import { auditInputSchema, type AuditInput, type AuditOutcome } from './audit-shared.js';
 import { chatSchema, type ChatOutcome, type ChatRequest } from './client/web.js';
 
@@ -119,7 +120,12 @@ export function createWebhook(
   /** `POST /chat` (header `x-chat-token`), the website version of the client bot; `ip` is `x-visitor-ip` from a trusted peer, else the socket (see `visitorIp`). */
   chat?: { token: string; handle: (req: ChatRequest, ip: string) => Promise<ChatOutcome> },
   /** `/admin/*` (header `x-admin-token`), the owner's website workplace (`admin.ts`); without it the routes answer 404. */
-  admin?: { token: string; handle: (req: AdminRequest) => Promise<AdminReply> },
+  admin?: {
+    token: string;
+    handle: (req: AdminRequest) => Promise<AdminReply>;
+    /** `GET /admin/files/<path>` (rendered files of the content calendar, `pult-files.ts`); without it the path is an ordinary 404. */
+    file?: (path: string, range: string | undefined) => FileReply;
+  },
   /**
    * `POST /audit` (header `x-lead-token`, the same token as `/lead`) and the public `GET /status` (no token, per-IP rate limit).
    * Without `audit` the route answers 404; without `status` too.
@@ -134,6 +140,7 @@ export function createWebhook(
   } = {},
 ): Server {
   const hits: number[] = [];
+  const fileHits: number[] = [];
   const auditHits: number[] = [];
   const statusHits = new Map<string, number[]>();
   const blogHits = new Map<string, number[]>();
@@ -146,6 +153,24 @@ export function createWebhook(
         if (admin && req.url?.startsWith('/admin/')) {
           if (!tokenOk(req.headers['x-admin-token'] as string | undefined, admin.token)) return json(res, 401, { ok: false, error: 'unauthorized' });
           const url = new URL(req.url, 'http://hq.local');
+          if (req.method === 'GET' && admin.file && url.pathname.startsWith('/admin/files/')) {
+            // pictures and video of one page load are many requests: their own, wider window (the 600 of `/admin/*` is for the API calls)
+            const t = now();
+            while (fileHits.length && fileHits[0]! < t - 600_000) fileHits.shift();
+            if (fileHits.length >= 3000) return json(res, 429, { ok: false, error: 'rate_limited' });
+            fileHits.push(t);
+            const rangeHeader = req.headers.range;
+            const out = admin.file(url.pathname.slice('/admin/files/'.length), typeof rangeHeader === 'string' ? rangeHeader : undefined);
+            if ('json' in out) {
+              res.writeHead(out.status, { 'content-type': 'application/json', ...out.headers });
+              return void res.end(JSON.stringify(out.json));
+            }
+            res.writeHead(out.status, out.headers);
+            const stream = out.stream();
+            stream.on('error', () => res.destroy());
+            res.on('close', () => stream.destroy());
+            return void stream.pipe(res);
+          }
           let body: unknown = null;
           if (req.method === 'POST') {
             const raw = await readBody(req);
