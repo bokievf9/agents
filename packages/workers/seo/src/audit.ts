@@ -1,4 +1,4 @@
-import { pinnedFetch, resolvePublic, systemLookup, tryJson, type LlmClient, type PinnedAddress } from '@fir/core';
+import { pinnedFetch, resolvePublic, systemLookup, tryJson, withPlaybook, type LlmClient, type PinnedAddress } from '@fir/core';
 import { z } from 'zod';
 import { pageFacts, type PageFacts } from './checks.js';
 import type { FetchFn } from './worker.js';
@@ -229,7 +229,7 @@ const SYSTEM = (lang: AuditLocale) =>
 /** The five findings: the model first (strict JSON, cleaned), the template when it is off or fails. */
 export async function composeFindings(llm: LlmClient, f: AuditFacts, lang: AuditLocale): Promise<AuditFindings> {
   const facts = { ...f, title: f.title ? f.title.slice(0, 120) : null };
-  const res = await tryJson(llm, { tier: 'sonnet', maxTokens: 900, system: SYSTEM(lang), messages: [{ role: 'user', content: JSON.stringify(facts) }] }, findingsSchema);
+  const res = await tryJson(llm, { tier: 'sonnet', maxTokens: 900, system: withPlaybook(SYSTEM(lang), 'seo'), messages: [{ role: 'user', content: JSON.stringify(facts) }] }, findingsSchema);
   return (res && acceptFindings(res, f, lang)) || fallbackFindings(f, lang);
 }
 

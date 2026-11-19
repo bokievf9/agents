@@ -82,6 +82,13 @@ export interface Config extends BaseConfig {
   ytOauthClientJson: string | undefined;
   ytRefreshToken: string | undefined;
   ytPrivacy: string | undefined;
+  /** Instagram Graph API publishing and insights (all optional): professional account id, long-lived token, public base URL of the media route, token issue date (ISO). */
+  igUserId: string | undefined;
+  igAccessToken: string | undefined;
+  igPublicBase: string | undefined;
+  igTokenIssuedAt: string | undefined;
+  /** Signs the public `/media/<sig>/<path>` URLs: `MEDIA_SECRET`, else `WEB_CHAT_TOKEN`. Without both the route answers 404. */
+  mediaSecret: string | undefined;
   trendsRegions: string[];
   gscServiceAccountJson: string | undefined;
   gscSiteUrl: string | undefined;
@@ -182,6 +189,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ytOauthClientJson: optional(env, 'YT_OAUTH_CLIENT_JSON'),
     ytRefreshToken: optional(env, 'YT_REFRESH_TOKEN'),
     ytPrivacy: optional(env, 'YT_PRIVACY'),
+    igUserId: optional(env, 'IG_USER_ID'),
+    igAccessToken: optional(env, 'IG_ACCESS_TOKEN'),
+    igPublicBase: optional(env, 'IG_PUBLIC_BASE')?.replace(/\/+$/, ''),
+    igTokenIssuedAt: optional(env, 'IG_TOKEN_ISSUED_AT'),
+    mediaSecret: optional(env, 'MEDIA_SECRET') ?? optional(env, 'WEB_CHAT_TOKEN'),
     trendsRegions: (optional(env, 'TRENDS_REGIONS') ?? 'KZ,UZ,RU').split(',').map((r) => r.trim().toUpperCase()).filter((r) => /^[A-Z]{2}$/.test(r)),
     gscServiceAccountJson: optional(env, 'GSC_SERVICE_ACCOUNT_JSON'),
     gscSiteUrl: optional(env, 'GSC_SITE_URL'),

@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { isIP } from 'node:net';
 import { z } from 'zod';
@@ -140,6 +141,11 @@ export function createWebhook(
     events?: { token: string; handle: (data: unknown) => 'ok' | 'invalid' };
     /** Public `GET /pay/:number?k=<key>` (no token, per-IP rate limit, the key is the protection). Without it the route answers 404. */
     pay?: PayApi;
+    /**
+     * Public `GET|HEAD /media/<signature>/<path>` for the Instagram Graph API (it fetches our PNG/MP4 by URL). The signature is
+     * HMAC(secret, path); `resolve` returns the file only for a valid signature and a path under DATA_DIR/renders. Without it: 404.
+     */
+    media?: { resolve: (sig: string, rel: string) => { file: string; type: string; size: number } | null };
   } = {},
 ): Server {
   const hits: number[] = [];
@@ -148,6 +154,7 @@ export function createWebhook(
   const statusHits = new Map<string, number[]>();
   const blogHits = new Map<string, number[]>();
   const payByIp = new KeyedLimit(60, 60_000);
+  const mediaByIp = new KeyedLimit(300, 60_000);
   const auditByIp = new KeyedLimit(10, 3_600_000);
   const leadByIp = new KeyedLimit(20, 3_600_000);
   const eventsByIp = new KeyedLimit(120, 60_000);
@@ -222,6 +229,25 @@ export function createWebhook(
           if (!found) return json(res, 404, { ok: false, error: 'not_found' });
           res.setHeader('cache-control', 'public, max-age=60');
           return json(res, 200, found);
+        }
+        if ((req.method === 'GET' || req.method === 'HEAD') && extra.media && /^\/media\//.test(req.url ?? '')) {
+          const fwd = req.headers['x-forwarded-for'];
+          const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+          if (!mediaByIp.take(ip, now())) return json(res, 429, { ok: false, error: 'rate_limited' });
+          const m = /^\/media\/([0-9a-f]{32})\/([^?#]+)/.exec(req.url!);
+          let rel = '';
+          try {
+            rel = m ? m[2]!.split('/').map(decodeURIComponent).join('/') : '';
+          } catch {
+            /* a broken escape is just an unknown file */
+          }
+          const found = m && rel ? extra.media.resolve(m[1]!, rel) : null;
+          if (!found) return json(res, 404, { ok: false, error: 'not_found' });
+          res.writeHead(200, { 'content-type': found.type, 'content-length': found.size, 'cache-control': 'public, max-age=3600' });
+          if (req.method === 'HEAD') return void res.end();
+          const stream = createReadStream(found.file);
+          stream.on('error', () => res.destroy());
+          return void stream.pipe(res);
         }
         if (req.method === 'GET' && extra.pay && /^\/pay\//.test(req.url ?? '')) {
           const url = new URL(req.url!, 'http://hq.local');

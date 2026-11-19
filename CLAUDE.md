@@ -52,6 +52,13 @@ LLM в компании ходит не напрямую в Anthropic, а чер
   модель сама не называет (ставит `[цена]`, владелец правит).
 - Тесты: `MockLlm`, настоящий API в тестах не зовём.
 
+## Плейбуки ремесла (2026-11-20)
+`knowledge/playbooks/<роль>.md` учат исполнителей работе: правила, чек-лист, шаблоны, чего не делать (источник: навыки владельца в `~/.claude/skills`, конспект своими словами,
+лицензии отмечены в каждом файле). `@fir/core` `playbooks.ts`: `loadPlaybook(role)` (кэш, папка `KNOWLEDGE_DIR`), `playbookExcerpt(role)` (Правила и Чеклист, не больше 2500 знаков) и
+`withPlaybook(system, role)`; воркеры с LLM (Контент-мейкер, Трендвотчер, Аналитик, SEO, Разведчик) дописывают выжимку к системному промпту, воркер без LLM плейбук не грузит.
+Не раздувай выжимку: тест держит потолок. Рилс до одобрения проходит `lintReelScript` в `review()` головы маркетинга (хук, один призыв, без штампов ИИ). `/playbook <роль>` присылает владельцу правила.
+Правки плейбуков только коммитом, без секретов и клиентских данных.
+
 ## Как добавить нового агента («новая голова»)
 1. `apps/<имя>/`: `package.json` (зависимость `"@fir/core": "workspace:*"`, скрипты как у `lead-intake`),
    `tsconfig.json` (`customConditions: ["source"]`), `tsconfig.build.json`, `vitest.config.ts` (как у `lead-intake`),
@@ -99,6 +106,8 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 пишут статью дня RU+EN (пн, ср, пт, вс «ИИ для бизнеса», вт, чт, сб ниша); одобренная публикуется самим HQ (публичный `GET /blog`, `docs/public-api.md`), в пакет недели из неё идут карусель и рилс. Telegram-канала нет (владелец отказался).
 
 YouTube Shorts автоматом (2026-11-20, этап 2): при `YT_OAUTH_CLIENT_JSON` + `YT_REFRESH_TOKEN` Публикатор утром сам грузит одобренные Shorts с MP4 (`YouTubePoster`, resumable upload, квота 1600 из 10 000 в `pb_quota`, потолок 9000, одна попытка на строку в сутки, сбой остаётся ручным с причиной в `pb_posts.error`); `YT_PRIVACY=unlisted` для проб; токен один раз через `pnpm --filter hq yt-auth` (в буфер, не на экран); `safePost` в `packages/core/src/net.ts` (https, список хостов, без редиректов); Аналитик добавляет строку «YouTube за неделю». См. `packages/workers/publisher/README.md`.
+
+Instagram автоматом (2026-11-20, этап 2): при `IG_USER_ID` + `IG_ACCESS_TOKEN` Публикатор утром сам публикует рилсы, посты, карусели и истории через Meta Graph API (`InstagramPoster` в `packages/workers/publisher/src/instagram.ts`, `IgApi` поверх `safeGetJson`/`safePost`, хосты `META_HOSTS` в core, токен только в заголовке). Файлы Graph API берёт по публичному URL: `GET /media/<hmac32>/<путь>` на вебхуке HQ (`resolveMedia`, только `DATA_DIR/renders`, секрет `MEDIA_SECRET` или `WEB_CHAT_TOKEN`, база `IG_PUBLIC_BASE`, nginx проксирует `/media/` на 127.0.0.1:8787, блок в README публикатора). Рилс, не успевший обработаться, держит `pb_posts.container_id` и завершается следующим запуском (`PostPending`); потолок 45 из 50 публикаций в сутки; `InstagramDaily` проверяет токен (раз в сутки алерт при истечении, предупреждение за 7 дней по `IG_TOKEN_ISSUED_AT`) и собирает комментарии в `pb_comments` (ответов пока нет, колонка `replied`); Аналитик добавляет строку «Instagram за неделю».
 
 Видео рилсов (2026-11-19): `packages/renderer` (Remotion + Piper `ru_RU-denis-medium`), сервис `renderer` в `compose.yaml` (1,5 ГБ, без сети, общий том с `hq`),
 очередь `cm_render_jobs` в SQLite HQ, образ `agents-renderer` в CI. Одобренный рилс ставится в очередь, утром Публикатор шлёт MP4; `/render <id>`; `REELS_RENDER=off`

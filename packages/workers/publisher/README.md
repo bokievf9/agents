@@ -46,11 +46,52 @@
 Аналитик (еженедельный отчёт): при `YT_REFRESH_TOKEN` читает `channels?part=statistics&mine=true` и `videos?part=statistics` по роликам недели (из `pb_posts.url`) и
 добавляет «YouTube за неделю: N Shorts, X просмотров, Y подписчиков (+Z)». Без токена работает путь по `YOUTUBE_API_KEY`.
 
+## Этап 2: Instagram через Meta Graph API
+Рилсы, посты, карусели (2-10 PNG) и истории публикуются утром сами (`InstagramPoster`), если заданы `IG_USER_ID` и `IG_ACCESS_TOKEN`; без них ручной поток как раньше.
+Окружение (всё необязательное):
+- `IG_USER_ID`: id профессионального аккаунта Instagram; `IG_ACCESS_TOKEN`: долгоживущий токен пользователя (60 дней), уходит только в заголовок `authorization`, в логи и ошибки не попадает;
+- `IG_PUBLIC_BASE`: публичная база файлов, `https://firtech.pro/media` (Graph API сам скачивает PNG и MP4 по URL; без неё причина «нет публичного URL файлов», материал остаётся ручным);
+- `MEDIA_SECRET` (иначе `WEB_CHAT_TOKEN`): секрет подписи ссылок; `IG_TOKEN_ISSUED_AT` (дата выпуска токена, `2026-11-20`): предупреждение за 7 дней до конца.
+Права токена: `instagram_basic`, `instagram_content_publish`, `instagram_manage_insights`, `instagram_manage_comments`, `pages_show_list`.
+
+Публичные ссылки на файлы: `GET /media/<подпись>/<путь>` на вебхук-сервере HQ. Подпись = HMAC-SHA256(секрет, путь) в hex, 32 знака; отдаются только PNG/JPG/MP4 из `DATA_DIR/renders`
+с `cache-control: public, max-age=3600`; чужая подпись, `..`, симлинк наружу, другое расширение: 404. nginx на сервере (в блок `firtech.pro`, до `location /`):
+```
+location /media/ {
+    proxy_pass http://127.0.0.1:8787/media/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_read_timeout 120s;
+}
+```
+Потом `sudo nginx -t && sudo systemctl reload nginx`. Проверка: ссылка из лога или `curl -I https://firtech.pro/media/0000/x.png` отвечает 404 от HQ (JSON), не 502.
+
+Как публикуется. Рилс: `POST /{IG_USER_ID}/media` (`media_type=REELS`, `video_url`, `caption`, `share_to_feed=true`), опрос `GET /{container}?fields=status_code` каждые 10 с до `FINISHED` (до 5 минут),
+`POST /media_publish`, ссылка из `GET /{media}?fields=permalink`. Не успело за запуск: id контейнера в `pb_posts.container_id`, строка завершается при следующем запуске (новый контейнер не создаётся),
+в шапке дня «видео обрабатывается». Пост: `image_url` без `media_type`. Карусель: контейнеры-дети (`is_carousel_item=true`), затем `media_type=CAROUSEL` с `children`. История: `media_type=STORIES` на каждый кадр.
+Лимит: `GET /{IG_USER_ID}/content_publishing_limit` перед постом; с 45 из 50 за 24 часа публикация не начинается (остальное вручную, строка в шапке). Одна попытка на материал в сутки (`pb_posts.auto_on`),
+ошибка в `pb_posts.error`, в карточке «Instagram: автопубликация не удалась (<причина>). Публикуйте вручную.». `media_id` в `pb_posts.media_id` (для статистики и комментариев).
+
+Утренний прогон `InstagramDaily`: `GET /me?fields=id` проверяет токен. Ответ 400/401/403 (ядро не отдаёт тело ошибок GET, поэтому код 190 виден по статусу) = токен истёк: владельцу раз в сутки
+«Токен Instagram истёк: обновите в чеклисте (скрытое окно)»; при `IG_TOKEN_ISSUED_AT` предупреждение за 7 дней. Комментарии к публикациям последних 7 дней (`GET /{media}/comments`) падают в `pb_comments`
+(`id`, `media_id`, `username`, `text` до 500, `at`, `replied=0`), в шапке дня «Комментарии в Instagram: N новых» и первые три. Ответы через голову Поддержки позже (TODO, колонка `replied` готова).
+
+Аналитик (недельный отчёт): `GET /{IG_USER_ID}/insights` (`reach,profile_views,accounts_engaged`, `period=day`, `metric_type=total_value`), `followers_count`, `media_count` и по каждой публикации недели
+`insights` (`views,reach,likes,comments,shares,saved`; `plays` в API заменён на `views`). Строка «Instagram за неделю: N публикаций, охват X, подписчиков Y (+Z), лучший ролик: <ссылка> (V просмотров)».
+Снимок подписчиков в `pb_ig_stats`, дельта к снимку недельной давности.
+
+Продление токена (раз в ~50 дней, владелец; токен кладёт главное окно через скрытое окно, не в чат):
+1. developers.facebook.com, приложение, Tools, Graph API Explorer: выбрать приложение, «Generate Access Token» с правами выше (короткий токен живёт 1 час).
+2. Обмен на долгоживущий: `GET https://graph.facebook.com/v23.0/oauth/access_token?grant_type=fb_exchange_token&client_id=<APP_ID>&client_secret=<APP_SECRET>&fb_exchange_token=<короткий токен>`
+   (в браузере или curl на своём компьютере), в ответе `access_token` на 60 дней.
+3. Отдать токен главному окну (поле «Токен Instagram» в чеклисте, скрытое окно), там же дату выпуска для `IG_TOKEN_ISSUED_AT`. `IG_USER_ID`: Graph API Explorer, `GET me/accounts?fields=instagram_business_account`.
+Первое подключение: аккаунт Business или Creator, привязанный к Facebook Page; в режиме разработки приложение публикует только для ролей приложения (App Review для остальных).
+
 Остальное по платформам (сети нет, ручной путь):
 
 | Платформа | Нужно |
 |---|---|
-| Instagram (Graph API, Reels и карусели) | профессиональный (Business или Creator) аккаунт, привязанный к Facebook Page; приложение на developers.facebook.com с продуктом Instagram Graph API; разрешения `instagram_content_publish`, `instagram_basic`, `pages_show_list`; долгоживущий токен; для боевого режима App Review |
+| Instagram (Graph API, Reels и карусели, сделано) | профессиональный (Business или Creator) аккаунт, привязанный к Facebook Page; приложение на developers.facebook.com с продуктом Instagram Graph API; разрешения `instagram_content_publish`, `instagram_basic`, `pages_show_list`; долгоживущий токен; для боевого режима App Review |
 | YouTube Shorts (сделано) | проект в Google Cloud, YouTube Data API v3, OAuth client (Desktop или Web), один раз согласие владельца канала со scope `youtube.upload`; непроверенные приложения грузят видео только как приватные до аудита |
 | TikTok | аккаунт на developers.tiktok.com, приложение с продуктом Content Posting API, scope `video.publish`; прямой постинг требует аудита приложения, до него только режим черновиков (`video.upload`) |
 

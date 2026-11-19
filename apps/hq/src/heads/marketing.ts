@@ -4,11 +4,11 @@ import { GoogleAuth, errMsg, escapeHtml, log, parseClientJson, tryJson, zonedPar
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import {
   ARTICLE_KIND, KIND, ContentMakerWorker, TYPE_RU, approveArticle, articleLineOn, dayLabel, editableParts, isAiAsk, partLabel, replacePart,
-  findNiche, splitPlatforms, storeFor, titleOf, ymd, RenderQueue, parseReel, shortReason, type RenderJob,
+  findNiche, lintReelScript, splitPlatforms, storeFor, titleOf, ymd, RenderQueue, parseReel, shortReason, type RenderJob,
   type PartId,
 } from '@fir/worker-content-maker';
 import { AnalystWorker } from '@fir/worker-analyst';
-import { PublishStore, PublisherWorker, YouTubePoster, parsePrivacy, dayHeader, imagesOf, publishedButtons, renderItemMessage, publishDay, videoCaption, videoOf } from '@fir/worker-publisher';
+import { IgApi, InstagramDaily, InstagramPoster, PublishStore, PublisherWorker, YouTubePoster, instagramWeekLine, parsePrivacy, dayHeader, imagesOf, publishedButtons, renderItemMessage, publishDay, videoCaption, videoOf } from '@fir/worker-publisher';
 import { AUDIT_KIND, KIND as SEO_KIND, SeoWorker, type AuditPayload, type SeoProposalPayload } from '@fir/worker-seo';
 import { TrendScoutWorker, latestTrendHints } from '@fir/worker-trend-scout';
 import { z } from 'zod';
@@ -68,6 +68,12 @@ export interface Integrations {
   ytOauthClientJson?: string | undefined;
   ytRefreshToken?: string | undefined;
   ytPrivacy?: string | undefined;
+  /** Instagram Graph API (all optional; without IG_USER_ID and IG_ACCESS_TOKEN Instagram stays manual). */
+  igUserId?: string | undefined;
+  igAccessToken?: string | undefined;
+  igPublicBase?: string | undefined;
+  igTokenIssuedAt?: string | undefined;
+  mediaSecret?: string | undefined;
   trendsRegions?: string[];
   gscServiceAccountJson?: string | undefined;
   gscSiteUrl?: string | undefined;
@@ -138,6 +144,8 @@ export class MarketingHead implements ApprovalEditor {
   readonly publisher: PublisherWorker;
   readonly seo: Worker;
   readonly analyst: Worker;
+  /** The Instagram morning run (token health, comments digest); null without IG_USER_ID and IG_ACCESS_TOKEN. */
+  private readonly igDaily: InstagramDaily | null = null;
   /** Video render jobs (shared SQLite, the `renderer` service claims them). */
   readonly renderQueue: RenderQueue;
 
@@ -147,12 +155,20 @@ export class MarketingHead implements ApprovalEditor {
     this.trendScout = d.trendScout ?? new TrendScoutWorker({ youtubeApiKey: i.youtubeApiKey, regions: i.trendsRegions ?? ['KZ', 'UZ', 'RU'], ...net });
     this.renderQueue = new RenderQueue(d.hq.db, d.hq.now);
     const yt = youtubeAuth(i);
+    const pstore = new PublishStore(d.hq.db);
+    const pday = () => publishDay({ now: d.hq.now, tz: d.hq.tz });
+    const ig = i.igUserId && i.igAccessToken ? new IgApi({ token: i.igAccessToken }) : null;
+    const posters = [
+      ...(yt ? [new YouTubePoster({ auth: yt, store: pstore, day: pday, now: d.hq.now, privacy: parsePrivacy(i.ytPrivacy) })] : []),
+      ...(ig && i.igUserId ? [new InstagramPoster({ api: ig, userId: i.igUserId, store: pstore, day: pday, publicBase: i.igPublicBase, mediaSecret: i.mediaSecret, rendersDir: d.rendersDir ?? '' })] : []),
+    ];
+    if (ig && i.igUserId) this.igDaily = new InstagramDaily({ api: ig, store: pstore, day: pday, now: d.hq.now, tokenIssuedAt: i.igTokenIssuedAt });
     this.publisher = d.publisher ?? new PublisherWorker({
       render: (itemId) => this.renderedClip(itemId), renderNote: (itemId) => this.reelNote(itemId),
-      ...(yt ? { posters: [new YouTubePoster({ auth: yt, store: new PublishStore(d.hq.db), day: () => publishDay({ now: d.hq.now, tz: d.hq.tz }), now: d.hq.now, privacy: parsePrivacy(i.ytPrivacy) })] } : {}),
+      ...(posters.length ? { posters } : {}),
     });
     this.seo = d.seo ?? new SeoWorker({ ...(i.siteUrl ? { siteUrl: i.siteUrl } : {}), gscServiceAccountJson: i.gscServiceAccountJson, gscSiteUrl: i.gscSiteUrl, ...net });
-    this.analyst = d.analyst ?? new AnalystWorker({ youtubeApiKey: i.youtubeApiKey, youtubeChannelId: i.youtubeChannelId, ...(yt ? { oauth: yt } : {}), ...net });
+    this.analyst = d.analyst ?? new AnalystWorker({ youtubeApiKey: i.youtubeApiKey, youtubeChannelId: i.youtubeChannelId, ...(yt ? { oauth: yt } : {}), ...(ig && i.igUserId ? { instagramLine: (w: { fromMs: number; toMs: number; day: string }) => instagramWeekLine({ api: ig, userId: i.igUserId!, store: pstore }, w) } : {}), ...net });
     this.worker =
       d.worker ??
       new ContentMakerWorker({
@@ -612,6 +628,10 @@ export class MarketingHead implements ApprovalEditor {
   }
 
   private async review(task: Task, result: string): Promise<{ ok: boolean; issues: string[]; skipped?: boolean }> {
+    // The hard rules of the Content maker's checklist (hook, one call to action, no AI tells, prices from the list) are checked in code first:
+    // a script that fails them goes back for the one rework without asking the model.
+    const hard = lintReelScript(result);
+    if (hard.length > 0) return { ok: false, issues: hard };
     const res = await tryJson(
       this.llmFor(HEAD_ID, task.id),
       {
@@ -698,14 +718,25 @@ export class MarketingHead implements ApprovalEditor {
       return [];
     });
     const groups = this.publisher.packsToSend(tctx);
-    const autoLine = (r: { title: string; url?: string }) => `YouTube: опубликовано, ${r.url} («${r.title}»)`;
+    const label = (p: string) => (p === 'instagram' ? 'Instagram' : 'YouTube');
+    const autoLine = (r: { title: string; url?: string; platform: string }) => `${label(r.platform)}: опубликовано, ${r.url} («${r.title}»)`;
     const posted = auto.filter((r) => r.url);
-    const failed = new Map(auto.filter((r) => r.error && !r.quota).map((r) => [r.itemId, r.error!]));
-    const quotaNote = auto.some((r) => r.quota) ? 'YouTube: квота на сегодня исчерпана, остальные Shorts публикуйте вручную.' : '';
+    const failed = new Map(auto.filter((r) => r.error && !r.quota).map((r) => [r.itemId, r]));
+    const quotaNote = [
+      auto.some((r) => r.quota && r.platform !== 'instagram') ? 'YouTube: квота на сегодня исчерпана, остальные Shorts публикуйте вручную.' : '',
+      ...auto.filter((r) => r.quota && r.platform === 'instagram').slice(0, 1).map((r) => `Instagram: ${r.error ?? 'лимит публикаций'}`),
+    ].filter(Boolean).join('\n');
+    const pendingNote = auto.filter((r) => r.pending).map((r) => `Instagram: видео «${r.title}» обрабатывается, опубликую при следующем запуске.`).join('\n');
+    // Instagram morning run: token health (alerts once a day) and the comments digest
+    const igRun = this.igDaily ? await this.igDaily.run().catch((e: unknown) => {
+      log('warn', 'instagram daily failed', { err: errMsg(e) });
+      return { alerts: [] as string[], commentsLine: '', newComments: 0 };
+    }) : { alerts: [] as string[], commentsLine: '', newComments: 0 };
+    for (const a of igRun.alerts) await this.d.messenger.send(this.d.ownerId, a).catch((e: unknown) => log('warn', 'instagram alert not delivered', { err: errMsg(e) }));
     let sent = 0;
-    if (groups.length || posted.length) {
+    if (groups.length || posted.length || igRun.commentsLine || pendingNote || quotaNote) {
       try {
-        await this.d.messenger.send(this.d.ownerId, [groups.length ? dayHeader(groups) : '', ...posted.map(autoLine), quotaNote].filter(Boolean).join('\n'));
+        await this.d.messenger.send(this.d.ownerId, [groups.length ? dayHeader(groups) : '', ...posted.map(autoLine), quotaNote, pendingNote, igRun.commentsLine].filter(Boolean).join('\n'));
       } catch (e) {
         log('warn', 'publish header not delivered', { err: errMsg(e) });
       }
@@ -742,8 +773,9 @@ export class MarketingHead implements ApprovalEditor {
             note = '\n\nАльбом с картинками не отправился: публикуйте по тексту, картинки лежат на сервере.';
           }
         }
-        const why = failed.get(g[0]!.itemId);
-        if (why) note += `\n\nYouTube: автозагрузка не удалась (${why}). Публикуйте Shorts вручную.`;
+        const fail = failed.get(g[0]!.itemId);
+        const why = fail?.error;
+        if (fail && why) note += fail.platform === 'instagram' ? `\n\nInstagram: автопубликация не удалась (${why}). Публикуйте вручную.` : `\n\nYouTube: автозагрузка не удалась (${why}). Публикуйте Shorts вручную.`;
         if (!textSent || why) await this.d.messenger.send(this.d.ownerId, `${renderItemMessage(g, publishDay(tctx), { videoSent })}${note}`.slice(0, 4000), publishedButtons(g));
         this.publisher.markSent(tctx, g);
         sent++;
