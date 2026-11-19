@@ -81,12 +81,12 @@ export interface Kit {
   /** The files group of the same toolbox (uploads read from it). */
   files: () => Files;
   /** Runs `fn` as tool `name`: department rights from the policy, `isConfigured`, retries from the policy limits, journal. */
-  call<T>(name: string, fn: () => Promise<ToolResult<T>>): Promise<ToolResult<T>>;
+  call<T>(name: string, fn: () => Promise<ToolResult<T>>, o?: { quiet?: boolean; retries?: number }): Promise<ToolResult<T>>;
 }
 
 export function makeCall(cx: CallContext, deps: ToolDeps): Kit['call'] {
-  return (name, fn) => {
+  return (name, fn, o) => {
     const p = policyOf(name);
-    return withTool(name, cx, { allowed: isAllowed(name, cx.dept), configured: isConfigured(name, deps), retries: p?.limits.retries ?? 0, quiet: p?.quiet ?? false }, fn);
+    return withTool(name, cx, { allowed: isAllowed(name, cx.dept), configured: isConfigured(name, deps), retries: o?.retries ?? p?.limits.retries ?? 0, quiet: o?.quiet ?? p?.quiet ?? false }, fn);
   };
 }

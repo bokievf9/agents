@@ -1,4 +1,4 @@
-import { openDb } from '@fir/core';
+import { HostQueue, createTools, openDb } from '@fir/core';
 import { describe, expect, it } from 'vitest';
 import {
   BOT_SILENCE_MS, DAY_MS, MonitoringWorker, checkServices, containerHealth, MonitorStore, checkBot, checkDisk, containerProblems, dailyLine, isHealthy, parseCertDays, parseMonitorUrls, step,
@@ -132,6 +132,28 @@ describe('MonitoringWorker tick', () => {
     expect(r.events.find((e) => e.checkId === 'tls:firtech.pro')!.text).toContain('осталось 10 дн.');
     expect(w.st.fetched.find((f) => f.url.includes('omniroute'))!.auth).toBe('Bearer k');
     expect(w.st.fetched.find((f) => f.url.includes('firtech'))!.auth).toBeUndefined();
+  });
+
+  it('through the Support toolbox: internal http host by the policy flag, status and detail as before, the key only to /v1/models', async () => {
+    const w = world({ fetch: (() => Promise.reject(new Error('must not be used'))) as unknown as typeof fetch });
+    const seen: { url: string; auth: string | null; pin: unknown }[] = [];
+    const net = (healthy: boolean) => (url: string, init: RequestInit, pin?: unknown) => {
+      seen.push({ url, auth: new Headers(init.headers).get('authorization'), pin });
+      const ok = url.includes('omniroute') ? true : healthy;
+      return Promise.resolve(new Response(ok ? '{"ok":true}' : 'down', { status: ok ? 200 : 503, headers: { 'content-type': 'application/json' } }));
+    };
+    const web = (dept: string, healthy: boolean) => createTools({ agentId: 'monitoring', dept, fetch: net(healthy), lookup: () => Promise.resolve(['104.16.1.1']), queue: new HostQueue(() => 0, () => Promise.resolve()) }).web;
+    const worker = new MonitoringWorker({ ...cfg, omnirouteUrl: 'http://omniroute:20128/v1/models', llmApiKey: 'k' }, w.deps);
+    const good = await worker.tick(w.db, web('support', true));
+    expect(good.results.find((r) => r.id === 'omniroute')).toMatchObject({ ok: true, detail: 'HTTP 200' });
+    expect(good.results.find((r) => r.id.startsWith('http:'))).toMatchObject({ ok: true, detail: 'HTTP 200' });
+    expect(seen.find((f) => f.url.includes('omniroute'))).toMatchObject({ auth: 'Bearer k', pin: undefined });
+    expect(seen.find((f) => f.url.includes('firtech'))).toMatchObject({ auth: null, pin: { address: '104.16.1.1' } });
+    const bad = await worker.tick(w.db, web('support', false));
+    expect(bad.results.find((r) => r.id.startsWith('http:'))).toMatchObject({ ok: false, detail: 'HTTP 503' });
+    // another department's toolbox cannot reach the internal host: the check fails with the reason, nothing leaks
+    const denied = await worker.tick(w.db, web('marketing', true));
+    expect(denied.results.find((r) => r.id === 'omniroute')).toMatchObject({ ok: false });
   });
 
   it('docker check only with the flag', async () => {

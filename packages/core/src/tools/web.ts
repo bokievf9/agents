@@ -2,7 +2,7 @@ import { decodeBody, rawRequest, type HostList, type RawResponse } from './http.
 import { extractReadable, type Readable } from './html.js';
 import type { Kit } from './kit.js';
 import { policyOf } from './policy.js';
-import { fail, failStatus, okv, type ToolResult } from './result.js';
+import { fail, failStatus, okv, type Dept, type ToolResult } from './result.js';
 import { BRAVE_HOST, DDG_HOST, braveUrl, ddgBlocked, ddgUrl, parseBrave, parseDdg, type SearchHit } from './search.js';
 
 export interface GetOptions {
@@ -11,6 +11,11 @@ export interface GetOptions {
   headers?: Record<string, string>;
   timeoutMs?: number;
   maxBytes?: number;
+  /**
+   * Our own network (docker service names, plain http): only departments the policy lists (`support`, Monitoring); the same timeouts and size
+   * caps, no public-address check and no pinned address. Anyone else gets `not_allowed`.
+   */
+  internal?: boolean;
 }
 
 export interface TextPage {
@@ -53,12 +58,18 @@ export function createWeb(k: Kit): Web {
   /** Hosts that searches of this toolbox returned: `readable` may open them without a list. */
   const searched = new Set<string>();
 
-  async function text(name: string, url: string, hosts: HostList, o: { headers?: Record<string, string>; timeoutMs?: number; maxBytes?: number }): Promise<ToolResult<TextPage>> {
+  /** `internal: true` is a department right of the policy (`ToolPolicy.internal`), not a plain option. */
+  function internalDenied(name: string, o: { internal?: boolean } | undefined): ToolResult<never> | null {
+    if (!o?.internal) return null;
+    return policyOf(name)?.internal?.includes(k.cx.dept as Dept) ? null : fail('not_allowed', `${name}: internal hosts are not allowed for department ${k.cx.dept}`);
+  }
+
+  async function text(name: string, url: string, hosts: HostList, o: { headers?: Record<string, string>; timeoutMs?: number; maxBytes?: number; internal?: boolean }): Promise<ToolResult<TextPage>> {
     const l = lim(name);
     const r = await rawRequest(url, {
       hosts, headers: { accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5', ...(o.headers ?? {}) },
       timeoutMs: o.timeoutMs ?? l.timeoutMs!, maxBytes: Math.min(o.maxBytes ?? l.maxBytes!, l.maxBytes!), truncate: true, redirects: 3,
-      perHost: l.perHost!, minGapMs: l.minGapMs!,
+      perHost: l.perHost!, minGapMs: l.minGapMs!, ...(o.internal ? { internal: true } : {}),
     }, k.net);
     if (!r.ok) return r;
     const v = r.value;
@@ -70,10 +81,12 @@ export function createWeb(k: Kit): Web {
 
   async function json<T>(name: string, url: string, o: GetOptions): Promise<ToolResult<T>> {
     if (!hostsOk(o?.hosts)) return fail('invalid', 'hosts: a non-empty list of host names is required');
+    const denied = internalDenied(name, o);
+    if (denied) return denied;
     const l = lim(name);
     const r = await rawRequest(url, {
       hosts: o.hosts, headers: { accept: 'application/json', ...(o.headers ?? {}) }, timeoutMs: o.timeoutMs ?? l.timeoutMs!,
-      maxBytes: Math.min(o.maxBytes ?? l.maxBytes!, 10_000_000), perHost: l.perHost!, minGapMs: l.minGapMs!,
+      maxBytes: Math.min(o.maxBytes ?? l.maxBytes!, 10_000_000), perHost: l.perHost!, minGapMs: l.minGapMs!, ...(o.internal ? { internal: true } : {}),
     }, k.net);
     if (!r.ok) return r;
     if (r.value.status < 200 || r.value.status >= 300) return failStatus(r.value.status, new URL(url).hostname);
@@ -138,9 +151,14 @@ export function createWeb(k: Kit): Web {
   }
 
   return {
-    getJson: <T>(url: string, o: GetOptions) => k.call('web.getJson', () => json<T>('web.getJson', url, o)),
+    // an internal call is a monitoring probe: no `activity` line on success and no retries (the monitor's own hysteresis decides)
+    getJson: <T>(url: string, o: GetOptions) => k.call('web.getJson', () => json<T>('web.getJson', url, o), o?.internal ? { quiet: true, retries: 0 } : undefined),
     getText: (url, o) =>
-      k.call('web.getText', () => (hostsOk(o?.hosts) ? text('web.getText', url, o.hosts, o) : Promise.resolve(fail('invalid', 'hosts: a non-empty list of host names is required')))),
+      k.call('web.getText', () => {
+        if (!hostsOk(o?.hosts)) return Promise.resolve(fail('invalid', 'hosts: a non-empty list of host names is required'));
+        const denied = internalDenied('web.getText', o);
+        return denied ? Promise.resolve(denied) : text('web.getText', url, o.hosts, o);
+      }, o?.internal ? { quiet: true, retries: 0 } : undefined),
     readable: (url, o = {}) =>
       k.call('web.readable', async () => {
         let hosts: HostList;

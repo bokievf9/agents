@@ -24,6 +24,8 @@ export interface ToolPolicy {
   env: readonly string[];
   /** No `activity` line for successful calls (cheap local reads); counters still kept. */
   quiet?: boolean;
+  /** Departments that may pass `internal: true` (http hosts of our own network, no public-address check). Absent: nobody. */
+  internal?: readonly Dept[];
   summary: string;
 }
 
@@ -35,8 +37,8 @@ const NET = { timeoutMs: 8000, maxBytes: 1_000_000, perHost: 2, minGapMs: 250, r
  * `/admin/company` listing is built from it, and a test checks that every tool of the registry is here and in `docs/tools.md`.
  */
 export const TOOL_POLICY: readonly ToolPolicy[] = [
-  { name: 'web.getJson', departments: ALL, limits: NET, env: [], summary: 'GET JSON from listed https hosts' },
-  { name: 'web.getText', departments: ['marketing', 'sales', 'support', 'director'], limits: { ...NET, maxBytes: 300_000 }, env: [], summary: 'GET HTML or text, cut at 300 KB' },
+  { name: 'web.getJson', departments: ALL, limits: NET, env: [], internal: ['support'], summary: 'GET JSON from listed https hosts' },
+  { name: 'web.getText', departments: ['marketing', 'sales', 'support', 'director'], limits: { ...NET, maxBytes: 300_000 }, env: [], internal: ['support'], summary: 'GET HTML or text, cut at 300 KB' },
   { name: 'web.readable', departments: ['marketing', 'sales', 'director'], limits: { ...NET, maxBytes: 300_000 }, env: [], summary: 'article text of a page' },
   { name: 'web.search', departments: ['marketing', 'sales', 'director'], limits: { timeoutMs: 8000, minGapMs: 1000, perHost: 1, retries: 1, cacheTtlMs: 3_600_000, maxResults: 10 }, env: ['BRAVE_SEARCH_KEY'], summary: 'web search: Brave API, else DuckDuckGo HTML' },
   { name: 'web.post', departments: ALL, limits: { timeoutMs: 60_000, maxBytes: 1_000_000, perHost: 2, minGapMs: 250, retries: 0 }, env: [], summary: 'POST to listed https hosts (no retries)' },

@@ -28,6 +28,11 @@ export interface RawRequest {
   truncate?: boolean;
   /** Follow up to this many redirects, each hop checked again (default 0: a 3xx is returned as it is). */
   redirects?: number;
+  /**
+   * Our own network (monitoring): http or https to a listed host on any port, no public-address check and no pinned address (the
+   * system resolver decides). Only `web.*` sets it, and only for departments the policy allows (`ToolPolicy.internal`).
+   */
+  internal?: boolean;
   /** Per-host queue settings. */
   perHost?: number;
   minGapMs?: number;
@@ -46,16 +51,20 @@ const UA = 'FirTechAgent/1.0 (+https://firtech.pro)';
 const isTimeout = (e: unknown): boolean => e instanceof Error && /timeout|abort/i.test(`${e.name} ${e.message}`);
 
 /** https, port 443, no credentials, host in the list. A reason when refused. */
-export function checkUrl(raw: string, hosts: HostList): { url: URL } | { refused: string } {
+export function checkUrl(raw: string, hosts: HostList, internal = false): { url: URL } | { refused: string } {
   let u: URL;
   try {
     u = new URL(raw);
   } catch {
     return { refused: 'not a URL' };
   }
-  if (u.protocol !== 'https:') return { refused: 'https only' };
   if (u.username || u.password) return { refused: 'credentials in URL' };
-  if (u.port && u.port !== '443') return { refused: 'port not allowed' };
+  if (internal) {
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return { refused: 'http or https only' };
+  } else {
+    if (u.protocol !== 'https:') return { refused: 'https only' };
+    if (u.port && u.port !== '443') return { refused: 'port not allowed' };
+  }
   if (hosts !== 'public' && !hosts.includes(u.hostname)) return { refused: `host ${u.hostname} not in the list` };
   return { url: u };
 }
@@ -68,12 +77,16 @@ export async function rawRequest(target: string, r: RawRequest, net: NetDeps): P
   let cur = target;
   const lookup = net.lookup ?? (net.fetch ? () => Promise.resolve(TEST_PUBLIC) : systemLookup);
   for (let hop = 0; ; hop++) {
-    const c = checkUrl(cur, r.hosts);
+    const c = checkUrl(cur, r.hosts, r.internal === true);
     if ('refused' in c) return fail(r.hosts !== 'public' && /not in the list/.test(c.refused) ? 'blocked' : hop === 0 ? 'invalid' : 'blocked', c.refused);
-    const pin = await resolvePublic(c.url.hostname, lookup);
-    if (pin === 'blocked') return fail('blocked', `${c.url.hostname} resolves to a private address`);
-    if (pin === 'dns') return fail('network', `${c.url.hostname}: DNS lookup failed`);
-    const res = await net.queue.run(c.url.hostname, { perHost: r.perHost ?? 2, minGapMs: r.minGapMs ?? 0 }, () => readOnce(c.url.toString(), r, pin.ok, net.fetch ?? pinnedFetch));
+    let pinned: PinnedAddress | undefined;
+    if (!r.internal) {
+      const pin = await resolvePublic(c.url.hostname, lookup);
+      if (pin === 'blocked') return fail('blocked', `${c.url.hostname} resolves to a private address`);
+      if (pin === 'dns') return fail('network', `${c.url.hostname}: DNS lookup failed`);
+      pinned = pin.ok;
+    }
+    const res = await net.queue.run(c.url.hostname, { perHost: r.perHost ?? 2, minGapMs: r.minGapMs ?? 0 }, () => readOnce(c.url.toString(), r, pinned, net.fetch ?? pinnedFetch));
     if (!res.ok) return res;
     const loc = res.value.headers.location;
     if (res.value.status >= 300 && res.value.status < 400 && loc && hop < (r.redirects ?? 0)) {
@@ -88,7 +101,7 @@ export async function rawRequest(target: string, r: RawRequest, net: NetDeps): P
   }
 }
 
-async function readOnce(url: string, r: RawRequest, pin: PinnedAddress, f: ToolFetch): Promise<ToolResult<RawResponse>> {
+async function readOnce(url: string, r: RawRequest, pin: PinnedAddress | undefined, f: ToolFetch): Promise<ToolResult<RawResponse>> {
   let res: Response;
   try {
     res = await f(

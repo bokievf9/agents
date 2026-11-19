@@ -87,7 +87,46 @@ describe('media.pdf', () => {
   });
 
   it('text runs: Cyrillic letters in the Cyrillic subset, spaces, digits and Latin in the Latin one', () => {
-    expect(scriptRuns('Счёт № 12 (USDT)')).toEqual([{ cyr: true, text: 'Счёт' }, { cyr: false, text: ' ' }, { cyr: true, text: '№' }, { cyr: false, text: ' 12 (USDT)' }]);
+    expect(scriptRuns('Счёт № 12 (USDT)')).toEqual([
+      { cyr: true, script: 'cyr', text: 'Счёт' }, { cyr: false, script: 'lat', text: ' ' }, { cyr: true, script: 'cyr', text: '№' }, { cyr: false, script: 'lat', text: ' 12 (USDT)' },
+    ]);
+  });
+});
+
+describe('media.pdf: Tajik letters (Cyrillic Extended subset)', () => {
+  const TAJIK = 'ҳқҷӯғӣ';
+  const fontDir = new URL('../../assets/fonts/', import.meta.url).pathname;
+
+  it('the letters go to the ext subset, the rest of the words to the Cyrillic one', () => {
+    expect(scriptRuns('Душанбе, ҳисоб').map((r) => [r.script, r.text])).toEqual([['cyr', 'Душанбе'], ['lat', ', '], ['ext', 'ҳ'], ['cyr', 'исоб']]);
+    for (const ch of TAJIK) expect(scriptRuns(ch)[0]!.script).toBe('ext');
+  });
+
+  it('the ext fonts (400 and 700) have the glyphs, and neither the Cyrillic nor the Latin subset does', async () => {
+    const { default: PDFDocument } = await import('pdfkit');
+    const doc = new PDFDocument();
+    const has = (file: string, ch: string): boolean => {
+      doc.registerFont(file, `${fontDir}${file}`);
+      return (doc.font(file) as unknown as { _font: { font: { hasGlyphForCodePoint(cp: number): boolean } } })._font.font.hasGlyphForCodePoint(ch.codePointAt(0)!);
+    };
+    for (const w of ['400', '700']) {
+      for (const ch of TAJIK) {
+        expect(has(`onest-cyrillic-ext-${w}-normal.woff`, ch), `ext ${w} ${ch}`).toBe(true);
+        expect(has(`onest-cyrillic-${w}-normal.woff`, ch), `cyr ${w} ${ch}`).toBe(false);
+      }
+    }
+    doc.registerFont('e', `${fontDir}onest-cyrillic-ext-400-normal.woff`);
+    expect(doc.font('e').widthOfString(TAJIK)).toBeGreaterThan(0);
+  });
+
+  it('a PDF with «Душанбе, ҳисоб» embeds the ext subset, in regular and bold', async () => {
+    const { t } = tools({ dept: 'backoffice' });
+    const tajik = await t.media.pdf({ title: 'Ҳисоб', sections: [{ heading: 'Душанбе', paragraphs: ['Душанбе, ҳисоб, қарз, ҷавоб, ӯро, ғайр, ӣ.'] }] });
+    const plain = await t.media.pdf({ title: 'Акт', sections: [{ heading: 'Душанбе', paragraphs: ['Работы приняты.'] }] });
+    expect(tajik.ok && plain.ok).toBe(true);
+    if (!tajik.ok || !plain.ok) return;
+    const names = (b: Buffer) => new Set(b.toString('latin1').match(/\/FontName \/[A-Z]{6}\+[A-Za-z0-9-]+/g));
+    expect(names(tajik.value.bytes).size).toBe(names(plain.value.bytes).size + 2); // ext regular (text) and ext bold (title)
   });
 });
 

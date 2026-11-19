@@ -56,10 +56,10 @@ export class MonitoringWorker implements Worker {
     return this.store(db).addUrl(url);
   }
 
-  async tick(db: Db): Promise<TickResult> {
+  async tick(db: Db, web?: CheckDeps['web']): Promise<TickResult> {
     const store = this.store(db);
     const urls = [...new Set([...this.cfg.urls, ...store.urls()])];
-    const checks = buildChecks({ ...this.cfg, urls }, this.deps, this.bot);
+    const checks = buildChecks({ ...this.cfg, urls }, web ? { ...this.deps, web } : this.deps, this.bot);
     const results = (
       await Promise.all(
         checks.map((c) =>
@@ -106,7 +106,7 @@ export class MonitoringWorker implements Worker {
   /** Task entry: `meta.action` is `check` (default, one tick) or `status` (the daily line). */
   async run(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
     if (task.meta.action === 'status') return { ok: true, result: this.dailyLine(ctx.db) };
-    const { results, events } = await this.tick(ctx.db);
+    const { results, events } = await this.tick(ctx.db, ctx.tools?.web);
     const skipped = results.filter((r) => r.skipped);
     const bad = results.filter((r) => !r.ok && !r.skipped);
     const passed = results.length - bad.length - skipped.length;

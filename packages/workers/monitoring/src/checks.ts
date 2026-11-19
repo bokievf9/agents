@@ -2,6 +2,7 @@ import { request } from 'node:http';
 import { stat, statfs } from 'node:fs/promises';
 import { join } from 'node:path';
 import { connect } from 'node:tls';
+import type { Web } from '@fir/core';
 
 export const DAY_MS = 86_400_000;
 
@@ -29,6 +30,11 @@ export interface Container {
 /** Everything the checks touch outside the process, so tests can replace it. */
 export interface CheckDeps {
   fetch: typeof fetch;
+  /**
+   * The toolbox of the Support department (`ctx.tools.web`): when present every HTTP probe goes through `web.getText`, internal `http://`
+   * hosts with the `internal: true` policy flag. Without it (a bare worker, old tests) the probes use `fetch` directly.
+   */
+  web?: Pick<Web, 'getText'>;
   now(): number;
   /** The certificate's `valid_to` string for a host (port 443). */
   certValidTo(host: string): Promise<string>;
@@ -99,6 +105,14 @@ export function isHealthy(status: number, body: string): boolean {
 }
 
 async function get(deps: CheckDeps, url: string, timeoutMs: number, headers?: Record<string, string>): Promise<{ status: number; body: string }> {
+  if (deps.web) {
+    const u = new URL(url);
+    const r = await deps.web.getText(url, { hosts: [u.hostname], timeoutMs, maxBytes: 4000, ...(headers ? { headers } : {}), ...(u.protocol === 'http:' ? { internal: true } : {}) });
+    if (r.ok) return { status: r.value.status, body: r.value.text.slice(0, 2000) };
+    // an answer that is not 2xx (or not text) still has a status to judge by; no answer at all is an error
+    if (r.status !== undefined) return { status: r.status, body: '' };
+    throw new Error(r.message);
+  }
   const res = await deps.fetch(url, { signal: AbortSignal.timeout(timeoutMs), ...(headers ? { headers } : {}) });
   return { status: res.status, body: (await res.text()).slice(0, 2000) };
 }

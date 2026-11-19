@@ -3,7 +3,7 @@ import { meterLlm, type Agent, type Hq, type Task, type WorkerCtx } from '@fir/h
 import { BillingWorker, parseInvoiceArgs, parseSubArgs, usdt, type Invoice, type PaymentWatcher } from '@fir/worker-billing';
 import { CustomerSupportWorker, csStoreFor, parseClientArgs, parseTicketArgs, type TicketDelivery } from '@fir/worker-customer-support';
 import { FinanceWorker } from '@fir/worker-finance';
-import { MonitoringWorker, type MonEvent } from '@fir/worker-monitoring';
+import { MonitoringWorker, WORKER_ID as MONITORING_WORKER_ID, type MonEvent } from '@fir/worker-monitoring';
 import { OnboardingWorker, obStoreFor, parseOnboardArgs } from '@fir/worker-onboarding';
 import type { Cron } from 'croner';
 import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
@@ -196,7 +196,9 @@ export class SupportHead {
     if (this.checking || this.agent()?.status !== 'active') return [];
     this.checking = true;
     try {
-      const { events } = await this.d.monitor.tick(this.hq.db);
+      // the probes go through the Support toolbox (`web.getText`, internal hosts by the policy flag); no task, so no taskId on its journal lines
+      const web = this.d.tools ? toolsFor(this.hq, this.d.tools, { agentId: MONITORING_WORKER_ID, dept: SUPPORT }).web : undefined;
+      const { events } = await this.d.monitor.tick(this.hq.db, web);
       this.closeOldDuty();
       if (events.length === 0) return events;
       const duty = this.duty();

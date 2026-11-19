@@ -199,3 +199,36 @@ describe('web.post', () => {
     expect(await t.web.post('https://evil.example/ok', {}, H)).toMatchObject({ error: 'blocked' });
   });
 });
+
+describe('web: internal hosts (policy flag, Monitoring only)', () => {
+  const O = { hosts: ['omniroute'], internal: true };
+  const pins: (PinnedAddress | undefined)[] = [];
+  const net = fakeNet({ 'http://omniroute:20128/healthz': new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } }) });
+  const fetch: ToolFetch = (u, i, p) => (pins.push(p), net.fetch(u, i));
+
+  it('support reaches an http host on any port: no public-address check, no pinned address, no activity line on success, no retries', async () => {
+    const { t, journal } = tools({ dept: 'support', fetch, lookup: () => Promise.resolve(['10.0.0.5']) });
+    expect(await t.web.getText('http://omniroute:20128/healthz', O)).toMatchObject({ ok: true, value: { status: 200, text: '{"ok":true}' } });
+    expect(await t.web.getJson('http://omniroute:20128/healthz', O)).toEqual({ ok: true, value: { ok: true } });
+    expect(pins).toEqual([undefined, undefined]);
+    expect(journal.lines).toEqual([]);
+    expect(JSON.parse(journal.setting('tools.stats.2026-11-20'))['web.getText']).toMatchObject({ calls: 1, errors: 0 });
+    // a 503 is one attempt (the monitor has its own hysteresis) and is still a failure line
+    const down = tools({ dept: 'support', fetch: async () => new Response('x', { status: 503 }) });
+    expect(await down.t.web.getText('http://omniroute:20128/healthz', O)).toMatchObject({ ok: false, status: 503 });
+    expect(down.sleeps).toEqual([]);
+  });
+
+  it('other departments get not_allowed; without the flag http and private hosts stay refused; the host list still applies', async () => {
+    for (const dept of ['marketing', 'sales', 'production', 'backoffice', 'director']) {
+      expect(await tools({ dept, fetch }).t.web.getText('http://omniroute:20128/healthz', O)).toMatchObject({ ok: false, error: 'not_allowed' });
+      expect(await tools({ dept, fetch }).t.web.getJson('http://omniroute:20128/healthz', O)).toMatchObject({ ok: false, error: 'not_allowed' });
+    }
+    const s = tools({ dept: 'support', fetch });
+    expect(await s.t.web.getText('http://omniroute:20128/healthz', { hosts: ['omniroute'] })).toMatchObject({ ok: false, error: 'invalid' });
+    expect(await tools({ dept: 'support', fetch, lookup: () => Promise.resolve(['10.0.0.5']) }).t.web.getText('https://omniroute/x', { hosts: ['omniroute'] })).toMatchObject({ ok: false, error: 'blocked' });
+    expect(await s.t.web.getText('http://other:20128/healthz', O)).toMatchObject({ ok: false, error: 'blocked' });
+    expect(await s.t.web.getText('http://u:p@omniroute:20128/healthz', O)).toMatchObject({ ok: false, error: 'invalid' });
+    expect(await s.t.web.getText('ftp://omniroute/healthz', O)).toMatchObject({ ok: false, error: 'invalid' });
+  });
+});

@@ -6,7 +6,7 @@ import { z } from 'zod';
 /**
  * A4 PDF of a structured document (КП, договор, счёт, акт): title, meta lines, sections with paragraphs and an optional table,
  * signature lines, a footer with page numbers. Fonts: Onest (OFL) from `packages/core/assets/fonts`. The Onest files are
- * subsets (Cyrillic and Latin apart), so every line is written in runs, each in the subset that has its letters.
+ * subsets (Latin, Cyrillic and Cyrillic Extended apart), so every line is written in runs, each in the subset that has its letters.
  */
 export const pdfDocSchema = z.object({
   title: z.string().trim().min(1).max(200),
@@ -41,27 +41,34 @@ const FONTS = {
   latB: 'onest-latin-700-normal.woff',
   cyr: 'onest-cyrillic-400-normal.woff',
   cyrB: 'onest-cyrillic-700-normal.woff',
+  ext: 'onest-cyrillic-ext-400-normal.woff',
+  extB: 'onest-cyrillic-ext-700-normal.woff',
 } as const;
 
 export const fontsPresent = (dir = FONT_DIR): boolean => Object.values(FONTS).every((f) => existsSync(`${dir}${f}`));
 
 /**
- * Characters of the Cyrillic subset of Onest (fontsource range); everything else is drawn with the Latin subset. Letters of
- * the Cyrillic Extended block (Tajik ҳ, қ, ҷ, ӯ...) are in neither file yet: add `onest-cyrillic-ext-*` when documents need them.
+ * Characters of the Cyrillic subset of Onest (fontsource range); the Cyrillic Extended subset (`onest-cyrillic-ext-*`: Tajik ҳ, қ, ҷ, ӯ, ғ, ӣ,
+ * also Ukrainian ґ in the first subset) has its own range; everything else is drawn with the Latin subset.
  */
 const CYR = /[́Ѐ-џҐ-ґҰ-ұ№]/;
+const EXT = /[Ѡ-ԯᲀ-ᲊ₴ⷠ-ⷿꙀ-ꚟ]/;
+
+export type Script = 'lat' | 'cyr' | 'ext';
+const scriptOf = (ch: string): Script => (CYR.test(ch) ? 'cyr' : EXT.test(ch) ? 'ext' : 'lat');
+const fontName = (script: Script, bold: boolean): string => (script === 'lat' ? (bold ? 'latB' : 'lat') : script === 'cyr' ? (bold ? 'cyrB' : 'cyr') : bold ? 'extB' : 'ext');
 
 /**
- * Splits a line into runs of one subset. The Cyrillic subset has no space, digits or punctuation, so those always go to the
- * Latin subset (which has them).
+ * Splits a line into runs of one subset. The Cyrillic subsets have no space, digits or punctuation, so those always go to the
+ * Latin subset (which has them). `cyr` stays true for the first Cyrillic subset only.
  */
-export function scriptRuns(text: string): { cyr: boolean; text: string }[] {
-  const out: { cyr: boolean; text: string }[] = [];
+export function scriptRuns(text: string): { cyr: boolean; script: Script; text: string }[] {
+  const out: { cyr: boolean; script: Script; text: string }[] = [];
   for (const ch of text) {
-    const cyr = CYR.test(ch);
+    const script = scriptOf(ch);
     const last = out[out.length - 1];
-    if (last && last.cyr === cyr) last.text += ch;
-    else out.push({ cyr, text: ch });
+    if (last && last.script === script) last.text += ch;
+    else out.push({ cyr: script === 'cyr', script, text: ch });
   }
   return out;
 }
@@ -87,7 +94,7 @@ export async function renderPdf(input: PdfDoc, fontDir = FONT_DIR): Promise<{ by
     const runs = scriptRuns(text || ' ');
     doc.fontSize(o.size).fillColor(o.color ?? '#111');
     runs.forEach((r, i) => {
-      doc.font(r.cyr ? (o.bold ? 'cyrB' : 'cyr') : o.bold ? 'latB' : 'lat');
+      doc.font(fontName(r.script, o.bold === true));
       const opts = { width: o.w ?? width, align: o.align ?? 'left', continued: i < runs.length - 1, lineGap: o.gap ?? 2 };
       if (i === 0 && o.x !== undefined && o.y !== undefined) doc.text(r.text, o.x, o.y, opts);
       else if (i === 0 && o.x !== undefined) doc.text(r.text, o.x, doc.y, opts);
@@ -169,7 +176,7 @@ export async function renderPdf(input: PdfDoc, fontDir = FONT_DIR): Promise<{ by
     doc.page.margins.bottom = 0;
     // centred by hand: PDFKit centres each continued run on its own
     doc.fontSize(8);
-    const lineW = scriptRuns(line).reduce((s, r) => s + doc.font(r.cyr ? 'cyr' : 'lat').widthOfString(r.text), 0);
+    const lineW = scriptRuns(line).reduce((s, r) => s + doc.font(fontName(r.script, false)).widthOfString(r.text), 0);
     write(line, { size: 8, x: M + Math.max(0, (width - lineW) / 2), y: A4.h - M, w: width, color: '#777' });
     doc.page.margins.bottom = keep;
   }
