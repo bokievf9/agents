@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "assets"
   ],
   "exports": {
     ".": {
@@ -23,9 +24,12 @@
     "better-sqlite3": "^13.2.0",
     "croner": "^11.0.1",
     "grammy": "^1.46.0",
+    "pdfkit": "0.17.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0"
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/pdfkit": "^0.17.7",
+    "jsqr": "1.4.0"
   }
 }

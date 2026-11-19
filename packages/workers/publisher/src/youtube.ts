@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
-import { GOOGLE_HOSTS, safePost, type PostFn } from '@fir/core';
+import { YT_QUOTA_LIMIT, YT_UPLOAD_COST, safePost, youtubeResumableUpload, type PostFn } from '@fir/core';
 import type { PublishPack } from './pack.js';
 import { isVideo } from './pack.js';
 import type { PlatformPoster } from './poster.js';
 import { PublishStore } from './store.js';
 
 /** One upload costs 1600 of the 10 000 daily units; we stop at 9 000 and leave the rest for the manual flow. */
-export const UPLOAD_COST = 1600;
-export const QUOTA_LIMIT = 9000;
+export const UPLOAD_COST = YT_UPLOAD_COST;
+export const QUOTA_LIMIT = YT_QUOTA_LIMIT;
 export const SITE_URL = 'https://firtech.pro/';
 
 export type Privacy = 'public' | 'unlisted' | 'private';
@@ -98,26 +98,10 @@ export class YouTubePoster implements PlatformPoster {
     const token = await this.o.auth.accessToken();
     this.o.store.addQuota(day, UPLOAD_COST);
 
-    const init = await this.post_('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
-      allowHosts: GOOGLE_HOSTS,
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=UTF-8', 'x-upload-content-length': String(bytes.length), 'x-upload-content-type': 'video/mp4' },
-      body: JSON.stringify(meta),
-      timeoutMs: 30_000,
-    });
-    if (!init.ok) throw new Error(`YouTube: сессия загрузки не открыта (${init.error})`);
-    if (init.status !== 200 || !init.headers.location) throw new Error(`YouTube: сессия загрузки не открыта (HTTP ${init.status}${reason(init.body)})`);
-
-    const put = await this.post_(init.headers.location, { method: 'PUT', allowHosts: GOOGLE_HOSTS, headers: { 'content-type': 'video/mp4' }, body: bytes, timeoutMs: 60_000 });
-    if (!put.ok) throw new Error(`YouTube: загрузка не удалась (${put.error}), сессия сброшена`);
-    const id = (put.body as { id?: unknown } | null)?.id;
-    if ((put.status !== 200 && put.status !== 201) || typeof id !== 'string') throw new Error(`YouTube: загрузка не удалась (HTTP ${put.status}${reason(put.body)}), сессия сброшена`);
-    return { url: `https://youtube.com/shorts/${id}` };
+    // the two HTTP steps live in core (`youtubeResumableUpload`), shared with `tools.google.youtube.upload`
+    const r = await youtubeResumableUpload(this.post_, token, meta, bytes);
+    if (r.ok) return { url: `https://youtube.com/shorts/${r.id}` };
+    if (r.stage === 'session') throw new Error(`YouTube: сессия загрузки не открыта (${r.transport ?? `HTTP ${r.status}${r.reason}`})`);
+    throw new Error(`YouTube: загрузка не удалась (${r.transport ?? `HTTP ${r.status}${r.reason}`}), сессия сброшена`);
   }
-}
-
-/** « quotaExceeded»: the machine reason from a Google error body, if any (never a token: those are not in answers). */
-function reason(body: unknown): string {
-  const e = (body as { error?: { errors?: { reason?: unknown }[]; status?: unknown } } | null)?.error;
-  const r = e?.errors?.[0]?.reason ?? e?.status;
-  return typeof r === 'string' ? ` ${r.slice(0, 60)}` : '';
 }

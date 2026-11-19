@@ -1,0 +1,198 @@
+import { decodeBody, rawRequest, type HostList, type RawResponse } from './http.js';
+import { extractReadable, type Readable } from './html.js';
+import type { Kit } from './kit.js';
+import { policyOf } from './policy.js';
+import { fail, failStatus, okv, type ToolResult } from './result.js';
+import { BRAVE_HOST, DDG_HOST, braveUrl, ddgBlocked, ddgUrl, parseBrave, parseDdg, type SearchHit } from './search.js';
+
+export interface GetOptions {
+  /** Exact https hosts the URL may point to (required: no tool takes an arbitrary URL). */
+  hosts: readonly string[];
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  maxBytes?: number;
+}
+
+export interface TextPage {
+  status: number;
+  text: string;
+  /** The body was longer than the cap and was cut. */
+  truncated: boolean;
+  contentType: string;
+  lastModified: string | null;
+  /** The URL that answered (after redirects). */
+  url: string;
+}
+
+export interface PostOptions extends GetOptions {
+  /** `json` (default for objects), `form` (x-www-form-urlencoded) or `raw` (a string or bytes as given). */
+  as?: 'json' | 'form' | 'raw';
+  method?: 'POST' | 'PUT';
+}
+
+export interface PostAnswer {
+  status: number;
+  /** Parsed JSON, or null when the answer is empty or not JSON. */
+  body: unknown;
+  headers: Record<string, string>;
+}
+
+export interface Web {
+  getJson<T = unknown>(url: string, o: GetOptions): Promise<ToolResult<T>>;
+  getText(url: string, o: GetOptions): Promise<ToolResult<TextPage>>;
+  /** Article of a page. Hosts: the listed ones, or any public host a `search` of this toolbox returned, or `'public'` explicitly. */
+  readable(url: string, o?: { hosts?: HostList; maxChars?: number }): Promise<ToolResult<Readable & { url: string }>>;
+  search(q: string, o?: { limit?: number; lang?: string }): Promise<ToolResult<SearchHit[]>>;
+  post(url: string, body: unknown, o: PostOptions): Promise<ToolResult<PostAnswer>>;
+}
+
+const lim = (name: string) => policyOf(name)!.limits;
+const hostsOk = (hosts: unknown): hosts is readonly string[] => Array.isArray(hosts) && hosts.length > 0 && hosts.every((h) => typeof h === 'string' && /^[a-z0-9.-]+$/i.test(h));
+
+export function createWeb(k: Kit): Web {
+  /** Hosts that searches of this toolbox returned: `readable` may open them without a list. */
+  const searched = new Set<string>();
+
+  async function text(name: string, url: string, hosts: HostList, o: { headers?: Record<string, string>; timeoutMs?: number; maxBytes?: number }): Promise<ToolResult<TextPage>> {
+    const l = lim(name);
+    const r = await rawRequest(url, {
+      hosts, headers: { accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5', ...(o.headers ?? {}) },
+      timeoutMs: o.timeoutMs ?? l.timeoutMs!, maxBytes: Math.min(o.maxBytes ?? l.maxBytes!, l.maxBytes!), truncate: true, redirects: 3,
+      perHost: l.perHost!, minGapMs: l.minGapMs!,
+    }, k.net);
+    if (!r.ok) return r;
+    const v = r.value;
+    if (v.status < 200 || v.status >= 300) return failStatus(v.status, new URL(v.url).hostname);
+    const ct = v.headers['content-type'] ?? '';
+    if (ct && !/text\/|html|xml|json|javascript/i.test(ct)) return fail('invalid', `not a text answer (${ct.slice(0, 40)})`, { status: v.status });
+    return okv({ status: v.status, text: decodeBody(v.bytes, ct), truncated: v.truncated, contentType: ct, lastModified: v.headers['last-modified'] ?? null, url: v.url });
+  }
+
+  async function json<T>(name: string, url: string, o: GetOptions): Promise<ToolResult<T>> {
+    if (!hostsOk(o?.hosts)) return fail('invalid', 'hosts: a non-empty list of host names is required');
+    const l = lim(name);
+    const r = await rawRequest(url, {
+      hosts: o.hosts, headers: { accept: 'application/json', ...(o.headers ?? {}) }, timeoutMs: o.timeoutMs ?? l.timeoutMs!,
+      maxBytes: Math.min(o.maxBytes ?? l.maxBytes!, 10_000_000), perHost: l.perHost!, minGapMs: l.minGapMs!,
+    }, k.net);
+    if (!r.ok) return r;
+    if (r.value.status < 200 || r.value.status >= 300) return failStatus(r.value.status, new URL(url).hostname);
+    try {
+      return okv(JSON.parse(r.value.bytes.toString('utf8')) as T);
+    } catch {
+      return fail('upstream', `${new URL(url).hostname}: answer is not JSON`, { status: r.value.status, retryable: false });
+    }
+  }
+
+  async function search(q: string, o: { limit?: number; lang?: string } = {}): Promise<ToolResult<SearchHit[]>> {
+    const query = typeof q === 'string' ? q.trim().replace(/\s+/g, ' ') : '';
+    if (!query || query.length > 400) return fail('invalid', 'query: 1..400 characters');
+    const l = lim('web.search');
+    const limit = Math.min(Math.max(1, Math.floor(o.limit ?? l.maxResults!)), l.maxResults!);
+    const lang = o.lang && /^[a-z]{2}$/.test(o.lang) ? o.lang : undefined;
+    const key = k.cfg.braveSearchKey;
+    const provider = key ? 'brave' : 'ddg';
+    const ck = `t:search:${provider}:${lang ?? ''}:${limit}:${query.toLowerCase()}`;
+    const hit = k.cache.getJson<SearchHit[]>(ck);
+    if (hit) {
+      for (const h of hit) searched.add(new URL(h.url).hostname);
+      return okv(hit);
+    }
+    let hits: SearchHit[];
+    if (key) {
+      const r = await rawRequest(braveUrl(query, limit, lang), {
+        hosts: [BRAVE_HOST], headers: { accept: 'application/json', 'x-subscription-token': key }, timeoutMs: l.timeoutMs!, maxBytes: 2_000_000, perHost: 1, minGapMs: l.minGapMs!,
+      }, k.net);
+      if (!r.ok) return r;
+      if (r.value.status !== 200) return failStatus(r.value.status, 'Brave Search');
+      let body: unknown;
+      try {
+        body = JSON.parse(r.value.bytes.toString('utf8'));
+      } catch {
+        return fail('upstream', 'Brave Search: answer is not JSON', { retryable: false });
+      }
+      const parsed = parseBrave(body);
+      if (!parsed) return fail('upstream', 'Brave Search: unexpected answer', { retryable: false });
+      hits = parsed;
+    } else {
+      const r: ToolResult<RawResponse> = await rawRequest(ddgUrl(query, lang), {
+        hosts: [DDG_HOST], headers: { accept: 'text/html', 'accept-language': lang === 'en' ? 'en' : 'ru,en;q=0.8' }, timeoutMs: l.timeoutMs!, maxBytes: 1_000_000,
+        truncate: true, perHost: 1, minGapMs: l.minGapMs!,
+      }, k.net);
+      if (!r.ok) return r;
+      if (r.value.status !== 200) return failStatus(r.value.status, 'DuckDuckGo');
+      const html = r.value.bytes.toString('utf8');
+      if (ddgBlocked(html)) return fail('rate_limited', 'DuckDuckGo asked for a challenge; set BRAVE_SEARCH_KEY', { retryable: false });
+      hits = parseDdg(html);
+    }
+    hits = hits.slice(0, limit);
+    k.cache.setJson(ck, hits, l.cacheTtlMs!);
+    for (const h of hits) {
+      try {
+        searched.add(new URL(h.url).hostname);
+      } catch {
+        /* skipped */
+      }
+    }
+    return okv(hits);
+  }
+
+  return {
+    getJson: <T>(url: string, o: GetOptions) => k.call('web.getJson', () => json<T>('web.getJson', url, o)),
+    getText: (url, o) =>
+      k.call('web.getText', () => (hostsOk(o?.hosts) ? text('web.getText', url, o.hosts, o) : Promise.resolve(fail('invalid', 'hosts: a non-empty list of host names is required')))),
+    readable: (url, o = {}) =>
+      k.call('web.readable', async () => {
+        let hosts: HostList;
+        if (o.hosts === 'public') hosts = 'public';
+        else if (o.hosts !== undefined) {
+          if (!hostsOk(o.hosts)) return fail('invalid', 'hosts: a list of host names or "public"');
+          hosts = o.hosts;
+        } else hosts = [...searched];
+        if (hosts !== 'public' && hosts.length === 0) return fail('blocked', 'no host list: pass hosts, or read a page a search returned');
+        const page = await text('web.readable', url, hosts, {});
+        if (!page.ok) return page;
+        if (!/html|xml/i.test(page.value.contentType) && !/<html|<body|<p[\s>]/i.test(page.value.text.slice(0, 2000))) {
+          return okv({ url: page.value.url, title: '', text: page.value.text.slice(0, o.maxChars ?? 20_000), published: page.value.lastModified ? new Date(page.value.lastModified).toISOString() : null, links: [], lang: null });
+        }
+        return okv({ url: page.value.url, ...extractReadable(page.value.text, page.value.url, o.maxChars ?? 20_000) });
+      }),
+    search: (q, o) => k.call('web.search', () => search(q, o)),
+    post: (url, body, o) =>
+      k.call('web.post', async () => {
+        if (!hostsOk(o?.hosts)) return fail('invalid', 'hosts: a non-empty list of host names is required');
+        const as = o.as ?? (typeof body === 'string' || body instanceof Uint8Array ? 'raw' : 'json');
+        let payload: string | Uint8Array;
+        let ct: string | undefined;
+        if (as === 'raw') {
+          if (typeof body !== 'string' && !(body instanceof Uint8Array)) return fail('invalid', 'raw body must be a string or bytes');
+          payload = body;
+        } else if (as === 'form') {
+          if (!body || typeof body !== 'object') return fail('invalid', 'form body must be an object');
+          payload = new URLSearchParams(Object.entries(body as Record<string, unknown>).map(([a, b]) => [a, String(b)])).toString();
+          ct = 'application/x-www-form-urlencoded';
+        } else {
+          try {
+            payload = JSON.stringify(body);
+          } catch {
+            return fail('invalid', 'body is not serialisable');
+          }
+          ct = 'application/json';
+        }
+        const l = lim('web.post');
+        const r = await rawRequest(url, {
+          method: o.method ?? 'POST', hosts: o.hosts, headers: { accept: 'application/json', ...(ct ? { 'content-type': ct } : {}), ...(o.headers ?? {}) },
+          body: payload, timeoutMs: o.timeoutMs ?? l.timeoutMs!, maxBytes: Math.min(o.maxBytes ?? l.maxBytes!, 10_000_000), perHost: l.perHost!, minGapMs: l.minGapMs!,
+        }, k.net);
+        if (!r.ok) return { ...r, retryable: false }; // a POST is never repeated blindly
+        let parsed: unknown;
+        try {
+          parsed = r.value.bytes.length ? JSON.parse(r.value.bytes.toString('utf8')) : null;
+        } catch {
+          parsed = null;
+        }
+        if (r.value.status < 200 || r.value.status >= 300) return { ...failStatus(r.value.status, new URL(url).hostname), retryable: false };
+        return okv({ status: r.value.status, body: parsed, headers: r.value.headers });
+      }),
+  };
+}
