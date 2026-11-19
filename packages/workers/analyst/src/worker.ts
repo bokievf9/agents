@@ -1,4 +1,4 @@
-import { GOOGLE_HOSTS, errMsg, log, migrate, safeGetJson, tryJson, zonedParts, type Db } from '@fir/core';
+import { GOOGLE_HOSTS, errMsg, log, migrate, safeGetJson, tryJson, withPlaybook, zonedParts, type Db } from '@fir/core';
 import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { z } from 'zod';
 
@@ -271,7 +271,7 @@ export class AnalystWorker implements Worker {
       ctx.llm,
       {
         tier: 'haiku', maxTokens: 700,
-        system: 'Ты аналитик отдела маркетинга студии Fir Tech (ИИ-агенты и боты, короткие видео RU). По числам недели дай ровно 3 конкретных рекомендации на следующую неделю. Русский, без эмодзи и длинных тире, без выдуманных цифр, только то, что следует из чисел. Ответ: только JSON {"recommendations":["...","...","..."]}.',
+        system: withPlaybook('Ты аналитик отдела маркетинга студии Fir Tech (ИИ-агенты и боты, короткие видео RU). По числам недели дай ровно 3 конкретных рекомендации на следующую неделю. Русский, без эмодзи и длинных тире, без выдуманных цифр, только то, что следует из чисел. Ответ: только JSON {"recommendations":["...","...","..."]}.', 'analyst'),
         messages: [{ role: 'user', content: `${text}${funnel}`.slice(0, 3000) }],
       },
       recsSchema,

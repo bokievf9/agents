@@ -31,7 +31,7 @@ export const WORKER_TRIGGERS: Record<string, Trigger> = {
   reviewer: { events: ['строитель вернул результат со ссылкой на ветку или PR'] },
   deployer: { commands: ['mdone'], events: ['этап «Сдача» закрыт'] },
   documents: { commands: ['doc'], events: ['КП утверждено: договор делается вместе со счётом'] },
-  knowledge: { routines: ['backoffice-lessons-weekly'], commands: ['lesson', 'kb'] },
+  knowledge: { routines: ['backoffice-lessons-weekly'], commands: ['lesson', 'kb', 'playbook'] },
 };
 
 const DOW = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];

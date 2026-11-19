@@ -1,4 +1,4 @@
-import { errMsg, log, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
+import { errMsg, log, PLAYBOOK_ROLES, PLAYBOOK_ROLE_RU, loadPlaybook, playbookSection, type PlaybookRole, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx } from '@fir/hq';
 import {
   DocStore, DOC_RU, DOC_TYPES, kindSpecs as docKinds, onDecision as onDocDecision, parseDocType, DocumentsWorker, type DocContext,
@@ -144,6 +144,8 @@ export class BackofficeHead {
         const r = searchKb(arg, new KbStore(this.hq.db, this.hq.now).all(), playbookTitles(this.d.knowledgeDir));
         return searchText(arg.trim(), r);
       }
+      case 'playbook':
+        return playbookText(arg, this.d.knowledgeDir);
       default:
         return 'Неизвестная команда бэк-офиса.';
     }
@@ -257,4 +259,30 @@ export class BackofficeHead {
     this.hq.complete(task.id, KNOWLEDGE_ID, `Уроков к выгрузке: ${plan.lessonIds.length}, builder-задача #${bt.id}.`);
     await this.report(task.id, `Уроков к выгрузке в knowledge/lessons: ${plan.lessonIds.length}. Builder-задача #${bt.id} (/builders).`);
   }
+}
+
+const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е').trim();
+
+/** A role by its id («content-maker») or its Russian name («контент-мейкер»), also by a start of either; null when unclear. */
+export function findPlaybookRole(query: string): PlaybookRole | null {
+  const q = norm(query);
+  if (!q) return null;
+  const hit = PLAYBOOK_ROLES.find((r) => r === q || norm(PLAYBOOK_ROLE_RU[r]) === q)
+    ?? PLAYBOOK_ROLES.find((r) => r.startsWith(q) || norm(PLAYBOOK_ROLE_RU[r]).startsWith(q));
+  return hit ?? null;
+}
+
+/**
+ * `/playbook <role>`: the Правила of the role's playbook, for the owner to read and ask for edits. The whole text goes out as one
+ * reply; the messenger splits it by the Telegram limit. Without an argument: the list of roles.
+ */
+export function playbookText(arg: string, knowledgeDir?: string): string {
+  const list = PLAYBOOK_ROLES.map((r) => `${r} (${PLAYBOOK_ROLE_RU[r]})`).join(', ');
+  if (!arg.trim()) return `Формат: /playbook <роль>. Роли: ${list}.`;
+  const role = findPlaybookRole(arg);
+  if (!role) return `Не нашёл роль «${arg.trim().slice(0, 40)}». Роли: ${list}.`;
+  const text = loadPlaybook(role, knowledgeDir);
+  const rules = playbookSection(text, 'Правила');
+  if (!rules) return `Плейбук роли «${PLAYBOOK_ROLE_RU[role]}» не найден в базе знаний (knowledge/playbooks/${role}.md).`;
+  return `Плейбук «${PLAYBOOK_ROLE_RU[role]}»: правила\n\n${rules}\n\nЧтобы поменять, напишите, что исправить: строитель внесёт правку в knowledge/playbooks/${role}.md. Остальные разделы (чеклист, шаблоны) в том же файле.`;
 }
