@@ -1,7 +1,7 @@
 import { MockLlm, OffLlm, openDb, type LlmClient } from '@fir/core';
 import { Hq, type Task, type WorkerCtx } from '@fir/hq';
 import { describe, expect, it } from 'vitest';
-import { AnalystWorker, aggregate, fallbackRecommendations, numbersText, type FetchFn } from '../src/index.js';
+import { AnalystWorker, aggregate, weekVideoIds, youtubeWeekLine, fallbackRecommendations, numbersText, type FetchFn } from '../src/index.js';
 
 const DAY = 86_400_000;
 // Mon 2026-11-23 08:00 Tashkent. The report covers Mon 16.11 - Sun 22.11.
@@ -133,5 +133,38 @@ describe('Analyst report', () => {
 
   it('fallback recommendations are never more than three', () => {
     expect(fallbackRecommendations({ approved: 7, published: 1, publishedByPlatform: {}, leads: 0, leadsPrev: 2, costUsd: 0, subscribers: null, subscribersDelta: null, funnel: null, articles: null })).toHaveLength(3);
+  });
+});
+
+describe('YouTube with the owner token', () => {
+  const oauth = { accessToken: () => Promise.resolve('AT') };
+  const get = (url: string, h: Record<string, string>) => {
+    expect(h.authorization).toBe('Bearer AT');
+    if (url.includes('channels?part=statistics&mine=true')) return Promise.resolve({ items: [{ statistics: { subscriberCount: '45', viewCount: '9000', videoCount: '12' } }] });
+    if (url.includes('videos?part=statistics&id=aaaaaaaaaaa,bbbbbbbbbbb')) return Promise.resolve({ items: [{ statistics: { viewCount: '700' } }, { statistics: { viewCount: '500' } }] });
+    return Promise.reject(new Error(`unexpected ${url}`));
+  };
+  const withUrl = (w: ReturnType<typeof world>) => {
+    w.db.exec('ALTER TABLE pb_posts ADD COLUMN url TEXT');
+    w.posted(1, 'shorts', inWeek);
+    w.posted(2, 'shorts', inWeek);
+    w.posted(3, 'shorts', inWeek - 20 * DAY);
+    w.db.prepare("UPDATE pb_posts SET url = 'https://youtube.com/shorts/' || CASE ready_id WHEN 1 THEN 'aaaaaaaaaaa' WHEN 2 THEN 'bbbbbbbbbbb' ELSE 'ccccccccccc' END").run();
+  };
+
+  it('the week line counts this week\'s Shorts, their views and subscribers', async () => {
+    const w = world();
+    withUrl(w);
+    const res = await new AnalystWorker({ oauth, get }).run(w.task, w.ctx);
+    expect(res.result).toContain('YouTube за неделю: 2 Shorts, 1200 просмотров, 45 подписчиков');
+    expect(weekVideoIds(w.db, inWeek - DAY, inWeek + DAY)).toHaveLength(2);
+    expect(youtubeWeekLine(1, 10, 5, 2)).toBe('YouTube за неделю: 1 Shorts, 10 просмотров, 5 подписчиков (+2)');
+  });
+
+  it('without a refresh token the API-key path works as before and adds no week line', async () => {
+    const w = world();
+    const res = await new AnalystWorker({ youtubeApiKey: 'K', youtubeChannelId: 'UC1', fetch: ytFetch(30) }).run(w.task, w.ctx);
+    expect(res.result).toContain('Подписчики YouTube: 30');
+    expect(res.result).not.toContain('YouTube за неделю');
   });
 });

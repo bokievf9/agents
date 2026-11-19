@@ -109,7 +109,7 @@ export async function resolvesPublic(host: string, lookup: (h: string) => Promis
 export const systemLookup = async (h: string): Promise<string[]> => (await dnsLookup(h, { all: true })).map((a) => a.address);
 
 /**
- * A GET that connects to `pin` instead of resolving the hostname again (TLS still checks the certificate for the
+ * A GET (or, with `init.method` and a string or bytes `init.body`, a POST/PUT) that connects to `pin` instead of resolving the hostname again (TLS still checks the certificate for the
  * hostname, `Host` stays the hostname). No automatic redirects and no decompression: the caller follows hops itself.
  */
 export function pinnedFetch(url: string, init: RequestInit = {}, pin?: PinnedAddress): Promise<Response> {
@@ -125,7 +125,9 @@ export function pinnedFetch(url: string, init: RequestInit = {}, pin?: PinnedAdd
     new Headers(init.headers).forEach((v, k) => {
       headers[k] = v;
     });
-    const req = (u.protocol === 'https:' ? https : http).request(u, { method: 'GET', headers, ...(lookup ? { lookup } : {}), ...(init.signal ? { signal: init.signal } : {}) }, (res) => {
+    const payload = init.body === undefined || init.body === null ? undefined : typeof init.body === 'string' ? Buffer.from(init.body) : Buffer.from(init.body as Uint8Array);
+    if (payload) headers['content-length'] = String(payload.length);
+    const req = (u.protocol === 'https:' ? https : http).request(u, { method: init.method ?? 'GET', headers, ...(lookup ? { lookup } : {}), ...(init.signal ? { signal: init.signal } : {}) }, (res) => {
       const h = new Headers();
       for (const [k, v] of Object.entries(res.headers)) for (const x of Array.isArray(v) ? v : v === undefined ? [] : [v]) h.append(k, x);
       const status = res.statusCode ?? 0;
@@ -133,7 +135,7 @@ export function pinnedFetch(url: string, init: RequestInit = {}, pin?: PinnedAdd
       resolve(new Response(bodyless ? null : (Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>), { status, headers: h }));
     });
     req.on('error', reject);
-    req.end();
+    req.end(payload);
   });
 }
 
@@ -203,4 +205,70 @@ export async function safeGetJson(url: string, opts: SafeGetOptions): Promise<Sa
   } catch {
     return { ok: false, status: res.status, error: 'invalid_json' };
   }
+}
+
+export interface SafePostOptions extends SafeGetOptions {
+  method?: 'POST' | 'PUT';
+  /** A string or bytes (a video is sent in one request). */
+  body?: string | Uint8Array;
+}
+export type SafePostResult =
+  | { ok: true; status: number; body: unknown; headers: Record<string, string> }
+  | { ok: false; status: number; error: Exclude<SafeGetError, 'invalid_json'> };
+
+/**
+ * A POST or PUT to an allow-listed https host, with the same guarantees as `safeGetJson`: https only, exact host list,
+ * public addresses only (resolved once, pinned), no redirects, timeout (default 60 s: uploads are slow), size cap on the
+ * answer. Never throws. A non-2xx answer is `ok: true` with its status; `body` is the parsed JSON answer or null (empty or
+ * not JSON); `headers` are the response headers in lower case (the resumable upload session URL is `location`).
+ */
+export async function safePost(url: string, opts: SafePostOptions): Promise<SafePostResult> {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return { ok: false, status: 0, error: 'not_allowed' };
+  }
+  if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443') || !opts.allowHosts.includes(u.hostname)) return { ok: false, status: 0, error: 'not_allowed' };
+  const g = await resolvePublic(u.hostname, opts.lookup ?? systemLookup);
+  if (typeof g === 'string') return { ok: false, status: 0, error: g };
+  const max = opts.maxBytes ?? 1_000_000;
+  let res: Response;
+  try {
+    res = await (opts.fetch ?? pinnedFetch)(u.toString(), { method: opts.method ?? 'POST', redirect: 'manual', signal: AbortSignal.timeout(opts.timeoutMs ?? 60_000), headers: { accept: 'application/json', ...(opts.headers ?? {}) }, ...(opts.body !== undefined ? { body: opts.body as BodyInit } : {}) }, g.ok);
+  } catch (e) {
+    return { ok: false, status: 0, error: e instanceof Error && /timeout|abort/i.test(`${e.name} ${e.message}`) ? 'timeout' : 'network' };
+  }
+  let text = '';
+  try {
+    if (res.body) {
+      const reader = res.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > max) {
+          await reader.cancel().catch(() => undefined);
+          return { ok: false, status: res.status, error: 'too_large' };
+        }
+        chunks.push(value);
+      }
+      text = Buffer.concat(chunks).toString('utf8');
+    }
+  } catch (e) {
+    return { ok: false, status: res.status, error: e instanceof Error && /timeout|abort/i.test(`${e.name} ${e.message}`) ? 'timeout' : 'network' };
+  }
+  const headers: Record<string, string> = {};
+  res.headers.forEach((v, k) => {
+    headers[k.toLowerCase()] = v;
+  });
+  let body: unknown;
+  try {
+    body = text ? (JSON.parse(text) as unknown) : null;
+  } catch {
+    body = null;
+  }
+  return { ok: true, status: res.status, body, headers };
 }

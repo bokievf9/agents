@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { errMsg, escapeHtml, log, tryJson, zonedParts, type ApprovalQueue, type Button, type LlmClient, type Messenger } from '@fir/core';
+import { GoogleAuth, errMsg, escapeHtml, log, parseClientJson, tryJson, zonedParts, type ApprovalQueue, type Button, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import {
   ARTICLE_KIND, KIND, ContentMakerWorker, TYPE_RU, approveArticle, articleLineOn, dayLabel, editableParts, isAiAsk, partLabel, replacePart,
@@ -8,7 +8,7 @@ import {
   type PartId,
 } from '@fir/worker-content-maker';
 import { AnalystWorker } from '@fir/worker-analyst';
-import { PublisherWorker, dayHeader, imagesOf, publishedButtons, renderItemMessage, publishDay, videoCaption, videoOf } from '@fir/worker-publisher';
+import { PublishStore, PublisherWorker, YouTubePoster, parsePrivacy, dayHeader, imagesOf, publishedButtons, renderItemMessage, publishDay, videoCaption, videoOf } from '@fir/worker-publisher';
 import { AUDIT_KIND, KIND as SEO_KIND, SeoWorker, type AuditPayload, type SeoProposalPayload } from '@fir/worker-seo';
 import { TrendScoutWorker, latestTrendHints } from '@fir/worker-trend-scout';
 import { z } from 'zod';
@@ -65,11 +65,20 @@ export interface MarketingDeps {
 export interface Integrations {
   youtubeApiKey?: string | undefined;
   youtubeChannelId?: string | undefined;
+  ytOauthClientJson?: string | undefined;
+  ytRefreshToken?: string | undefined;
+  ytPrivacy?: string | undefined;
   trendsRegions?: string[];
   gscServiceAccountJson?: string | undefined;
   gscSiteUrl?: string | undefined;
   siteUrl?: string | undefined;
   fetch?: (url: string, init?: RequestInit) => Promise<Response>;
+}
+
+/** The Google refresh-token flow, when the client JSON and the refresh token are both set (else Shorts stay manual). */
+function youtubeAuth(i: Integrations): GoogleAuth | null {
+  const client = parseClientJson(i.ytOauthClientJson);
+  return client && i.ytRefreshToken ? new GoogleAuth({ client, refreshToken: i.ytRefreshToken }) : null;
 }
 
 const splitSchema = z.object({
@@ -137,9 +146,13 @@ export class MarketingHead implements ApprovalEditor {
     const net = i.fetch ? { fetch: i.fetch } : {};
     this.trendScout = d.trendScout ?? new TrendScoutWorker({ youtubeApiKey: i.youtubeApiKey, regions: i.trendsRegions ?? ['KZ', 'UZ', 'RU'], ...net });
     this.renderQueue = new RenderQueue(d.hq.db, d.hq.now);
-    this.publisher = d.publisher ?? new PublisherWorker({ render: (itemId) => this.renderedClip(itemId), renderNote: (itemId) => this.reelNote(itemId) });
+    const yt = youtubeAuth(i);
+    this.publisher = d.publisher ?? new PublisherWorker({
+      render: (itemId) => this.renderedClip(itemId), renderNote: (itemId) => this.reelNote(itemId),
+      ...(yt ? { posters: [new YouTubePoster({ auth: yt, store: new PublishStore(d.hq.db), day: () => publishDay({ now: d.hq.now, tz: d.hq.tz }), now: d.hq.now, privacy: parsePrivacy(i.ytPrivacy) })] } : {}),
+    });
     this.seo = d.seo ?? new SeoWorker({ ...(i.siteUrl ? { siteUrl: i.siteUrl } : {}), gscServiceAccountJson: i.gscServiceAccountJson, gscSiteUrl: i.gscSiteUrl, ...net });
-    this.analyst = d.analyst ?? new AnalystWorker({ youtubeApiKey: i.youtubeApiKey, youtubeChannelId: i.youtubeChannelId, ...net });
+    this.analyst = d.analyst ?? new AnalystWorker({ youtubeApiKey: i.youtubeApiKey, youtubeChannelId: i.youtubeChannelId, ...(yt ? { oauth: yt } : {}), ...net });
     this.worker =
       d.worker ??
       new ContentMakerWorker({
@@ -683,11 +696,20 @@ export class MarketingHead implements ApprovalEditor {
     const res = await this.runOnce(task.id, this.publisher.id, staged, this.publisher);
     if (!res.ok) return void this.hq.block(task.id, HEAD_ID, res.error ?? 'публикатор не вернул результат');
     const tctx = { db: this.hq.db, now: this.hq.now, tz: this.hq.tz };
+    // stage 2: approved Shorts with a rendered MP4 go to YouTube first (no-op without YT_* keys); the rest is the manual flow
+    const auto = await this.publisher.autoPublish(tctx).catch((e: unknown) => {
+      log('warn', 'auto publish failed', { err: errMsg(e) });
+      return [];
+    });
     const groups = this.publisher.packsToSend(tctx);
+    const autoLine = (r: { title: string; url?: string }) => `YouTube: опубликовано, ${r.url} («${r.title}»)`;
+    const posted = auto.filter((r) => r.url);
+    const failed = new Map(auto.filter((r) => r.error && !r.quota).map((r) => [r.itemId, r.error!]));
+    const quotaNote = auto.some((r) => r.quota) ? 'YouTube: квота на сегодня исчерпана, остальные Shorts публикуйте вручную.' : '';
     let sent = 0;
-    if (groups.length) {
+    if (groups.length || posted.length) {
       try {
-        await this.d.messenger.send(this.d.ownerId, dayHeader(groups));
+        await this.d.messenger.send(this.d.ownerId, [groups.length ? dayHeader(groups) : '', ...posted.map(autoLine), quotaNote].filter(Boolean).join('\n'));
       } catch (e) {
         log('warn', 'publish header not delivered', { err: errMsg(e) });
       }
@@ -724,7 +746,9 @@ export class MarketingHead implements ApprovalEditor {
             note = '\n\nАльбом с картинками не отправился: публикуйте по тексту, картинки лежат на сервере.';
           }
         }
-        if (!textSent) await this.d.messenger.send(this.d.ownerId, `${renderItemMessage(g, publishDay(tctx), { videoSent })}${note}`.slice(0, 4000), publishedButtons(g));
+        const why = failed.get(g[0]!.itemId);
+        if (why) note += `\n\nYouTube: автозагрузка не удалась (${why}). Публикуйте Shorts вручную.`;
+        if (!textSent || why) await this.d.messenger.send(this.d.ownerId, `${renderItemMessage(g, publishDay(tctx), { videoSent })}${note}`.slice(0, 4000), publishedButtons(g));
         this.publisher.markSent(tctx, g);
         sent++;
       } catch (e) {

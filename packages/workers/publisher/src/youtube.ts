@@ -1,0 +1,119 @@
+import { readFileSync } from 'node:fs';
+import { GOOGLE_HOSTS, safePost, type PostFn } from '@fir/core';
+import type { PublishPack } from './pack.js';
+import { isVideo } from './pack.js';
+import type { PlatformPoster } from './poster.js';
+import { PublishStore } from './store.js';
+
+/** One upload costs 1600 of the 10 000 daily units; we stop at 9 000 and leave the rest for the manual flow. */
+export const UPLOAD_COST = 1600;
+export const QUOTA_LIMIT = 9000;
+export const SITE_URL = 'https://firtech.pro/';
+
+export type Privacy = 'public' | 'unlisted' | 'private';
+export const parsePrivacy = (v: string | undefined): Privacy => (v === 'unlisted' || v === 'private' ? v : 'public');
+
+export interface VideoMeta {
+  snippet: { title: string; description: string; tags: string[]; categoryId: string; defaultLanguage: string };
+  status: { privacyStatus: Privacy; selfDeclaredMadeForKids: false; publishAt?: string };
+}
+
+/** Thrown when today's quota is spent: the caller falls back to the manual flow and says so in the day header. */
+export class QuotaExceeded extends Error {
+  constructor() {
+    super('квота YouTube на сегодня исчерпана (лимит 9000 из 10 000)');
+  }
+}
+
+const TAG_BUDGET = 500;
+
+/**
+ * Title ≤ 100 chars (the Shorts title line, else the item title, + « #Shorts»); description = the caption text, the site
+ * link with UTM and the hashtags; tags ≤ 500 chars in total. With a future `publishAt` the video must be `private` (the API
+ * publishes it on time); a past or missing one is ignored.
+ */
+export function buildVideoMeta(pack: PublishPack, o: { privacy?: Privacy; publishAt?: number | null; now: number }): VideoMeta {
+  const lines = pack.caption.split('\n').map((l) => l.trim()).filter(Boolean);
+  const base = (lines[0] ?? pack.title).replace(/#Shorts/gi, '').trim() || pack.title || 'Fir Tech';
+  const title = `${base.slice(0, 100 - ' #Shorts'.length).trim()} #Shorts`;
+  const body = lines.slice(1).join('\n');
+  const tags = [...new Set(['Shorts', ...pack.hashtags.map((h) => h.replace(/^#+/, ''))])].filter(Boolean);
+  const hashtags = tags.map((t) => `#${t}`).join(' ');
+  const link = `${SITE_URL}?utm_source=youtube&utm_medium=shorts&utm_campaign=${pack.itemId}`;
+  const description = [body, link, hashtags].filter(Boolean).join('\n\n').slice(0, 4900);
+  const kept: string[] = [];
+  let total = 0;
+  for (const t of tags) {
+    total += t.length + (kept.length ? 1 : 0);
+    if (total > TAG_BUDGET) break;
+    kept.push(t);
+  }
+  const future = o.publishAt != null && o.publishAt > o.now;
+  return {
+    snippet: { title, description, tags: kept, categoryId: '28', defaultLanguage: 'ru' },
+    status: future
+      ? { privacyStatus: 'private', selfDeclaredMadeForKids: false, publishAt: new Date(o.publishAt!).toISOString() }
+      : { privacyStatus: o.privacy ?? 'public', selfDeclaredMadeForKids: false },
+  };
+}
+
+export interface YouTubePosterOptions {
+  auth: { accessToken(): Promise<string> };
+  store: PublishStore;
+  /** The HQ day (YYYY-MM-DD), the key of the quota counter. */
+  day: () => string;
+  now: () => number;
+  privacy?: Privacy;
+  /** Planned publication time of a pack, if the plan has one (then the video is uploaded private and goes public at that time). */
+  publishAt?: (pack: PublishPack) => number | null;
+  /** Tests. */
+  post?: PostFn;
+  readFile?: (path: string) => Uint8Array;
+}
+
+/**
+ * Stage 2 poster for `shorts`: resumable upload through YouTube Data API v3 (init POST, then the whole MP4 in one PUT).
+ * It never retries: a failed session is dropped and the error goes up (the item stays `ready`, the manual flow shows the reason).
+ * The 1600 units are booked before the upload starts, a failed upload counts too.
+ */
+export class YouTubePoster implements PlatformPoster {
+  readonly platform = 'shorts' as const;
+  private readonly post_: PostFn;
+
+  constructor(private readonly o: YouTubePosterOptions) {
+    this.post_ = o.post ?? safePost;
+  }
+
+  async post(pack: PublishPack): Promise<{ url: string }> {
+    const file = pack.files.find(isVideo);
+    if (!file) throw new Error('нет MP4 для загрузки');
+    const day = this.o.day();
+    if (this.o.store.quotaUsed(day) + UPLOAD_COST > QUOTA_LIMIT) throw new QuotaExceeded();
+    const bytes = (this.o.readFile ?? readFileSync)(file);
+    const meta = buildVideoMeta(pack, { ...(this.o.privacy ? { privacy: this.o.privacy } : {}), publishAt: this.o.publishAt?.(pack) ?? null, now: this.o.now() });
+    const token = await this.o.auth.accessToken();
+    this.o.store.addQuota(day, UPLOAD_COST);
+
+    const init = await this.post_('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+      allowHosts: GOOGLE_HOSTS,
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=UTF-8', 'x-upload-content-length': String(bytes.length), 'x-upload-content-type': 'video/mp4' },
+      body: JSON.stringify(meta),
+      timeoutMs: 30_000,
+    });
+    if (!init.ok) throw new Error(`YouTube: сессия загрузки не открыта (${init.error})`);
+    if (init.status !== 200 || !init.headers.location) throw new Error(`YouTube: сессия загрузки не открыта (HTTP ${init.status}${reason(init.body)})`);
+
+    const put = await this.post_(init.headers.location, { method: 'PUT', allowHosts: GOOGLE_HOSTS, headers: { 'content-type': 'video/mp4' }, body: bytes, timeoutMs: 60_000 });
+    if (!put.ok) throw new Error(`YouTube: загрузка не удалась (${put.error}), сессия сброшена`);
+    const id = (put.body as { id?: unknown } | null)?.id;
+    if ((put.status !== 200 && put.status !== 201) || typeof id !== 'string') throw new Error(`YouTube: загрузка не удалась (HTTP ${put.status}${reason(put.body)}), сессия сброшена`);
+    return { url: `https://youtube.com/shorts/${id}` };
+  }
+}
+
+/** « quotaExceeded»: the machine reason from a Google error body, if any (never a token: those are not in answers). */
+function reason(body: unknown): string {
+  const e = (body as { error?: { errors?: { reason?: unknown }[]; status?: unknown } } | null)?.error;
+  const r = e?.errors?.[0]?.reason ?? e?.status;
+  return typeof r === 'string' ? ` ${r.slice(0, 60)}` : '';
+}
