@@ -1,5 +1,7 @@
 import type { Db } from '@fir/core';
 import { ProspectStore, STATUSES as PROSPECT_STATUSES, TRANSITIONS as PROSPECT_TRANSITIONS, type Status as ProspectStatus } from '@fir/worker-prospector';
+import { CsStore } from '@fir/worker-customer-support';
+import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 
 /**
@@ -32,7 +34,34 @@ interface Page {
   q: string;
 }
 
-export function createCrm(db: Db, now: () => number = Date.now): { handle(method: string, seg: string[], query: URLSearchParams, body: unknown): CrmReply } {
+/** Side effects of the cabinet endpoints that live outside the CRM views: the owner's line and the support flow. */
+export interface CrmHooks {
+  /** A short non-blocking line for the owner (inbox, Telegram digest when away). */
+  notifyOwner?: (text: string) => void;
+  /** A cabinet ticket was stored: the Support head drafts the answer (fire and forget). */
+  cabinetTicket?: (t: { id: number; name: string; text: string; telegram: string }) => void;
+}
+
+const clientPost = z.object({
+  email: z.string().trim().toLowerCase().max(254).email(),
+  name: z.string().trim().max(120).default(''),
+  telegram: z.string().trim().max(120).default(''),
+  locale: z.enum(['ru', 'en']).default('ru'),
+  supabaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),
+  marketingConsent: z.boolean().default(false),
+});
+const ticketCreate = z.object({ text: z.string().trim().min(1).max(1000) });
+const emailParam = z.string().trim().toLowerCase().max(254).email();
+const CAB_LIST_CAP = 50;
+const CAB_TICKETS_PER_HOUR = 10;
+const CAB_DOC_KINDS = ['contract', 'kp', 'estimate', 'act', 'offer'];
+/** A Telegram handle as compared everywhere: no `@`, no spaces, lower case. */
+const handleKey = (s: string) => s.trim().replace(/^@/, '').replace(/^https?:\/\/t\.me\//i, '').trim().toLowerCase();
+
+export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks = {}): {
+  handle(method: string, seg: string[], query: URLSearchParams, body: unknown): CrmReply;
+  clients(method: string, seg: string[], query: URLSearchParams, body: unknown): CrmReply;
+} {
   const has = (t: string) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t) !== undefined;
   const all = <T>(sql: string, ...p: unknown[]) => db.prepare(sql).all(...p) as T[];
   const one = <T>(sql: string, ...p: unknown[]) => db.prepare(sql).get(...p) as T | undefined;
@@ -161,6 +190,10 @@ export function createCrm(db: Db, now: () => number = Date.now): { handle(method
     if (has('pm_projects')) for (const r of all<{ client: string; created_at: number }>('SELECT client, created_at FROM pm_projects')) touch(r.client, '', 'project', r.created_at, 'projects');
     if (has('bl_invoices')) for (const r of all<{ client: string; created_at: number }>('SELECT client, created_at FROM bl_invoices')) touch(r.client, '', 'billing', r.created_at, 'invoices');
     if (has('bo_documents')) for (const r of all<{ client: string; created_at: number }>('SELECT client, created_at FROM bo_documents')) touch(r.client, '', 'documents', r.created_at, 'documents');
+    if (has('cab_clients')) for (const c of all<{ email: string; name: string; created_at: number; last_seen_at: number | null }>('SELECT email, name, created_at, last_seen_at FROM cab_clients')) {
+      touch(c.name || c.email, c.email, 'cabinet', c.created_at, null);
+      touch(c.name || c.email, c.email, 'cabinet', c.last_seen_at ?? c.created_at, null);
+    }
     let list = [...map.values()];
     if (p.q) {
       const q = p.q.toLowerCase();
@@ -183,10 +216,10 @@ export function createCrm(db: Db, now: () => number = Date.now): { handle(method
   }
 
   // ---- tickets ----
-  interface TicketRow { id: number; client_id: number | null; client_name: string; contact: string; text: string; status: string; money: number; alerted: number; created_at: number; answered_at: number | null }
+  interface TicketRow { id: number; client_id: number | null; client_name: string; contact: string; text: string; status: string; money: number; alerted: number; created_at: number; answered_at: number | null; source?: string | null; answer?: string | null }
   const ticketView = (t: TicketRow) => ({
     id: t.id, clientName: t.client_name, contact: t.contact, text: cap(t.text), status: t.status, money: t.money === 1, slaAlerted: t.alerted === 1,
-    note: note('ticket', t.id), createdAt: iso(t.created_at), answeredAt: iso(t.answered_at),
+    answer: t.answer ? cap(t.answer) : null, note: note('ticket', t.id), createdAt: iso(t.created_at), answeredAt: iso(t.answered_at),
   });
   function tickets(method: string, id: number | null, query: URLSearchParams, body: unknown): CrmReply {
     const statuses = [...TICKET_STATUSES];
@@ -220,10 +253,14 @@ export function createCrm(db: Db, now: () => number = Date.now): { handle(method
   // ---- documents: bo_documents (contract, offer, privacy, act), ps_documents (kp, estimate, contract draft), bl_invoices ----
   interface Doc {
     id: string; source: 'back_office' | 'presales' | 'billing'; kind: string; status: string; client: string; title: string; excerpt: string;
-    amountUsd: number | null; number: string | null; createdAt: number; link: null;
+    amountUsd: number | null; number: string | null; createdAt: number; link: null; leadId?: number;
   }
-  function documents(query: URLSearchParams): CrmReply {
-    const p = page(query);
+  const docView = (doc: Doc) => {
+    const d: Partial<Doc> = { ...doc };
+    delete d.leadId;
+    return { ...d, createdAt: iso(doc.createdAt) };
+  };
+  function allDocs(): Doc[] {
     const docs: Doc[] = [];
     if (has('bo_documents')) {
       for (const d of all<{ id: number; type: string; client: string; version: number; text: string; status: string; created_at: number }>('SELECT * FROM bo_documents'))
@@ -232,13 +269,18 @@ export function createCrm(db: Db, now: () => number = Date.now): { handle(method
     if (has('ps_documents')) {
       for (const d of all<{ id: number; lead_id: number | null; kind: string; title: string; body: string; status: string; created_at: number }>('SELECT * FROM ps_documents')) {
         const lead = d.lead_id !== null && has('li_leads') ? one<{ name: string }>('SELECT name FROM li_leads WHERE id = ?', d.lead_id)?.name ?? '' : '';
-        docs.push({ id: `ps:${d.id}`, source: 'presales', kind: d.kind, status: d.status, client: lead, title: d.title, excerpt: cap(d.body), amountUsd: null, number: null, createdAt: d.created_at, link: null });
+        docs.push({ id: `ps:${d.id}`, source: 'presales', kind: d.kind, status: d.status, client: lead, title: d.title, excerpt: cap(d.body), amountUsd: null, number: null, createdAt: d.created_at, link: null, ...(d.lead_id !== null ? { leadId: d.lead_id } : {}) } as Doc);
       }
     }
     if (has('bl_invoices')) {
       for (const d of all<{ id: number; number: string; client: string; amount_usd: number; what: string; status: string; created_at: number }>('SELECT * FROM bl_invoices'))
         docs.push({ id: `bl:${d.id}`, source: 'billing', kind: 'invoice', status: d.status, client: d.client, title: d.what || d.number, excerpt: cap(d.what), amountUsd: d.amount_usd, number: d.number, createdAt: d.created_at, link: null });
     }
+    return docs;
+  }
+  function documents(query: URLSearchParams): CrmReply {
+    const p = page(query);
+    const docs = allDocs();
     const kind = query.get('kind');
     const status = query.get('status');
     const q = p.q.toLowerCase();
@@ -250,7 +292,7 @@ export function createCrm(db: Db, now: () => number = Date.now): { handle(method
     return ok({
       available: has('bo_documents') || has('ps_documents') || has('bl_invoices'),
       kinds,
-      items: list.slice(start, start + p.limit).map((d) => ({ ...d, createdAt: iso(d.createdAt) })),
+      items: list.slice(start, start + p.limit).map(docView),
       nextCursor: start + p.limit < list.length ? start + p.limit : null,
     });
   }
@@ -262,10 +304,10 @@ export function createCrm(db: Db, now: () => number = Date.now): { handle(method
     const p = page(query);
     const status = query.get('status');
     const r = idPage<ProjRow>('pm_projects', p, ['client', 'what', 'product'], status ? [{ sql: 'status = ?', params: [status] }] : []);
-    const msTable = has('pm_milestones');
-    return ok({
-      available: true,
-      items: r.items.map((pr) => {
+    return ok({ available: true, items: r.items.map(projectView), nextCursor: r.nextCursor });
+  }
+  function projectView(pr: ProjRow) {
+        const msTable = has('pm_milestones');
         const ms = msTable ? all<{ kind: string; title: string; due_at: number; status: string }>('SELECT kind, title, due_at, status FROM pm_milestones WHERE project_id = ? ORDER BY due_at, id', pr.id) : [];
         const open = ms.filter((m) => m.status !== 'done');
         const next = open[0];
@@ -276,9 +318,6 @@ export function createCrm(db: Db, now: () => number = Date.now): { handle(method
           deadline: iso(next?.due_at ?? last?.due_at), nextMilestone: next ? { kind: next.kind, title: next.title, dueAt: iso(next.due_at) } : null,
           tasksTotal: ms.length, tasksDone: ms.length - open.length, createdAt: iso(pr.created_at),
         };
-      }),
-      nextCursor: r.nextCursor,
-    });
   }
 
   // ---- referrals ----
@@ -288,16 +327,12 @@ export function createCrm(db: Db, now: () => number = Date.now): { handle(method
     const p = page(query);
     const status = query.get('status');
     const r = idPage<RefRow>('rf_referrals', p, ['referrer', 'referred'], status ? [{ sql: 'status = ?', params: [status] }] : []);
-    return ok({
-      available: true,
-      statuses: ['proposed', 'paid', 'rewarded'],
-      items: r.items.map((x) => ({
-        id: x.id, referrer: x.referrer, referred: x.referred, leadId: x.lead_id, source: x.source, status: x.status, reward: x.reward,
-        rewardRequested: x.reward_requested === 1, createdAt: iso(x.created_at), paidAt: iso(x.paid_at), rewardedAt: iso(x.rewarded_at),
-      })),
-      nextCursor: r.nextCursor,
-    });
+    return ok({ available: true, statuses: ['proposed', 'paid', 'rewarded'], items: r.items.map(refView), nextCursor: r.nextCursor });
   }
+  const refView = (x: RefRow) => ({
+    id: x.id, referrer: x.referrer, referred: x.referred, leadId: x.lead_id, source: x.source, status: x.status, reward: x.reward,
+    rewardRequested: x.reward_requested === 1, createdAt: iso(x.created_at), paidAt: iso(x.paid_at), rewardedAt: iso(x.rewarded_at),
+  });
 
   // ---- summary ----
   function summary(): CrmReply {
@@ -331,7 +366,142 @@ export function createCrm(db: Db, now: () => number = Date.now): { handle(method
     });
   }
 
+  // ---- client cabinet (`/admin/clients/*`): accounts made on the site, scoped views of their own rows ----
+  db.exec(`CREATE TABLE IF NOT EXISTS cab_clients (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    telegram TEXT NOT NULL DEFAULT '',
+    locale TEXT NOT NULL DEFAULT 'ru',
+    supabase_id TEXT NOT NULL DEFAULT '',
+    marketing_consent INTEGER NOT NULL DEFAULT 0,
+    ref_slug TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    last_seen_at INTEGER
+  )`);
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS cab_clients_slug ON cab_clients (ref_slug)');
+  const ensureLeadClientId = () => {
+    if (has('li_leads') && !all<{ name: string }>('PRAGMA table_info(li_leads)').some((c) => c.name === 'client_id')) db.exec('ALTER TABLE li_leads ADD COLUMN client_id INTEGER');
+  };
+  ensureLeadClientId();
+  interface CabRow { id: number; email: string; name: string; telegram: string; locale: string; supabase_id: string; ref_slug: string | null; created_at: number }
+  const cabById = (id: number) => one<CabRow>('SELECT * FROM cab_clients WHERE id = ?', id);
+
+  /** Links the leads whose contact is the client's email or Telegram handle (case-insensitive, `@` optional); returns all leads linked to the client. */
+  function linkLeads(c: CabRow): number {
+    if (!has('li_leads')) return 0;
+    ensureLeadClientId();
+    const handle = handleKey(c.telegram);
+    const mine = (contact: string) => {
+      const k = contact.trim().toLowerCase();
+      return k === c.email || (handle !== '' && handleKey(contact) === handle);
+    };
+    for (const l of all<{ id: number; contact: string; client_id: number | null }>('SELECT id, contact, client_id FROM li_leads WHERE client_id IS NULL')) {
+      if (mine(l.contact)) db.prepare('UPDATE li_leads SET client_id = ? WHERE id = ?').run(c.id, l.id);
+    }
+    return one<{ n: number }>('SELECT COUNT(*) n FROM li_leads WHERE client_id = ?', c.id)?.n ?? 0;
+  }
+
+  function clientCreate(body: unknown): CrmReply {
+    const parsed = clientPost.safeParse(body ?? {});
+    if (!parsed.success) return fail(400, 'invalid');
+    const d = parsed.data;
+    const t = now();
+    const existed = one<{ id: number }>('SELECT id FROM cab_clients WHERE email = ?', d.email);
+    db.prepare(
+      `INSERT INTO cab_clients (email, name, telegram, locale, supabase_id, marketing_consent, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(email) DO UPDATE SET name = excluded.name, telegram = excluded.telegram, locale = excluded.locale, supabase_id = excluded.supabase_id,
+         marketing_consent = excluded.marketing_consent, updated_at = excluded.updated_at`,
+    ).run(d.email, d.name, d.telegram, d.locale, d.supabaseId, d.marketingConsent ? 1 : 0, t, t);
+    const c = one<CabRow>('SELECT * FROM cab_clients WHERE email = ?', d.email)!;
+    const linked = linkLeads(c);
+    if (!existed) hooks.notifyOwner?.(`Новый аккаунт в кабинете: ${c.name || c.email}, лидов привязано ${linked}`);
+    return ok({ client: { id: c.id, email: c.email, name: c.name, telegram: c.telegram, locale: c.locale, createdAt: iso(c.created_at) }, linkedLeads: linked });
+  }
+
+  const newest = <T extends { createdAt: string | null }>(list: T[]) => list.sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')).slice(0, CAB_LIST_CAP);
+
+  function clientByEmail(query: URLSearchParams): CrmReply {
+    const em = emailParam.safeParse(query.get('email') ?? '');
+    if (!em.success) return fail(400, 'invalid');
+    const c = one<CabRow>('SELECT * FROM cab_clients WHERE email = ?', em.data);
+    if (!c) return fail(404, 'not_found');
+    const t = now();
+    db.prepare('UPDATE cab_clients SET last_seen_at = ? WHERE id = ?').run(t, c.id);
+    linkLeads(c);
+    const handle = handleKey(c.telegram);
+    const lead = has('li_leads') ? all<{ id: number; name: string }>('SELECT id, name FROM li_leads WHERE client_id = ?', c.id) : [];
+    const leadIds = new Set(lead.map((l) => l.id));
+    // Names come only from rows already tied to this account (its leads, support records with its email or handle):
+    // the name typed at registration is never used to pull in rows, anybody could type any name
+    const names = new Set(lead.map((l) => l.name.trim().toLowerCase()).filter(Boolean));
+    const contactIs = (contact: string) => contact.trim().toLowerCase() === c.email || (handle !== '' && handleKey(contact) === handle);
+    if (has('cs_clients')) for (const x of all<{ name: string; contact: string }>('SELECT name, contact FROM cs_clients')) if (contactIs(x.contact)) names.add(x.name.trim().toLowerCase());
+    const mineName = (n: string) => names.has(n.trim().toLowerCase());
+
+    const projectsOut = has('pm_projects')
+      ? newest(all<ProjRow & { lead_id?: number | null }>('SELECT * FROM pm_projects ORDER BY id DESC').filter((p) => mineName(p.client) || (p.lead_id != null && leadIds.has(p.lead_id))).map(projectView))
+      : [];
+    const docs = allDocs().filter((d) => {
+      const own = d.leadId !== undefined ? leadIds.has(d.leadId) : mineName(d.client);
+      if (!own) return false;
+      // the client sees what the owner approved or issued: never drafts, rejected or voided papers
+      if (d.source === 'billing') return d.status === 'issued' || d.status === 'paid';
+      return CAB_DOC_KINDS.includes(d.kind) && d.status === 'approved';
+    });
+    const invoices = newest(docs.filter((d) => d.source === 'billing').map(docView));
+    const documentsOut = newest(docs.filter((d) => d.source !== 'billing').map(docView));
+    const ticketsOut = has('cs_tickets')
+      ? newest(all<TicketRow>('SELECT * FROM cs_tickets ORDER BY id DESC').filter((x) => contactIs(x.contact) || (x.source === 'cabinet' && x.contact.toLowerCase() === c.email) || (mineName(x.client_name) && x.contact === '')).map((x) => {
+          const view: Omit<ReturnType<typeof ticketView>, 'note'> & { note?: string } = ticketView(x);
+          delete view.note;
+          return view;
+        }))
+      : [];
+    const slug = c.ref_slug ?? issueSlug(c.id);
+    const referralsOut = has('rf_referrals')
+      ? newest(all<RefRow>('SELECT * FROM rf_referrals ORDER BY id DESC').filter((r) => { const k = r.referrer.trim().toLowerCase(); return k === slug || mineName(r.referrer); }).map(refView))
+      : [];
+    return ok({
+      client: { id: c.id, name: c.name, email: c.email, telegram: c.telegram, createdAt: iso(c.created_at) },
+      projects: projectsOut, invoices, documents: documentsOut, tickets: ticketsOut, referrals: referralsOut, referralSlug: slug,
+    });
+  }
+
+  /** The client's referral slug (`?start=ref_<slug>` in the bot, `ref:<slug>` on the form): lower-case letters and digits, unique, issued once. */
+  function issueSlug(id: number): string {
+    for (let i = 0; i < 5; i++) {
+      const slug = `c${id.toString(36)}${randomBytes(3).toString('hex')}`;
+      if (db.prepare('UPDATE cab_clients SET ref_slug = ? WHERE id = ? AND ref_slug IS NULL').run(slug, id).changes === 1) return slug;
+      const have = one<{ ref_slug: string | null }>('SELECT ref_slug FROM cab_clients WHERE id = ?', id)?.ref_slug;
+      if (have) return have;
+    }
+    return `c${id.toString(36)}`;
+  }
+
+  function clientTicketCreate(id: number, body: unknown): CrmReply {
+    const c = cabById(id);
+    if (!c) return fail(404, 'not_found');
+    const parsed = ticketCreate.safeParse(body ?? {});
+    if (!parsed.success) return fail(400, 'invalid');
+    const store = new CsStore(db, now);
+    const recent = one<{ n: number }>("SELECT COUNT(*) n FROM cs_tickets WHERE source = 'cabinet' AND lower(contact) = ? AND created_at > ?", c.email, now() - 3_600_000)?.n ?? 0;
+    if (recent >= CAB_TICKETS_PER_HOUR) return fail(429, 'rate_limited');
+    const tk = store.addCabinetTicket({ clientName: c.name || c.email, contact: c.email, text: parsed.data.text });
+    hooks.cabinetTicket?.({ id: tk.id, name: tk.clientName, text: tk.text, telegram: c.telegram });
+    return ok({ item: { id: tk.id, text: tk.text, status: tk.status, createdAt: iso(tk.createdAt), answeredAt: iso(tk.answeredAt), answer: tk.answer } });
+  }
+
+  function clientsRoute(method: string, seg: string[], query: URLSearchParams, body: unknown): CrmReply {
+    if (method === 'POST' && seg.length === 0) return clientCreate(body);
+    if (method === 'GET' && seg.length === 1 && seg[0] === 'by-email') return clientByEmail(query);
+    if (method === 'POST' && seg.length === 2 && seg[1] === 'tickets' && /^\d+$/.test(seg[0]!)) return clientTicketCreate(Number(seg[0]), body);
+    return fail(404, 'not_found');
+  }
+
   return {
+    clients: clientsRoute,
     handle(method, seg, query, body) {
       const [panel, idRaw] = seg;
       const id = idRaw !== undefined ? intParam(idRaw) : null;

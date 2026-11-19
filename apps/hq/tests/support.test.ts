@@ -1,6 +1,7 @@
 import { ApprovalQueue, MemoryMessenger, MockLlm, openDb } from '@fir/core';
 import { Hq } from '@fir/hq';
 import { BillingWorker } from '@fir/worker-billing';
+import { CsStore } from '@fir/worker-customer-support';
 import { FinanceWorker } from '@fir/worker-finance';
 import { DAY_MS, MonitoringWorker, type CheckDeps, type MonitorConfig } from '@fir/worker-monitoring';
 import { describe, expect, it } from 'vitest';
@@ -146,6 +147,20 @@ describe('Support head', () => {
     expect(w.messenger.sent.at(-1)!.text).toContain('#1 отвечен');
     await w.director.onCommand('ticket', 'без двоеточия');
     expect(w.messenger.sent.at(-1)!.text).toContain('Формат: /ticket');
+  });
+
+  it('a cabinet ticket: the answer is stored on the ticket, no hand-off message to the owner without a chat', async () => {
+    const w = world();
+    const store = new CsStore(w.hq.db, () => w.clock.t);
+    const t = store.addCabinetTicket({ clientName: 'Dilnoza', contact: 'dil@example.com', text: 'как оплатить подписку?' });
+    const before = w.messenger.sent.length;
+    await w.head.cabinetTicket(t.id, 'Dilnoza', 'как оплатить подписку?', '@nobody');
+    const after = store.ticket(t.id)!;
+    expect(after.status).toBe('answered');
+    expect(after.answer).toContain('TRC20');
+    expect(after.source).toBe('cabinet');
+    expect(w.messenger.sent.slice(before).some((m) => m.text.includes('отправьте клиенту'))).toBe(false);
+    expect(store.recent()).toHaveLength(1);
   });
 
   it('ticket SLA: a money ticket waits at level 0 and becomes one alert after 4 hours', async () => {

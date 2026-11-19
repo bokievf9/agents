@@ -19,6 +19,8 @@ export interface AdminDeps {
   /** `/drill` of the Drill (GET: report, POST: the argument). */
   drill?: (arg: string) => Promise<string>;
   now?: () => number;
+  /** The Support head drafts the answer to a cabinet ticket (the row is already stored). Fire and forget. */
+  cabinetTicket?: (t: { id: number; name: string; text: string; telegram: string }) => Promise<unknown>;
 }
 
 export interface AdminRequest {
@@ -44,7 +46,11 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   const now = d.now ?? Date.now;
   const hits: number[] = [];
   let served = 0;
-  const crm = createCrm(hq.db, now);
+  const crm = createCrm(hq.db, now, {
+    // a plain inbox line, not an approval: Telegram only through the away digest rules of the channel
+    notifyOwner: (text) => void channel.notify('message', text).catch((e) => log('warn', 'cabinet notify failed', { err: errMsg(e) })),
+    ...(d.cabinetTicket ? { cabinetTicket: (t) => void d.cabinetTicket!(t).catch((e) => log('warn', 'cabinet ticket flow failed', { err: errMsg(e) })) } : {}),
+  });
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));
 
   const maxTaskId = () => (hq.db.prepare('SELECT COALESCE(MAX(id), 0) m FROM tasks').get() as { m: number }).m;
@@ -134,6 +140,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
     const key = `${method} ${a}${id !== undefined && /^\d+$/.test(id) ? '/:id' : id ? `/${id}` : ''}${sub ? `/${sub}` : ''}`;
     const num = (v: string | undefined) => (v !== undefined && /^\d+$/.test(v) ? Number(v) : null);
     if (a === 'crm') return crm.handle(method, seg.slice(1), query, req.body);
+    if (a === 'clients') return crm.clients(method, seg.slice(1), query, req.body);
 
     switch (key) {
       case 'GET state':

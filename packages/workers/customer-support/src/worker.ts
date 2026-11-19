@@ -82,11 +82,16 @@ export class CustomerSupportWorker {
     const run = (kind: string) => async (p: Payload): Promise<void> => {
       if (typeof p.text !== 'string' || !p.text.trim()) throw new Error('nothing to deliver');
       if (hasPlaceholder(p.text)) throw new Error('answer still has a placeholder');
-      await deliver({
-        text: p.text, ticketId: Number(p.ticketId), contact: String(p.contact ?? ''), name: String(p.name ?? ''), kind,
-        ...(typeof p.chatId === 'number' ? { chatId: p.chatId } : {}),
-      });
-      if (Number.isInteger(p.ticketId)) csStoreFor(ctx).markAnswered(Number(p.ticketId));
+      const store = csStoreFor(ctx);
+      const known = Number.isInteger(p.ticketId) ? store.ticket(Number(p.ticketId)) : undefined;
+      // a cabinet ticket without a Telegram chat has no other channel: the stored answer is what the client sees
+      if (!(known?.source === 'cabinet' && typeof p.chatId !== 'number')) {
+        await deliver({
+          text: p.text, ticketId: Number(p.ticketId), contact: String(p.contact ?? ''), name: String(p.name ?? ''), kind,
+          ...(typeof p.chatId === 'number' ? { chatId: p.chatId } : {}),
+        });
+      }
+      if (Number.isInteger(p.ticketId)) store.markAnswered(Number(p.ticketId), p.text);
     };
     return {
       [KIND_ANSWER]: { initialLevel: this.answerLevel, execute: run(KIND_ANSWER) },
@@ -109,10 +114,12 @@ export class CustomerSupportWorker {
   }
 
   /** Creates the ticket and stages the answer for approval. Returns a short line for the owner. */
-  async handleTicket(ctx: WorkerCtx, input: { client: string; text: string; chatId?: number }): Promise<{ ticket: CsTicket; text: string; line: string }> {
+  async handleTicket(ctx: WorkerCtx, input: { client: string; text: string; chatId?: number; ticketId?: number }): Promise<{ ticket: CsTicket; text: string; line: string }> {
     const store = csStoreFor(ctx);
     const money = isMoneyTopic(input.text);
-    const ticket = store.addTicket({ clientName: input.client, text: input.text, money });
+    const existing = input.ticketId !== undefined ? store.ticket(input.ticketId) : undefined;
+    if (existing) store.setMoney(existing.id, money);
+    const ticket = existing ? { ...existing, money } : store.addTicket({ clientName: input.client, text: input.text, money });
     const known = store.clientByName(input.client);
     const who = `${ticket.clientName}${known ? '' : ' (нет в базе клиентов: /client)'}`;
     const payload = { ticketId: ticket.id, contact: ticket.contact, name: ticket.clientName, ...(input.chatId !== undefined ? { chatId: input.chatId } : {}) };

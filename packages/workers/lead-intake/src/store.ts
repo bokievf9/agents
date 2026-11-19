@@ -77,6 +77,8 @@ export class LeadStore {
     if (!cols.some((c) => c.name === 'estimate')) db.exec("ALTER TABLE li_leads ADD COLUMN estimate TEXT NOT NULL DEFAULT ''");
     if (!cols.some((c) => c.name === 'has_domain')) db.exec('ALTER TABLE li_leads ADD COLUMN has_domain INTEGER');
     if (!cols.some((c) => c.name === 'has_hosting')) db.exec('ALTER TABLE li_leads ADD COLUMN has_hosting INTEGER');
+    // the cabinet account this lead belongs to (cab_clients.id), set when the client registers on the site
+    if (!cols.some((c) => c.name === 'client_id')) db.exec('ALTER TABLE li_leads ADD COLUMN client_id INTEGER');
   }
 
   get(id: number): Lead | undefined {

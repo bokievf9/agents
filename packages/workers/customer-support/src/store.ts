@@ -25,6 +25,10 @@ export interface CsTicket {
   alerted: boolean;
   createdAt: number;
   answeredAt: number | null;
+  /** Where the ticket came from: `owner` (the /ticket command), `bot`, `cabinet` (the client cabinet on the site). */
+  source: string;
+  /** The approved answer text, kept so the cabinet can show it; null until answered. */
+  answer: string | null;
 }
 
 const SCHEMA = `
@@ -55,18 +59,22 @@ CREATE INDEX IF NOT EXISTS cs_tickets_status ON cs_tickets (status);
 interface ClientRow { id: number; name: string; contact: string; product: string; plan: string; since: string; created_at: number }
 interface TicketRow {
   id: number; client_id: number | null; client_name: string; contact: string; text: string; status: string; money: number; alerted: number;
-  created_at: number; answered_at: number | null;
+  created_at: number; answered_at: number | null; source: string | null; answer: string | null;
 }
 
 const toClient = (r: ClientRow): CsClient => ({ id: r.id, name: r.name, contact: r.contact, product: r.product, plan: r.plan, since: r.since, createdAt: r.created_at });
 const toTicket = (r: TicketRow): CsTicket => ({
   id: r.id, clientId: r.client_id, clientName: r.client_name, contact: r.contact, text: r.text, status: r.status as TicketStatus, money: r.money === 1,
-  alerted: r.alerted === 1, createdAt: r.created_at, answeredAt: r.answered_at,
+  alerted: r.alerted === 1, createdAt: r.created_at, answeredAt: r.answered_at, source: r.source ?? '', answer: r.answer ?? null,
 });
 
 export class CsStore {
   constructor(private readonly db: Db, private readonly now: () => number = Date.now) {
     migrate(db, SCHEMA);
+    // added later: where the ticket came from and the approved answer (the client cabinet shows it)
+    const cols = db.prepare('PRAGMA table_info(cs_tickets)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'source')) db.exec("ALTER TABLE cs_tickets ADD COLUMN source TEXT NOT NULL DEFAULT ''");
+    if (!cols.some((c) => c.name === 'answer')) db.exec('ALTER TABLE cs_tickets ADD COLUMN answer TEXT');
   }
 
   upsertClient(c: { name: string; contact?: string; product?: string; plan?: string; since?: string }): CsClient {
@@ -103,6 +111,18 @@ export class CsStore {
     return this.ticket(Number(r.lastInsertRowid))!;
   }
 
+  /** A ticket from the client cabinet: the name and contact (email) are the cabinet's own, no cs_clients lookup. */
+  addCabinetTicket(t: { clientName: string; contact: string; text: string }): CsTicket {
+    const r = this.db
+      .prepare("INSERT INTO cs_tickets (client_id, client_name, contact, text, money, created_at, source) VALUES (NULL, ?, ?, ?, 0, ?, 'cabinet')")
+      .run(t.clientName.trim(), t.contact, t.text, this.now());
+    return this.ticket(Number(r.lastInsertRowid))!;
+  }
+
+  setMoney(id: number, money: boolean): void {
+    this.db.prepare('UPDATE cs_tickets SET money = ? WHERE id = ?').run(money ? 1 : 0, id);
+  }
+
   ticket(id: number): CsTicket | undefined {
     const r = this.db.prepare('SELECT * FROM cs_tickets WHERE id = ?').get(id) as TicketRow | undefined;
     return r ? toTicket(r) : undefined;
@@ -112,7 +132,8 @@ export class CsStore {
     return (this.db.prepare("SELECT * FROM cs_tickets ORDER BY (status = 'open') DESC, id DESC LIMIT ?").all(limit) as TicketRow[]).map(toTicket);
   }
 
-  markAnswered(id: number): void {
+  markAnswered(id: number, answer?: string): void {
+    if (answer !== undefined) this.db.prepare('UPDATE cs_tickets SET answer = ? WHERE id = ?').run(answer.slice(0, 4000), id);
     this.db.prepare("UPDATE cs_tickets SET status = 'answered', answered_at = ? WHERE id = ? AND status = 'open'").run(this.now(), id);
   }
 

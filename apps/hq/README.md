@@ -528,6 +528,7 @@ firtech.pro на том же хосте читает его через `/api/adm
 | `GET /admin/departments` | отделы, голова, исполнители, счётчики задач |
 | `GET /admin/drill`, `POST /admin/drill` `{arg}` | отчёт учений, запуск; `{text}` |
 | `GET /admin/crm/{summary,prospects,leads,clients,tickets,documents,projects,referrals,reviews}`, `POST /admin/crm/prospects/:id`, `POST /admin/crm/tickets/:id` | CRM-панели «Пульта» (`src/admin-crm.ts`): списки с `limit/cursor/q`, статусы разведки и тикетов; панель без таблицы отдаёт `available: false`. Ответ клиенту из тикета не уходит (только через одобрения). Контракт: `docs/admin-crm-api.md` |
+| `POST /admin/clients`, `GET /admin/clients/by-email?email=`, `POST /admin/clients/:id/tickets` | кабинет клиента на сайте (`src/admin-crm.ts`): upsert аккаунта и привязка лидов, свои проекты, счета, документы, тикеты и рефералы клиента, обращение в Поддержку. Контракт: `docs/admin-crm-api.md`, раздел «Кабинет клиента» |
 
 ## Запуск
 `pnpm --filter hq dev` (`.env.local`). Docker: `apps/hq/Dockerfile`, сервис `hq` в `compose.yaml` (единственный порт `127.0.0.1:8787` для webhook лидов, `read_only`,

@@ -355,7 +355,7 @@ const webChat = cfg.webChatToken
 webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix }));
 
 const admin = cfg.adminToken
-  ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: botCommands, drill: (arg) => drill.command(arg) })
+  ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: botCommands, drill: (arg) => drill.command(arg), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram) })
   : null;
 // Presence: the site pings while it is open; without pings the owner counts as away and a digest goes to Telegram.
 const presenceTimer = setInterval(() => void channel.sync().catch((e) => log('error', 'presence sync failed', { err: errMsg(e) })), 60_000);

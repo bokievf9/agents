@@ -303,6 +303,29 @@ export class SupportHead {
     return `${r.checklist}\n\nЧеклист лежит задачей для вас, черновик инструкции ждёт одобрения.`;
   }
 
+  /**
+   * A ticket written in the client cabinet on the site (the row already exists in cs_tickets, source `cabinet`): a support task so
+   * the usual draft and approval follow. A Telegram chat is looked up by the client's handle, otherwise the stored answer is the channel.
+   */
+  async cabinetTicket(ticketId: number, client: string, text: string, telegram = ''): Promise<number> {
+    const name = client.replace(/:/g, ' ').trim().slice(0, 80) || 'клиент';
+    const handle = telegram.trim().replace(/^@/, '').toLowerCase();
+    let chatId: number | undefined;
+    if (handle) {
+      try {
+        chatId = (this.hq.db.prepare('SELECT chat_id FROM cb_chats WHERE lower(username) = ? AND blocked = 0').get(handle) as { chat_id: number } | undefined)?.chat_id;
+      } catch { /* no bot table: the stored answer is the only channel */ }
+    }
+    const t = this.hq.createTask({ title: `Тикет из кабинета: ${name.slice(0, 60)}`, dept: SUPPORT, assigneeId: SUPPORT_HEAD_ID, creator: 'routine', meta: { action: 'ticket', args: `${name}: ${text}`, ticketId, ...(chatId !== undefined ? { chatId } : {}) } });
+    if (!this.hq.claim(t.id, SUPPORT_HEAD_ID)) return t.id;
+    try {
+      await this.finish(t.id, await this.ownerAction(this.hq.task(t.id)!, 'ticket'), false);
+    } catch (e) {
+      await this.crash(t, e);
+    }
+    return t.id;
+  }
+
   /** Owner commands and the billing routine. Returns the text for the owner (or the routine's report). */
   private async ownerAction(task: Task, action: Action): Promise<string> {
     const ctx = this.ctx(task);
@@ -315,7 +338,9 @@ export class SupportHead {
           return 'Для тикета нужен формат «клиент: вопрос клиента» (или /ticket).';
         }
         const chatId = typeof task.meta.chatId === 'number' ? task.meta.chatId : undefined;
-        const r = await this.cs.handleTicket(ctx, { ...p, ...(chatId !== undefined ? { chatId } : {}) });
+        const ticketId = typeof task.meta.ticketId === 'number' ? task.meta.ticketId : undefined;
+        const r = await this.cs.handleTicket(ctx, { ...p, ...(chatId !== undefined ? { chatId } : {}), ...(ticketId !== undefined ? { ticketId } : {}) });
+        if (ticketId !== undefined) return `${r.line}\n\nОбращение из кабинета на сайте: одобренный ответ появится у клиента в кабинете${chatId !== undefined ? ' и уйдёт ему в Telegram' : ''}.`;
         if (chatId !== undefined) return `${r.line}\n\nКлиент написал в клиентский бот: одобренный ответ бот отправит ему сам.`;
         return `${r.line}\n\nЧерновик:\n${r.text}\n\nОдобрите его (/approve или в пачке): после этого я пришлю текст для отправки клиенту.`;
       }
