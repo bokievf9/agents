@@ -401,6 +401,21 @@ id задачи HQ, контекст (описание, последние ко�
 4. Закрывать issue только после этого комментария: после закрытия мост читает именно последний комментарий.
 5. Вопрос к владельцу: комментарий с вопросом и метка `builder-blocked-question`, issue не закрывать. Переоткрытие вернёт задачу в `blocked`.
 
+## Инструменты агентов (`ctx.tools`, 2026-11-20)
+Каждый исполнитель получает от своей головы `ctx.tools` (`src/tools.ts`: `appTools` один раз на процесс из конфига, `toolsFor` на каждый запуск
+исполнителя): веб (`getJson`, `getText`, `readable`, `search`, `post`), кэш, файлы в `DATA_DIR/renders`, PNG/QR/PDF, LLM с учётом расходов задачи,
+прайс, плейбуки, база знаний, CRM только на чтение, события сайта, USDT, Google (YouTube, Trends, Search Console), Telegram владельцу, письма,
+очередь Мака, часы. Права по отделам, единый формат ошибок без исключений, журнал `activity` (`tool:<имя>`, код и длительность) и счётчики дня
+в `settings` (`tools.stats.<дата>`). Полная таблица, лимиты и что нужно для каждого инструмента: `../../docs/tools.md`.
+- Список с состоянием отдаёт `GET /admin/company` (`tools`: имя, отделы, настроен ли, вызовы и ошибки за сегодня, лимиты, env-ключи без значений).
+- Ключи (все необязательны): `BRAVE_SEARCH_KEY` (поиск через Brave, без него DuckDuckGo HTML), `RESEND_API_KEY` и `RESEND_FROM` (письма),
+  `GSC_SERVICE_ACCOUNT_JSON` и `GSC_SITE_URL` (Search Console, JWT сервисного аккаунта без библиотек), `YT_*`/`YOUTUBE_*` (как у Публикатора и Аналитика),
+  `MEDIA_SECRET` и `IG_PUBLIC_BASE` (`files.url`), `TRONGRID_API_KEY`/`TONCENTER_API_KEY` (`chain.transfers`).
+- Документы: утверждённый документ Бэк-офиса приходит владельцу ещё и PDF-файлом (`media.pdf`, Onest, `renders/docs/<тип>-<id>-v<версия>.pdf`).
+- Очередь Мака: `tools.mac.poster.enqueue(itemId, platform)` пишет `mac_queue`; `GET /admin/content?queued=1` отдаёт только поставленное в очередь
+  (`macQueued` у материала, `queuedItems` за все недели), отчёт помощника `published`/`failed` закрывает строку.
+- Мониторинг остаётся на своём `fetch` (внутренние `http://` адреса docker, инструменты их запрещают по замыслу).
+
 ## Инструкции агентов
 `instructions/director.md`, `instructions/marketing-head.md` и `instructions/sales-head.md` (русский) загружаются в таблицу `agents` один раз при первом
 старте (`ensureAgent`). Исключение: `instructions/client-bot.md` (тон и знания клиентского бота) читается из файла при каждом старте. Дальше правда в базе: меняются через Директора (кнопка) или `hq import`. Чек-лист проверки

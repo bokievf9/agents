@@ -265,7 +265,7 @@ Upsert по email в `cab_clients` (повторный вызов обновля
   "days": [ { "date": "2026-11-23", "items": [ { "id": 41, "kind": "clip|post|carousel|story|article", "platform": "instagram|blog", "status": "draft|pending|approved|rendering|ready|published|rejected",
     "title": "...", "hook": "...", "caption": { "instagram": "", "tiktok": "", "shorts": "", "dzen": "" },
     "files": [ { "path": "41/1.png", "type": "png", "w": 1080, "h": 1350 } ], "sourceSlug": null, "approvalId": 91, "publishedUrl": null, "error": null,
-    "publishedOn": ["instagram"], "igCaption": "подпись\n\n#теги" } ] } ],
+    "publishedOn": ["instagram"], "igCaption": "подпись\n\n#теги", "macQueued": [] } ] } ],
   "summary": { "pending": 3, "approved": 2, "published": 1, "rendering": 1 } }
 ```
 - Всегда 7 дней (пн..вс), пустой день `items: []`. Строки: `cm_items` (рилс `clip`, пост, карусель, история; профильный пакет идёт как `post`) и статьи блога `cm_articles` (`kind: "article"`, `platform: "blog"`).
@@ -275,6 +275,8 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 - `files[].path` относительно `DATA_DIR/renders`, отдаётся через `GET /admin/files/<path>`; `w` и `h` читаются из заголовка PNG, у видео 1080x1920. `approvalId`: номер одобрения ядра, когда карточка владельцу уже отправлена (иначе `null`; решать можно и без неё).
 - `publishedUrl`: адрес YouTube или Instagram из `pb_posts.url`, у статьи `/blog/<slug>`.
 - `publishedOn`: платформы, строки которых уже отмечены опубликованными (у статьи `[]`). `igCaption`: подпись Instagram для вставки (текст, пустая строка, хештеги), пока не одобрен `""`. Оба поля для помощника на Маке (`packages/mac-poster`).
+- `macQueued` (2026-11-20): площадки, на которые агент поставил материал в очередь Мака (`tools.mac.poster.enqueue`, таблица `mac_queue`), пока не закрыты; у статьи поля нет.
+- `?queued=1`: в `days` только материалы с открытой очередью Мака (статей нет), плюс `queuedItems`: все такие материалы любой недели. Отчёт помощника `published` с `url` или `failed` закрывает строку очереди этой площадки.
 
 `POST /admin/content/:itemId` тело `{ "action": "approve|reject|revise|published|rerender|failed", "note"?: string (1..4000), "platform"?: "instagram|tiktok|shorts", "url"?: "https://..." }` → `{ ok, item }` (строка как в списке). Лишние поля и неизвестное действие 400 `invalid` + `allowed`, неизвестный id 404.
 - `approve` и `reject` решают то же одобрение, что кнопки Telegram-карточки (`queue.handle`, затем задача и карточка в Telegram закрываются; элемент пакета недели, который ещё не рассылался карточкой, открывается как в «Посмотреть по одному»). Повтор того же решения безопасен: очередь забирает одобрение один раз, второй записи в журнале решений нет. Обратное решение 409 `already_decided`, материал не ждёт владельца (черновик) 409 `not_pending`. У `reject` `note` сохраняется комментарием материала.
@@ -325,12 +327,14 @@ Upsert по email в `cab_clients` (повторный вызов обновля
   "costs": { "byDept": { "marketing": { "todayUsd": 0, "monthUsd": 0, "limitUsd": 0 } }, "byDay": [ { "date": "2026-11-18", "usd": 0 } ] },
   "trust": [ { "kind": "content_item", "level": 0, "locked": false, "approvals": 0 } ],
   "playbooks": [],
-  "workers": [ { "id": "content-maker", "dept": "marketing", "title": "Контент-мейкер", "state": "idle" } ] }
+  "workers": [ { "id": "content-maker", "dept": "marketing", "title": "Контент-мейкер", "state": "idle" } ],
+  "tools": [ { "name": "web.search", "departments": ["marketing", "sales", "director"], "configured": true, "callsToday": 4, "errorsToday": 0, "limits": { "timeoutMs": 8000, "minGapMs": 1000, "cacheTtlMs": 3600000, "maxResults": 10 }, "env": ["BRAVE_SEARCH_KEY"] } ] }
 ```
 - `routines`: все рутины. `tz` = зона, в которой идёт cron (часы владельца или компании), `lastStatus` = статус задачи последнего запуска (`null`, пока не запускалась), `nextRunAt` = следующий запуск по cron в этой зоне (`null` у выключенной).
 - `costs.byDept`: по каждому отделу траты сегодня и в месяце (USD) и месячный лимит (`0` = без лимита); `byDay` = последние 30 суток по часам компании, все дни есть, старые первыми.
 - `trust`: уровни доверия по типам одобрений; `locked` = деньги, цены, документы (не растёт сам), `approvals` = сколько раз владелец одобрил (или тип отработал сам на уровне 1).
 - `playbooks`: **пока всегда `[]`** (в этом клоне нет `loadPlaybook` пакета знаний; место помечено TODO в `pult-company.ts`). Форма по контракту `{ role, updatedAt, lines }`.
+- `tools` (2026-11-20, сайт покажет позже): инструменты агентов (`docs/tools.md`): отделы с правом вызова, `configured` (есть ключи и адаптеры; значений ключей нет), вызовы и ошибки за сегодня по часам компании, лимиты, имена env-ключей.
 - `workers`: исполнители со статусом офиса (`working|waiting|blocked|idle|sleeping|paused|offline`, как на странице офиса).
 
 `POST /admin/company/routines/:name` тело `{ "enabled": true|false }` → `{ ok, item }` (рутина как в списке). Выключение запоминается как правка владельца: следующий старт не включает рутину обратно. После переключения HQ перезапускает cron-задачи.

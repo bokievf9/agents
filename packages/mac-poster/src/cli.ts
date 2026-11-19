@@ -86,7 +86,7 @@ async function main(): Promise<number> {
       const st = loadState(cfg.stateFile);
       if (user) st.username = user;
       saveState(cfg.stateFile, st, localDate(Date.now()));
-      console.log('Дальше: pnpm --filter mac-poster run instagram --dry-run');
+      console.log('Дальше: pnpm --filter mac-poster ig:run --dry-run');
       return 0;
     }
     const log = logger(cfg, args.date);

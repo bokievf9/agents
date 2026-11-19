@@ -65,6 +65,18 @@ LLM в компании ходит не напрямую в Anthropic, а чер
 Сообщение клиента `POST /admin/clients/:id/leads/:leadId/messages` создаёт тикет Поддержки (`cs_tickets.lead_id`), одобренный ответ дописывается в тред; ответы владельца и головы продаж по лиду с кабинетом
 тоже пишутся в `cab_messages` (`apps/hq/src/cabinet.ts`). Контракт: `docs/admin-crm-api.md`.
 
+## Инструменты агентов (2026-11-20)
+Спека и таблица: `docs/tools.md`. Код `packages/core/src/tools/*` (`createTools(deps)` → `Tools`), тесты-контракты `packages/core/tests/tools/*`.
+Каждая голова кладёт в `WorkerCtx.tools` набор своего отдела (`apps/hq/src/tools.ts`: `appTools` из конфига и адаптеров приложения: PNG
+Контент-мейкера, CRM Пульта только на чтение, квота YouTube Публикатора; `toolsFor` на запуск). Исполнитель не зовёт `fetch` сам: веб через
+`ctx.tools.web.*` (https, хосты из списка, закреплённый публичный адрес из `net.ts`, очередь на хост, таймауты, повтор только `retryable`), ответ
+всегда `ToolResult` без исключений, права в `tools/policy.ts`, `configured` в `tools/configured.ts`, журнал `tool:<имя>` и `settings.tools.stats.<дата>`.
+`WorkerCtx.tools` необязателен только ради ручных контекстов тестов: `toolsOf(ctx, dept)` из `@fir/hq`. Новый инструмент: файл в `tools/`, строка
+политики, строка в `docs/tools.md` (тест реестра это проверяет), тест-контракт. Переехали в core: `chain.ts` (Сопровождение реэкспортирует),
+подпись `/media/` (`media-sign.ts`, Публикатор реэкспортирует), загрузка YouTube (`youtube.ts`), Search Console. Шрифты PDF: `packages/core/assets/fonts`
+(в `files` пакета, Dockerfile проверяет их наличие в образе). Мониторинг сознательно на своём `fetch` (внутренние адреса).
+`packages/mac-poster`: команды `ig:login`, `ig:run`, `ig:install-launchd`, `ig:uninstall-launchd` (голые `login`/`run` совпадали со встроенными pnpm).
+
 ## Как добавить нового агента («новая голова»)
 1. `apps/<имя>/`: `package.json` (зависимость `"@fir/core": "workspace:*"`, скрипты как у `lead-intake`),
    `tsconfig.json` (`customConditions: ["source"]`), `tsconfig.build.json`, `vitest.config.ts` (как у `lead-intake`),

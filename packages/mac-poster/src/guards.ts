@@ -19,11 +19,11 @@ export function classifyBlock(url: string, text: string, loginForm = false): Blo
     /* about:blank and the like */
   }
   if (/^\/challenge\//.test(path) || /^\/accounts\/suspended/.test(path) || CHALLENGE.some((r) => r.test(text))) {
-    return { kind: 'challenge', message: 'Instagram просит подтвердить вход («Подтвердите, что это вы»). Откройте окно (pnpm --filter mac-poster login), пройдите проверку руками, потом запускайте снова.' };
+    return { kind: 'challenge', message: 'Instagram просит подтвердить вход («Подтвердите, что это вы»). Откройте окно (pnpm --filter mac-poster ig:login), пройдите проверку руками, потом запускайте снова.' };
   }
   if (RATE.some((r) => r.test(text))) return { kind: 'rate', message: 'Instagram ограничил действия («Повторите попытку позже»). Остановился, следующий запуск по расписанию.' };
   if (/^\/accounts\/login/.test(path) || (loginForm && LOGIN_TEXT.some((r) => r.test(text)))) {
-    return { kind: 'login', message: 'Instagram показывает страницу входа: профиль разлогинен. Запустите pnpm --filter mac-poster login и войдите руками.' };
+    return { kind: 'login', message: 'Instagram показывает страницу входа: профиль разлогинен. Запустите pnpm --filter mac-poster ig:login и войдите руками.' };
   }
   return null;
 }

@@ -39,12 +39,14 @@
    ```
    Ключ SSH должен работать без вопросов (`BatchMode`): если на ключе пароль, добавьте его в связку ключей
    `ssh-add --apple-use-keychain ~/.ssh/id_ed25519_firtech`.
-4. Вход: `pnpm --filter mac-poster login`. Откроется окно Chromium с instagram.com, войдите руками (логин, пароль, код).
+Команды пакета начинаются с `ig:` (`ig:login`, `ig:run`, `ig:install-launchd`, `ig:uninstall-launchd`): голые `login` и `run` совпадают со
+   встроенными командами pnpm (`pnpm --filter mac-poster login` запускал `npm login`, 2026-11-20). Сам CLI по-прежнему понимает `instagram` и `run instagram`.
+4. Вход: `pnpm --filter mac-poster ig:login`. Откроется окно Chromium с instagram.com, войдите руками (логин, пароль, код).
    Когда видна лента, окно закроется само, профиль сохранён в `~/Library/Application Support/fir-mac-poster/instagram`.
-5. Пробный прогон без публикации: `pnpm --filter mac-poster run instagram --dry-run` (печатает план: что, в каком порядке, сколько файлов).
-6. Настоящий запуск: `pnpm --filter mac-poster run instagram` (окно видно; `--headless` без окна, `--limit N`, `--date YYYY-MM-DD`).
-7. Расписание: `pnpm --filter mac-poster install-launchd` ставит `~/Library/LaunchAgents/pro.firtech.mac-poster.plist`:
-   10:00, 14:00 и 19:00 по часам Мака (Куала-Лумпур). Убрать: `pnpm --filter mac-poster uninstall-launchd`.
+5. Пробный прогон без публикации: `pnpm --filter mac-poster ig:run --dry-run` (печатает план: что, в каком порядке, сколько файлов).
+6. Настоящий запуск: `pnpm --filter mac-poster ig:run` (окно видно; `--headless` без окна, `--limit N`, `--date YYYY-MM-DD`).
+7. Расписание: `pnpm --filter mac-poster ig:install-launchd` ставит `~/Library/LaunchAgents/pro.firtech.mac-poster.plist`:
+   10:00, 14:00 и 19:00 по часам Мака (Куала-Лумпур). Убрать: `pnpm --filter mac-poster ig:uninstall-launchd`.
    Мак в это время должен не спать: «Настройки → Аккумулятор/Энергосбережение → не переходить в сон при подключении к сети»
    или `caffeinate -dims` в отдельном окне Терминала. Пропущенный из-за сна запуск launchd выполнит при пробуждении.
    После переезда клона (`git clone` в другое место) расписание нужно поставить заново.
@@ -60,7 +62,7 @@
 
 ## Когда Instagram меняет вёрстку
 Все надписи и селекторы собраны в начале `src/instagram/web.ts` (объект `T`, `CROP_ICON`, `NEW_POST_ICON`, `LOGGED_IN`) на русском
-и английском. Порядок починки: найти по логу шаг и открыть его скриншот, запустить `pnpm --filter mac-poster run instagram --limit 1`
+и английском. Порядок починки: найти по логу шаг и открыть его скриншот, запустить `pnpm --filter mac-poster ig:run --limit 1`
 и посмотреть в окне, как теперь называется кнопка (или в DevTools, `aria-label`), поправить регулярное выражение в `T`, прогнать
 `pnpm --filter mac-poster test`. Тексты остановок (проверка входа, лимиты) в `src/guards.ts`.
 
@@ -72,4 +74,4 @@
 ## Проверки
 `pnpm --filter mac-poster typecheck`, `pnpm --filter mac-poster test` (без сети и браузера: отбор и порядок, недели, план
 сухого прогона, счётчик и лимит, lock, разбор ссылок, клиент HQ на подменённом fetch, туннель на подменённом ssh, plist).
-Настоящий instagram.com тестами не проверяется: первый запуск после `login` всегда `--dry-run`, затем `--limit 1`.
+Настоящий instagram.com тестами не проверяется: первый запуск после `ig:login` всегда `--dry-run`, затем `--limit 1`.
