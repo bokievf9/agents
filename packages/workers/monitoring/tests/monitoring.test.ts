@@ -1,7 +1,7 @@
 import { openDb } from '@fir/core';
 import { describe, expect, it } from 'vitest';
 import {
-  BOT_SILENCE_MS, DAY_MS, MonitoringWorker, MonitorStore, checkBot, checkDisk, containerProblems, dailyLine, isHealthy, parseCertDays, parseMonitorUrls, step,
+  BOT_SILENCE_MS, DAY_MS, MonitoringWorker, checkServices, containerHealth, MonitorStore, checkBot, checkDisk, containerProblems, dailyLine, isHealthy, parseCertDays, parseMonitorUrls, step,
   type BotProbe, type CheckDeps, type MonitorConfig,
 } from '../src/index.js';
 
@@ -214,5 +214,47 @@ describe('the client bot (@firtech_bot)', () => {
     expect(await checkBot(w.deps, cfg, bot({ started: null, last: null }))).toMatchObject([{ id: 'bot', ok: true, detail: 'ещё не запущен' }]);
     const m = new MonitoringWorker(cfg, w.deps);
     expect((await m.tick(w.db)).results.some((x) => x.id.startsWith('bot'))).toBe(false);
+  });
+});
+
+describe('hq and renderer as services', () => {
+  const base = { dataDir: '/data', docker: false, renderer: true, heartbeatStaleMs: 180_000 };
+
+  it('reads the heartbeat files: fresh is fine, stale or missing is a failure', async () => {
+    const w = world();
+    const files: Record<string, number | null> = { '/data/hq.heartbeat': NOW - 20_000, '/data/renderer.heartbeat': NOW - 600_000 };
+    const deps: CheckDeps = { ...w.deps, fileMtime: (p) => Promise.resolve(files[p] ?? null) };
+    expect((await checkServices(deps, base)).map((r) => [r.id, r.ok])).toEqual([['hq', true], ['renderer', false]]);
+    files['/data/renderer.heartbeat'] = NOW - 5_000;
+    expect((await checkServices(deps, base)).every((r) => r.ok)).toBe(true);
+    delete files['/data/hq.heartbeat'];
+    expect((await checkServices(deps, base))[0]).toMatchObject({ ok: false, detail: 'файла сигнала нет' });
+  });
+
+  it('with Docker access the container health decides; a container without a healthcheck falls back to the file', async () => {
+    const w = world();
+    const containers = [
+      { name: 'fir-agents-hq-1', state: 'running', status: 'Up 2 hours (healthy)' },
+      { name: 'fir-agents-renderer-1', state: 'running', status: 'Up 2 hours (unhealthy)' },
+    ];
+    const deps: CheckDeps = { ...w.deps, listContainers: () => Promise.resolve(containers), fileMtime: () => Promise.resolve(NOW - 1000) };
+    expect((await checkServices(deps, { ...base, docker: true })).map((r) => [r.id, r.ok])).toEqual([['hq', true], ['renderer', false]]);
+    containers[1] = { name: 'fir-agents-renderer-1', state: 'running', status: 'Up 2 hours' };
+    expect((await checkServices(deps, { ...base, docker: true }))[1]).toMatchObject({ ok: true, detail: 'сигнал свежий' });
+    expect(containerHealth(containers, 'hq')).toBe('healthy');
+    expect(containerHealth([], 'hq')).toBe('missing');
+    expect(containerHealth([{ name: 'fir-agents-renderer-1', state: 'exited', status: 'Exited (1)' }], 'renderer')).toBe('stopped');
+  });
+
+  it('a service that cannot be judged is skipped, never passed: no state, no sample, a note in the task result', async () => {
+    const w = world();
+    const deps: CheckDeps = { ...w.deps };
+    delete (deps as { fileMtime?: unknown }).fileMtime;
+    expect((await checkServices(deps, base)).every((r) => r.skipped === true)).toBe(true);
+    const worker = new MonitoringWorker({ ...cfg, renderer: true }, deps);
+    const { results } = await worker.tick(w.db);
+    expect(results.filter((r) => r.skipped).map((r) => r.id)).toEqual(['hq', 'renderer']);
+    const store = new MonitorStore(w.db);
+    expect(store.state('hq')).toBeUndefined();
   });
 });

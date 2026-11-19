@@ -232,7 +232,7 @@ export class SalesHead implements ApprovalEditor {
     };
   }
 
-  private async review(task: Task, result: string): Promise<{ ok: boolean; issues: string[] }> {
+  private async review(task: Task, result: string): Promise<{ ok: boolean; issues: string[]; skipped?: boolean }> {
     const res = await tryJson(
       this.llmFor(HEAD_ID, task.id),
       {
@@ -242,7 +242,11 @@ export class SalesHead implements ApprovalEditor {
       },
       reviewSchema,
     );
-    return res ?? { ok: true, issues: [] }; // LLM off or garbage: the owner's approval is the safety net
+    if (res) return res;
+    // LLM off or garbage: the check did NOT run. It is logged as skipped (never as passed); the owner's approval is the safety net.
+    this.hq.comment(task.id, HEAD_ID, 'Ревью по чек-листу пропущено: модель не дала разборчивого ответа.');
+    this.hq.log(HEAD_ID, 'review_skipped', 'task', String(task.id));
+    return { ok: true, issues: [], skipped: true };
   }
 
   private async runOnce(taskId: number, worker: Worker, actor: string, staged: Staged[]): Promise<WorkerResult> {
@@ -277,7 +281,8 @@ export class SalesHead implements ApprovalEditor {
         this.hq.setStatus(taskId, 'review', HEAD_ID, 'повторная проверка');
         verdict = await this.review(this.hq.task(taskId)!, res.result);
       }
-      if (!verdict.ok) warn = `\nРевью отдела после доработки: ${verdict.issues.join('; ')}.`;
+      if (verdict.skipped) warn = '\nРевью по чек-листу пропущено (модель не ответила): проверьте текст сами.';
+      else if (!verdict.ok) warn = `\nРевью отдела после доработки: ${verdict.issues.join('; ')}.`;
     }
     const task = this.hq.task(taskId)!;
     // The Scout's batch: one child task and one approval per card, so the daily routine is never held up by cards the owner has not decided yet.

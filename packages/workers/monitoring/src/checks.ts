@@ -1,5 +1,6 @@
 import { request } from 'node:http';
-import { statfs } from 'node:fs/promises';
+import { stat, statfs } from 'node:fs/promises';
+import { join } from 'node:path';
 import { connect } from 'node:tls';
 
 export const DAY_MS = 86_400_000;
@@ -15,6 +16,8 @@ export interface CheckResult {
    * no alert to the owner. Used for «silence», which is often just a quiet hour.
    */
   soft?: boolean;
+  /** The check could not run (no data to judge by): it is logged as skipped and counts neither as passed nor as failed. */
+  skipped?: boolean;
 }
 
 export interface Container {
@@ -31,6 +34,8 @@ export interface CheckDeps {
   certValidTo(host: string): Promise<string>;
   statfs(path: string): Promise<{ blocks: number; bavail: number }>;
   listContainers(): Promise<Container[]>;
+  /** Epoch ms of a file's last modification (heartbeat files of the services); null when the file is missing. Optional: tests may omit it. */
+  fileMtime?(path: string): Promise<number | null>;
 }
 
 export interface MonitorConfig {
@@ -45,6 +50,10 @@ export interface MonitorConfig {
   diskMaxPct: number;
   certMinDays: number;
   timeoutMs: number;
+  /** Is the renderer service expected (REELS_RENDER on)? Then its heartbeat file / container health is checked. */
+  renderer?: boolean;
+  /** A heartbeat file older than this means the service is stuck or down (default 3 minutes; services touch it every 30 s). */
+  heartbeatStaleMs?: number;
 }
 
 export const DEFAULT_URLS = ['https://firtech.pro/api/health'];
@@ -170,6 +179,54 @@ export async function checkDocker(deps: CheckDeps): Promise<CheckResult> {
   }
 }
 
+/** Heartbeat files the services touch in the shared data dir. */
+export const HEARTBEAT_FILES = { hq: 'hq.heartbeat', renderer: 'renderer.heartbeat' } as const;
+export const HEARTBEAT_STALE_MS = 180_000;
+
+/** The compose container of a service by name (`fir-agents-hq-1`, `hq`): its health word from the Docker status, or null without a healthcheck. */
+export function containerHealth(list: Container[], service: string): 'healthy' | 'unhealthy' | 'starting' | 'nohealth' | 'stopped' | 'missing' {
+  const c = list.find((x) => new RegExp(`(^|[-_/])${service}([-_]\\d+)?$`).test(x.name));
+  if (!c) return 'missing';
+  if (c.state !== 'running') return 'stopped';
+  const m = /\((healthy|unhealthy|health: starting)\)/i.exec(c.status);
+  if (!m) return 'nohealth';
+  return m[1]!.toLowerCase() === 'healthy' ? 'healthy' : m[1]!.toLowerCase() === 'unhealthy' ? 'unhealthy' : 'starting';
+}
+
+/**
+ * `hq` and `renderer` as services. With Docker access (MONITOR_DOCKER) the state is the container's own health (the compose
+ * healthchecks); without it, or when the container has no healthcheck yet, the service's heartbeat file in the shared volume:
+ * fresh means alive. A service that cannot be judged (no Docker, no file API) is `skipped`, never reported as fine.
+ */
+export async function checkServices(deps: CheckDeps, cfg: Pick<MonitorConfig, 'dataDir' | 'docker' | 'renderer' | 'heartbeatStaleMs'>): Promise<CheckResult[]> {
+  const stale = cfg.heartbeatStaleMs ?? HEARTBEAT_STALE_MS;
+  const services = ['hq', ...(cfg.renderer ? ['renderer'] : [])] as ('hq' | 'renderer')[];
+  let list: Container[] | null = null;
+  if (cfg.docker) list = await deps.listContainers().catch(() => null);
+  const out: CheckResult[] = [];
+  for (const s of services) {
+    const base = { id: s, label: s === 'hq' ? 'HQ' : 'рендерер' };
+    const h = list ? containerHealth(list, s) : null;
+    if (h === 'healthy') { out.push({ ...base, ok: true, detail: 'контейнер healthy' }); continue; }
+    if (h === 'unhealthy') { out.push({ ...base, ok: false, detail: 'контейнер unhealthy' }); continue; }
+    if (h === 'stopped') { out.push({ ...base, ok: false, detail: 'контейнер остановлен' }); continue; }
+    if (h === 'starting') { out.push({ ...base, ok: true, detail: 'контейнер запускается' }); continue; }
+    // no Docker answer, no healthcheck or the container is not listed: the heartbeat file decides
+    if (!deps.fileMtime) { out.push({ ...base, ok: true, skipped: true, detail: 'нечем проверить' }); continue; }
+    try {
+      const at = await deps.fileMtime(join(cfg.dataDir, HEARTBEAT_FILES[s]));
+      if (at === null) out.push({ ...base, ok: false, detail: 'файла сигнала нет' });
+      else {
+        const age = deps.now() - at;
+        out.push({ ...base, ok: age <= stale, detail: age <= stale ? 'сигнал свежий' : `сигнала нет ${Math.round(age / 60_000)} мин` });
+      }
+    } catch (e) {
+      out.push({ ...base, ok: false, detail: errText(e) });
+    }
+  }
+  return out;
+}
+
 /** Silence of the client bot longer than this, with no polling error, makes it `degraded`. */
 export const BOT_SILENCE_MS = 10 * 60_000;
 
@@ -202,7 +259,7 @@ export async function checkBot(deps: CheckDeps, cfg: Pick<MonitorConfig, 'timeou
   const base = { id: 'bot', label: 'Telegram-бот' };
   const started = probe.startedAt();
   const err = probe.pollingError();
-  if (started === null && !err) return [{ ...base, ok: true, detail: 'ещё не запущен' }];
+  if (started === null && !err) return [{ ...base, ok: true, skipped: true, detail: 'ещё не запущен' }];
   if (err) return [{ ...base, ok: false, detail: `поллинг остановлен: ${err.slice(0, 100)}` }];
   try {
     await withTimeout(probe.getMe(), cfg.timeoutMs);
@@ -233,6 +290,7 @@ export function buildChecks(cfg: MonitorConfig, deps: CheckDeps, bot?: BotProbe)
   checks.push({ id: 'omniroute', run: () => checkOmniroute(deps, cfg) });
   checks.push({ id: 'disk', run: () => checkDisk(deps, cfg) });
   if (cfg.docker) checks.push({ id: 'docker', run: () => checkDocker(deps) });
+  checks.push({ id: 'services', run: async () => (await checkServices(deps, cfg))[0]!, runMany: () => checkServices(deps, cfg) });
   if (bot) checks.push({ id: 'bot', run: async () => (await checkBot(deps, cfg, bot))[0]!, runMany: () => checkBot(deps, cfg, bot) });
   return checks;
 }
@@ -287,5 +345,12 @@ export function realDeps(cfg: Pick<MonitorConfig, 'dockerSocket' | 'timeoutMs'>)
       return { blocks: Number(s.blocks), bavail: Number(s.bavail) };
     },
     listContainers: () => listContainers(cfg.dockerSocket, cfg.timeoutMs),
+    fileMtime: async (p) => {
+      try {
+        return (await stat(p)).mtimeMs;
+      } catch {
+        return null;
+      }
+    },
   };
 }

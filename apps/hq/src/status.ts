@@ -6,7 +6,7 @@ import { DAY_MS, MonitorStore, type CheckState, type Incident } from '@fir/worke
  * percentages leave the process: never a check id (they carry URLs), a detail, a port or an error body.
  */
 /** Studio services only: Polly and Dono are the owner's personal agents, not studio services, and are not shown. */
-export const SERVICE_IDS = ['site', 'hq', 'bot', 'omniroute'] as const;
+export const SERVICE_IDS = ['site', 'hq', 'bot', 'omniroute', 'renderer'] as const;
 export type ServiceId = (typeof SERVICE_IDS)[number];
 export type ServiceState = 'up' | 'degraded' | 'down' | 'unknown';
 
@@ -18,13 +18,13 @@ export interface PublicStatus {
   uptime30d: Partial<Record<ServiceId, number>>;
 }
 
-const TITLES: Record<ServiceId, string> = { site: 'Website', hq: 'Agents HQ', bot: 'Telegram bot', omniroute: 'AI gateway' };
+const TITLES: Record<ServiceId, string> = { site: 'Website', hq: 'Agents HQ', bot: 'Telegram bot', omniroute: 'AI gateway', renderer: 'Video renderer' };
 /** The public site's host: the monitoring checks of this host are «the site». */
 const SITE_HOST = /(^|\.)firtech\.pro$/i;
 /** Checks older than this and HQ is serving a page: the monitoring cycle (5 min) has stalled. */
 const STALE_MS = 30 * 60_000;
 
-type Kind = 'http' | 'tls' | 'omniroute' | 'disk' | 'docker' | 'bot' | 'botsilence';
+type Kind = 'http' | 'tls' | 'omniroute' | 'disk' | 'docker' | 'bot' | 'botsilence' | 'hqsvc' | 'renderer';
 interface Mapped { service: ServiceId; kind: Kind }
 
 /** Which public service a monitoring check stands for (null: a check that is not part of the public picture). */
@@ -32,6 +32,9 @@ export function mapCheck(checkId: string): Mapped | null {
   if (checkId === 'omniroute') return { service: 'omniroute', kind: 'omniroute' };
   if (checkId === 'disk') return { service: 'hq', kind: 'disk' };
   if (checkId === 'docker') return { service: 'hq', kind: 'docker' };
+  // The compose healthchecks (or the heartbeat files) of the two long-running services.
+  if (checkId === 'hq') return { service: 'hq', kind: 'hqsvc' };
+  if (checkId === 'renderer') return { service: 'renderer', kind: 'renderer' };
   // The client bot (@firtech_bot): `bot` is getMe and polling, `bot:silence` is a hung poll with no error (soft, degraded only).
   if (checkId === 'bot') return { service: 'bot', kind: 'bot' };
   if (checkId === 'bot:silence') return { service: 'bot', kind: 'botsilence' };
@@ -54,14 +57,15 @@ export function mapCheck(checkId: string): Mapped | null {
 }
 
 /** When a check fails: a dead health endpoint is `down`, a soon-expiring certificate or a full disk is `degraded`. */
-const DOWN_AS: Record<Kind, ServiceState> = { http: 'down', omniroute: 'down', tls: 'degraded', disk: 'degraded', docker: 'degraded', bot: 'down', botsilence: 'degraded' };
+const DOWN_AS: Record<Kind, ServiceState> = { http: 'down', omniroute: 'down', tls: 'degraded', disk: 'degraded', docker: 'degraded', bot: 'down', botsilence: 'degraded', hqsvc: 'down', renderer: 'degraded' };
 const NOTE: Record<Kind, string> = {
   http: 'The health check is failing', omniroute: 'The health check is failing', tls: 'The certificate expires soon', disk: 'Disk space is running low', docker: 'A container is unhealthy',
   bot: 'The bot is not receiving updates', botsilence: 'The bot has been silent for a while',
+  hqsvc: 'The service is not responding', renderer: 'Video rendering is not running',
 };
 const INCIDENT: Record<Kind, string> = {
   http: 'health check failed', omniroute: 'health check failed', tls: 'certificate problem', disk: 'low disk space', docker: 'container problem',
-  bot: 'bot not responding', botsilence: 'bot silent',
+  bot: 'bot not responding', botsilence: 'bot silent', hqsvc: 'service not responding', renderer: 'renderer not running',
 };
 const RANK: Record<ServiceState, number> = { up: 0, unknown: 0, degraded: 1, down: 2 };
 const iso = (ms: number): string => new Date(ms).toISOString();
@@ -79,6 +83,8 @@ export function aggregate(inp: StatusInput, now: number): PublicStatus {
   const uptime: PublicStatus['uptime30d'] = {};
   for (const id of SERVICE_IDS) {
     const mine = inp.states.map((s) => ({ s, m: mapCheck(s.checkId) })).filter((x): x is { s: CheckState & { checkId: string }; m: Mapped } => x.m?.service === id);
+    // the renderer appears only when it is expected (it has a check): an install without reels shows four services as before
+    if (id === 'renderer' && !mine.length) continue;
     let state: ServiceState = 'unknown';
     let since: number | undefined;
     let note: string | undefined;

@@ -11,7 +11,7 @@ import { seedOrg } from './org.js';
 import { PRODUCTION, PRODUCTION_HEAD_ID, ProductionHead, seedProduction } from './heads/production.js';
 import { BACKOFFICE, BACKOFFICE_HEAD_ID, BackofficeHead, seedBackoffice } from './heads/backoffice.js';
 import { SUPPORT, SUPPORT_COMMANDS, SUPPORT_HEAD_ID, SupportHead, seedSupport } from './heads/support.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BillingWorker } from '@fir/worker-billing';
 import { CustomerSupportWorker } from '@fir/worker-customer-support';
@@ -270,6 +270,18 @@ const heartbeats = new HeartbeatWorker(hq, async (agent) => {
   if (agent.id === BACKOFFICE_HEAD_ID) await backoffice.onHeartbeat();
 });
 heartbeats.start();
+// Heartbeat file for the monitoring (without Docker access) and for a look from outside: touched every 30 s while the process is alive.
+const hqBeat = join(cfg.dataDir, 'hq.heartbeat');
+const beat = () => {
+  try {
+    writeFileSync(hqBeat, String(Date.now()));
+  } catch (e) {
+    log('warn', 'heartbeat file not written', { err: errMsg(e) });
+  }
+};
+beat();
+const beatTimer = setInterval(beat, 30_000);
+beatTimer.unref();
 const routineJobs = startRoutines(hq);
 const bridge = new BuilderBridge({
   hq, pollMinutes: cfg.builderPollMinutes,
@@ -336,6 +348,7 @@ const stop = () => {
   webhook?.close();
   pricesRefresh.stop();
   clearInterval(presenceTimer);
+  clearInterval(beatTimer);
   heartbeats.stop();
   bridge.stop();
   director.stop();

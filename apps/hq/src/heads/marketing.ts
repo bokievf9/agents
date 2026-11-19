@@ -498,7 +498,7 @@ export class MarketingHead implements ApprovalEditor {
     };
   }
 
-  private async review(task: Task, result: string): Promise<{ ok: boolean; issues: string[] }> {
+  private async review(task: Task, result: string): Promise<{ ok: boolean; issues: string[]; skipped?: boolean }> {
     const res = await tryJson(
       this.llmFor(HEAD_ID, task.id),
       {
@@ -508,7 +508,11 @@ export class MarketingHead implements ApprovalEditor {
       },
       reviewSchema,
     );
-    return res ?? { ok: true, issues: [] }; // LLM off or garbage: the owner's approval is the safety net
+    if (res) return res;
+    // LLM off or garbage: the check did NOT run. It is logged as skipped (never as passed); the owner's approval is the safety net.
+    this.hq.comment(task.id, HEAD_ID, 'Ревью по чек-листу пропущено: модель не дала разборчивого ответа.');
+    this.hq.log(HEAD_ID, 'review_skipped', 'task', String(task.id));
+    return { ok: true, issues: [], skipped: true };
   }
 
   private async runOnce(taskId: number, actor: string, staged: { kind: string; payload: Record<string, unknown>; summary: string }[], worker: Worker = this.worker): Promise<WorkerResult> {
@@ -540,7 +544,7 @@ export class MarketingHead implements ApprovalEditor {
       this.hq.setStatus(taskId, 'review', HEAD_ID, 'повторная проверка');
       verdict = await this.review(this.hq.task(taskId)!, res.result);
     }
-    const warn = verdict.ok ? '' : `\nРевью отдела после доработки: ${verdict.issues.join('; ')}.`;
+    const warn = verdict.skipped ? '\nРевью по чек-листу пропущено (модель не ответила): проверьте текст сами.' : verdict.ok ? '' : `\nРевью отдела после доработки: ${verdict.issues.join('; ')}.`;
     this.hq.complete(taskId, actor, res.result, staged.length > 0 ? 'review' : 'done');
     for (const s of staged) await this.hq.requestApproval(taskId, actor, s.kind, s.payload, s.summary + warn);
     const t = this.hq.task(taskId)!;

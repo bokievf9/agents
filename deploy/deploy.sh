@@ -16,5 +16,6 @@ printf '%s' "$ghcr_token" | docker login ghcr.io -u "$ghcr_user" --password-stdi
 docker network inspect fir-llm >/dev/null 2>&1 || docker network create fir-llm >/dev/null
 docker compose pull
 docker compose up -d --remove-orphans
-docker image prune -f --filter label=app=hq >/dev/null
+# every image of ours (hq, renderer with Chromium and Piper, polly) leaves dangling layers with each push
+for app in hq renderer polly; do docker image prune -f --filter "label=app=$app" >/dev/null; done
 docker compose ps

@@ -13,5 +13,6 @@ export function loadMonitorConfig(env: NodeJS.ProcessEnv, dataDir: string): Moni
     diskMaxPct: 85,
     certMinDays: 14,
     timeoutMs: 10_000,
+    renderer: (env.REELS_RENDER ?? 'on').toLowerCase() !== 'off',
   };
 }

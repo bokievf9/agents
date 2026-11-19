@@ -1,5 +1,6 @@
 import { openDb } from '@fir/core';
 import { RenderQueue } from '@fir/worker-content-maker';
+import { utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BundleCache, renderReel } from './job.js';
 import { runLoop } from './loop.js';
@@ -27,6 +28,19 @@ if (stale) log('warn', 'recovered jobs left running', { n: stale });
 const bundle = new BundleCache((m) => log('info', m));
 const tts = noTts ? null : ttsEnvFrom();
 log('info', 'renderer started', { pollSeconds: pollMs / 1000, voice: tts?.voice ?? 'off', concurrency });
+
+// Heartbeat for the Docker healthcheck and the HQ monitoring: touched every 30 s, also during a long render.
+const beatFile = join(dataDir, 'renderer.heartbeat');
+const beat = () => {
+  try {
+    const now = new Date();
+    try { utimesSync(beatFile, now, now); } catch { writeFileSync(beatFile, String(now.getTime())); }
+  } catch (e) {
+    log('warn', 'heartbeat file not written', { err: e instanceof Error ? e.message : String(e) });
+  }
+};
+beat();
+setInterval(beat, 30_000).unref();
 
 const ac = new AbortController();
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => ac.abort());

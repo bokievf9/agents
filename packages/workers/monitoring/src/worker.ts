@@ -1,4 +1,4 @@
-import type { Db } from '@fir/core';
+import { log, type Db } from '@fir/core';
 import type { SubtaskSpec, Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { buildChecks, DAY_MS, realDeps, type BotProbe, type CheckDeps, type CheckResult, type MonitorConfig } from './checks.js';
 import { MonitorStore, step } from './state.js';
@@ -72,6 +72,11 @@ export class MonitoringWorker implements Worker {
     const now = this.deps.now();
     const events: MonEvent[] = [];
     for (const r of results) {
+      if (r.skipped) {
+        // could not run: logged as skipped, never counted as a pass (no state change, no sample)
+        log('info', 'monitor check skipped', { check: r.id, why: r.detail });
+        continue;
+      }
       const s = step(store.state(r.id), r.ok, now);
       store.saveState(r.id, s.next);
       if (r.soft) continue; // colours the public status only: no uptime sample, incident or alert
@@ -102,8 +107,11 @@ export class MonitoringWorker implements Worker {
   async run(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
     if (task.meta.action === 'status') return { ok: true, result: this.dailyLine(ctx.db) };
     const { results, events } = await this.tick(ctx.db);
-    const bad = results.filter((r) => !r.ok);
-    const head = bad.length ? `Не в порядке: ${bad.map((r) => `${r.label} (${r.detail})`).join('; ')}` : `Все проверки в норме (${results.length}).`;
+    const skipped = results.filter((r) => r.skipped);
+    const bad = results.filter((r) => !r.ok && !r.skipped);
+    const passed = results.length - bad.length - skipped.length;
+    const tail = skipped.length ? `, пропущено: ${skipped.map((r) => r.label).join(', ')}` : '';
+    const head = bad.length ? `Не в порядке: ${bad.map((r) => `${r.label} (${r.detail})`).join('; ')}${tail}` : `Все проверки в норме (${passed})${tail}.`;
     return { ok: true, result: events.length ? `${head}\n${events.map((e) => e.text).join('\n')}` : head };
   }
 }

@@ -261,6 +261,17 @@ describe('/status aggregation from mon_* rows', () => {
     expect(bot([state('bot', 'down', 2), state('bot:silence', 'down', 2)]).state).toBe('down');
   });
 
+  it('the renderer is shown as a service only when it is monitored: up, down (degraded for the public)', () => {
+    const state = (checkId: string, status: 'ok' | 'down', fails: number) => ({ checkId, status, fails, failSince: status === 'down' ? NOW - 600_000 : 0 });
+    const ids = (states: ReturnType<typeof state>[]) => aggregate({ states, perCheck: [], incidents: [], lastSampleAt: NOW }, NOW).services;
+    expect(mapCheck('renderer')).toEqual({ service: 'renderer', kind: 'renderer' });
+    expect(mapCheck('hq')).toEqual({ service: 'hq', kind: 'hqsvc' });
+    expect(ids([]).map((s) => s.id)).toEqual(['site', 'hq', 'bot', 'omniroute']);
+    expect(ids([state('renderer', 'ok', 0)]).find((s) => s.id === 'renderer')).toMatchObject({ state: 'up', title: 'Video renderer' });
+    expect(ids([state('renderer', 'down', 2)]).find((s) => s.id === 'renderer')).toMatchObject({ state: 'degraded', note: 'Video rendering is not running' });
+    expect(ids([state('hq', 'down', 2)]).find((s) => s.id === 'hq')).toMatchObject({ state: 'down' });
+  });
+
   it('states, uptime and incidents', () => {
     const s = buildStatus(seed(), NOW);
     const by = Object.fromEntries(s.services.map((x) => [x.id, x]));

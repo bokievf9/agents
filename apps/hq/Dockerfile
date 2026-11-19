@@ -42,7 +42,7 @@ RUN pnpm --filter "hq..." build \
 FROM node:22-bookworm-slim
 LABEL app=hq
 ENV NODE_ENV=production HOME=/tmp KNOWLEDGE_DIR=/app/knowledge
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tini age tar \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /out/node_modules ./node_modules
