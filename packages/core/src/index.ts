@@ -2,6 +2,7 @@ export * from './approvals.js';
 export * from './bot.js';
 export * from './db.js';
 export * from './env.js';
+export * from './gateway-watch.js';
 export * from './llm.js';
 export * from './log.js';
 export * from './messenger.js';

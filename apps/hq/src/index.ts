@@ -1,6 +1,6 @@
 import { Api } from 'grammy';
 import {
-  ApprovalQueue, OutboxMessenger, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, schedule, setupBotMenu, startPolling, startPricesRefresh,
+  ApprovalQueue, GatewayWatch, OutboxMessenger, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, schedule, setupBotMenu, startPolling, startPricesRefresh,
 } from '@fir/core';
 import { HeartbeatWorker, Hq, meterLlm, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
@@ -67,7 +67,11 @@ hq.attachQueue(queue);
 // A decision cut off mid-execution by a restart is failed (never run twice); the owner decides again.
 const cutOff = queue.recoverInterrupted();
 if (cutOff.length) log('warn', 'approvals interrupted by a restart marked failed', { ids: cutOff });
-const llm = createLlm(cfg.llm);
+// The model gateway is watched through the company's own calls: down for a minute, the owner hears once; back, once more.
+const llm = new GatewayWatch(createLlm(cfg.llm), {
+  onDown: () => hq.alert('Шлюз моделей не отвечает больше минуты, задачи подождут (задачи с ошибкой модели можно повторить: /retry). Скажу, когда вернётся.'),
+  onUp: () => hq.alert('Шлюз моделей снова отвечает, работа идёт.'),
+});
 // The public client bot and the website chat are the biggest spend and had no meter: every call now lands in `costs` (agent
 // `client-bot`, department sales; a customer is waiting, so the money limit alerts but never silences it). The daily call cap
 // lives in HQ settings, so a deploy does not reset it.
