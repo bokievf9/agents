@@ -16,6 +16,7 @@
   "dependencies": {
     "@fir/core": "workspace:*",
     "@fir/worker-content-maker": "workspace:*",
+    "better-sqlite3": "^13.2.0",
     "@remotion/bundler": "4.0.534",
     "@remotion/cli": "4.0.534",
     "@remotion/renderer": "4.0.534",
