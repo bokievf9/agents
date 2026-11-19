@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tryJson, type LlmClient } from '@fir/core';
+import { tryJson, withPlaybook, type LlmClient } from '@fir/core';
 import { z } from 'zod';
 import { offerFor, priceLabel } from './offers.js';
 import type { Prospect } from './store.js';
@@ -58,7 +58,7 @@ export function replyFallback(): string {
 }
 
 async function ask(llm: LlmClient, system: string, input: unknown, ok: (t: string) => boolean): Promise<string | null> {
-  const res = await tryJson(llm, { tier: 'sonnet', system, messages: [{ role: 'user', content: JSON.stringify(input) }], maxTokens: 600 }, Reply);
+  const res = await tryJson(llm, { tier: 'sonnet', system: withPlaybook(system, 'sales'), messages: [{ role: 'user', content: JSON.stringify(input) }], maxTokens: 600 }, Reply);
   const text = res?.message.trim();
   return text && ok(text) ? text : null;
 }

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tryJson, type Db, type LlmClient } from '@fir/core';
+import { tryJson, withPlaybook, type Db, type LlmClient } from '@fir/core';
 import { DIRECTIONS, priceLine } from './directions.js';
 import { carouselSchema, clipSchema, postSchema, profileSchema, renderCarousel, renderClip, renderPost, renderProfile, renderStory, storySchema, titleOf, type ItemType } from './format.js';
 import { estimateSeconds, lintText } from './lint.js';
@@ -88,7 +88,7 @@ function userPrompt(p: Prompts, spec: GenSpec, fix?: { text: string; issues: str
 }
 
 async function once(llm: LlmClient, p: Prompts, spec: GenSpec, fix?: { text: string; issues: string[] }): Promise<Generated | null> {
-  const req = { tier: 'sonnet' as const, system: p.system, messages: [{ role: 'user' as const, content: userPrompt(p, spec, fix) }], maxTokens: 3000 };
+  const req = { tier: 'sonnet' as const, system: withPlaybook(p.system, 'content-maker'), messages: [{ role: 'user' as const, content: userPrompt(p, spec, fix) }], maxTokens: 3000 };
   const withCta = <T extends { cta: string }>(c: T): T => (/firtech\.pro/i.test(c.cta) ? c : { ...c, cta: `${c.cta.replace(/[.\s]+$/, '')}. Ссылка: firtech.pro` });
   if (spec.type === 'clip') {
     const parsed = await tryJson(llm, req, clipSchema);

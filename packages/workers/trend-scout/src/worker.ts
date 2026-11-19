@@ -1,4 +1,4 @@
-import { errMsg, log, tryJson, zonedParts } from '@fir/core';
+import { errMsg, log, tryJson, withPlaybook, zonedParts } from '@fir/core';
 import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { z } from 'zod';
 import { fetchGoogleTrends, fetchYoutube, type Candidate, type FetchFn } from './sources.js';
@@ -121,11 +121,13 @@ export class TrendScoutWorker implements Worker {
       ctx.llm,
       {
         tier: 'sonnet', maxTokens: 2500,
-        system:
+        system: withPlaybook(
           'Ты трендвотчер студии Fir Tech: ИИ-агенты и боты для малого бизнеса (Ташкент, Алматы, Душанбе, Бишкек), короткие видео на русском для Instagram, TikTok и Shorts. ' +
           'Из списка сигналов выбери до 5 самых полезных для хуков и форматов роликов студии. Сигнал годится, если его механику (формат подачи, тип хука, тема внимания) можно перенести на услуги студии. Новости, политика и спорт не годятся. ' +
           `Пиши по-русски, коротко, без эмодзи и без длинных тире. Хук пиши своими словами, не копируй заголовки и тексты авторов. Направления: ${DIRECTION_IDS.join(', ')} или null. ` +
           'Ответ: только JSON {"items":[{"n": номер сигнала, "hook":"текст хука", "format":"формат ролика", "why":"почему растёт", "direction":"id или null"}]}.',
+          'trend-scout',
+        ),
         messages: [{ role: 'user', content: list.map((c, i) => `${i + 1}. [${c.source} ${c.region}] ${c.title} (${c.metric})`).join('\n') }],
       },
       pickSchema,

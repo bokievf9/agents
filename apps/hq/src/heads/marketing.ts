@@ -4,7 +4,7 @@ import { errMsg, escapeHtml, log, tryJson, zonedParts, type ApprovalQueue, type 
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import {
   ARTICLE_KIND, KIND, ContentMakerWorker, TYPE_RU, approveArticle, articleLineOn, dayLabel, editableParts, isAiAsk, partLabel, replacePart,
-  findNiche, splitPlatforms, storeFor, titleOf, ymd, RenderQueue, parseReel, shortReason, type RenderJob,
+  findNiche, lintReelScript, splitPlatforms, storeFor, titleOf, ymd, RenderQueue, parseReel, shortReason, type RenderJob,
   type PartId,
 } from '@fir/worker-content-maker';
 import { AnalystWorker } from '@fir/worker-analyst';
@@ -599,6 +599,10 @@ export class MarketingHead implements ApprovalEditor {
   }
 
   private async review(task: Task, result: string): Promise<{ ok: boolean; issues: string[]; skipped?: boolean }> {
+    // The hard rules of the Content maker's checklist (hook, one call to action, no AI tells, prices from the list) are checked in code first:
+    // a script that fails them goes back for the one rework without asking the model.
+    const hard = lintReelScript(result);
+    if (hard.length > 0) return { ok: false, issues: hard };
     const res = await tryJson(
       this.llmFor(HEAD_ID, task.id),
       {
