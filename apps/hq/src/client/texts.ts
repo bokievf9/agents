@@ -27,7 +27,7 @@ export const productOf = (need: Need | undefined): string => (need && isCatalogu
 
 interface Texts {
   welcome(name: string): string;
-  menu: { discuss: string; products: string; client: string; human: string; lang: string };
+  menu: { discuss: string; products: string; client: string; human: string; lang: string; demo: string };
   productsTitle: string;
   productsIntro: string;
   card: { forWhom: string; inside: string; pairs: string; demo: string; discuss: string; back: string };
@@ -77,7 +77,7 @@ const RU: Texts = {
   welcome: (name) =>
     `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Строим бота-администратора для записи, ИИ-приёмщика заявок, автоматизацию, Mini Apps, личных агентов и внедряем ИИ в компании.\n\n` +
     'Наши собственные боты работают каждый день: Dono ведёт учёбу студента, Polly учит языкам. Этот чат тоже наша работа: так выглядит ИИ-приёмщик заявок.\n\nЧем помочь?',
-  menu: { discuss: '💬 Обсудить проект', products: '🧩 Продукты', client: '🧾 Я уже клиент', human: '👤 Позвать человека', lang: '🇬🇧 English' },
+  menu: { discuss: '💬 Обсудить проект', products: '🧩 Продукты', client: '🧾 Я уже клиент', human: '👤 Позвать человека', lang: '🇬🇧 English', demo: '🧪 Попробовать демо' },
   productsTitle: '<b>Продукты Fir Tech</b>',
   productsIntro: 'Выберите, что интересно: расскажу, для кого это и что внутри.',
   card: { forWhom: 'Для кого', inside: 'Что внутри', pairs: 'Обычно берут вместе с', demo: 'Посмотреть', discuss: '💬 Обсудить', back: '← Все продукты' },
@@ -108,7 +108,7 @@ const RU: Texts = {
   slow: 'Сообщений много, я передал разговор команде. Человек ответит здесь.',
   slotPicked: (slot) => `<b>Записал звонок</b>\n${esc(slot)}. Подтвердим время здесь, в этом чате.`,
   help:
-    '<b>Что умеет этот бот</b>\n/start: начало и меню\n/human: позвать человека\n/lang: English\n\nМожно просто написать вопрос: отвечу сразу или передам команде.',
+    '<b>Что умеет этот бот</b>\n/start: начало и меню\n/demo: демо бота-администратора для салона\n/audit &lt;сайт&gt;: бесплатный аудит за 24 часа\n/human: позвать человека\n/lang: English\n\nМожно просто написать вопрос: отвечу сразу или передам команде.',
   stale: 'Уже неактуально',
   priceNote: 'Стоимость и сроки назовём после короткого разговора с командой.',
   langSwitched: 'Русский',
@@ -118,7 +118,7 @@ const EN: Texts = {
   welcome: (name) =>
     `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. We build a booking assistant bot, an AI request handler, automation, Mini Apps and personal agents, and bring AI into companies.\n\n` +
     'Our own bots work every day: Dono runs a student’s studies, Polly teaches languages. This chat is our work too: this is what an AI request handler looks like.\n\nHow can we help?',
-  menu: { discuss: '💬 Discuss a project', products: '🧩 Products', client: '🧾 I am a client', human: '👤 Talk to a person', lang: '🇷🇺 Русский' },
+  menu: { discuss: '💬 Discuss a project', products: '🧩 Products', client: '🧾 I am a client', human: '👤 Talk to a person', lang: '🇷🇺 Русский', demo: '🧪 Try the demo' },
   productsTitle: '<b>Fir Tech products</b>',
   productsIntro: 'Pick what interests you: I will tell you who it is for and what is inside.',
   card: { forWhom: 'Who it is for', inside: 'What is inside', pairs: 'Usually taken together with', demo: 'See it', discuss: '💬 Discuss', back: '← All products' },
@@ -149,7 +149,7 @@ const EN: Texts = {
   slow: 'That is a lot of messages, so I passed the conversation to the team. A person will answer here.',
   slotPicked: (slot) => `<b>Call noted</b>\n${esc(slot)}. We will confirm the time here, in this chat.`,
   help:
-    '<b>What this bot does</b>\n/start: start and menu\n/human: talk to a person\n/lang: Русский\n\nYou can also just type a question: I answer right away or pass it to the team.',
+    '<b>What this bot does</b>\n/start: start and menu\n/demo: demo of the booking bot for a salon\n/audit &lt;site&gt;: free audit within 24 hours\n/human: talk to a person\n/lang: Русский\n\nYou can also just type a question: I answer right away or pass it to the team.',
   stale: 'No longer relevant',
   priceNote: 'We will name the price and timing after a short talk with the team.',
   langSwitched: 'English',
@@ -162,6 +162,7 @@ export const menuButtons = (lang: Lang): Button[][] => {
   return [
     [{ text: m.discuss, data: 'm:discuss' }, { text: m.products, data: 'm:products' }],
     [{ text: m.client, data: 'm:client' }, { text: m.human, data: 'm:human' }],
+    [{ text: m.demo, data: 'm:demo' }],
     [{ text: m.lang, data: 'm:lang' }],
   ];
 };
@@ -216,12 +217,16 @@ export const budgetButtons = (lang: Lang): Button[][] => {
 export const COMMANDS: Record<Lang, { command: string; description: string }[]> = {
   ru: [
     { command: 'start', description: 'Начало и меню' },
+    { command: 'demo', description: 'Демо: бот-администратор для салона' },
+    { command: 'audit', description: 'Бесплатный аудит сайта за 24 часа' },
     { command: 'human', description: 'Позвать человека' },
     { command: 'lang', description: 'English' },
     { command: 'help', description: 'Что умеет бот' },
   ],
   en: [
     { command: 'start', description: 'Start and menu' },
+    { command: 'demo', description: 'Demo: booking bot for a salon' },
+    { command: 'audit', description: 'Free site audit within 24 hours' },
     { command: 'human', description: 'Talk to a person' },
     { command: 'lang', description: 'Русский' },
     { command: 'help', description: 'What this bot does' },
@@ -246,5 +251,23 @@ export const PROFILE: Record<Lang, { short: string; description: string }> = {
     short: 'Fir Tech: websites, Telegram bots, apps and automation. Tell us about your task, we answer within one working day.',
     description:
       'Discuss a project with Fir Tech: a website, a Telegram bot, an app or automation. Three short questions, and the team comes back with a proposal within one working day.\n\nThis bot is our work too: this is what an AI request handler for your business looks like.',
+  },
+};
+
+/** Texts of the demo entry and the free audit command (the demo itself lives in `demo.ts`). */
+export const X: Record<Lang, { auditUsage: string; auditOk: string; auditDup: string; auditBusy: string; auditOff: string }> = {
+  ru: {
+    auditUsage: 'Пришлите адрес сайта после команды, например: /audit example.com. Я разберу его и вернусь с пятью находками в течение 24 часов.',
+    auditOk: '<b>Принял</b>\nРазберём сайт и пришлём пять находок и что исправить, в течение 24 часов. Ответ придёт сюда.',
+    auditDup: 'Аудит для вас уже в работе, повторно не нужен: результат придёт в течение 24 часов.',
+    auditBusy: 'Сегодня очень много заявок на аудит. Попробуйте чуть позже или напишите команде через /human.',
+    auditOff: 'Аудит сейчас недоступен. Напишите нам через /human, сделаем вручную.',
+  },
+  en: {
+    auditUsage: 'Send a site address after the command, for example: /audit example.com. We will review it and come back with five findings within 24 hours.',
+    auditOk: '<b>Got it</b>\nWe will review the site and send five findings and what to fix within 24 hours. The answer will arrive here.',
+    auditDup: 'Your audit is already in progress, no need to ask again: the result arrives within 24 hours.',
+    auditBusy: 'A lot of audit requests today. Please try again a bit later or write to the team with /human.',
+    auditOff: 'The audit is unavailable right now. Write to us with /human and we will do it by hand.',
   },
 };

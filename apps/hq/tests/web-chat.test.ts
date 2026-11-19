@@ -103,6 +103,20 @@ describe('greeting and language', () => {
   });
 });
 
+describe('demo in the web chat', () => {
+  it('«demo» or mode: demo answers with the script and the deep link, no LLM, no sandbox, no lead', async () => {
+    const w = world();
+    for (const r of [await w.say('demo'), await w.say('Demo', { sessionId: 'visitor-0002-abcd', locale: 'en' }), await w.say('x', { sessionId: 'visitor-0003-abcd', mode: 'demo' })]) {
+      expect(r).toMatchObject({ ok: true, state: 'chat' });
+      expect(r.reply).toContain('https://t.me/firtech_bot?start=demo_salon');
+    }
+    expect((await w.say('demo', { sessionId: 'visitor-0004-abcd' })).reply).toContain('Салона Лайм');
+    expect((await w.say('demo', { sessionId: 'visitor-0005-abcd', locale: 'en' })).reply).toContain('Lime Salon');
+    expect(w.llmCalls()).toBe(0);
+    expect(w.leadTasks()).toHaveLength(0);
+  });
+});
+
 describe('intake to a web lead', () => {
   it('buttons and free text, the contact step, then done: exactly one Sales lead with source web, the contact and the page', async () => {
     const w = world();

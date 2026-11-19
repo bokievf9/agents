@@ -74,6 +74,18 @@ export class MonitorStore {
     return r ? { status: r.status, fails: r.fails, failSince: r.fail_since } : undefined;
   }
 
+  /** Every check's current state (the public status page reads this). */
+  allStates(): (CheckState & { checkId: string })[] {
+    return (this.db.prepare('SELECT check_id, status, fails, fail_since FROM mon_state ORDER BY check_id').all() as { check_id: string; status: 'ok' | 'down'; fails: number; fail_since: number }[]).map(
+      (r) => ({ checkId: r.check_id, status: r.status, fails: r.fails, failSince: r.fail_since }),
+    );
+  }
+
+  /** Time of the newest sample (ms), null when the worker never ran. */
+  lastSampleAt(): number | null {
+    return (this.db.prepare('SELECT MAX(at) AS t FROM mon_samples').get() as { t: number | null }).t;
+  }
+
   saveState(checkId: string, s: CheckState): void {
     this.db
       .prepare(

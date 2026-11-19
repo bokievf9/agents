@@ -136,7 +136,7 @@ describe('welcome and language', () => {
     expect(welcome.html).not.toContain('!');
     expect(welcome.html.length).toBeLessThan(700);
     expect(welcome.html).toContain('Строим бота-администратора для записи, ИИ-приёмщика заявок, автоматизацию, Mini Apps, личных агентов и внедряем ИИ в компании');
-    expect(buttonTexts(welcome.buttons)).toEqual(['💬 Обсудить проект', '🧩 Продукты', '🧾 Я уже клиент', '👤 Позвать человека', '🇬🇧 English']);
+    expect(buttonTexts(welcome.buttons)).toEqual(['💬 Обсудить проект', '🧩 Продукты', '🧾 Я уже клиент', '👤 Позвать человека', '🧪 Попробовать демо', '🇬🇧 English']);
     for (const t of buttonTexts(welcome.buttons)) expect((t.match(/\p{Extended_Pictographic}/gu) ?? []).length).toBeLessThanOrEqual(1);
 
     await w.engine.onButton(ME, 'm:lang', welcome.id);

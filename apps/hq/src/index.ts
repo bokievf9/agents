@@ -21,6 +21,8 @@ import { MonitoringWorker } from '@fir/worker-monitoring';
 import { Reporter, type TopicSender } from './reporter.js';
 import { TopicManager } from './topics.js';
 import { createWebhook } from './webhook.js';
+import { AuditGate, AuditStore, submitAudit } from './audit-shared.js';
+import { cachedStatus } from './status.js';
 import { createAdmin } from './admin.js';
 import { OwnerChannel } from './presence.js';
 import { cachedOffice } from './office.js';
@@ -94,6 +96,7 @@ const clientBot = cfg.clientBotToken
 const marketing = new MarketingHead({
   hq, llm, queue, messenger, ownerId: cfg.ownerId, reporter, clipsPerWeek: cfg.clipsPerWeek, carouselsPerWeek: cfg.carouselsPerWeek,
   postsPerWeek: cfg.postsPerWeek, storiesPerWeek: cfg.storiesPerWeek, rendersDir: cfg.rendersDir,
+  ...(clientBot ? { audit: clientBot.engine } : {}),
   integrations: {
     youtubeApiKey: cfg.youtubeApiKey, youtubeChannelId: cfg.youtubeChannelId, trendsRegions: cfg.trendsRegions,
     gscServiceAccountJson: cfg.gscServiceAccountJson, gscSiteUrl: cfg.gscSiteUrl, siteUrl: cfg.siteUrl,
@@ -114,7 +117,8 @@ const sales = new SalesHead({
   referralReward: cfg.referralReward, prepaymentPercent: cfg.prepaymentPercent, kpValidDays: cfg.kpValidDays,
   ...(clientBot ? { client: clientBot } : {}),
 });
-clientBot?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix }));
+const auditGate = new AuditGate(hq.now);
+clientBot?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix, audit: { marketing, gate: auditGate } }));
 director.onSalesReply = (id, text) => sales.startReply(id, text);
 director.onSalesCommand = (name, arg) => sales.salesCommand(name, arg);
 director.editors.set('sales:reply', sales); // the owner's text after /reply <id>
@@ -291,6 +295,17 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken
       cfg.officeToken ? { token: cfg.officeToken, get: cachedOffice(hq) } : undefined,
       webChat && cfg.webChatToken ? { token: cfg.webChatToken, handle: (r, ip) => webChat.handle(r, ip) } : undefined,
       admin && cfg.adminToken ? { token: cfg.adminToken, handle: (r) => admin.handle(r) } : undefined,
+      {
+        ...(cfg.leadWebhookToken
+          ? {
+              audit: {
+                token: cfg.leadWebhookToken,
+                handle: (a) => Promise.resolve(submitAudit({ store: new AuditStore(db, hq.now), gate: auditGate, create: (x) => marketing.requestAudit(x) }, a)),
+              },
+            }
+          : {}),
+        status: { get: cachedStatus(db) },
+      },
     ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort, lead: Boolean(cfg.leadWebhookToken), chat: Boolean(webChat), admin: Boolean(admin) }))
   : null;
 if (!webhook) log('warn', 'LEAD_WEBHOOK_TOKEN and WEB_CHAT_TOKEN are not set, POST /lead and POST /chat are disabled');

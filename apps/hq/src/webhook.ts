@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { z } from 'zod';
 import { errMsg, log } from '@fir/core';
 import type { AdminReply, AdminRequest } from './admin.js';
+import { auditInputSchema, type AuditInput, type AuditOutcome } from './audit-shared.js';
 import { chatSchema, type ChatOutcome, type ChatRequest } from './client/web.js';
 
 /** Same fields as the firtech.pro form (`../firtech/src/lib/lead.ts` leadSchema); `estimate` is the builder's leadSummary. */
@@ -65,8 +66,15 @@ export function createWebhook(
   chat?: { token: string; handle: (req: ChatRequest, ip: string) => Promise<ChatOutcome> },
   /** `/admin/*` (header `x-admin-token`), the owner's website workplace (`admin.ts`); without it the routes answer 404. */
   admin?: { token: string; handle: (req: AdminRequest) => Promise<AdminReply> },
+  /**
+   * `POST /audit` (header `x-lead-token`, the same token as `/lead`) and the public `GET /status` (no token, per-IP rate limit).
+   * Without `audit` the route answers 404; without `status` too.
+   */
+  extra: { audit?: { token: string; handle: (a: AuditInput) => Promise<AuditOutcome> }; status?: { get: () => unknown } } = {},
 ): Server {
   const hits: number[] = [];
+  const auditHits: number[] = [];
+  const statusHits = new Map<string, number[]>();
   return createServer((req, res) => {
     void (async () => {
       try {
@@ -87,6 +95,39 @@ export function createWebhook(
           return json(res, out.status, out.body);
         }
         if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ok: true });
+        if (req.method === 'GET' && req.url?.split('?')[0] === '/status' && extra.status) {
+          const fwd = req.headers['x-forwarded-for'];
+          const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+          const t = now();
+          const mine = (statusHits.get(ip) ?? []).filter((x) => x > t - 60_000);
+          if (mine.length >= 30) return json(res, 429, { ok: false, error: 'rate_limited' });
+          mine.push(t);
+          statusHits.set(ip, mine);
+          if (statusHits.size > 5000) for (const [k, v] of statusHits) if (!v.some((x) => x > t - 60_000)) statusHits.delete(k);
+          res.setHeader('cache-control', 'public, max-age=60');
+          return json(res, 200, extra.status.get());
+        }
+        if (req.method === 'POST' && req.url === '/audit' && extra.audit) {
+          if (!tokenOk(req.headers['x-lead-token'] as string | undefined, extra.audit.token)) return json(res, 401, { ok: false, error: 'unauthorized' });
+          const t = now();
+          while (auditHits.length && auditHits[0]! < t - 60_000) auditHits.shift();
+          if (auditHits.length >= 60) return json(res, 429, { ok: false, error: 'rate_limited' });
+          auditHits.push(t);
+          const raw = await readBody(req);
+          if (raw === null) return json(res, 413, { ok: false, error: 'too_large' });
+          let data: unknown = null;
+          try {
+            data = JSON.parse(raw);
+          } catch {
+            /* falls through to invalid */
+          }
+          const parsed = auditInputSchema.safeParse(data);
+          if (!parsed.success) return json(res, 400, { ok: false, error: 'invalid' });
+          const out = await extra.audit.handle(parsed.data);
+          if (out === 'rate_limited') return json(res, 429, { ok: false, error: 'rate_limited' });
+          if (out === 'invalid') return json(res, 400, { ok: false, error: 'invalid' });
+          return json(res, 200, out === 'duplicate' ? { ok: true, duplicate: true } : { ok: true });
+        }
         if (req.method === 'GET' && req.url === '/office' && office) {
           if (!tokenOk(req.headers['x-office-token'] as string | undefined, office.token)) return json(res, 401, { ok: false, error: 'unauthorized' });
           return json(res, 200, office.get());

@@ -2,6 +2,7 @@ import { errMsg, log, migrate } from '@fir/core';
 import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { checkLlms, checkPage, checkServices, pageFacts, type Finding, type PageFacts } from './checks.js';
 import { fetchGsc, gscText } from './gsc.js';
+import { AUDIT_KIND, auditText, collectFacts, composeFindings, defaultNet, hostOfUrl, type AuditLocale, type AuditPayload } from './audit.js';
 
 export type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -26,6 +27,8 @@ export interface SeoOptions {
   /** Search Console property: `sc-domain:firtech.pro` or `https://firtech.pro/`. */
   gscSiteUrl?: string | undefined;
   fetch?: FetchFn;
+  /** Resolver of the public-address guard for `audit` (tests); with an injected `fetch` and no resolver the guard is off. */
+  auditLookup?: (host: string) => Promise<string[]>;
 }
 
 export type SeoProposalPayload = { key: string; page: string; title: string; change: string; needsBuilder: boolean };
@@ -82,6 +85,7 @@ export class SeoWorker implements Worker {
   }
 
   async run(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
+    if (task.meta.action === 'audit') return this.audit(task, ctx);
     if (task.meta.action !== 'seo') return { ok: false, result: '', error: `Неизвестное действие: ${String(task.meta.action)}` };
     try {
       return await this.check(ctx);
@@ -89,6 +93,29 @@ export class SeoWorker implements Worker {
       log('error', 'seo check failed', { err: errMsg(e) });
       return { ok: false, result: '', error: errMsg(e) };
     }
+  }
+
+  /**
+   * Action `audit`: the free 24-hour audit of a visitor's page. Page facts (title, description, h1, canonical, OG, speed,
+   * viewport, Telegram/WhatsApp button, form, Instagram link) go to the LLM as booleans, never as HTML; the result is five
+   * findings with one fix each and a closing line, proposed as approval kind `audit` (level 0). An unreachable site still
+   * gets findings about that fact.
+   */
+  private async audit(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
+    const url = typeof task.meta.url === 'string' ? task.meta.url : '';
+    const auditId = Number(task.meta.auditId);
+    const locale: AuditLocale = task.meta.locale === 'en' ? 'en' : 'ru';
+    if (!url || !Number.isInteger(auditId)) return { ok: false, result: '', error: 'audit: no url or audit id' };
+    const host = hostOfUrl(url);
+    // response time is real wall-clock time, not the (possibly frozen) company clock
+    const facts = await collectFacts(url, { ...defaultNet(this.opts.fetch, this.opts.auditLookup), now: Date.now });
+    const found = await composeFindings(ctx.llm, facts, locale);
+    const text = auditText(host, found, locale);
+    const payload: AuditPayload = { auditId, host, locale, text };
+    const contact = typeof task.meta.contact === 'string' ? task.meta.contact : '';
+    await ctx.requestApproval(AUDIT_KIND, payload as unknown as Record<string, unknown>, `Аудит ${host}${contact ? ` для ${contact}` : ''} (${locale}):\n\n${text}`);
+    ctx.log('audit_composed', `${host}, reachable ${facts.reachable}`);
+    return { ok: true, result: `Аудит ${host}: ${facts.reachable ? 'сайт открылся' : `сайт не открылся (${facts.reason ?? '?'})`}, пять находок на одобрение.` };
   }
 
   private async check(ctx: WorkerCtx): Promise<WorkerResult> {

@@ -15,6 +15,8 @@ export const chatSchema = z.object({
   locale: z.enum(['ru', 'en']),
   message: z.string().trim().min(1).max(1000),
   page: z.string().max(200).optional(),
+  /** `demo`: a scripted description of the salon demo with the Telegram deep link (no sandbox on the website). */
+  mode: z.enum(['demo']).optional(),
 });
 export type ChatRequest = z.output<typeof chatSchema>;
 
@@ -125,6 +127,7 @@ export class WebChatEngine {
     s = this.store.get(s.id)!;
 
     const text = req.message.trim();
+    if (req.mode === 'demo' || /^demo$/i.test(text)) return { ok: true, reply: W[lang].demo, buttons: menuButtons(lang), state: 'chat' };
     const start = /^\/start\b/i.test(text);
     if (start || (fresh && GREETING.test(text))) return this.greet(s, lang);
     let step: Step;

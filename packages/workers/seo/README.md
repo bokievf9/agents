@@ -25,3 +25,8 @@ search.google.com/search-console, «Настройки», «Пользовате
 «Ограниченный». `GSC_SITE_URL` как в списке ресурсов: `sc-domain:firtech.pro` или `https://firtech.pro/`.
 
 Тесты: `pnpm --filter @fir/worker-seo test` (HTML-фикстуры, fetch подменён).
+
+## Действие `audit` (бесплатный аудит по запросу посетителя)
+Задача с `meta.action: audit` (`url`, `auditId`, `locale`, `contact`): `collectFacts` забирает страницу (только публичные адреса, редиректы
+проверяются на каждом шаге, 8 с, 1 МБ), `composeFindings` просит LLM ровно 5 находок и закрывающую строку (строгий JSON, очистка от HTML и
+ссылок, без цен, иначе шаблон `fallbackFindings`), результат идёт в одобрение `audit`. Недоступный сайт тоже даёт находки. Тесты: `tests/audit.test.ts`.

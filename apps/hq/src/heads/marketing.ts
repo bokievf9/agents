@@ -7,9 +7,11 @@ import {
 } from '@fir/worker-content-maker';
 import { AnalystWorker } from '@fir/worker-analyst';
 import { PublisherWorker, dayHeader, filesOf, publishedButtons, renderItemMessage, publishDay } from '@fir/worker-publisher';
-import { KIND as SEO_KIND, SeoWorker, type SeoProposalPayload } from '@fir/worker-seo';
+import { AUDIT_KIND, KIND as SEO_KIND, SeoWorker, type AuditPayload, type SeoProposalPayload } from '@fir/worker-seo';
 import { TrendScoutWorker, latestTrendHints } from '@fir/worker-trend-scout';
 import { z } from 'zod';
+import { AuditStore, type AuditInput } from '../audit-shared.js';
+import { ClientBlockedError, type ClientChannel } from '../client/channel.js';
 import type { ApprovalEditor } from '../editor.js';
 import type { Reporter } from '../reporter.js';
 
@@ -39,6 +41,8 @@ export interface MarketingDeps {
   /** Where approved posts, slides and stories are rendered to PNG (`DATA_DIR/renders`). Absent: no pictures, text only. */
   rendersDir?: string;
   rng?: () => number;
+  /** The client bot: an approved audit goes to the contact when that person already wrote to it (matched by username or chat id). */
+  audit?: ClientChannel & { findChat(username: string): number | undefined };
 }
 
 /** Optional external sources (all keys optional: a source without its key is simply off). */
@@ -59,9 +63,9 @@ const splitSchema = z.object({
 });
 const reviewSchema = z.object({ ok: z.boolean(), issues: z.array(z.string()).max(10).default([]) });
 
-type Action = 'pack' | 'topic' | 'daily' | 'trends' | 'trends_weekly' | 'seo' | 'report' | 'profile' | 'article' | 'none';
+type Action = 'pack' | 'topic' | 'daily' | 'trends' | 'trends_weekly' | 'seo' | 'report' | 'profile' | 'article' | 'audit' | 'none';
 const DIRECT: Action[] = ['trends', 'trends_weekly', 'seo', 'report'];
-const ACTIONS: Action[] = ['pack', 'topic', 'daily', 'profile', 'article', ...DIRECT];
+const ACTIONS: Action[] = ['pack', 'topic', 'daily', 'profile', 'article', 'audit', ...DIRECT];
 
 /** Heuristics for the case without an LLM: only the obvious wordings. */
 function guessAction(task: Task): { action: Action; topic?: string } {
@@ -141,8 +145,14 @@ export class MarketingHead implements ApprovalEditor {
         return Promise.resolve();
       },
     });
+    // An approved audit text goes to its contact; without a known chat the owner gets plain text to send by hand.
+    d.hq.registerKind(AUDIT_KIND, {
+      initialLevel: 0, locked: true,
+      execute: (payload) => this.deliverAudit(payload as unknown as AuditPayload),
+    });
     // The owner rejected an item: the worker's own table follows.
     d.hq.onApprovalDecision((link, state) => {
+      if (link.kind === AUDIT_KIND && state === 'rejected') this.audits().setStatus(Number(link.payload.auditId), 'rejected');
       if (link.kind === KIND && state === 'rejected') storeFor({ db: d.hq.db, now: d.hq.now }).setStatus(Number(link.payload.itemId), 'rejected');
       if (link.kind === ARTICLE_KIND && state === 'rejected') {
         const store = storeFor({ db: d.hq.db, now: d.hq.now });
@@ -154,6 +164,51 @@ export class MarketingHead implements ApprovalEditor {
 
   private get hq(): Hq {
     return this.d.hq;
+  }
+
+  private audits(): AuditStore {
+    return new AuditStore(this.hq.db, this.hq.now);
+  }
+
+  /**
+   * A free audit asked for (`POST /audit`, the client bot's `/audit`): a row in `mk_audits` and a Marketing task
+   * `action: audit` the head picks up. Returns both ids.
+   */
+  requestAudit(a: AuditInput & { chatId?: number }): { id: number; taskId: number } {
+    const id = this.audits().add(a);
+    let host = 'site';
+    try {
+      host = new URL(a.url).hostname;
+    } catch {
+      /* the URL was validated before */
+    }
+    const t = this.hq.createTask({
+      title: `Аудит: ${host}`.slice(0, 200), body: 'Бесплатный аудит сайта за 24 часа: пять находок и одно закрывающее предложение.', dept: MARKETING, creator: 'head',
+      meta: { action: 'audit', auditId: id, url: a.url, contact: a.contact, locale: a.locale },
+    });
+    this.hq.wake(HEAD_ID, 'task');
+    return { id, taskId: t.id };
+  }
+
+  private async deliverAudit(p: AuditPayload): Promise<void> {
+    const store = this.audits();
+    const row = store.get(p.auditId);
+    if (!row) return;
+    const chatId = row.chatId ?? (row.contact.startsWith('@') ? this.d.audit?.findChat(row.contact) : undefined);
+    if (chatId !== undefined && this.d.audit) {
+      try {
+        await this.d.audit.send(chatId, p.text);
+        store.setStatus(p.auditId, 'delivered');
+        return;
+      } catch (e) {
+        log('warn', 'audit delivery failed', { auditId: p.auditId, blocked: e instanceof ClientBlockedError });
+      }
+    }
+    store.setStatus(p.auditId, 'handed_off');
+    await this.d.messenger.send(
+      this.d.ownerId,
+      `Аудит ${p.host} утверждён. ${row.contact.startsWith('@') ? `${row.contact} ещё не писал в @firtech_bot` : `Контакт ${row.contact} не в боте`}, поэтому отправьте вручную. Текст ниже, его можно скопировать целиком.\n\n${p.text}`,
+    );
   }
 
   /**
@@ -287,6 +342,13 @@ export class MarketingHead implements ApprovalEditor {
       return;
     }
     if (action === 'daily') return this.daily(task);
+    if (action === 'audit') {
+      this.hq.setMeta(task.id, { action: 'audit' });
+      await this.runDirect(task.id, this.seo);
+      const auditId = Number(this.hq.task(task.id)?.meta.auditId);
+      if (Number.isInteger(auditId)) this.audits().setStatus(auditId, this.hq.task(task.id)?.status === 'blocked' ? 'failed' : 'proposed');
+      return;
+    }
     if (DIRECT.includes(action)) {
       this.hq.setMeta(task.id, { action });
       const worker = { trends: this.trendScout, trends_weekly: this.trendScout, seo: this.seo, report: this.analyst }[action as 'trends']!;

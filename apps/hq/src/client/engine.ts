@@ -5,9 +5,11 @@ import { clip, freeAnswer, GREETING, intakeRecord, TurnHistory } from './shared.
 import { ChatStore, maskUsername, textHash, type Chat, type Draft } from './store.js';
 import {
   BUDGETS, budgetButtons, DEADLINES, deadlineButtons, esc, menuButtons, NEEDS, needButtons, productCardButtons, productCardHtml, productListButtons,
-  productListHtml, T, type Budget, type Deadline, type Lang, type Need,
+  productListHtml, T, X, type Budget, type Deadline, type Lang, type Need,
 } from './texts.js';
 import { isCatalogueId, nicheHint } from './products.js';
+import { DemoSalon, DEMO_START } from './demo.js';
+import { auditInputSchema, type AuditOutcome } from '../audit-shared.js';
 
 /** What the engine needs from Telegram; the grammy bot implements it, tests keep everything in memory. */
 export interface ClientTransport {
@@ -37,6 +39,8 @@ export interface ClientSinks {
   findClient(query: string): string | null;
   /** The call slots offered to the lead of a task (for a «1» / «2» answer). */
   leadSlots(taskId: number): { leadId: number; slots: number[] } | null;
+  /** `/audit <url>`: the same path as `POST /audit` (contact is the chat's username, or `tg:<chatId>` with `chatId` for direct delivery). */
+  createAudit?(a: { url: string; contact: string; name?: string; locale: Lang; chatId: number }): Promise<AuditOutcome>;
 }
 
 export interface ClientEngineDeps {
@@ -56,6 +60,8 @@ export interface ClientEngineDeps {
   sinks?: ClientSinks;
   /** Plain text to the owner through the Director when the client bot cannot write to him (he never opened it). */
   ownerFallback?: (text: string) => Promise<void>;
+  /** Runs a delayed job (the demo reminder); default `setTimeout` (unref). Tests capture it. */
+  schedule?: (ms: number, job: () => void) => void;
 }
 
 /**
@@ -70,9 +76,15 @@ export class ClientEngine implements ClientChannel {
   readonly limiter: RateLimiter;
   private sinks: ClientSinks | undefined;
   private readonly history: TurnHistory<number>;
+  readonly demo: DemoSalon;
 
   constructor(private readonly d: ClientEngineDeps) {
     this.store = new ChatStore(d.db, d.now);
+    this.demo = new DemoSalon(
+      d.db, d.now, d.tz,
+      { send: (chatId, html, buttons) => this.say(chatId, html, buttons), edit: (chatId, id, html, buttons) => this.edit(chatId, id, html, buttons) },
+      d.schedule ?? ((ms, job) => void setTimeout(job, ms).unref()),
+    );
     this.limiter = new RateLimiter(d.perHour ?? 20, d.dailyCap ?? 300, d.now, d.tz);
     this.sinks = d.sinks;
     this.history = new TurnHistory(d.now);
@@ -97,6 +109,11 @@ export class ClientEngine implements ClientChannel {
     this.remember(chatId, 'assistant', text);
   }
 
+  /** The chat of a Telegram username, for delivering an approved audit to someone who already wrote to the bot. */
+  findChat(username: string): number | undefined {
+    return this.store.chatIdByUsername(username);
+  }
+
   // ---- entry points (the grammy glue calls these, private chats only) ----
   async onCommand(from: From, name: string, arg: string): Promise<void> {
     if (from.chatId === this.d.ownerId) return this.ownerCommand(name, arg.trim());
@@ -104,7 +121,13 @@ export class ClientEngine implements ClientChannel {
     if (this.limiter.hit(chat.chatId) === 'drop') return;
     switch (name) {
       case 'start':
+        this.demo.wipe(chat.chatId);
+        if (/^demo(_salon)?$/i.test(arg.trim()) || arg.trim() === DEMO_START) return this.startDemo(chat);
         return this.welcome(chat, from);
+      case 'demo':
+        return this.startDemo(chat);
+      case 'audit':
+        return this.audit(chat, from, arg.trim());
       case 'human':
         return this.callHuman(chat);
       case 'lang': {
@@ -115,6 +138,25 @@ export class ClientEngine implements ClientChannel {
       default:
         await this.say(chat.chatId, T[chat.lang].help);
     }
+  }
+
+  private async startDemo(chat: Chat): Promise<void> {
+    await this.dropCard(chat);
+    this.store.update(chat.chatId, { state: 'idle', draft: {}, card: null });
+    await this.demo.start(chat.chatId, chat.lang);
+  }
+
+  /** `/audit <url>`: the free 24-hour audit, through the same sink as the website. Never a lead; the owner approves the text. */
+  private async audit(chat: Chat, from: From, arg: string): Promise<void> {
+    const t = X[chat.lang];
+    const url = /^(https?:\/\/)?\S+$/i.test(arg) ? (/^https?:\/\//i.test(arg) ? arg : `https://${arg}`) : '';
+    const parsed = url ? auditInputSchema.safeParse({ url, contact: from.username ? `@${from.username}` : `tg:${chat.chatId}`, locale: chat.lang }) : null;
+    if (!parsed?.success || !this.sinks?.createAudit) {
+      await this.say(chat.chatId, parsed?.success === false || !arg ? t.auditUsage : t.auditOff);
+      return;
+    }
+    const out = await this.sinks.createAudit({ ...parsed.data, chatId: chat.chatId });
+    await this.say(chat.chatId, out === 'ok' ? t.auditOk : out === 'duplicate' ? t.auditDup : out === 'rate_limited' ? t.auditBusy : t.auditUsage);
   }
 
   async onText(from: From, raw: string, replyTo?: number): Promise<void> {
@@ -174,6 +216,12 @@ export class ClientEngine implements ClientChannel {
     if (from.chatId === this.d.ownerId) return undefined;
     const chat = this.chat(from);
     const [kind, key = ''] = data.split(':');
+    if (kind === 'dm') {
+      if (messageId === undefined) return T[chat.lang].stale;
+      const r = await this.demo.button(chat.chatId, chat.lang, messageId, data);
+      if (r.want) await this.demoWant(chat, messageId);
+      return r.toast;
+    }
     if (kind === 'm') {
       await this.menu(chat, from, key, messageId);
       return undefined;
@@ -210,6 +258,14 @@ export class ClientEngine implements ClientChannel {
       return undefined;
     }
     return stale();
+  }
+
+  /** «Хочу такого бота себе»: the demo is wiped and the normal intake starts with the booking bot chosen, `source: demo_salon`. */
+  private async demoWant(chat: Chat, messageId: number): Promise<void> {
+    this.demo.wipe(chat.chatId);
+    const draft: Draft = { source: DEMO_START };
+    this.store.update(chat.chatId, { state: 'need', draft, card: messageId });
+    await this.afterNeed({ ...chat, state: 'need', draft, card: messageId }, { need: 'admin' }, messageId);
   }
 
   // ---- welcome, menu ----
@@ -261,6 +317,8 @@ export class ClientEngine implements ClientChannel {
       }
       case 'human':
         return this.callHuman(chat);
+      case 'demo':
+        return this.startDemo(chat);
       case 'lang': {
         const lang: Lang = chat.lang === 'ru' ? 'en' : 'ru';
         this.store.update(chat.chatId, { lang, state: 'idle', draft: {} });
@@ -296,7 +354,7 @@ export class ClientEngine implements ClientChannel {
   private async finishIntake(chat: Chat, from: From, patch: Draft, messageId?: number): Promise<void> {
     const d: Draft = { ...chat.draft, ...patch };
     const t = T[chat.lang];
-    const rec = intakeRecord(d, chat.lang, 'Заявка из клиентского Telegram-бота.');
+    const rec = intakeRecord(d, chat.lang, d.source === DEMO_START ? 'Заявка из клиентского Telegram-бота после демо «Салон Лайм».' : 'Заявка из клиентского Telegram-бота.');
     const night = this.isNight();
     const done = `${t.done(rec.shown.need, rec.shown.deadline, rec.shown.budget)}${night ? `\n${t.doneNight}` : ''}`;
     if (messageId !== undefined) await this.edit(chat.chatId, messageId, done);
@@ -304,11 +362,11 @@ export class ClientEngine implements ClientChannel {
       await this.dropCard(chat);
       await this.say(chat.chatId, done);
     }
-    await this.createLead(chat, from, { message: rec.message, budget: rec.budget, service: rec.service, product: rec.product }, rec.masked);
+    await this.createLead(chat, from, { message: rec.message, budget: rec.budget, service: rec.service, product: rec.product, ...(d.source ? { source: d.source } : {}) }, rec.masked);
   }
 
   /** The lead goes to Sales exactly like a website form lead, with the chat id so replies come back here. */
-  private async createLead(chat: Chat, from: From, x: { message: string; budget: string; service: string; product?: string }, masked: string): Promise<void> {
+  private async createLead(chat: Chat, from: From, x: { message: string; budget: string; service: string; product?: string; source?: string }, masked: string): Promise<void> {
     this.store.update(chat.chatId, { state: 'idle', draft: {}, card: null });
     if (!this.sinks) {
       await this.forward(chat, x.message, 'Заявка (продажи не подключены)');
@@ -317,7 +375,7 @@ export class ClientEngine implements ClientChannel {
     const name = clip(from.firstName?.trim() || (from.username ? `@${from.username}` : '') || 'Клиент из Telegram', 80);
     const lead = {
       name, contact: from.username ? `@${from.username}` : `Telegram id ${chat.chatId}`, service: x.service, budget: clip(x.budget, 40),
-      message: clip(x.message, 2000), estimate: '', locale: chat.lang, slot: '', source: 'telegram', chatId: chat.chatId, product: x.product ?? '',
+      message: clip(x.message, 2000), estimate: '', locale: chat.lang, slot: '', source: x.source ?? 'telegram', chatId: chat.chatId, product: x.product ?? '',
       ...(from.username ? { username: from.username.slice(0, 40) } : {}),
     };
     const taskId = this.sinks.createLead(lead, x.service);

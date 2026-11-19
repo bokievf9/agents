@@ -24,6 +24,8 @@ export interface Draft {
   page?: string;
   /** Web chat: what the contact step finishes. */
   pending?: 'intake' | 'client';
+  /** Where the intake started (the demo salon sets `demo_salon`): becomes the lead's `source`. */
+  source?: string;
 }
 
 /** Per chat only: id, username, language, state, last activity and a short masked summary (no message texts). */
@@ -127,6 +129,13 @@ export class ChatStore {
     const keys = Object.keys(cols);
     if (!keys.length) return;
     this.db.prepare(`UPDATE cb_chats SET ${keys.map((k) => `${k} = @${k}`).join(', ')} WHERE chat_id = @chatId`).run({ ...cols, chatId });
+  }
+
+  /** The chat of a Telegram username (case-insensitive), when that person wrote to the bot and did not block it. */
+  chatIdByUsername(username: string): number | undefined {
+    const u = username.replace(/^@/, '').trim();
+    if (!u) return undefined;
+    return (this.db.prepare('SELECT chat_id FROM cb_chats WHERE lower(username) = lower(?) AND blocked = 0 ORDER BY last_at DESC LIMIT 1').get(u) as { chat_id: number } | undefined)?.chat_id;
   }
 
   recent(limit = 15): Chat[] {

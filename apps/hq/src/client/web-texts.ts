@@ -13,6 +13,8 @@ export interface WebButton {
 
 interface WebTexts {
   welcome: string;
+  /** The scripted demo description with the bot's deep link. */
+  demo: string;
   menu: Record<'intake' | 'products' | 'client' | 'ask', string>;
   productsIntro: string;
   discuss: string;
@@ -29,6 +31,7 @@ interface WebTexts {
 }
 
 const RU: WebTexts = {
+  demo: 'Демо бота-администратора на примере вымышленного «Салона Лайм»: выбираете услугу, мастера, день и время, бот записывает вас, через минуту присылает напоминание, предлагает перенести, отменить или оставить отзыв. Записи не настоящие. Демо работает в Telegram: https://t.me/firtech_bot?start=demo_salon',
   welcome:
     'Здравствуйте. Это ИИ-приёмщик заявок студии Fir Tech: так же он может принимать клиентов вашего бизнеса. Строим бота-администратора для записи, ИИ-приёмщика заявок, автоматизацию, Mini Apps, личных агентов и внедряем ИИ в компании. Чем помочь?',
   productsIntro: 'Наши продукты. Выберите, расскажу, для кого это и что внутри.',
@@ -50,6 +53,7 @@ const RU: WebTexts = {
 };
 
 const EN: WebTexts = {
+  demo: 'A demo of the booking bot on the example of a fictional “Lime Salon”: you pick a service, a master, a day and a time, the bot books you, sends a reminder a minute later and offers to reschedule, cancel or leave a review. Bookings are not real. The demo runs in Telegram: https://t.me/firtech_bot?start=demo_salon',
   welcome:
     'Hello. This is the AI request handler of the Fir Tech studio: it can receive your business’s clients the same way. We build a booking assistant bot, an AI request handler, automation, Mini Apps and personal agents, and bring AI into companies. How can we help?',
   productsIntro: 'Our products. Pick one and I will tell you who it is for and what is inside.',
