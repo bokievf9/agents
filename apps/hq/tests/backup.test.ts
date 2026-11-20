@@ -120,6 +120,18 @@ describe('renders cleanup', () => {
     expect(existsSync(join(dir, '1'))).toBe(false);
   });
 
+  it('a database without the content tables (nothing written yet) is not a block: old folders are orphans, young ones stay (drill 2026-11-21: "no such table: cm_items")', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fir-renders-'));
+    for (const [id, age] of [[7, 40], [8, 1]] as const) {
+      const d = join(dir, String(id));
+      mkdirSync(d);
+      writeFileSync(join(d, 'reel.mp4'), 'x');
+      utimesSync(d, new Date(T0 - age * DAY), new Date(T0 - age * DAY));
+    }
+    expect(cleanRenders({ db: openDb(':memory:'), rendersDir: dir, now: T0 })).toEqual([7]);
+    expect(readdirSync(dir)).toEqual(['8']);
+  });
+
   it('a missing renders dir is not an error', () => {
     const { db } = world();
     expect(cleanRenders({ db, rendersDir: '/nonexistent/renders', now: T0 })).toEqual([]);

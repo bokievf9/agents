@@ -14,15 +14,19 @@ export function cleanRenders(o: { db: Db; rendersDir: string; now: number; keepD
   if (!existsSync(o.rendersDir)) return [];
   const cutoff = o.now - (o.keepDays ?? RENDER_KEEP_DAYS) * 86_400_000;
   const removed: number[] = [];
+  // a database nobody has written content to yet has no content tables: every folder is then an orphan (it was a "no such table: cm_items" block each night)
+  const has = (t: string) => o.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t) !== undefined;
+  const withItems = has('cm_items');
+  const withPosts = has('cm_ready') && has('pb_posts');
   for (const name of readdirSync(o.rendersDir)) {
     const id = Number(name);
     const dir = join(o.rendersDir, name);
     if (!Number.isInteger(id) || id <= 0 || !statSync(dir).isDirectory()) continue;
-    const item = o.db.prepare('SELECT status FROM cm_items WHERE id = ?').get(id) as { status: string } | undefined;
+    const item = withItems ? (o.db.prepare('SELECT status FROM cm_items WHERE id = ?').get(id) as { status: string } | undefined) : undefined;
     let drop = false;
     if (!item) drop = statSync(dir).mtimeMs < cutoff;
     else if (item.status === 'rejected') drop = statSync(dir).mtimeMs < cutoff;
-    else if (item.status === 'ready') {
+    else if (item.status === 'ready' && withPosts) {
       const r = o.db
         .prepare(
           `SELECT COUNT(*) total, SUM(CASE WHEN p.published_at IS NOT NULL THEN 1 ELSE 0 END) done, MAX(p.published_at) last
