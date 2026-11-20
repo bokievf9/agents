@@ -103,7 +103,7 @@ export interface Config extends BaseConfig {
   resendApiKey: string | undefined;
   emailFrom: string | undefined;
   siteUrl: string;
-  /** The site's price list (`GET`, JSON): the single source of every price the agents name. Fetched at start and every 6 hours. */
+  /** The site's price list (`GET`, JSON): the single source of every price the agents name. Fetched at start and every 15 minutes (`PRICES_RELOAD_MS`). */
   pricesUrl: string;
   /** Builder bridge: fine-grained token (Issues read/write on `githubRepo`). Without it the bridge is off. */
   githubToken: string | undefined;

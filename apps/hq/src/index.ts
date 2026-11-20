@@ -53,7 +53,7 @@ const db = openDb(cfg.dbFile);
 const hq = new Hq(db);
 // Requests accepted from visitors that fail before the owner sees them: `lost_lead` rows and one summary alert an hour.
 const lost = new LostLeads(hq);
-// Prices come from one place: the site's price list (fetched now and every 6 hours, the last good copy is kept in the
+// Prices come from one place: the site's price list (fetched now and every 15 minutes (PRICES_RELOAD_MS), the last good copy is kept in the
 // database, a bundled snapshot is the last resort). Workers and the client bot read `getPrices()` when they need a number.
 const pricesOpts = { url: cfg.pricesUrl, store: { get: (k: string) => hq.setting(k) || undefined, set: (k: string, v: string) => hq.setSetting(k, v) } };
 const pricesRefresh = startPricesRefresh(pricesOpts);
