@@ -35,7 +35,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'away', route: 'director', group: 'daily', help: 'я в пути: всё в Telegram', menu: 'Я в пути: всё в Telegram' },
   { name: 'costs', route: 'director', group: 'more', help: 'расходы за месяц по отделам', menu: 'Расходы за месяц по отделам' },
   { name: 'org', route: 'director', group: 'more', help: 'оргструктура и доверие', menu: 'Оргструктура и доверие' },
-  { name: 'workers', route: 'director', group: 'more', help: '19 исполнителей и что запускает каждого: рутина, команда или событие', menu: 'Исполнители и что их запускает' },
+  { name: 'workers', route: 'director', group: 'more', help: 'исполнители и что запускает каждого: рутина, команда или событие', menu: 'Исполнители и что их запускает' },
   { name: 'level', route: 'director', group: 'more', args: '[<тип|агент> <0|1>]', help: 'уровни доверия: 0 жду кнопку, 1 делаю сам и отчитываюсь', menu: '<тип|агент> <0|1>: уровень доверия' },
   { name: 'pause', route: 'director', group: 'more', args: '<отдел>', help: 'поставить отдел на паузу' },
   { name: 'resume', route: 'director', group: 'more', args: '<отдел>', help: 'вернуть отдел в работу' },

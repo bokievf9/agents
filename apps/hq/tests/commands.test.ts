@@ -106,6 +106,8 @@ describe('/workers: the table of the executors and what wakes them', () => {
     const hq = fullHq();
     const text = workersText(hq);
     expect(text).toContain('Исполнители (20)');
+    // the help does not carry its own hand-counted number (it said 19 while /workers printed 20: drill 2026-11-21)
+    expect(helpHtml()).not.toMatch(/\d+ исполнител/);
     expect(text).toContain('Контент-мейкер (content-maker)');
     expect(text).toContain('рутина marketing-weekly-pack (пн 06:00 Куала-Лумпур)');
     expect(text).toContain('рутина marketing-daily-today (каждый день 09:00 Душанбе)');
