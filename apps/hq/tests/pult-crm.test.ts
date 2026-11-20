@@ -299,7 +299,7 @@ describe('projects: detail and actions', () => {
     const r = await p.call('GET', `/admin/crm/projects/${proj.id}`);
     expect(r.json.ok).toBe(true);
     expect(r.json.item).toMatchObject({ id: proj.id, client: 'Алиса', status: 'active', stage: 'brief' });
-    expect(r.json.milestones).toEqual([
+    expect(r.json.milestones).toMatchObject([
       { id: m1.id, kind: 'brief', title: 'Бриф', dueAt: new Date(p.t() + DAY).toISOString(), doneAt: null },
       expect.objectContaining({ kind: 'prototype' }),
     ]);

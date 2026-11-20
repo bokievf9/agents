@@ -1,6 +1,6 @@
 {
   "currency": "USD",
-  "updatedAt": "2026-11-19",
+  "updatedAt": "2026-11-21",
   "startingPrice": {
     "websites": 150,
     "bots": 100,
@@ -112,6 +112,139 @@
     }
   ],
   "referralPercent": 10,
+  "smallProjectMaxUsd": 300,
+  "stages": {
+    "site": [
+      {
+        "id": "structure",
+        "title": {
+          "ru": "Структура и первый экран",
+          "en": "Structure and first screen"
+        },
+        "share": 30
+      },
+      {
+        "id": "pages",
+        "title": {
+          "ru": "Все страницы и наполнение",
+          "en": "All pages and content"
+        },
+        "share": 40
+      },
+      {
+        "id": "launch",
+        "title": {
+          "ru": "Запуск, SEO, передача",
+          "en": "Launch, SEO, handover"
+        },
+        "share": 30
+      }
+    ],
+    "bot": [
+      {
+        "id": "scenario",
+        "title": {
+          "ru": "Сценарий и структура",
+          "en": "Scenario and structure"
+        },
+        "share": 30
+      },
+      {
+        "id": "build",
+        "title": {
+          "ru": "Рабочий бот на тесте",
+          "en": "Working bot on a test account"
+        },
+        "share": 40
+      },
+      {
+        "id": "launch",
+        "title": {
+          "ru": "Запуск и обучение",
+          "en": "Launch and training"
+        },
+        "share": 30
+      }
+    ],
+    "automation": [
+      {
+        "id": "map",
+        "title": {
+          "ru": "Карта процессов",
+          "en": "Process map"
+        },
+        "share": 20
+      },
+      {
+        "id": "integrate",
+        "title": {
+          "ru": "Интеграции",
+          "en": "Integrations"
+        },
+        "share": 50
+      },
+      {
+        "id": "launch",
+        "title": {
+          "ru": "Запуск и обучение",
+          "en": "Launch and training"
+        },
+        "share": 30
+      }
+    ],
+    "app": [
+      {
+        "id": "design",
+        "title": {
+          "ru": "Дизайн и прототип",
+          "en": "Design and prototype"
+        },
+        "share": 25
+      },
+      {
+        "id": "core",
+        "title": {
+          "ru": "Основной функционал",
+          "en": "Core features"
+        },
+        "share": 25
+      },
+      {
+        "id": "full",
+        "title": {
+          "ru": "Все экраны и тесты",
+          "en": "All screens and tests"
+        },
+        "share": 25
+      },
+      {
+        "id": "launch",
+        "title": {
+          "ru": "Публикация и передача",
+          "en": "Publishing and handover"
+        },
+        "share": 25
+      }
+    ],
+    "small": [
+      {
+        "id": "start",
+        "title": {
+          "ru": "Старт",
+          "en": "Start"
+        },
+        "share": 50
+      },
+      {
+        "id": "launch",
+        "title": {
+          "ru": "Запуск",
+          "en": "Launch"
+        },
+        "share": 50
+      }
+    ]
+  },
   "products": {
     "admin": {
       "kind": "from",

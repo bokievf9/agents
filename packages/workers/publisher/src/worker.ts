@@ -69,7 +69,6 @@ export class PublisherWorker implements Worker {
     if (posters.length === 0) return [];
     const today = publishDay(ctx);
     const store = new PublishStore(ctx.db);
-    const content = storeFor(ctx);
     const exists = this.opts.fileExists ?? existsSync;
     const out: AutoResult[] = [];
     for (const p of assemblePacks(ctx, today, this.opts.render, this.opts.renderNote)) {
@@ -78,27 +77,46 @@ export class PublisherWorker implements Worker {
       const prev = store.get(p.readyId);
       // a container waiting at the platform is finished on a later day too (it is the same attempt)
       if (prev?.publishedAt != null || (store.auto(p.readyId).autoOn === today && store.container(p.readyId) === null)) continue;
-      const base = { readyId: p.readyId, itemId: p.itemId, platform: p.platform, title: p.title };
-      store.markAttempt(p.readyId, p.itemId, p.platform, today);
-      try {
-        const { url } = await poster.post(p);
-        store.setUrl(p.readyId, url);
-        store.markPublished(p.readyId, p.itemId, p.platform, ctx.now());
-        content.markPublished(p.readyId);
-        out.push({ ...base, url });
-      } catch (e) {
-        if (e instanceof PostPending) {
-          out.push({ ...base, pending: true });
-          continue;
-        }
-        const quota = e instanceof QuotaExceeded;
-        const error = errMsg(e);
-        store.setError(p.readyId, error);
-        log('warn', 'publisher: auto post failed', { readyId: p.readyId, platform: p.platform, err: error });
-        out.push({ ...base, error, ...(quota ? { quota: true } : {}) });
-      }
+      out.push(await this.post(poster, p, ctx, today));
     }
     return out;
+  }
+
+  /** One attempt for one pack: the attempt is written first (a crash never uploads twice), a success marks the row published, a failure keeps the reason; `PostPending` is reported as `pending` (it finishes on a later run). */
+  private async post(poster: PlatformPoster, p: PublishPack, ctx: Pick<WorkerCtx, 'db' | 'now' | 'tz'>, today: string): Promise<AutoResult> {
+    const store = new PublishStore(ctx.db);
+    const content = storeFor(ctx);
+    const base = { readyId: p.readyId, itemId: p.itemId, platform: p.platform, title: p.title };
+    store.markAttempt(p.readyId, p.itemId, p.platform, today);
+    try {
+      const { url } = await poster.post(p);
+      store.setUrl(p.readyId, url);
+      store.markPublished(p.readyId, p.itemId, p.platform, ctx.now());
+      content.markPublished(p.readyId);
+      return { ...base, url };
+    } catch (e) {
+      if (e instanceof PostPending) return { ...base, pending: true };
+      const quota = e instanceof QuotaExceeded;
+      const error = errMsg(e);
+      store.setError(p.readyId, error);
+      log('warn', 'publisher: auto post failed', { readyId: p.readyId, platform: p.platform, err: error });
+      return { ...base, error, ...(quota ? { quota: true } : {}) };
+    }
+  }
+
+  /**
+   * «Выложить сейчас» (review center): one item on one platform right away, not waiting for the morning run or the planned date. Same poster, same
+   * quota check, same bookkeeping as `autoPublish`; the only difference is that the owner asked, so the once-a-day guard does not apply.
+   * `reason`: nothing was tried (no poster for the platform, not an approved unpublished row, no file); `result`: what the poster did.
+   */
+  async publishNow(ctx: Pick<WorkerCtx, 'db' | 'now' | 'tz'>, itemId: number, platform: PublishPack['platform']): Promise<{ result: AutoResult } | { reason: 'no_poster' | 'not_ready' | 'no_file' }> {
+    const poster = (this.opts.posters ?? []).find((x) => x.platform === platform);
+    if (!poster) return { reason: 'no_poster' };
+    const pack = assemblePacks(ctx, '9999-12-31', this.opts.render, this.opts.renderNote).find((p) => p.itemId === itemId && p.platform === platform);
+    if (!pack) return { reason: 'not_ready' };
+    const exists = this.opts.fileExists ?? existsSync;
+    if (!(poster.canPost ? poster.canPost(pack) : pack.files.some(isVideo)) || pack.files.length === 0 || !pack.files.every((f) => exists(f))) return { reason: 'no_file' };
+    return { result: await this.post(poster, pack, ctx, publishDay(ctx)) };
   }
 
   /** The head calls this after a pack message went out. */

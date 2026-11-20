@@ -1,6 +1,7 @@
 import { ApprovalQueue, MemoryMessenger, MockLlm, OffLlm, openDb, type LlmClient, type LlmRequest } from '@fir/core';
 import { Hq } from '@fir/hq';
 import { fileURLToPath } from 'node:url';
+import type { PublisherWorker } from '@fir/worker-publisher';
 import { Director } from '../src/director.js';
 import { MarketingHead, type Integrations } from '../src/heads/marketing.js';
 import { seedOrg } from '../src/org.js';
@@ -134,7 +135,7 @@ export function routedLlm(r: Replies = {}): MockLlm {
 /** The old pack (7 reels and a carousel in even weeks): most tests count items, they ask for it explicitly. */
 export const OLD_PACK = { postsPerWeek: 0, storiesPerWeek: 0, carouselsPerWeek: 0.5 } as const;
 
-export function world(opts: { presence?: boolean; llm?: LlmClient; groupTopics?: boolean; budget?: number; integrations?: Integrations; cadence?: { clipsPerWeek?: number; carouselsPerWeek?: number; postsPerWeek?: number; storiesPerWeek?: number }; rendersDir?: string; renderReels?: boolean; audit?: ConstructorParameters<typeof MarketingHead>[0]['audit'] } = {}) {
+export function world(opts: { presence?: boolean; llm?: LlmClient; groupTopics?: boolean; budget?: number; integrations?: Integrations; cadence?: { clipsPerWeek?: number; carouselsPerWeek?: number; postsPerWeek?: number; storiesPerWeek?: number }; rendersDir?: string; renderReels?: boolean; audit?: ConstructorParameters<typeof MarketingHead>[0]['audit']; publisher?: PublisherWorker } = {}) {
   const clock = { t: NOW };
   const db = openDb(':memory:');
   const messenger = new MemoryMessenger();
@@ -152,7 +153,7 @@ export function world(opts: { presence?: boolean; llm?: LlmClient; groupTopics?:
     ? new Reporter(-1001, { marketing: 7, general: 2 }, new Map([['marketing', send], ['general', send]]))
     : new Reporter(undefined, {}, new Map());
   const director = new Director({ hq, llm, messenger: toOwner, queue, ownerId: OWNER, reporter });
-  const marketing = new MarketingHead({ hq, llm, queue, messenger: toOwner, ownerId: OWNER, reporter, rng: () => 0.1, ...(opts.cadence ?? OLD_PACK), ...(opts.rendersDir ? { rendersDir: opts.rendersDir } : {}), ...(opts.renderReels ? { renderReels: true } : {}), ...(opts.integrations ? { integrations: opts.integrations } : {}), ...(opts.audit ? { audit: opts.audit } : {}) });
+  const marketing = new MarketingHead({ hq, llm, queue, messenger: toOwner, ownerId: OWNER, reporter, rng: () => 0.1, ...(opts.cadence ?? OLD_PACK), ...(opts.rendersDir ? { rendersDir: opts.rendersDir } : {}), ...(opts.renderReels ? { renderReels: true } : {}), ...(opts.integrations ? { integrations: opts.integrations } : {}), ...(opts.audit ? { audit: opts.audit } : {}), ...(opts.publisher ? { publisher: opts.publisher } : {}) });
   director.editors.set('content_item', marketing);
   director.editors.set('article', marketing);
   director.onPackButton = (op, id, at) => marketing.onPackButton(op, id, at);

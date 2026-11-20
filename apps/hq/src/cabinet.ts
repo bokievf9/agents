@@ -31,6 +31,8 @@ export function ensureCabinetTables(db: Db): void {
   if (ready.has(db)) return;
   db.exec(CAB_CLIENTS_SCHEMA);
   db.exec(CAB_MESSAGES_SCHEMA);
+  // who wrote a manager line: the owner himself (his own reply, no approval) or HQ (an approved draft); the chats of the review center show the difference
+  if (!hasColumn(db, 'cab_messages', 'author')) db.exec("ALTER TABLE cab_messages ADD COLUMN author TEXT NOT NULL DEFAULT 'hq'");
   ready.add(db);
 }
 
@@ -38,20 +40,20 @@ const hasTable = (db: Db, t: string) => db.prepare("SELECT 1 FROM sqlite_master 
 const hasColumn = (db: Db, t: string, c: string) => (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).some((x) => x.name === c);
 
 /** Stores one message of a lead's thread. */
-export function addCabMessage(db: Db, now: number, m: { clientId: number; leadId: number; from: MessageFrom; text: string; ticketId?: number }): void {
+export function addCabMessage(db: Db, now: number, m: { clientId: number; leadId: number; from: MessageFrom; text: string; ticketId?: number; by?: 'owner' | 'hq' }): number {
   ensureCabinetTables(db);
-  db.prepare('INSERT INTO cab_messages (client_id, lead_id, "from", text, at, ticket_id) VALUES (?, ?, ?, ?, ?, ?)').run(
-    m.clientId, m.leadId, m.from, m.text.trim().slice(0, MESSAGE_CAP), now, m.ticketId ?? null,
-  );
+  return Number(db.prepare('INSERT INTO cab_messages (client_id, lead_id, "from", text, at, ticket_id, author) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    m.clientId, m.leadId, m.from, m.text.trim().slice(0, MESSAGE_CAP), now, m.ticketId ?? null, m.by ?? 'hq',
+  ).lastInsertRowid);
 }
 
 /** The manager's reply on a lead, kept in the cabinet thread when the lead belongs to a cabinet client (otherwise nothing: no cabinet, no thread). */
-export function recordManagerReply(db: Db, now: number, leadId: number, text: string): void {
+export function recordManagerReply(db: Db, now: number, leadId: number, text: string, by: 'owner' | 'hq' = 'hq'): void {
   try {
     if (!text.trim() || !hasTable(db, 'li_leads') || !hasColumn(db, 'li_leads', 'client_id')) return;
     const r = db.prepare('SELECT client_id FROM li_leads WHERE id = ?').get(leadId) as { client_id: number | null } | undefined;
     if (r?.client_id == null) return;
-    addCabMessage(db, now, { clientId: r.client_id, leadId, from: 'manager', text });
+    addCabMessage(db, now, { clientId: r.client_id, leadId, from: 'manager', text, by });
   } catch {
     /* the thread is a convenience for the client: a failure here never breaks the reply itself */
   }
@@ -103,7 +105,7 @@ const NEXT_STEP: Record<Lang, Record<Stage, string>> = {
     new: 'Менеджер уточнит детали в течение рабочего дня',
     qualified: 'Готовим коммерческое предложение',
     proposal: 'КП отправлено, ждём вашего решения',
-    contract: 'Договор и счёт на 50% готовы',
+    contract: 'Договор и счёт первого этапа готовы',
     paid: 'Оплата получена, запускаем проект',
     project: 'Проект в работе, этапы ниже',
     lost: 'Заявка закрыта',
@@ -112,7 +114,7 @@ const NEXT_STEP: Record<Lang, Record<Stage, string>> = {
     new: 'A manager will get back to you with questions within a working day',
     qualified: 'We are preparing the commercial proposal',
     proposal: 'The proposal has been sent, we are waiting for your decision',
-    contract: 'The contract and the 50% invoice are ready',
+    contract: 'The contract and the invoice for the first stage are ready',
     paid: 'Payment received, we are starting the project',
     project: 'The project is in progress, the stages are below',
     lost: 'The request is closed',
@@ -131,3 +133,29 @@ const STAGE_MOVE: Record<Lang, Record<Stage, string>> = {
 };
 export const timelineTitle = (kind: Exclude<TimelineKind, 'stage'>, lang: string | null | undefined): string => TITLES[lang === 'en' ? 'en' : 'ru'][kind];
 export const stageMoveTitle = (stage: Stage, lang: string | null | undefined): string => STAGE_MOVE[lang === 'en' ? 'en' : 'ru'][stage];
+
+/** The stage fields the next-step line reads (the cabinet's milestone view). */
+export interface StageLine {
+  stageNo: number | null;
+  title: string | null;
+  amountUsd: number | null;
+  state: 'awaiting_payment' | 'in_progress' | 'awaiting_acceptance' | 'accepted' | null;
+  invoiceNumber: string | null;
+  payUrl: string | null;
+}
+
+/**
+ * What the client does next in a project paid by stages: accept a finished stage, or pay the stage whose invoice is issued. Null when there is
+ * nothing for the client to do (no stages, the stage runs, the invoice is not issued yet): the lead's stage sentence is used then.
+ */
+export function stageNextStep(stages: StageLine[], lang: string | null | undefined): string | null {
+  const en = lang === 'en';
+  for (const s of stages) {
+    if (s.stageNo === null || s.state === 'accepted') continue;
+    const name = `${s.title ? `«${s.title}»` : ''}`;
+    if (s.state === 'awaiting_acceptance') return en ? `Accept stage ${s.stageNo} ${name}`.trim() : `Примите этап ${s.stageNo} ${name}`.trim();
+    if (s.state === 'awaiting_payment' && s.payUrl) return en ? `Pay stage ${s.stageNo} ${name}: $${s.amountUsd}`.replace(/\s+:/, ':') : `Оплатите этап ${s.stageNo} ${name}: $${s.amountUsd}`.replace(/\s+:/, ':');
+    return null; // the stage runs, or its invoice is not issued yet
+  }
+  return null;
+}

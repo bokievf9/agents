@@ -59,7 +59,28 @@ CREATE TABLE IF NOT EXISTS rf_referrals (
   reminded_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS rf_referrals_status ON rf_referrals (status);
+CREATE TABLE IF NOT EXISTS rf_stage_payouts (
+  referral_id INTEGER NOT NULL,
+  stage_no INTEGER NOT NULL,
+  invoice_number TEXT NOT NULL,
+  usd REAL NOT NULL,
+  contact TEXT NOT NULL DEFAULT '',
+  requested_at INTEGER NOT NULL,
+  paid_at INTEGER,
+  PRIMARY KEY (referral_id, stage_no)
+);
 `;
+
+/** The payout of one paid stage after the first (payment by stages, 2026-11-21): the first stage's payout lives on the referral row. */
+export interface StagePayout {
+  referralId: number;
+  stageNo: number;
+  invoiceNumber: string;
+  usd: number;
+  contact: string;
+  requestedAt: number;
+  paidAt: number | null;
+}
 
 const map = (r: Row): Referral => ({
   id: r.id, referrer: r.referrer, referred: r.referred, leadId: r.lead_id, source: r.source, status: r.status, reward: r.reward,
@@ -133,6 +154,26 @@ export class ReferralStore {
   /** The payout of a paid referral is asked of the owner: amount and the referrer's contact are recorded once. False when it was asked before. */
   requestPayout(id: number, p: { usd: number; contact: string }): boolean {
     return this.db.prepare('UPDATE rf_referrals SET payout_usd = ?, payout_contact = ?, payout_requested_at = ? WHERE id = ? AND payout_requested_at IS NULL').run(p.usd, p.contact, this.now(), id).changes === 1;
+  }
+
+  /** The payout of a later stage is asked of the owner: once per referral and stage (false when it was asked before). */
+  claimStagePayout(p: { referralId: number; stageNo: number; invoiceNumber: string; usd: number; contact: string }): boolean {
+    return this.db.prepare('INSERT OR IGNORE INTO rf_stage_payouts (referral_id, stage_no, invoice_number, usd, contact, requested_at) VALUES (?, ?, ?, ?, ?, ?)').run(p.referralId, p.stageNo, p.invoiceNumber, p.usd, p.contact, this.now()).changes === 1;
+  }
+
+  /** The owner paid it («Выплатил»). */
+  settleStagePayout(referralId: number, stageNo: number): void {
+    this.db.prepare('UPDATE rf_stage_payouts SET paid_at = ? WHERE referral_id = ? AND stage_no = ? AND paid_at IS NULL').run(this.now(), referralId, stageNo);
+  }
+
+  /** The owner rejected it (or it failed): it can be asked again. */
+  releaseStagePayout(referralId: number, stageNo: number): void {
+    this.db.prepare('DELETE FROM rf_stage_payouts WHERE referral_id = ? AND stage_no = ? AND paid_at IS NULL').run(referralId, stageNo);
+  }
+
+  stagePayouts(referralId?: number): StagePayout[] {
+    const rows = (referralId === undefined ? this.db.prepare('SELECT * FROM rf_stage_payouts ORDER BY referral_id, stage_no').all() : this.db.prepare('SELECT * FROM rf_stage_payouts WHERE referral_id = ? ORDER BY stage_no').all(referralId)) as { referral_id: number; stage_no: number; invoice_number: string; usd: number; contact: string; requested_at: number; paid_at: number | null }[];
+    return rows.map((r) => ({ referralId: r.referral_id, stageNo: r.stage_no, invoiceNumber: r.invoice_number, usd: r.usd, contact: r.contact, requestedAt: r.requested_at, paidAt: r.paid_at }));
   }
 
   /** The owner rejected the payout (or it failed): it can be asked again. */

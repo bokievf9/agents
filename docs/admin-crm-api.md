@@ -141,8 +141,8 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 { "ok": true, "client": { "id": 1, "name": "Алиса", "email": "alice@example.com", "telegram": "@alice", "createdAt": "..." },
   "projects": [], "invoices": [], "documents": [], "tickets": [], "referrals": [], "referralSlug": "c1a1b2c3" }
 ```
-- `projects`: строки как у `GET /admin/crm/projects`.
-- `invoices`: строки как у `GET /admin/crm/documents` с `source: "billing"`, только выставленные и оплаченные (`issued`, `paid`), без черновиков и аннулированных.
+- `projects`: строки как у `GET /admin/crm/projects`; `milestones[]` этапов оплаты: `{ id, stageNo, title, amountUsd, invoiceNumber, payUrl, paidAt, acceptedAt, state, dueAt }` (`title` на языке клиента, `payUrl` только пока счёт этапа выставлен и не оплачен, `state` `awaiting_payment|in_progress|awaiting_acceptance|accepted`).
+- `invoices`: строки как у `GET /admin/crm/documents` с `source: "billing"` (плюс `stageNo`), только выставленные и оплаченные (`issued`, `paid`), без черновиков и аннулированных.
 - `documents`: остальные строки документов, только виды `contract`, `kp`, `estimate`, `act`, `offer` со статусом `approved` (privacy, черновики и отклонённые не отдаются).
 - `tickets`: как у `GET /admin/crm/tickets`, но без `note`; поле `answer` (текст утверждённого ответа или `null`).
 - `referrals`: как у `GET /admin/crm/referrals`, где клиент рекомендатель (по имени из его лидов или по слагу).
@@ -158,6 +158,12 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 { "ok": true, "item": { "id": 7, "text": "Как оплатить?", "status": "open", "createdAt": "...", "answeredAt": null, "answer": null } }
 ```
 
+### POST /admin/clients/:id/projects/:pid/milestones/:no/accept
+Клиент принимает готовый этап своего проекта в кабинете («Принять этап»). Проект ищется через лид клиента: чужой проект, неизвестный проект или этап, неизвестный клиент 404 `not_found`.
+Этап ещё в работе: 409 `not_ready`; не оплачен: 409 `not_paid`. Успех: `{ ok, already, milestone }` (`milestone` как в `projects[].milestones`, `state: "accepted"`), повтор безопасен (`already: true`, второй счёт не создаётся).
+Приёмка один раз: пишется `pm_milestones.accepted_at` (в ленте лида «Этап N принят»), HQ предлагает счёт следующего этапа (карточка на одобрение, ссылка оплаты появится в `milestones[].payUrl` после одобрения),
+счёт последнего этапа выставляется при приёмке предпоследнего (передача доступов ждёт его оплаты), владельцу приходит строка во входящие.
+
 ### Лиды клиента в `by-email` (`leads`)
 Лиды, привязанные к клиенту (`li_leads.client_id`), новые сверху, не больше 20. Внутренних текстов, промптов и заметок владельца нет.
 ```json
@@ -167,11 +173,11 @@ Upsert по email в `cab_clients` (повторный вызов обновля
   "replies": [{ "at": "...", "text": "Здравствуйте, Алиса!", "from": "manager" }] }]
 ```
 - `stage`: этап Пульта (`new|qualified|proposal|contract|paid|project|lost`, с учётом ручного переноса владельца). `nextStep`: одно предложение на этап, на языке лида (`ru` по умолчанию):
-  new «Менеджер уточнит детали в течение рабочего дня», qualified «Готовим коммерческое предложение», proposal «КП отправлено, ждём вашего решения», contract «Договор и счёт на 50% готовы»,
-  paid «Оплата получена, запускаем проект», project «Проект в работе, этапы ниже», lost «Заявка закрыта».
+  new «Менеджер уточнит детали в течение рабочего дня», qualified «Готовим коммерческое предложение», proposal «КП отправлено, ждём вашего решения», contract «Договор и счёт первого этапа готовы»,
+  paid «Оплата получена, запускаем проект», project «Проект в работе, этапы ниже», lost «Заявка закрыта». Если у проекта лида есть этапы оплаты, `nextStep` важнее: «Оплатите этап N «название»: $сумма» (счёт этапа выставлен) или «Примите этап N «название»» (этап готов).
 - `estimateUsd`: сумма выставленного счёта, иначе «Итого» из сметы сайта, иначе `null`. `summary`: до 200 знаков из слов самого клиента.
 - `timeline` по возрастанию времени, из того, что уже есть: заявка (`lead`), первый ответ менеджера (`reply`), утверждённое КП (`kp`, `ps_documents`), договор (`contract`, `ps_documents` или `bo_documents`),
-  счёт (`invoice`) и оплата (`paid`, `bl_invoices`), старт проекта (`project`, `pm_projects`), переносы владельца по этапам (`stage`, журнал `lead_stage`).
+  счёт (`invoice`) и оплата (`paid`, `bl_invoices`; у счёта этапа название кончается «: этап N»), приёмка этапа клиентом (`stage_accepted`, «Этап N принят»), старт проекта (`project`, `pm_projects`), переносы владельца по этапам (`stage`, журнал `lead_stage`).
 - `replies`: переписка по лиду из `cab_messages` (`id, client_id, lead_id, from, text <= 2000, at`, плюс `ticket_id` для связи с тикетом): ответы владельца через `POST /admin/crm/leads/:id/reply`
   (пишутся для лида с кабинетом даже если чат не принял), одобренные ответы головы продаж, сообщения клиента и одобренные ответы Поддержки на них. Для лида без кабинета строк нет.
 
@@ -240,10 +246,11 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 Строки как в панелях (`leads`, `projects`, `invoices` как в `GET /admin/crm/invoices`, `documents` без счетов, `tickets`, `referrals`), до 50 штук. Клиента определяют лиды с его `client_id`, имя, email и Telegram-ник; `touches` не больше 30, новые первыми.
 
 ## Проекты
-`GET /admin/crm/projects/:id` → `{ ok, item, milestones: [ { id, kind, title, dueAt, doneAt } ], tasks: [ { id, title, status, assignee } ], issues: [ { number, title, state, url } ] }`.
+`GET /admin/crm/projects/:id` → `{ ok, item, milestones: [ { id, kind, title, dueAt, doneAt, stageNo, amountUsd, invoiceNumber, payUrl, paidAt, acceptedAt, state } ], tasks: [ { id, title, status, assignee } ], issues: [ { number, title, state, url } ] }`.
+Оплата по этапам (2026-11-21): у проекта по КП этапы оплаты и есть этапы (`kind: "stage"`), поля этапа `stageNo`, `amountUsd`, `invoiceNumber`, `payUrl` (только пока счёт `issued`), `paidAt`, `acceptedAt` и `state` (`awaiting_payment|in_progress|awaiting_acceptance|accepted`) у этапов старого плана `null`. Строка проекта (в списке и в `item`) несёт `milestones` только из этапов оплаты (`{ id, stageNo, title, amountUsd, invoiceNumber, payUrl, paidAt, acceptedAt, state, dueAt }`).
 `item` как в списке плюс `note`; `tasks` = задача проекта, задачи этапов и их подзадачи; `issues` = задачи строителям с GitHub-ссылкой (`state` `open|closed`).
 `POST /admin/crm/projects/:id` тело одно из:
-- `{ "action": "complete_milestone", "milestoneId" }`: команда `/mdone` Производства (этап «Сдача» заводит деплой, последний этап закрывает проект), повтор безопасен;
+- `{ "action": "complete_milestone", "milestoneId" }`: команда `/mdone` Производства (этап «Сдача» заводит деплой, последний этап закрывает проект), повтор безопасен; для этапа оплаты это ПРИЁМКА этапа (`/mdone <проект> <номер>`): приходит счёт следующего этапа, оплаченный этап обязателен;
 - `{ "action": "set_deadline", "milestoneId", "dueAt": "<ISO>" }`;
 - `{ "action": "set_status", "status": "draft|active|done|paused" }`. `paused` записывается в `pm_projects.status` как есть (раньше такого статуса не было). Другое значение: 400 `invalid` + `allowed`;
 - `{ "action": "note", "text" }` (1..2000, заметка владельца, ещё комментарий в задаче проекта).
@@ -251,7 +258,7 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 
 ## Счета
 `GET /admin/crm/invoices` (`?status=draft|issued|paid|void`, `?limit=`) → `{ ok, available, statuses, items, nextCursor: null }`, строка
-`{ id, number, client, title, amountUsd, payAmountUsd, status, dueDate, issuedAt, paidAt, paidVia, txId, payUrl, remindedAt, leadId, projectId }` (`title` = «за что», `payUrl` = ссылка страницы оплаты или `null`). Неизвестный статус: 400 `invalid_status` + `allowed`.
+`{ id, number, client, title, amountUsd, payAmountUsd, status, dueDate, issuedAt, paidAt, paidVia, txId, payUrl, remindedAt, leadId, projectId, stageNo, stage }` (`stageNo` и `stage: { no, of, title }` у счёта этапа, иначе `null`; колонка `bl_invoices.stage_no`) (`title` = «за что», `payUrl` = ссылка страницы оплаты или `null`). Неизвестный статус: 400 `invalid_status` + `allowed`.
 `POST /admin/crm/invoices/:id` тело `{ "action": "remind" | "mark_paid" | "void" }` → `{ ok, item }`:
 - `mark_paid` = `/paid <номер>` (голова Сопровождения отмечает оплату, запускает проект и выплату рекомендателю), повтор безопасен; аннулированный счёт 409 `illegal_transition`;
 - `remind` = текст напоминания Billing (`reminderText`) клиенту через канал его лида (Telegram-бот), иначе текст кладётся владельцу во входящие. В `item` поле `remindedVia: "telegram"|"owner"`, `remindedAt` обновлён (колонка `bl_invoices.reminded_at`). Только для `issued`, иначе 409;
@@ -344,3 +351,117 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 `POST /admin/company/routines/:name/run` → `{ ok, taskId }`: `Hq.runRoutine`, задача и пробуждение головы как у обычного срабатывания. Выключенная: 409 `not_started` + `reason: "disabled"`; прошлая задача рутины ещё идёт (политика `skip`): 409 `not_started` + `reason: "busy"`.
 `POST /admin/company/trust/:kind` тело `{ "level": 0 | 1 }` → `{ ok, item }` (запись списка `trust`): тот же код, что `/level <тип> <0|1>`, в том числе для типа с замком (так его и снимают). Неизвестный тип 404, другой уровень 400 `invalid` + `allowed: [0, 1]`.
 Плохое тело 400 `invalid`, неизвестная рутина 404.
+
+# Ревью-центр (2026-11-21)
+Одна поверхность, где владелец читает, правит, одобряет и жмёт «выкладывай»: полноэкранный режим сайта `/admin/review`, чаты с клиентами `/admin/chats` и ссылки для Трендвотчера. Всё под `x-admin-token`, лимит и ошибки как у остальных `/admin/*` (6000 запросов за 10 минут, 401 без токена, 429 `rate_limited`, 500 `internal`). Код: `apps/hq/src/review.ts`, `chats.ts`, `pult-trends.ts`. В логи попадают только номера и счётчики, тексты материалов и клиентов не логируются.
+Все решения идут через тот же код, что кнопки Telegram (`ApprovalQueue.handle`, затем задачи и карточка в Telegram закрываются, `settleCard`), второго пути нет: после решения на сайте Telegram-карточка показывает «Одобрено» или «Отклонено» без кнопок, а нажатие на ней потом отвечает «Уже обработано».
+Пути медиа вида `/admin/files/<путь>` относительны корня HQ: сайт проксирует их как `/api/admin/files/<путь>` (`GET /admin/files/*`, видео с `Range`).
+
+## GET /admin/review
+`?dept=marketing|sales|support|production|backoffice|director|all` (по умолчанию `all`), `?status=pending|decided|all` (по умолчанию `pending`), `?limit=1..200` (по умолчанию 50), `?cursor=<номер>`. Неизвестное значение любого параметра: 400 `invalid` + `hint` (+ `allowed`).
+```json
+{ "ok": true,
+  "items": [ {
+    "id": "ap_123", "kind": "content_item", "dept": "marketing", "createdAt": "2026-11-21T03:00:00.000Z", "status": "pending",
+    "title": "Запись ночью", "summary": "Клиент пишет в 2 ночи, а бот отвечает",
+    "media": [ { "type": "video", "url": "/admin/files/41/reel.mp4", "poster": null, "w": 1080, "h": 1920, "durationS": 28 } ],
+    "text": { "body": "...", "draft": "...", "caption": "...", "hashtags": ["#fir"], "captions": { "instagram": "...", "tiktok": "...", "shorts": "..." } },
+    "meta": { "slot": "2026-11-23", "platform": "instagram", "format": "reel", "source": "routine" },
+    "versions": [ { "v": 1, "createdAt": "...", "text": {}, "media": [], "note": "", "author": "worker" } ],
+    "currentVersion": 1, "parentId": null, "taskId": 77, "error": null,
+    "actions": ["approve", "edit", "revise", "reject", "reschedule"] } ],
+  "counts": { "marketing": 12, "sales": 3, "support": 1, "production": 0, "backoffice": 0, "director": 0 },
+  "nextCursor": null }
+```
+- Список строится из ВСЕХ одобрений компании (`task_approvals`), любого вида. Порядок: новые первыми (по номеру). `nextCursor`: строка для `?cursor=` следующей страницы или `null`. Решённые и лежащие в пачке (ещё не отправленные карточкой) тоже в списке: решать можно и без Telegram-карточки.
+- `counts`: сколько ждут владельца по отделам (всегда все шесть ключей, не зависят от `status`, `limit` и `dept`). Карточка пакета недели (`content_pack`) в счёт не входит: считаются её материалы. `director`: зарезервировано, одобрений этого отдела нет, всегда 0 и пустой список.
+- `id`: `ap_<номер строки task_approvals>`. Один и тот же, пока одобрение живёт.
+- `kind` (все виды одобрений): `content_item`, `content_pack`, `article`, `seo_proposal`, `audit` (Маркетинг); `lead_reply`, `lead_price`, `presales_pack`, `referral_reward`, `referral_payout`, `prospect_first`, `prospect_followup`, `prospect_reply` (Продажи); `support_answer`, `support_money`, `billing_invoice`, `billing_reminder`, `onboarding_guide` (Сопровождение); `pm_spec`, `pm_client_status` (Производство); `bo_document` (Бэк-офис). Профильный старт-кит это `content_item` с `meta.format: "profile"`. Неизвестный новый вид показывается общей карточкой (заголовок из первой строки карточки, `text.body` = её текст, действия `approve`, `reject`).
+- `dept`: отдел одобрения (`marketing|sales|support|production|backoffice`).
+- `createdAt`: ISO, когда голова поставила одобрение.
+- `status`: `pending` (ждёт владельца, в том числе в пачке и пока выполняется), `approved` (одобрено и выполнено; для вида, который решает сам на уровне 1, так и появляется), `rejected`, `published` (материал вышел на всех площадках или статья опубликована на `/blog`), `failed` (одобрение не выполнилось, или одобренный материал не опубликовался: причина в `error`).
+- `title`, `summary`: короткие строки для списка (`summary` до 160 знаков, у рилса хук). `error`: причина сбоя публикации или выполнения, иначе `null`.
+- `media[]`: `{ type: "video"|"image"|"pdf"|"html", url, poster: string|null, w, h, durationS }` (`w`, `h`, `durationS` могут быть `null`). Сейчас бывают `video` (`reel.mp4` рилса, 1080x1920, `durationS` из сценария) и `image` (PNG поста, слайдов, кадров; размеры из заголовка PNG). `pdf` и `html` зарезервированы под документы, HQ их пока не отдаёт. **Картинки и видео рисуются после одобрения** (посты, карусели, кадры сразу при решении, видео рилса рендерером позже), поэтому у ждущего решения материала `media: []`, а `meta.render.state` говорит, что с ними.
+- `text`: объект, ключи зависят от вида (все строки, кроме отмеченных):
+  - `content_item`: `body` (сценарий или слайды: текст над подписями), `draft` (весь текст целиком, с метками площадок), `caption` (подпись Instagram без хештегов), `hashtags` (массив из хвоста подписи Instagram), `captions` (`{instagram?, tiktok?, shorts?}`: подписи площадок целиком, ключ есть, только если у материала такая площадка), у старт-кита ещё `kit` (`{instagram, youtube, tiktok}`).
+  - `article`: `subject` (заголовок), `body` и `draft` (превью статьи, как в карточке).
+  - `presales_pack`: `body` (КП) и `documents` (`[{ key: "kp"|"estimate"|"contract", title, body }]`).
+  - `seo_proposal`: `body` (что менять), `page`.
+  - `content_pack`, `referral_*` и неизвестные виды: `body` (текст карточки).
+  - остальные виды с текстом для клиента (`lead_reply`, `lead_price`, `support_*`, `bo_document`, `billing_*`, `onboarding_guide`, `pm_*`, `prospect_*`, `audit`): `draft` и `body` (одинаковые: текст, который правит владелец и который уйдёт или будет утверждён).
+- `versions[]`: `{ v, createdAt, text, media, note, author: "owner"|"worker" }`, по возрастанию `v`; `text` и `media` того же вида, что у элемента. Нетронутый материал: одна версия `v: 1`, `author: "worker"`. Первая правка владельца записывает снимок до правки как `v: 1`, правка идёт как `v: 2`, `author: "owner"`, `note: "владелец"` или `"владелец: <note>"`. У материала, сделанного по «Правкам» (`revise`), версии родителя идут первыми, а его собственная первая версия получает `note: "владелец: <замечание>"`. У материала по ссылке владельца для Трендвотчера `versions[0].note` это разбор ссылки (формат, хук, структура, почему работает, аналог). Тексты версий читаются и в списке, и в ответе действия.
+- `currentVersion`: номер последней версии. `parentId`: `id` материала, который эти «Правки» переделывают (у статьи: прошлая карточка той же статьи), иначе `null`.
+- `taskId`: задача отдела, из которой пришло одобрение.
+- `actions[]`: какие действия сейчас можно (всегда в этом порядке): `approve`, `edit`, `revise`, `reject`, `publish_now`, `reschedule`, `send`, `call`. Правила:
+  - `approve`, `reject`: пока `pending`. `edit`: пока `pending` и у вида есть текст для замены (`content_item`; `lead_reply`, `lead_price`, `support_answer`, `support_money`, `bo_document`, `billing_invoice`, `billing_reminder`, `onboarding_guide`, `pm_spec`, `pm_client_status`, `prospect_*`, `audit`). Нет у `article`, `content_pack`, `presales_pack`, `referral_*`, `seo_proposal`.
+  - `revise`: пока `pending`, для `content_item` (кроме старт-кита профиля) и `article`, и только если в процессе есть голова Маркетинга.
+  - `publish_now`: `article` пока `pending`; `content_item` (кроме старт-кита), если он не вышел везде: `pending` пост, карусель или история (одобрится и уйдёт), `pending` рилс не предлагается (видео ещё нет), одобренный или `failed` материал, если у него есть видео рилса или картинки.
+  - `reschedule`: `content_item`, которому ещё есть что публиковать (`pending`, `approved`, `failed`).
+  - `send`: пока `pending`, для `lead_reply`, `lead_price`, `support_answer`, `support_money`, `audit`.
+  - `call`: в любом статусе, у вида есть лид (`lead_reply`, `lead_price`, `presales_pack`, `billing_*` по счёту лида, `support_*` по тикету лида).
+  - Решённый (`rejected`, `published`) материал не даёт ничего, кроме `call`.
+- `meta` (общее для видов; чего нет, того ключа нет):
+  - `content_item`: `slot` и `plannedDate` (день публикации `YYYY-MM-DD`, времени у материала нет: публикует утренний проход), `platform` (`instagram`, у старт-кита `all`), `platforms` (площадки материала: `instagram|tiktok|shorts`), `format` (`reel|post|carousel|story|profile`), `itemId`, `source` (`owner_link`: по ссылке владельца; `owner`: заказ владельца, в том числе «Правки»; `routine`: рутина и пакет недели; метки `trend` HQ не ставит, тренды дня идут в подсказки промпта незаметно), `render` (`{ state: "none"|"rendering"|"ready"|"failed" }`: `none` до одобрения), `publishedOn` (площадки, где уже вышло), `macQueued` (площадки, которые ждут помощника на Маке), `publishedUrl` (адрес YouTube или Instagram, `null`), `sourceSlug` (из какой статьи сделан), `link` (`{ id, url, note }`: ссылка владельца, из которой он вырос), `heldByPack: true` (материал лежит под карточкой пакета недели), `pack` (`id` карточки пакета, пока она открыта), `revision` (пока есть «Правки»: `{ taskId, state: "working"|"delivered", reviewId }`, `reviewId` это `id` нового материала, когда отдел его сдал).
+  - `content_pack`: `pack: { count, itemIds: ["ap_..."] }`, `source: "routine"`.
+  - `article`: `platform: "blog"`, `article: { id, niche, line: "ai"|"niche", slug }`, `url` (`/blog/<slug>`, пока не опубликована `null`), `source`, `revision` как выше.
+  - Лиды и клиенты: `lead` (`{ id, name, contact, service, budget, stage, source, temperature, taskId, callAt, cabinet }` или `null`; `stage`: `new|qualified|proposal|contract|paid|project|lost`) и `client` (`{ id, email, cabinet }`, `id` и `email` `null` без кабинета) у `lead_reply`, `lead_price`, `presales_pack`, `support_*`, `billing_*`; `delivery` (`telegram`: бот @firtech_bot отправит сам; `owner`: текст уйдёт владельцу, пересылает он; у `audit` `contact`) у `lead_reply`, `lead_price`, `support_*`, `audit`.
+  - `billing_invoice`: `meta.stage` `{ no, of, title, amountUsd }` у счёта этапа оплаты (у остальных поля нет).
+  - `presales_pack`: `pack` (`{ id, direction, totalUsd, prepayUsd, prepayPercent, stages, timeline }`). `support_*`: `ticket` (`{ id, clientName, contact, status, money, question, createdAt, answeredAt }` или `null`). `billing_*`: `invoice` (`{ id, number, client, amountUsd, dueDate, status, what, leadId, projectId }`). `bo_document`: `document` (`{ id, type, client, version, projectId }`). `referral_*`: `referral` (`{ id, referrer, referred, status, reward }`). `pm_*`: `project` (`{ id, client, status }`). `onboarding_guide`: `client` (`{ id: null, email: null, cabinet: false, name }`), `onboarding: { id }`. `prospect_*`: `prospect` (`{ id, name, niche, city, telegram, instagram }`), `draftKind` (`first|followup|reply`). `seo_proposal`: `seo: { key, page, needsBuilder }`. `audit`: `audit: { id, host, locale }`. Если строки в базе уже нет, в объекте остаётся только `{ id }`.
+- Пакет недели: карточка `content_pack` это отдельный элемент (действия `approve`, `reject`), а каждый её материал отдельный элемент `content_item` с `meta.heldByPack`. `approve` материала решает только его (у него появляется своя строка одобрения без Telegram-карточки), карточка пакета остаётся и дальше одобряет остальные. `approve` или `reject` пакета решает оставшиеся.
+
+## POST /admin/review/:id
+`:id` вида `ap_<номер>`. Тело `{ "action": "approve|edit|revise|reject|publish_now|reschedule|send|call", "text"?: {...}, "note"?: string (1..4000), "slot"?: string (до 40), "platform"?: "instagram|tiktok|shorts|youtube" }`, лишние поля запрещены. `youtube` это `shorts`. Ответ `{ ok: true, item }` (элемент как в списке, уже после действия) плюс поля действия. Порядок проверок: 404 `not_found` (id не такого вида или нет), 400 `invalid` + `allowed` (плохое тело), затем повторы и состояния, затем действие.
+- Повтор того же решения безопасен (`approve` уже одобренного или опубликованного, `reject` уже отклонённого дают `{ ok: true, item }`, в журнале решений второй записи нет). Обратное решение: 409 `already_decided` + `status`. `edit`, `revise`, `send` не у `pending`: 409 `not_pending` + `status`; так же `approve`/`reject` у `failed`. Действие, которого нет в `actions` элемента: 409 `not_applicable` + `status` + `actions` (список допустимых сейчас).
+- `approve`, `reject`: решение ядра, как нажатие кнопки. Предложение, которое ещё не уходило карточкой (лежит в пачке, под пакетом), получает строку одобрения без карточки. `reject` с `note` у `content_item` сохраняет замечание комментарием материала. Если выполнение одобренного упало: `200 { ok: false, error: "failed", status: "failed", item }`.
+- `edit`: владелец заменил текст сам (в Telegram это «Править»), тело `text` обязательно (иначе 400 `invalid`). Одобрение остаётся `pending`, счётчик чистых одобрений сбрасывается, в журнале решений запись `edit`, Telegram-карточка показывает новый текст с кнопками, нового сообщения владельцу не приходит. Создаётся версия `v+1` (`note: "владелец"`, с `note` в теле: `"владелец: <note>"`). Что можно передать в `text` (ключи строгие, лишний: 400 `invalid`):
+  - `content_item`: `draft` (весь текст сразу), `body` (сценарий или слайды: только эта часть), `captions` (`{ instagram?, tiktok?, shorts? }`: подпись площадки целиком), `caption` и `hashtags` (подпись и хештеги Instagram: собираются обратно в `captions.instagram`). Можно несколько ключей сразу. Метки площадок HQ расставляет сам. Такой части у материала нет, текст пустой или не изменился: 409 `not_applied` + `reason`.
+  - остальные виды: `draft` (или `body`), непустая строка до 8000; не изменился: 409 `not_applied`.
+- `revise`: замечание владельца для исполнителя, `note` обязателен (400 `invalid`). Материал: задача Маркетингу (`meta.action: "revise_item"`, замечание, исходный текст, `reviseOf` = id элемента), Контент-мейкер пишет НОВЫЙ материал того же типа, темы и дня; исходный остаётся `pending`, пока владелец не решит любой из двух. Когда отдел сдаёт, новая карточка приходит как новый элемент с `parentId` и общими версиями, а у исходного `meta.revision` = `{ taskId, state: "delivered", reviewId }`. Ответ `{ ok, state: "revising", taskId, item }`. Статья: карточка закрывается (`rejected`), статья пишется заново с замечанием, новая карточка той же статьи будет иметь `parentId`, ответ `{ ok, state: "revising", item }`. Правок вне Маркетинга нет, `revise` там не предлагается (`actions`); без головы Маркетинга `revise`, `publish_now` и `reschedule` не предлагаются тоже.
+- `publish_now` («Выложить сейчас»): сначала `approve`, если `pending` (тот же путь; упало выполнение: `200 { ok: false, error: "failed", ... }`), затем публикация. Без `platform` идёт по всем площадкам материала (рилс: `instagram`, `tiktok`, `shorts`), с `platform` по одной.
+  - `shorts` (YouTube): тот же `YouTubePoster`, что в утреннем проходе: квота 1600 из 10 000, потолок 9000, одна попытка. Успех: строка помечается опубликованной так же, как делает утренний проход, адрес в `url`.
+  - `instagram`, `tiktok`: очередь помощника на Маке (`mac_queue`, флаг `queued=1` читает `GET /admin/content?queued=1`), состояние `queued`, адрес придёт отчётом помощника.
+  - Статья: публикует само одобрение (`/blog/<slug>`), состояние `published`.
+  - Ответ `{ ok: true, state: "published"|"queued", url?, results?, item }`: `state` `published`, если всё вышло сразу, иначе `queued`; `url` первого опубликованного; `results` (материал): `[{ platform, state: "published"|"queued"|"skipped"|"manual"|"failed"|"not_ready", url?, reason?, error?, quota? }]`. `skipped`: уже опубликовано, `manual`: у площадки нет автоматической публикации в этом HQ (для `shorts` нет `YT_OAUTH_CLIENT_JSON` и `YT_REFRESH_TOKEN`), утренняя карточка остаётся ручной, `not_ready`: нет видео или картинок, `reason` по-русски.
+  - Сбой: `200 { ok: false, error: "publish_failed", state: "failed", message, results, item }`: материал остаётся `failed` (`error` с причиной, причина лежит в `pb_posts.error`), утренний проход повторит попытку как обычно, владелец может нажать ещё раз. Исчерпана квота YouTube: то же, в `results[].quota: true` и без запроса к YouTube.
+  - С явным `platform`, который сейчас нельзя: 409 `not_ready` (+ `reason`, `results`, `item`) или 409 `not_configured` (нет автопубликации YouTube). Ни одной площадки не сделано: 409 `not_ready`. Материал после одобрения не получил текстов площадок: 409 `not_ready`; такой площадки у материала нет: 400 `invalid` + `allowed`.
+- `reschedule`: `slot` обязателен, `YYYY-MM-DD` или ISO-дата с временем (берётся день, время у материала не хранится): 400 `invalid` + `hint`. Меняет `cm_items.planned_date` и дату ещё не опубликованных строк. Ответ `{ ok, item }`.
+- `send`: отправить клиенту то, что в карточке. `text.draft` необязателен: если он есть и отличается, сначала запись `edit` (версия `v+1`), затем `approve` тем же путём. Ответ `{ ok: true, state: "sent"|"handed_off", via: "telegram"|"cabinet"|"owner", item }`: `sent` с `via: "telegram"` когда бот @firtech_bot отправил клиенту сам (у лида есть чат), `sent` с `via: "cabinet"` когда ответ лёг в тред кабинета, `handed_off` с `via: "owner"` когда текст отдан владельцу переслать вручную (так же ведёт себя кнопка в Telegram). Доставка не удалась (бот заблокирован и т. п.): `200 { ok: false, error: "not_delivered", status, via, item }`, одобрение остаётся `failed`. Остался шаблонный маркер в квадратных скобках (`[цена]`, `[решение владельца]`) у `lead_price`, `support_money`, `support_answer`: 409 `placeholder` + `placeholders`, ничего не отправлено. Ответ клиенту СВОИМИ словами без черновика: `POST /admin/chats/:id/reply`.
+- `call`: `slot` обязателен, ISO-дата со временем (`2026-11-24T10:00:00Z`; без времени или не дата: 400 `invalid`), записывает слот созвона лида существующим путём `POST /admin/crm/leads/:id/call`. Ответ `{ ok, callAt, item }`; вида без лида 409 `not_applicable`.
+
+## GET /admin/chats и ответы клиентам
+Один тред на клиента, собранный из кабинета (`cab_clients`, `cab_messages`), лидов и ответов на них, тикетов Поддержки, сессий веб-чата сайта и диалогов @firtech_bot. Как склеиваются: по номеру клиента кабинета (у лида `client_id`, сообщения кабинета), иначе по одному контакту (email, Telegram-ник в любой записи `@ник`, `ник`, `t.me/ник`, телефон от 7 цифр), иначе по одной сессии или чату (лид хранит `chatId` или `sessionId` своей задачи). Анонимный диалог без лида, тикета и кабинета остаётся отдельным тредом.
+**Тексты анонимных диалогов веб-чата и бота не хранятся (правило проекта: у чата только маскированная сводка), поэтому у такого треда нет сообщений, пока человек не стал лидом, тикетом или клиентом кабинета.** Сообщения треда: первое обращение лида, сообщения кабинета, вопросы и ответы по тикетам, одобренные ответы на лид, ответы владельца из этого раздела и со страницы лида.
+
+`GET /admin/chats?status=open|all&limit=1..200&cursor=<число>` (по умолчанию `open`, 50). `open`: есть непрочитанное, или открытый тикет, или была активность за 7 дней. Неизвестное значение: 400 `invalid`.
+```json
+{ "ok": true, "unread": 2, "nextCursor": null,
+  "items": [ { "id": "c3", "client": { "id": 3, "name": "Анна", "email": "anna@example.com", "contact": "@anna" },
+    "channels": ["cabinet", "telegram"], "lastAt": "2026-11-21T05:10:00.000Z", "unread": 1, "preview": "Когда будет готов макет?",
+    "leadId": 12, "ticketId": null, "textsStored": true, "openTicket": false } ] }
+```
+- Порядок: по `lastAt`, новые первыми. `unread` (верхнего уровня): число тредов с непрочитанным; `nextCursor`: смещение следующей страницы или `null`.
+- `id` треда: `c<номер клиента кабинета>`, иначе `l<номер лида>`, иначе `t<номер тикета>`, иначе `w<сессия сайта>`, иначе `g<chat id бота>`. Когда треды склеиваются, id может смениться, поэтому `GET`/`POST` принимают любой псевдоним (`l12` открывает тред `c3`, если лид 12 принадлежит клиенту 3).
+- `client`: `{ id (кабинета или null), name, email|null, contact }`; без имени `"Посетитель сайта"`, у бота без лида `@ник`. `channels`: `web|telegram|cabinet`. `unread`: сообщения клиента после последнего сообщения владельца или HQ. `preview`: последнее сообщение, у треда без текстов маскированная сводка. `leadId`: новейший лид, `ticketId`: новейший тикет. `textsStored: false` у треда без сообщений (см. выше).
+
+`GET /admin/chats/:id` → `{ ok, thread, messages: [ { id, at, from: "client"|"hq"|"owner", channel: "web"|"telegram"|"cabinet", text, attachments: [] } ] }` (`thread` как строка списка, сообщения по возрастанию времени). Неизвестный 404. `id` сообщения: `cab_<n>` (кабинет), `lead_<n>` (первое обращение лида), `tk_<n>_q`/`tk_<n>_a` (вопрос и ответ тикета), `rp_<n>` (одобренный ответ на лид), `ow_<n>` (ответ владельца без кабинета). Вложений HQ пока не хранит: `attachments` всегда `[]`. Реплика владельца в треде клиента кабинета показывается с `channel: "cabinet"` (так она лежит в треде).
+
+`POST /admin/chats/:id/reply` тело `{ "text": 1..2000 }` (лишние поля 400 `invalid`, неизвестный тред 404) → `{ ok: true, sent, via, message, thread }`. Владелец написал сам, поэтому **одобрения нет**: текст уходит на последний канал клиента (где он написал последним), если не вышло, на следующий адрес по порядку Telegram-бот (`chatId`), сайт (`sessionId`, текст ждёт следующего ответа чата), кабинет. `via`: `telegram|web|cabinet|none`, `sent` = `via != "none"`. Если у клиента есть кабинет и лид, ответ ВСЕГДА пишется в тред кабинета (`cab_messages`, автор `owner`), иначе он хранится в `ch_messages`. В журнал лида (комментарий задачи «Ответ владельца (канал): текст» и `activity` `chat_reply`) запись попадает всегда, с признаком доставки. Недоставленный ответ (сессия сайта исчезла, бот заблокирован, нет адреса) возвращается как `200 { ok: true, sent: false, via: "none" }` и остаётся в треде, сайт показывает «не доставлено, отправьте вручную». `message` строка треда (`from: "owner"`), `thread` обновлённая строка.
+
+## Ссылки владельца для Трендвотчера
+`POST /admin/trends` тело `{ "url": string (1..600), "note"?: string (до 500) }` и Telegram `/trend <ссылка> [заметка]` (только владелец, Директор, команда в `/help`, в меню бота нет: меню заполнено 20 командами). Берутся публичные https-ссылки на пост или ролик Instagram, TikTok и YouTube (хосты `www.instagram.com`, `instagram.com`, `www.tiktok.com`, `vm.tiktok.com`, `vt.tiktok.com`, `www.youtube.com`, `m.youtube.com`, `youtube.com`, `youtu.be`), без логина в адресе. Лишние поля и пустой `url`: 400 `invalid`; не ссылка, не https, чужой хост, логин в адресе: 400 `invalid_link` + `reason` (по-русски). Без головы Маркетинга 503 `unavailable`. Та же ссылка за последние сутки (не упавшая) не ставится второй раз: `already: true` и прежняя строка. Ответ `{ ok: true, already, item }`.
+Что происходит: задача Маркетингу (`meta.action: "owner_link"`), Трендвотчер через `ctx.tools.web` читает то, что платформа показывает анонимному посетителю (oEmbed YouTube и TikTok, тэги `og:*` страницы; у Instagram oEmbed без токена приложения нет, остаются `og`-тэги; логина и входа нет никогда, хосты только из списка выше, `docs/tools.md`), анализирует (формат, хук, структура, почему работает, цифры только если они есть на странице, аналог для Fir Tech) и сохраняет разбор в `ts_links`. Затем Маркетинг ставит Контент-мейкеру задачу `topic` с аналогом (рилс, карусель или пост, разбор идёт подсказкой в промпт), материал проходит обычный конвейер (ревью по чек-листу, одобрение, рендер после решения) и появляется в ревью-центре с `meta.source: "owner_link"`, `meta.link` и разбором в `versions[0].note`. Владельцу приходит сообщение «Разбор ссылки готов» (во входящие или в Telegram по присутствию).
+`GET /admin/trends?limit=1..200&cursor=<id>` → `{ ok, items, nextCursor, statuses: ["analysing","proposed","done","failed"] }`, новые первыми, неверный параметр 400 `invalid`. Строка:
+```json
+{ "id": 3, "url": "https://www.youtube.com/shorts/xyz789", "host": "www.youtube.com", "platform": "youtube", "note": "", "status": "proposed", "error": null,
+  "createdAt": "...", "updatedAt": "...", "taskId": 91,
+  "analysis": { "format": "...", "hook": "...", "structure": ["..."], "whyItWorks": "...", "numbers": null, "analogue": { "type": "clip|carousel|post", "topic": "...", "angle": "..." } },
+  "reviewId": "ap_412", "itemId": 57 }
+```
+`status`: `analysing` (ждёт Трендвотчера, читает и анализирует, пишется аналог), `proposed` (аналог ждёт владельца в ревью-центре, `reviewId` его элемент), `done` (владелец решил аналог: одобрил или отклонил), `failed` (`error` по-русски: страница не отдала данные без входа, нет LLM, разбор не получился, аналог не получился; при сбое аналога `analysis` остаётся). `analysis`, `reviewId`, `itemId` бывают `null` до своего шага. `platform`: `youtube|instagram|tiktok`.
+
+## POST /admin/prices/reload
+Загружает прайс-лист сайта сразу (тот же `x-admin-token`): `{ ok, updatedAt, source: 'fetched'|'cached'|'fallback' }`; HQ и так перечитывает его каждые 15 минут (`PRICES_RELOAD_MS`).
+
+## Таблицы и отличия от черновика
+- Новые таблицы: `review_versions` (версии, ключ `approval_id` = id элемента: `v`, `created_at`, `text` и `media` JSON, `note`, `author`), `ch_messages` (ответы владельца клиентам без кабинета), `ts_links` (ссылки владельца и их разбор). Колонка `cab_messages.author` (`owner|hq`, по умолчанию `hq`): кто написал строку менеджера (ответ владельца со страницы лида или из чатов пишется как `owner`). Очередь Мака: `mac_queue` (общая функция `macEnqueue` в `@fir/core`).
+- Отличия от черновика контракта: `id` это `ap_<номер строки task_approvals>` (составных id нет); `meta.slot` у материала это день `YYYY-MM-DD` (в HQ нет времени публикации), `reschedule` принимает день; `meta.source` не выдаёт `trend` (см. выше), есть `owner`; у `GET /admin/chats` добавлены `textsStored`, `openTicket` и верхнеуровневый `unread`, и тексты анонимных диалогов веб-чата и бота не хранятся; `publish_now` для нескольких площадок возвращает `results`; сбой публикации и недоставка это `200` с `ok: false` (как у `POST /admin/approvals`); `revise` есть только у материалов Маркетинга (`content_item`, `article`); `send` это `approve` с необязательной правкой текста и ответом о доставке, а не второй путь отправки; в `GET /admin/review` добавлены `taskId` и `error`, у статуса `published` и `failed`.

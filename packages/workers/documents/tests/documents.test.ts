@@ -1,3 +1,4 @@
+import { stagesFor } from '@fir/core';
 import { describe, expect, it } from 'vitest';
 import { DOC_TYPES, fillTemplate, loadTemplate, openPlaceholders, parseDocType } from '../src/index.js';
 
@@ -17,10 +18,11 @@ describe('offer and contract follow the site terms', () => {
     }
   });
 
-  it('50/50 payment, USDT TRC20 or TON or the wallet from the estimate, first-result guarantee per product, 30 days of fixes', () => {
+  it('payment by stages, USDT TRC20 or TON or the wallet from the estimate, first-result guarantee per product, 30 days of fixes', () => {
     for (const t of both) {
-      expect(t).toMatch(/50% .*до начала работы/);
-      expect(t).toContain('остальные 50% после приёмки');
+      expect(t).toContain('Оплата по этапам: каждый этап оплачивается до его начала, последний до передачи доступов.');
+      expect(t).toContain('Следующий счёт выставляется после приёмки предыдущего этапа');
+      expect(t).not.toMatch(/50%|предоплат/i);
       expect(t).toContain('USDT в сети TRC20 или TON');
       expect(t).toContain('онлайн-кошелёк');
       expect(t).toContain('7 дней');
@@ -69,6 +71,20 @@ describe('document templates', () => {
   });
 });
 
+describe('payment clause from the approved КП', () => {
+  const stages = stagesFor(1000, ['site']);
+  it('the contract, the offer and the act name the stage plan of the КП; without it the general rule', () => {
+    for (const type of ['contract', 'offer'] as const) {
+      const t = fillTemplate(loadTemplate(type), { ...data, price: '$1000', stages });
+      expect(t).toContain('этап 1 «Структура и первый экран»: $300 (30%); этап 2 «Все страницы и наполнение»: $400 (40%); этап 3 «Запуск, SEO, передача»: $300 (30%).');
+      expect(t).toContain('оплата первого этапа возвращается полностью');
+    }
+    const small = fillTemplate(loadTemplate('contract'), { ...data, stages: stagesFor(290, ['admin']) });
+    expect(small).toContain('Небольшой проект оплачивается двумя этапами: 50% до начала работ ($145) и 50% до запуска и передачи доступов ($145).');
+    expect(fillTemplate(loadTemplate('act'), data)).toContain('Каждый этап оплачен до его начала');
+  });
+});
+
 describe('exact price and the conditions line', () => {
   it('the contract takes the exact price and the line from the approved КП; without them [цена] stays and the default line is printed', () => {
     const chain = fillTemplate(loadTemplate('contract'), { ...data, price: '$350', infra: { hasDomain: true, hasHosting: true } });
@@ -78,7 +94,7 @@ describe('exact price and the conditions line', () => {
     const manual = fillTemplate(loadTemplate('contract'), data);
     expect(manual).toContain('[цена]');
     expect(manual).toContain('Домен, хостинг, сервер и платные сторонние сервисы (SMS, API, платежи) в сумму не входят');
-    expect(manual).toContain('Предоплата 50%');
+    expect(manual).toContain('Оплата по этапам: каждый этап оплачивается до его начала');
     expect(manual).toContain('Гарантия первого результата');
     expect(fillTemplate(loadTemplate('contract'), { ...data, price: '$90 + $60 в месяц' })).toContain('$90 + $60 в месяц.');
     expect(fillTemplate(loadTemplate('act'), { ...data, price: '$350' })).toContain('Стоимость работ: $350.');

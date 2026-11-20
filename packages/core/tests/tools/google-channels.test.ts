@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MemoryMessenger, USDT_TRC20_CONTRACT, macQueued, macSettle, openDb, parseTrendsFeed } from '../../src/index.js';
+import { MemoryMessenger, USDT_TRC20_CONTRACT, macEnqueue, macQueued, macSettle, openDb, parseTrendsFeed } from '../../src/index.js';
 import { fakeNet, tools } from './helpers.js';
 
 const RSS = `<?xml version="1.0"?><rss xmlns:ht="https://trends.google.com/trending/rss"><channel>
@@ -135,6 +135,10 @@ describe('telegram, email, mac queue, chain', () => {
     expect(macQueued(db)).toEqual(new Map([[5, ['tiktok']]]));
     expect(await t.mac.poster.enqueue(5, 'instagram')).toMatchObject({ ok: true, value: { already: false } }); // a new run after the last one closed
     expect(await tools({ db, dept: 'sales' }).t.mac.poster.enqueue(5, 'instagram')).toMatchObject({ error: 'not_allowed' });
+    // the plain function behind it (the owner's «Выложить сейчас» in the review center uses it too): same open row, null for an unknown item
+    expect(macEnqueue(db, 5, 'tiktok', 'owner', 9)).toMatchObject({ already: true });
+    expect(macEnqueue(db, 5, 'instagram', 'owner', 9)).toMatchObject({ already: true });
+    expect(macEnqueue(db, 77, 'instagram', 'owner', 9)).toBeNull();
   });
 
   it('chain.transfers: TRC20 through TronGrid with the key header, validation, statuses', async () => {

@@ -66,7 +66,7 @@ export function statusMessage(p: Pick<Project, 'client' | 'what'>, ms: Milestone
   const open = ms.filter((m) => m.status === 'open');
   const next = open[0];
   const lines = [`Здравствуйте! Статус проекта «${p.what.slice(0, 80)}».`];
-  lines.push(done.length ? `Готово: ${done.map((m) => MILESTONE_RU[m.kind].toLowerCase()).join(', ')}.` : 'Работа идёт по плану, первый этап в процессе.');
+  lines.push(done.length ? `Готово: ${done.map((m) => (m.stageNo !== null ? m.title : MILESTONE_RU[m.kind]).toLowerCase()).join(', ')}.` : 'Работа идёт по плану, первый этап в процессе.');
   if (next) lines.push(`Следующий этап: ${next.title.toLowerCase()}, ориентир ${fmtDate(next.dueAt, tz)}.`);
   lines.push('Если есть вопросы или правки, напишите, учтём.');
   return lines.join('\n');

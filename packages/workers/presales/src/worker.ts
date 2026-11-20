@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { detectInfrastructure, log, usd, type Button, type KindSpec, type Payload } from '@fir/core';
 import type { ApprovalState, Task, TaskApproval, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { leadStoreFor, type Lead } from '@fir/worker-lead-intake';
-import { buildDocs, draftWording, exactLabel, splitPayment, type Brief } from './docs.js';
+import { buildDocs, draftWording, exactLabel, stagesOf, type Brief } from './docs.js';
 import { guessDirection, OFFERS } from './offers.js';
 import { builderTotal, quotePackage } from './package.js';
 import { splitMessage } from './split.js';
@@ -69,7 +69,6 @@ export function briefFromLead(l: Lead): Brief {
 }
 
 export interface PresalesOptions {
-  prepaymentPercent?: number;
   validDays?: number;
   /** Directory with kp.md, estimate.md, contract.md. Default: the package's own templates. */
   templatesDir?: string;
@@ -84,13 +83,11 @@ export class PresalesWorker implements Worker {
   readonly id = 'presales';
   private readonly templates: Templates;
   private readonly prompt: string;
-  private readonly prepaymentPercent: number;
   private readonly validDays: number;
 
   constructor(opts: PresalesOptions = {}) {
     this.templates = loadTemplates(opts.templatesDir ?? new URL('../templates', import.meta.url).pathname);
     this.prompt = readFileSync(opts.promptFile ?? new URL('../prompts/kp.md', import.meta.url).pathname, 'utf8');
-    this.prepaymentPercent = opts.prepaymentPercent ?? 50;
     this.validDays = opts.validDays ?? 14;
   }
 
@@ -113,15 +110,16 @@ export class PresalesWorker implements Worker {
     const offer = OFFERS[guessDirection({ source, service, text: `${brief.request} ${brief.niche} ${brief.estimate ?? ''}` })];
     const quote = quotePackage(offer.id, offer.title, `${brief.request} ${brief.niche} ${brief.estimate ?? ''}`);
     const wording = await draftWording(ctx.llm, this.prompt, brief, offer);
-    const docs = buildDocs(this.templates, offer, quote, brief, wording, { prepaymentPercent: this.prepaymentPercent, validDays: this.validDays }, ctx.now(), ctx.tz);
+    const docs = buildDocs(this.templates, offer, quote, brief, wording, { validDays: this.validDays }, ctx.now(), ctx.tz);
     const saved = storeFor(ctx).createPack(brief.leadId, offer.id, docs);
     const packId = saved[0]!.packId;
     // the numbers the sales chain needs after the approval (contract, invoice for the prepayment, the project): the exact price of the package
-    const { pre: prepayUsd } = splitPayment(quote.totalUsd, this.prepaymentPercent);
+    const stages = stagesOf(offer, quote);
+    const prepayUsd = stages[0]!.amountUsd;
     const payload: Payload = {
       packId, leadId: brief.leadId, direction: offer.id, docIds: saved.map((d) => d.id),
       kp: saved[0]!.body, estimate: saved[1]!.body, contract: saved[2]!.body,
-      client: brief.client, what: offer.title, totalUsd: quote.totalUsd, prepayUsd, prepayPercent: this.prepaymentPercent, timeline: offer.timeline,
+      client: brief.client, what: offer.title, totalUsd: quote.totalUsd, stages, prepayUsd, prepayPercent: stages[0]!.share, timeline: offer.timeline,
       ...(quote.monthlyUsd ? { monthlyUsd: quote.monthlyUsd } : {}),
       ...(brief.hasDomain != null ? { hasDomain: brief.hasDomain } : {}), ...(brief.hasHosting != null ? { hasHosting: brief.hasHosting } : {}),
     };
@@ -131,9 +129,9 @@ export class PresalesWorker implements Worker {
     const mismatch = seen !== null && seen !== quote.totalUsd ? ` Внимание: в конструкторе клиент видел итог ${usd(seen)}, в КП ${usd(quote.totalUsd)}: сверьте состав.` : '';
     const summary = [
       `${DOC_RU.kp}, смета и черновик договора #${packId}: ${who}`,
-      `Направление: ${offer.title}, цена ${exactLabel(quote)}${quote.lines.length > 1 ? ` (${quote.lines.map((l) => l.label).join(' + ')})` : ''}. Предоплата ${this.prepaymentPercent}%, КП действует ${this.validDays} дн.${mismatch}`,
+      `Направление: ${offer.title}, цена ${exactLabel(quote)}${quote.lines.length > 1 ? ` (${quote.lines.map((l) => l.label).join(' + ')})` : ''}. Оплата по этапам (${stages.map((x) => `${x.no}: ${usd(x.amountUsd)}`).join(', ')}), каждый до его начала. КП действует ${this.validDays} дн.${mismatch}`,
       'Тексты длинные: «Скопировать документы» пришлёт их сообщениями. «Утвердить» отмечает документы утверждёнными, отправляете клиенту сами.',
-      `Дальше после «Утвердить»: договор и счёт на ${this.prepaymentPercent}% (${usd(prepayUsd)}) придут отдельными карточками, проект стартует после оплаты счёта.`,
+      `Дальше после «Утвердить»: договор и счёт на первый этап (${usd(prepayUsd)}) придут отдельными карточками, проект стартует после оплаты первого этапа, каждый следующий счёт после приёмки предыдущего этапа.`,
     ].join('\n');
     await ctx.requestApproval(KIND_PACK, payload, summary);
     log('info', 'presales pack', { packId, lead: brief.leadId, direction: offer.id });

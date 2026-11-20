@@ -1,6 +1,6 @@
 import type { KindSpec, Payload } from '@fir/core';
 import type { SubtaskSpec, Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
-import { fmtDate, guessProduct, planMilestones } from './plan.js';
+import { fmtDate, guessProduct, planMilestones, planStageDates } from './plan.js';
 import { buildSpec, statusMessage } from './spec.js';
 import { PmStore, type Product } from './store.js';
 
@@ -8,6 +8,12 @@ export const WORKER_ID = 'project-manager';
 export const KIND_SPEC = 'pm_spec';
 export const KIND_STATUS = 'pm_client_status';
 const PRODUCTS: Product[] = ['site', 'bot', 'app', 'automation'];
+
+/** The share of a stage in the whole (its amount over the sum of the stages), percent. */
+const stageShare = (m: { amountUsd: number | null }, all: { amountUsd: number | null }[]): number => {
+  const sum = all.reduce((a, x) => a + (x.amountUsd ?? 0), 0);
+  return sum > 0 ? ((m.amountUsd ?? 0) / sum) * 100 : 100 / all.length;
+};
 
 export const storeFor = (ctx: Pick<WorkerCtx, 'db' | 'now'>): PmStore => new PmStore(ctx.db, ctx.now);
 
@@ -42,13 +48,20 @@ export class ProjectManagerWorker implements Worker {
     // a project reserved by an approved КП (`meta.projectId`) starts on its row; otherwise (`/project`) a new one is made
     const reservedId = Number(task.meta.projectId);
     const reserved = Number.isInteger(reservedId) && reservedId > 0 ? store.project(reservedId) : undefined;
-    if (reserved && store.milestones(reserved.id).length > 0) return { ok: false, result: '', error: `проект #${reserved.id} уже запущен` };
+    // a project of the stage plan has its milestones from the reservation: it is started when it has a task
+    if (reserved && (reserved.taskId !== null || store.milestones(reserved.id).some((m) => m.stageNo === null))) return { ok: false, result: '', error: `проект #${reserved.id} уже запущен` };
     let p;
     if (reserved) {
       store.start(reserved.id, { product, what, taskId: task.id });
       p = store.project(reserved.id)!;
     } else p = store.createProject({ client, what, product, source, taskId: task.id });
-    const ms = planMilestones(product, ctx.now(), ctx.tz).map((m) => store.addMilestone({ projectId: p.id, ...m }));
+    let ms = store.stageMilestones(p.id);
+    if (ms.length > 0) {
+      // payment by stages: the milestones are the stages; the target dates are counted from the start of the project
+      const dates = planStageDates(product, ms.map((m) => stageShare(m, ms)), ctx.now(), ctx.tz);
+      store.setStageDates(ms.map((m, i) => ({ id: m.id, dueAt: dates[i]! })));
+      ms = store.stageMilestones(p.id);
+    } else ms = planMilestones(product, ctx.now(), ctx.tz).map((m) => store.addMilestone({ projectId: p.id, ...m }));
     const spec = await buildSpec(ctx.llm, p, ms, ctx.tz);
     store.setSpec(p.id, spec);
     await ctx.requestApproval(KIND_SPEC, { text: spec, projectId: p.id }, `ТЗ проекта #${p.id} «${client}»:\n\n${spec}`);

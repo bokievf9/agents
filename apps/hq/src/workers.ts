@@ -25,7 +25,7 @@ export const WORKER_TRIGGERS: Record<string, Trigger> = {
   'customer-support': { commands: ['ticket'], events: ['«я уже клиент» в клиентском боте и веб-чате'] },
   monitoring: { events: ['каждые 5 минут (свой cron головы сопровождения, не рутина)'] },
   finance: { routines: ['support-daily', 'support-weekly'] },
-  billing: { routines: ['support-billing'], commands: ['invoice', 'sub', 'paid'], events: ['КП утверждено: счёт на 50% делается вместе с договором'] },
+  billing: { routines: ['support-billing'], commands: ['invoice', 'sub', 'paid'], events: ['КП утверждено: счёт первого этапа делается вместе с договором, следующие после приёмки этапов'] },
   onboarding: { commands: ['onboard'], events: ['оплачен счёт с пометкой нового проекта'], routines: ['support-billing'] },
   'project-manager': { commands: ['project', 'pstatus'], events: ['оплачен первый счёт КП: проект и этапы'] },
   reviewer: { events: ['строитель вернул результат со ссылкой на ветку или PR'] },

@@ -1,4 +1,4 @@
-import { costsLine, tryJson, usd, zonedParts, type LlmClient } from '@fir/core';
+import { costsLine, guaranteeLine, paymentLine, stagesFor, tryJson, usd, zonedParts, type LlmClient, type PaymentStage } from '@fir/core';
 import { z } from 'zod';
 import { DOC_RU, type NewDoc } from './store.js';
 import { supportMonthlyUsd, type Offer } from './offers.js';
@@ -10,7 +10,6 @@ export const PAYMENT_METHODS = 'USDT (сеть TRC20 или TON) или онла
 export const DAY = 86_400_000;
 
 export interface PresalesTerms {
-  prepaymentPercent: number;
   validDays: number;
 }
 
@@ -81,32 +80,29 @@ const fmtDate = (ms: number, tz: string): string => {
 
 const bullets = (items: string[]) => items.map((s) => `- ${s}`).join('\n');
 
-/** The split of the exact total into the prepayment and the rest, USD (whole dollars, the rest takes the rounding). */
-export const splitPayment = (totalUsd: number, pct: number): { pre: number; rest: number } => {
-  const pre = Math.round((totalUsd * pct) / 100);
-  return { pre, rest: totalUsd - pre };
-};
+/** The stages of a package (owner decision 2026-11-21): the template of the most expensive part, a small project is two stages 50/50. */
+export const stagesOf = (o: Offer, q: PackageQuote): PaymentStage[] => stagesFor(q.totalUsd, [o.id]);
 
-export function priceTable(q: PackageQuote, pct: number): string {
-  const { pre, rest } = splitPayment(q.totalUsd, pct);
+/** `| Этап | Что входит | Сумма |`: the stage plan the client pays by; each stage is paid before it starts. */
+export function stageTable(stages: PaymentStage[]): string {
+  return ['| Этап | Что входит | Сумма |', '|---|---|---|', ...stages.map((s) => `| Этап ${s.no} | ${s.title.ru} | ${usd(s.amountUsd)} (${s.share}%) |`)].join('\n');
+}
+
+export function priceTable(q: PackageQuote): string {
   const rows: [string, string][] = [
     ...q.lines.map((l): [string, string] => [l.label, usd(l.usd)]),
     ...(q.lines.length > 1 ? [['Итого', usd(q.totalUsd)] as [string, string]] : []),
     ...(q.monthlyUsd ? [['Ежемесячно (подписка)', `${usd(q.monthlyUsd)} в месяц`] as [string, string]] : []),
-    [`Предоплата ${pct}%`, usd(pre)],
-    [`Оплата после приёмки ${100 - pct}%`, usd(rest)],
     ['Сопровождение (по желанию)', `${usd(supportMonthlyUsd())} в месяц`],
   ];
   return ['| Позиция | Стоимость, USD |', '|---|---|', ...rows.map(([a, b]) => `| ${a} | ${b} |`)].join('\n');
 }
 
-const paymentTerms = (pct: number) =>
-  `Предоплата ${pct}% до старта, оставшиеся ${100 - pct}% после приёмки результата. Способы оплаты: ${PAYMENT_METHODS}. Реквизиты вы получите в смете.`;
+const paymentTerms = (stages: PaymentStage[]) => `${paymentLine(stages)} Способы оплаты: ${PAYMENT_METHODS}. Реквизиты вы получите в смете. ${guaranteeLine()}`;
 
 /** Builds the three documents from the templates. Prices come from the price list through `q` only. */
 export function buildDocs(tpl: Templates, o: Offer, q: PackageQuote, b: Brief, w: Wording, terms: PresalesTerms, now: number, tz: string): NewDoc[] {
-  const pct = terms.prepaymentPercent;
-  const { pre, rest } = splitPayment(q.totalUsd, pct);
+  const stages = stagesOf(o, q);
   const client = b.client || BLANK;
   const date = fmtDate(now, tz);
   const validUntil = fmtDate(now + terms.validDays * DAY, tz);
@@ -116,25 +112,22 @@ export function buildDocs(tpl: Templates, o: Offer, q: PackageQuote, b: Brief, w
   const kp = render(tpl.kp, {
     client, date, valid_until: validUntil, valid_days: String(terms.validDays), title: o.title,
     context: fill(w.context), problem: fill(w.problem), solution: fill(w.solution), scope: bullets(scope),
-    timeline: o.timeline, price_table: priceTable(q, pct), payment_terms: paymentTerms(pct), conditions,
+    timeline: o.timeline, price_table: priceTable(q), stage_table: stageTable(stages), payment_terms: paymentTerms(stages), conditions,
     support: `После запуска можно подключить сопровождение: ${usd(supportMonthlyUsd())} в месяц (правки, мониторинг, помощь). Решение вы принимаете после запуска.`,
   });
   const estimate = render(tpl.estimate, {
-    client, title: o.title, date, valid_until: validUntil, conditions,
+    client, title: o.title, date, valid_until: validUntil, conditions, stage_table: stageTable(stages), payment_terms: paymentLine(stages),
     line_items: ['| № | Позиция | Стоимость |', '|---|---|---|', ...scope.map((s, i) => `| ${i + 1} | ${s} | входит |`)].join('\n'),
     totals: [
       '| Позиция | USD |', '|---|---|',
       ...q.lines.map((l) => `| ${l.label} | ${usd(l.usd)} |`),
       `| Итого | ${exactLabel(q)} |`,
-      `| Предоплата ${pct}% | ${usd(pre)} |`,
-      `| Остаток ${100 - pct}% после приёмки | ${usd(rest)} |`,
       `| Сопровождение (по желанию) | ${usd(supportMonthlyUsd())} в месяц |`,
     ].join('\n'),
   });
   const contract = render(tpl.contract, {
     client, title: o.title, date, timeline: o.timeline, price: exactLabel(q),
-    price_note: 'цена точная для состава работ из Сметы, в долларах США', prepay_percent: String(pct), prepay_amount: usd(pre),
-    rest_percent: String(100 - pct), rest_amount: usd(rest), payment_methods: PAYMENT_METHODS,
+    price_note: 'цена точная для состава работ из Сметы, в долларах США', stage_table: stageTable(stages), payment_methods: PAYMENT_METHODS,
     support_price: `${usd(supportMonthlyUsd())} в месяц`, conditions,
   });
   return [

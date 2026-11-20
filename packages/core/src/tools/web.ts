@@ -277,3 +277,10 @@ export function createWeb(k: Kit): Web {
       }),
   };
 }
+
+/**
+ * Hosts of the public pages the owner may drop as links for the Trendwatcher (`/trend <url>`, `POST /admin/trends`): Instagram, TikTok and
+ * YouTube posts, and the oEmbed endpoints of YouTube and TikTok. Passed as `hosts` to `web.getText` / `web.getJson` (the policy is by
+ * department, the host list is by call). Never a login: only what the platform serves to an anonymous visitor.
+ */
+export const SOCIAL_HOSTS = ['www.instagram.com', 'instagram.com', 'www.tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com', 'www.youtube.com', 'm.youtube.com', 'youtube.com', 'youtu.be'] as const;

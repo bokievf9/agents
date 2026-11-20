@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { costsLine, type Infrastructure } from '@fir/core';
+import { costsLine, paymentLine, type Infrastructure, type PaymentStage } from '@fir/core';
 
 export type DocType = 'contract' | 'offer' | 'privacy' | 'act';
 export const DOC_TYPES: DocType[] = ['contract', 'offer', 'privacy', 'act'];
@@ -36,10 +36,12 @@ export interface DocData {
   price?: string;
   /** What the client already has; absent or unknown: the default conditions line (domain, hosting and third-party services are paid by the client). */
   infra?: Infrastructure;
+  /** The stages of the approved КП (amounts included); absent: the general rule without amounts, the estimate has the split. */
+  stages?: PaymentStage[];
 }
 
 /**
- * Fills `{{client}}`, `{{what}}`, `{{date}}`, `{{number}}`, `{{milestones}}`, `{{price}}` and `{{conditions}}`. What the data does not have becomes
+ * Fills `{{client}}`, `{{what}}`, `{{date}}`, `{{number}}`, `{{milestones}}`, `{{price}}`, `{{payment_clause}}` and `{{conditions}}`. What the data does not have becomes
  * `[заполнить: ...]`, never a made-up value; `[цена]` and `[срок]` stay as they are: the owner names money and terms.
  */
 export function fillTemplate(template: string, d: DocData): string {
@@ -51,6 +53,7 @@ export function fillTemplate(template: string, d: DocData): string {
     milestones: d.milestones.length ? d.milestones.join('\n') : '- [заполнить: этапы и даты]',
     price: d.price?.trim() || '[цена]',
     conditions: costsLine(d.infra),
+    payment_clause: paymentLine(d.stages ?? []),
   };
   return template.replace(/\{\{(\w+)\}\}/g, (_m, k: string) => val[k] ?? `[заполнить: ${k}]`);
 }

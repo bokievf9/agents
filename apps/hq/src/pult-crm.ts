@@ -118,7 +118,7 @@ export function createPultCrm(d: PultCrmDeps) {
     if (hq.task(row.task_id)) hq.comment(row.task_id, 'owner', `Ответ владельца (${via}${sent ? '' : ', не доставлен'}): ${text.slice(0, 2000)}`);
     hq.log('owner', 'lead_reply', 'lead', String(id), `${via}:${sent ? 'sent' : 'not_sent'}`);
     // a cabinet client reads the reply in the lead's thread: the cabinet itself is a channel, so it is kept even when no chat took it
-    recordManagerReply(db, now(), id, text);
+    recordManagerReply(db, now(), id, text, 'owner');
     return ok({ sent, via });
   }
 
@@ -134,10 +134,18 @@ export function createPultCrm(d: PultCrmDeps) {
   }
 
   // ---- invoices ----
+  /** `{ no, of, title }` of the stage an invoice pays (payment by stages); null for an invoice outside the stage plan. */
+  function stageOfInvoice(inv: Pick<Invoice, 'projectId' | 'stageNo'>): { no: number; of: number; title: string } | null {
+    if (inv.stageNo === null || inv.projectId === null) return null;
+    const stages = views.stageViews(inv.projectId);
+    const m = stages.find((x) => x.stageNo === inv.stageNo);
+    return m ? { no: inv.stageNo, of: stages.length, title: m.title ?? '' } : null;
+  }
   const invoiceView = (inv: Invoice) => ({
     id: inv.id, number: inv.number, client: inv.client, title: inv.what, amountUsd: inv.amountUsd, payAmountUsd: inv.payAmountUsd, status: inv.status,
     dueDate: inv.dueDate, issuedAt: iso(inv.issuedAt), paidAt: iso(inv.paidAt), paidVia: inv.paidVia, txId: inv.txId,
     payUrl: d.billing ? d.billing.payUrl(inv) : null, remindedAt: iso(inv.remindedAt), leadId: inv.leadId, projectId: inv.projectId,
+    stageNo: inv.stageNo, stage: stageOfInvoice(inv),
   });
 
   function invoicesList(query: URLSearchParams): AdminReply {
@@ -199,7 +207,14 @@ export function createPultCrm(d: PultCrmDeps) {
     if (!item) return fail(404, 'not_found');
     const pm = new PmStore(db, now);
     const proj = pm.project(id)!;
-    const milestones = pm.milestones(id).map((m) => ({ id: m.id, kind: m.kind, title: m.title, dueAt: iso(m.dueAt), doneAt: iso(m.doneAt) }));
+    const stageById = new Map(views.stageViews(id).map((x) => [x.id, x]));
+    const milestones = pm.milestones(id).map((m) => {
+      const st = stageById.get(m.id);
+      return {
+        id: m.id, kind: m.kind, title: m.title, dueAt: iso(m.dueAt), doneAt: iso(m.doneAt),
+        stageNo: st?.stageNo ?? null, amountUsd: st?.amountUsd ?? null, invoiceNumber: st?.invoiceNumber ?? null, payUrl: st?.payUrl ?? null, paidAt: st?.paidAt ?? null, acceptedAt: st?.acceptedAt ?? null, state: st?.state ?? null,
+      };
+    });
     const ids = new Set<number>();
     if (proj.taskId !== null) ids.add(proj.taskId);
     for (const m of pm.milestones(id)) if (m.taskId !== null) ids.add(m.taskId);
@@ -228,8 +243,9 @@ export function createPultCrm(d: PultCrmDeps) {
       const m = pm.milestone(b.milestoneId);
       if (!m || m.projectId !== id) return fail(404, 'not_found');
       if (b.action === 'complete_milestone') {
-        // the same path as `/mdone`: a «Сдача» starts the deploy, the last milestone closes the project (idempotent: a closed one says so)
-        if (m.status !== 'done') await d.channel.capture(() => d.director.onCommand('mdone', `${id} ${m.kind}`));
+        // the same path as `/mdone`: a «Сдача» starts the deploy, the last milestone closes the project (idempotent: a closed one says so);
+        // a stage of the payment plan is ACCEPTED (the next invoice is proposed), done or not
+        if (m.stageNo !== null ? m.acceptedAt === null : m.status !== 'done') await d.channel.capture(() => d.director.onCommand('mdone', `${id} ${m.stageNo ?? m.kind}`));
       } else {
         const at = Date.parse(b.dueAt);
         if (!Number.isFinite(at)) return fail(400, 'invalid');

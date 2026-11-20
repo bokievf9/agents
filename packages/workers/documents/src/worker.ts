@@ -1,4 +1,4 @@
-import { usd, zonedParts, type KindSpec, type Payload } from '@fir/core';
+import { parseStages, usd, zonedParts, type KindSpec, type Payload } from '@fir/core';
 import type { ApprovalState, SubtaskSpec, Task, TaskApproval, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { DocStore } from './store.js';
 import { DOC_RU, DOC_TYPES, fillTemplate, loadTemplate, openPlaceholders, type DocData, type DocType } from './templates.js';
@@ -28,10 +28,12 @@ export interface DocumentsOptions {
  * The result is a version in `bo_documents`; the owner sends the approved text himself.
  */
 /** The exact price and what the client already has, when the sales chain (an approved КП) made this task; a manual `/doc` has none. */
-function priceFromMeta(meta: Record<string, unknown>): Pick<DocData, 'price' | 'infra'> {
+function priceFromMeta(meta: Record<string, unknown>): Pick<DocData, 'price' | 'infra' | 'stages'> {
+  const stages = parseStages(meta.stages);
   const total = Number(meta.priceUsd);
   const monthly = Number(meta.monthlyUsd);
   return {
+    ...(stages ? { stages } : {}),
     ...(total > 0 ? { price: `${usd(total)}${monthly > 0 ? ` + ${usd(monthly)} в месяц` : ''}` } : {}),
     infra: { hasDomain: typeof meta.hasDomain === 'boolean' ? meta.hasDomain : null, hasHosting: typeof meta.hasHosting === 'boolean' ? meta.hasHosting : null },
   };
@@ -69,7 +71,7 @@ export class DocumentsWorker implements Worker {
     const text = fillTemplate(template, data);
     store.setStatus(row.id, 'pending', text);
     const open = openPlaceholders(text);
-    // the sales chain (КП → договор → счёт 50%): the cards name each other
+    // the sales chain (КП → договор → счёт первого этапа): the cards name each other
     const chain = typeof task.meta.chain === 'string' && task.meta.chain ? `${task.meta.chain}\n` : '';
     await ctx.requestApproval(KIND_DOC, { text, docId: row.id }, `${chain}${DOC_RU[type]}, ${docKey}, версия ${row.version}. Незаполнено: ${open.length ? open.join(', ') : 'нет'}.\n\n${text}`);
     ctx.log('doc_drafted', `${type} v${row.version}`);

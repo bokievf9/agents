@@ -1,7 +1,7 @@
 import { openDb } from '@fir/core';
 import type { Task, WorkerCtx } from '@fir/hq';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_REWARD, kindSpecs, KIND_REWARD, markPaid, onDecision, parseReferralArg, ReferralWorker, referrerFromSource, statsText, storeFor } from '../src/referral.js';
+import { DEFAULT_REWARD, kindSpecs, KIND_PAYOUT, KIND_REWARD, markPaid, payoutKindSpecs, payoutSummary, onDecision, parseReferralArg, ReferralWorker, referrerFromSource, statsText, storeFor } from '../src/referral.js';
 import { DAY, ReferralStore } from '../src/store.js';
 
 const T0 = Date.UTC(2026, 10, 20, 5, 0);
@@ -142,5 +142,36 @@ describe('store is plain SQL on the shared db', () => {
     const { db, store } = rig();
     store.propose({ referrer: 'A', referred: 'B', source: 'owner' });
     expect(new ReferralStore(db, 'x').all()).toHaveLength(1);
+  });
+});
+
+describe('payout per paid stage (payment by stages, 2026-11-21)', () => {
+  it('a later stage asks 10% of that stage once; the same stage again asks nothing; rejecting it lets it be asked again', async () => {
+    const { ctx, store } = rig();
+    const worker = new ReferralWorker();
+    const { referral } = store.propose({ referrer: 'Cambridge', referred: 'Blanche', source: 'lead', leadId: 5 });
+    // stage 1: the referral row carries it
+    expect(worker.requestPayout(ctx, { referralId: referral.id, totalUsd: 300, contact: '@cam' })?.payoutUsd).toBe(30);
+    // stage 2 and 3: one payout each, once
+    expect(worker.requestStagePayout(ctx, { referralId: referral.id, stageNo: 2, stageUsd: 400, contact: '@cam', invoiceNumber: 'FT-2026-002' })).toEqual({ usd: 40 });
+    expect(worker.requestStagePayout(ctx, { referralId: referral.id, stageNo: 2, stageUsd: 400, contact: '@cam', invoiceNumber: 'FT-2026-002' })).toBeNull();
+    expect(worker.requestStagePayout(ctx, { referralId: referral.id, stageNo: 3, stageUsd: 300, contact: '@cam', invoiceNumber: 'FT-2026-003' })).toEqual({ usd: 30 });
+    expect(worker.requestStagePayout(ctx, { referralId: referral.id, stageNo: 1, stageUsd: 300, contact: '', invoiceNumber: 'x' })).toBeNull(); // stage 1 is not a «later» stage
+    expect(statsText(store)).toContain('К выплате за следующие этапы: $70');
+    expect(payoutSummary(store.get(referral.id)!, 'FT-2026-002', { no: 2, usd: 40 })).toContain('Сумма: $40 (10% оплаты этапа 2)');
+    expect(payoutSummary(store.get(referral.id)!, 'FT-2026-001', { no: 1, usd: 30 })).toContain('клиент оплатил этап 1');
+    // the owner paid stage 2: it is settled; the first stage's payout is untouched
+    const spec = payoutKindSpecs(ctx)[KIND_PAYOUT]!;
+    await spec.execute({ referralId: referral.id, stageNo: 2, amountUsd: 40 }, 0);
+    expect(store.stagePayouts(referral.id).map((x) => [x.stageNo, x.paidAt !== null])).toEqual([[2, true], [3, false]]);
+    expect(store.get(referral.id)!.status).toBe('paid');
+    // the owner rejected stage 3: it is released and can be asked again; a settled one stays
+    onDecision(ctx, { kind: KIND_PAYOUT, payload: { referralId: referral.id, stageNo: 3 } }, 'rejected');
+    onDecision(ctx, { kind: KIND_PAYOUT, payload: { referralId: referral.id, stageNo: 2 } }, 'rejected');
+    expect(store.stagePayouts(referral.id).map((x) => x.stageNo)).toEqual([2]);
+    expect(worker.requestStagePayout(ctx, { referralId: referral.id, stageNo: 3, stageUsd: 300, contact: '@cam', invoiceNumber: 'FT-2026-003' })).toEqual({ usd: 30 });
+    // the first stage's approval still moves the referral to rewarded
+    await spec.execute({ referralId: referral.id }, 0);
+    expect(store.get(referral.id)!.status).toBe('rewarded');
   });
 });
