@@ -1,4 +1,4 @@
-import { MODEL_PRICES, errMsg, priceFor, usdFor, zonedParts, zonedToMs, type ApprovalQueue, type Db, type KindSpec, type Payload, type PriceTable } from '@fir/core';
+import { MODEL_PRICES, errMsg, log as coreLog, priceFor, usdFor, zonedParts, zonedToMs, type ApprovalQueue, type Db, type KindSpec, type Payload, type PriceTable } from '@fir/core';
 import { SCHEMA } from './schema.js';
 import type {
   Agent, ApprovalState, Creator, Heartbeat, NewRoutine, NewTask, Role, Routine, Task, TaskApproval, TaskEvent, TaskStatus,
@@ -589,7 +589,13 @@ export class Hq {
       const status = this.q().get(row.approval_id!)?.status;
       const next: ApprovalState | null = status === 'executed' ? 'executed' : status === 'rejected' ? 'rejected' : status === 'failed' ? 'failed' : null;
       if (!next) continue;
-      this.settleLink(row, next, true);
+      try {
+        this.settleLink(row, next, true);
+      } catch (e) {
+        // one broken link (a sink that throws) must not stop the owner's decision or the links after it
+        coreLog('error', 'approval reconcile failed', { link: row.id, err: errMsg(e) });
+        this.db.prepare('UPDATE task_approvals SET state = ? WHERE id = ?').run(next, row.id);
+      }
       changed++;
     }
     return changed;
@@ -599,7 +605,13 @@ export class Hq {
   private settleLink(row: LinkRow, next: ApprovalState, write: boolean): void {
     if (write) this.db.prepare('UPDATE task_approvals SET state = ? WHERE id = ?').run(next, row.id);
     this.log('owner', 'approval_decided', 'task', String(row.task_id), next);
-    for (const sink of this.decisionSinks) sink(this.approvalLink(row.id)!, next);
+    for (const sink of this.decisionSinks) {
+      try {
+        sink(this.approvalLink(row.id)!, next);
+      } catch (e) {
+        coreLog('error', 'approval decision sink failed', { link: row.id, err: errMsg(e) }); // the task still follows the owner's decision
+      }
+    }
     const open = this.db.prepare("SELECT COUNT(*) c FROM task_approvals WHERE task_id = ? AND state IN ('queued','asked')").get(row.task_id) as { c: number };
     const t = this.task(row.task_id);
     if (!t || TERMINAL.includes(t.status)) return;
@@ -608,6 +620,8 @@ export class Hq {
     else if (open.c === 0) {
       const all = this.db.prepare('SELECT state FROM task_approvals WHERE task_id = ?').all(row.task_id) as { state: ApprovalState }[];
       const anyOk = all.some((a) => a.state === 'executed');
+      // a task blocked meanwhile (another of its approvals failed, /builder, a spending limit) cannot go to done: it stays blocked for /retry
+      if (anyOk && t.status === 'blocked') return;
       this.move(row.task_id, anyOk ? 'done' : 'rejected', 'owner');
       this.log('owner', anyOk ? 'approved' : 'rejected', 'task', String(row.task_id));
     }

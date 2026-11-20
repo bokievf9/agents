@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { OWNER, setup } from './helpers.js';
 
 function kindSetup(level: 0 | 1 = 0) {
@@ -115,5 +115,41 @@ describe('approvals through the Director batch', () => {
     hq.reconcileApprovals();
     hq.reconcileApprovals();
     expect(seen).toEqual(['post:rejected']);
+  });
+});
+
+describe('a task blocked while its approvals are open (chaos drill 2026-11-21)', () => {
+  it('a decision on a sibling approval of a blocked task does not throw "blocked -> done"; the task stays blocked for /retry', async () => {
+    const { hq, queue, task } = kindSetup();
+    const a = task('SEO');
+    await hq.requestApproval(a.id, 'marketing-head', 'post', { text: 'one' }, 'first');
+    await hq.requestApproval(a.id, 'marketing-head', 'post', { text: 'two' }, 'second');
+    await hq.releaseApprovals();
+    const [first, second] = queue.pending();
+    // another of the task's approvals failed, or the owner sent it to the builders: it is blocked while a card is still open
+    hq.block(a.id, 'owner', 'approval post failed to execute');
+    await queue.handle('approve', first!.id, OWNER);
+    expect(() => hq.reconcileApprovals()).not.toThrow();
+    await queue.handle('approve', second!.id, OWNER);
+    expect(() => hq.reconcileApprovals()).not.toThrow();
+    expect(hq.task(a.id)!.status).toBe('blocked');
+    expect(hq.approvalLink(1)!.state).toBe('executed');
+    expect(hq.approvalLink(2)!.state).toBe('executed');
+  });
+  it('a sink that throws on one link does not stop the owner\'s decision or the links after it', async () => {
+    const { hq, queue, task } = kindSetup();
+    const a = task('A');
+    const b = task('B');
+    await hq.requestApproval(a.id, 'marketing-head', 'post', { text: 'one' }, 'first');
+    await hq.requestApproval(b.id, 'marketing-head', 'post', { text: 'two' }, 'second');
+    await hq.releaseApprovals();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    hq.onApprovalDecision((l) => { if (l.taskId === a.id) throw new Error('sink boom'); });
+    for (const p of queue.pending()) await queue.handle('approve', p.id, OWNER);
+    expect(() => hq.reconcileApprovals()).not.toThrow();
+    expect(hq.task(b.id)!.status).toBe('done');
+    expect(hq.task(a.id)!.status, 'the task whose sink threw still follows the decision').toBe('done');
+    expect(hq.approvalLink(1)!.state).toBe('executed');
+    vi.restoreAllMocks();
   });
 });
