@@ -51,6 +51,11 @@ export interface KindSpec {
   /** Runs only after "approve" (or at level 1). Throwing marks the approval failed. */
   execute(payload: Payload, approvalId: number): Promise<void>;
   /**
+   * A text that cannot be executed yet (a `[цена]` left in a client reply): the reason for the owner, in Russian, else null. «Одобрить» on such a
+   * card answers the reason and leaves the proposal open (it is not failed: the owner edits the text and approves again).
+   */
+  ready?(payload: Payload): string | null;
+  /**
    * Own button rows for the owner's card instead of the default «Одобрить / Править / Отклонить». Buttons that decide must
    * keep the `ap:<id>:a|e|r` data (approve, edit, reject) so the core's handlers still work; others are the app's own.
    */
@@ -58,6 +63,11 @@ export interface KindSpec {
 }
 
 export type Action = 'approve' | 'edit' | 'reject';
+
+/** `ready` hook for texts that carry a template in square brackets (`[цена]`, `[решение владельца]`): the owner fills it with «Править». */
+export function placeholderHold(placeholders: string[]): string | null {
+  return placeholders.length ? `В тексте осталось ${placeholders.slice(0, 3).join(', ')}: нажмите «Править», впишите значение и одобрите снова` : null;
+}
 /** `running`: claimed by one decision (approve/reject/auto) and being executed; nobody else may touch it. */
 type Status = 'pending' | 'editing' | 'running' | 'executed' | 'rejected' | 'failed';
 
@@ -249,6 +259,10 @@ export class ApprovalQueue {
         out.skipped++;
         continue;
       }
+      if (this.notReady(row.id)) {
+        out.skipped++; // a template is left in the text: decided one by one, after the owner fills it
+        continue;
+      }
       const answer = await this.handle('approve', row.id, fromId);
       if (answer === 'Одобрено') out.approved++;
       else if (answer === 'Уже обработано') out.skipped++;
@@ -335,6 +349,10 @@ export class ApprovalQueue {
     if (row.status !== 'pending' && !(row.status === 'editing' && action !== 'edit')) return 'Уже обработано';
     const spec = this.spec(row.kind);
 
+    if (action === 'approve') {
+      const hold = spec.ready?.(row.payload);
+      if (hold) return hold;
+    }
     if (action === 'reject') {
       if (!this.claim(id)) return 'Уже обработано';
       this.setStatus(id, 'rejected');
@@ -362,6 +380,12 @@ export class ApprovalQueue {
     if (row.edited) this.bump(row.kind, 'reset');
     else await this.bumpClean(row.kind);
     return 'Одобрено';
+  }
+
+  /** Why an open proposal cannot be approved as it stands (its `ready` hook), else null. */
+  notReady(id: number): string | null {
+    const row = this.get(id);
+    return row ? (this.spec(row.kind).ready?.(row.payload) ?? null) : null;
   }
 
   /** True while the next owner message is a correction for a proposal (the bot must route it here). */

@@ -1,4 +1,4 @@
-import { parseStages, usd, zonedParts, type KindSpec, type Payload } from '@fir/core';
+import { parseStages, placeholderHold, usd, zonedParts, type KindSpec, type Payload } from '@fir/core';
 import type { ApprovalState, SubtaskSpec, Task, TaskApproval, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { DocStore } from './store.js';
 import { DOC_RU, DOC_TYPES, fillTemplate, loadTemplate, openPlaceholders, type DocData, type DocType } from './templates.js';
@@ -93,6 +93,10 @@ export function kindSpecs(ctx: Pick<WorkerCtx, 'db' | 'now'>, hooks: DocHooks): 
     [KIND_DOC]: {
       initialLevel: 0,
       locked: true,
+      ready: (payload: Payload) => {
+        const doc = storeFor(ctx).get(Number(payload.docId));
+        return doc ? placeholderHold(openPlaceholders(typeof payload.text === 'string' ? payload.text : doc.text)) : null;
+      },
       execute: async (payload: Payload) => {
         const store = storeFor(ctx);
         const doc = store.get(Number(payload.docId));

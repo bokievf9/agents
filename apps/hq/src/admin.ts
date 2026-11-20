@@ -157,6 +157,8 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
       await queue.settleCard(id).catch(() => false);
       return ok({ status: queue.get(id)!.status });
     }
+    const hold = action === 'approve' ? queue.notReady(id) : null;
+    if (hold) return fail(409, 'placeholder', { reason: hold });
     const { status, message, notes } = await decide(id, action);
     if (status === 'failed') return { status: 200, body: { ok: false, error: 'failed', status, message, notes } };
     return ok({ status, message, notes });

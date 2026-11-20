@@ -61,12 +61,17 @@ describe('Back Office head', () => {
     expect(w.queue.level('bo_document')).toBe(0);
     expect(w.head.pendingLine()).toContain('Договор оказания услуг «Салон Роза» v1');
     expect(w.director.morningSummary()).toContain('Документы ждут решения');
-    // approving with open placeholders fails: nothing goes to the owner as a final text
+    // approving with open placeholders is held (the card stays open for the edit): nothing goes to the owner as a final text
     await w.hq.releaseApprovals();
-    await w.queue.handle('approve', w.queue.pending()[0]!.id, OWNER);
+    const answer = await w.queue.handle('approve', w.queue.pending()[0]!.id, OWNER);
+    w.director.afterDecision();
+    expect(answer).toContain('Править');
+    expect(w.queue.pending()).toHaveLength(1);
+    expect(w.messenger.sent.some((m) => m.text.includes('Отправьте клиенту сами'))).toBe(false);
+    // the owner rejects it instead: the version is closed
+    await w.queue.handle('reject', w.queue.pending()[0]!.id, OWNER);
     w.director.afterDecision();
     expect(w.docs()[0]!.status).toBe('rejected');
-    expect(w.messenger.sent.some((m) => m.text.includes('Отправьте клиенту сами'))).toBe(false);
     // a second request makes version 2
     await w.director.onCommand('doc', 'договор Салон Роза');
     await w.head.onHeartbeat();

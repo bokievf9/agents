@@ -1,4 +1,4 @@
-import { tryComplete, type KindSpec, type Payload } from '@fir/core';
+import { placeholderHold, tryComplete, type KindSpec, type Payload } from '@fir/core';
 import type { WorkerCtx } from '@fir/hq';
 import { DEFAULT_KB_DIR, isMoneyTopic, loadKb, lookup, type KbEntry } from './kb.js';
 import { CsStore, type CsTicket } from './store.js';
@@ -7,6 +7,9 @@ import { CsStore, type CsTicket } from './store.js';
 export const KIND_ANSWER = 'support_answer';
 /** `support_money`: refunds, discounts, disputed charges. Locked at level 0: only the owner decides these. */
 export const KIND_MONEY = 'support_money';
+/** The unfilled `[...]` templates of a draft as the owner-facing hold of «Одобрить» (null: nothing left to fill). */
+const holdOf = (text: unknown): string | null => placeholderHold([...new Set(typeof text === 'string' ? (text.match(/\[[^\]]*\]/g) ?? []) : [])]);
+
 
 export interface CustomerSupportOptions {
   kbDir?: string;
@@ -94,8 +97,8 @@ export class CustomerSupportWorker {
       if (Number.isInteger(p.ticketId)) store.markAnswered(Number(p.ticketId), p.text);
     };
     return {
-      [KIND_ANSWER]: { initialLevel: this.answerLevel, execute: run(KIND_ANSWER) },
-      [KIND_MONEY]: { initialLevel: 0, locked: true, execute: run(KIND_MONEY) },
+      [KIND_ANSWER]: { initialLevel: this.answerLevel, ready: (p) => holdOf(p.text), execute: run(KIND_ANSWER) },
+      [KIND_MONEY]: { initialLevel: 0, locked: true, ready: (p) => holdOf(p.text), execute: run(KIND_MONEY) },
     };
   }
 

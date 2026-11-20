@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { detectInfrastructure, formatSlot, log, tryComplete, tryJson, zonedParts, zonedToMs, type KindSpec, type Payload } from '@fir/core';
+import { detectInfrastructure, formatSlot, log, placeholderHold, tryComplete, tryJson, zonedParts, zonedToMs, type KindSpec, type Payload } from '@fir/core';
 import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { LeadStore, type Lang, type Lead } from './store.js';
 import { guessDeadline, guessNiche, hasMoney, hasPlaceholder, isPriceQuestion, scoreLead, TEMP_RU, tpl } from './text.js';
@@ -10,6 +10,9 @@ import { guessDeadline, guessNiche, hasMoney, hasPlaceholder, isPriceQuestion, s
  * owner filled [цена] / [срок] in.
  */
 export const KIND_REPLY = 'lead_reply';
+/** The unfilled `[...]` templates of a draft as the owner-facing hold of «Одобрить» (null: nothing left to fill). */
+const holdOf = (text: unknown): string | null => placeholderHold([...new Set(typeof text === 'string' ? (text.match(/\[[^\]]*\]/g) ?? []) : [])]);
+
 export const KIND_PRICE = 'lead_price';
 
 /** The form lead as the webhook puts it into `task.meta.lead` (same fields as the firtech.pro form). */
@@ -132,6 +135,7 @@ export class LeadIntakeWorker implements Worker {
     return {
       [KIND_REPLY]: {
         initialLevel: this.replyLevel,
+        ready: (p) => holdOf(p.text),
         execute: async (p) => {
           const d = toDelivery(p, KIND_REPLY);
           if (hasPlaceholder(d.text)) throw new Error('reply still has a placeholder');
@@ -141,6 +145,7 @@ export class LeadIntakeWorker implements Worker {
       [KIND_PRICE]: {
         initialLevel: 0,
         locked: true,
+        ready: (p) => holdOf(p.text),
         execute: async (p) => {
           const d = toDelivery(p, KIND_PRICE);
           if (hasPlaceholder(d.text)) throw new Error('price text still has a placeholder');

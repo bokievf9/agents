@@ -343,7 +343,8 @@ describe('replies back to the client', () => {
     const price = await priceLead(w);
     const before = w.transport.to(CLIENT).length;
     await w.decide('approve', price.id);
-    expect(w.queue.get(price.id)!.status).toBe('failed');
+    expect(w.queue.get(price.id)!.status).toBe('pending'); // held open with a hint, not failed for good (drill 2026-11-21)
+    expect(w.queue.notReady(price.id)).toContain('[цена]');
     expect(w.transport.to(CLIENT)).toHaveLength(before);
   });
 

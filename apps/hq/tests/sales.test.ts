@@ -70,9 +70,10 @@ describe('lead from the webhook', () => {
     const price = w.queue.pending()[0]!;
     expect(price.kind).toBe('lead_price');
     const before = w.messenger.sent.length;
-    await w.decide('approve', price.id); // still has [цена]
+    await w.decide('approve', price.id); // still has [цена]: held open, nothing sent
     expect(w.messenger.sent.slice(before).some((m) => m.text.includes('ответ утверждён'))).toBe(false);
-    expect(w.hq.task(id)!.status).toBe('blocked');
+    expect(w.queue.get(price.id)!.status).toBe('pending');
+    expect(w.hq.task(id)!.status).toBe('approval');
   });
 
   it('the filled price goes through after the owner edits it', async () => {

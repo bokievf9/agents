@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { KindSpec, Payload } from '@fir/core';
-import { costsLine, zonedParts, type Infrastructure } from '@fir/core';
+import { costsLine, placeholderHold, zonedParts, type Infrastructure } from '@fir/core';
 import type { WorkerCtx } from '@fir/hq';
 import { addDays, addMonths, dateStr, diffDays, isDate, ruDate } from './dates.js';
 import { BillingStore, METHOD_LABEL, PAY_METHODS, parseMethod, type ChainMethod, type Invoice, type Locale, type PayMethod, type Period, type Subscription } from './store.js';
@@ -10,6 +10,9 @@ import { chainMethodsOf } from './watch.js';
 export const KIND_INVOICE = 'billing_invoice';
 /** `billing_reminder`: payment reminder draft (3 days before and on the due date). Locked at level 0. */
 export const KIND_REMINDER = 'billing_reminder';
+/** The unfilled `[...]` templates of a draft as the owner-facing hold of «Одобрить» (null: nothing left to fill). */
+const holdOf = (text: unknown): string | null => placeholderHold([...new Set(typeof text === 'string' ? (text.match(/\[[^\]]*\]/g) ?? []) : [])]);
+
 
 /** After this many days past the due date the owner gets an alert. */
 export const OVERDUE_DAYS = 5;
@@ -202,8 +205,8 @@ export class BillingWorker {
       }
     };
     return {
-      [KIND_INVOICE]: { initialLevel: 0, locked: true, execute: run(KIND_INVOICE) },
-      [KIND_REMINDER]: { initialLevel: 0, locked: true, execute: run(KIND_REMINDER) },
+      [KIND_INVOICE]: { initialLevel: 0, locked: true, ready: (p) => holdOf(p.text), execute: run(KIND_INVOICE) },
+      [KIND_REMINDER]: { initialLevel: 0, locked: true, ready: (p) => holdOf(p.text), execute: run(KIND_REMINDER) },
     };
   }
 
