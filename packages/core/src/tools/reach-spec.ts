@@ -73,7 +73,7 @@ export function reachSpec(channel: string, action: string): ReachActionSpec | un
   return Object.hasOwn(ch, action) ? ch[action] : undefined;
 }
 
-const noCtl = (s: string) => !/[\u0000-\u001f\u007f]/.test(s);
+const noCtl = (s: string) => [...s].every((c) => c.charCodeAt(0) > 31 && c.charCodeAt(0) !== 127);
 
 /**
  * One parameter, checked and normalised; a string never starts with `-` (the CLI would read it as an option) and has no control
