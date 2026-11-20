@@ -28,7 +28,7 @@ const NEXT_ACTION: Record<Stage, string | null> = {
   new: 'Ответить лиду и выяснить задачу и бюджет',
   qualified: 'Проверить и одобрить КП',
   proposal: 'Согласовать договор и выставить счёт',
-  contract: 'Получить предоплату',
+  contract: 'Получить оплату первого этапа',
   paid: 'Запустить проект',
   project: null,
   lost: null,

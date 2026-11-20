@@ -149,6 +149,13 @@ export function createReview(d: ReviewDeps) {
   }
 
   // ---- lead, ticket, client facts ----
+  /** The stage an invoice card pays (payment by stages): its number, how many stages the project has, its title and amount. */
+  function reviewStage(projectId: number, stageNo: number): Json {
+    const stages = views.stageViews(projectId);
+    const m = stages.find((x) => x.stageNo === stageNo);
+    return { no: stageNo, of: stages.length || null, title: m?.title ?? null, amountUsd: m?.amountUsd ?? null };
+  }
+
   function leadFacts(leadId: number | null): { lead: Json | null; client: Json } {
     const none = { lead: null, client: { id: null, email: null, cabinet: false } };
     if (leadId === null || !has('li_leads')) return none;
@@ -331,7 +338,7 @@ export function createReview(d: ReviewDeps) {
           text: { body: str(payload.kp), documents: docs }, edit: null, leadId,
           meta: {
             lead: f.lead, client: f.client,
-            pack: { id: num(payload.packId), direction: str(payload.direction), totalUsd: num(payload.totalUsd), prepayUsd: num(payload.prepayUsd), prepayPercent: num(payload.prepayPercent), timeline: str(payload.timeline) || null },
+            pack: { id: num(payload.packId), direction: str(payload.direction), totalUsd: num(payload.totalUsd), prepayUsd: num(payload.prepayUsd), prepayPercent: num(payload.prepayPercent), stages: Array.isArray(payload.stages) ? payload.stages : null, timeline: str(payload.timeline) || null },
           },
         });
       }
@@ -346,6 +353,7 @@ export function createReview(d: ReviewDeps) {
         return generic(l, payload, `${l.kind === 'billing_invoice' ? 'Счёт' : 'Напоминание'} ${inv?.number ?? ''}: ${inv?.client ?? str(payload.name)}`.replace(/\s+:/, ':'), {
           meta: {
             invoice: inv ? { id: inv.id, number: inv.number, client: inv.client, amountUsd: inv.amountUsd, dueDate: inv.dueDate, status: inv.status, what: inv.what, leadId: inv.leadId, projectId: inv.projectId } : { id: num(payload.invoiceId) },
+            ...(inv?.stageNo != null && inv.projectId != null ? { stage: reviewStage(inv.projectId, inv.stageNo) } : {}),
             lead: f.lead, client: f.client,
           },
           leadId: inv?.leadId ?? null,

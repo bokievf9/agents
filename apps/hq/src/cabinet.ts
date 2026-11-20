@@ -105,7 +105,7 @@ const NEXT_STEP: Record<Lang, Record<Stage, string>> = {
     new: 'Менеджер уточнит детали в течение рабочего дня',
     qualified: 'Готовим коммерческое предложение',
     proposal: 'КП отправлено, ждём вашего решения',
-    contract: 'Договор и счёт на 50% готовы',
+    contract: 'Договор и счёт первого этапа готовы',
     paid: 'Оплата получена, запускаем проект',
     project: 'Проект в работе, этапы ниже',
     lost: 'Заявка закрыта',
@@ -114,7 +114,7 @@ const NEXT_STEP: Record<Lang, Record<Stage, string>> = {
     new: 'A manager will get back to you with questions within a working day',
     qualified: 'We are preparing the commercial proposal',
     proposal: 'The proposal has been sent, we are waiting for your decision',
-    contract: 'The contract and the 50% invoice are ready',
+    contract: 'The contract and the invoice for the first stage are ready',
     paid: 'Payment received, we are starting the project',
     project: 'The project is in progress, the stages are below',
     lost: 'The request is closed',
@@ -133,3 +133,29 @@ const STAGE_MOVE: Record<Lang, Record<Stage, string>> = {
 };
 export const timelineTitle = (kind: Exclude<TimelineKind, 'stage'>, lang: string | null | undefined): string => TITLES[lang === 'en' ? 'en' : 'ru'][kind];
 export const stageMoveTitle = (stage: Stage, lang: string | null | undefined): string => STAGE_MOVE[lang === 'en' ? 'en' : 'ru'][stage];
+
+/** The stage fields the next-step line reads (the cabinet's milestone view). */
+export interface StageLine {
+  stageNo: number | null;
+  title: string | null;
+  amountUsd: number | null;
+  state: 'awaiting_payment' | 'in_progress' | 'awaiting_acceptance' | 'accepted' | null;
+  invoiceNumber: string | null;
+  payUrl: string | null;
+}
+
+/**
+ * What the client does next in a project paid by stages: accept a finished stage, or pay the stage whose invoice is issued. Null when there is
+ * nothing for the client to do (no stages, the stage runs, the invoice is not issued yet): the lead's stage sentence is used then.
+ */
+export function stageNextStep(stages: StageLine[], lang: string | null | undefined): string | null {
+  const en = lang === 'en';
+  for (const s of stages) {
+    if (s.stageNo === null || s.state === 'accepted') continue;
+    const name = `${s.title ? `«${s.title}»` : ''}`;
+    if (s.state === 'awaiting_acceptance') return en ? `Accept stage ${s.stageNo} ${name}`.trim() : `Примите этап ${s.stageNo} ${name}`.trim();
+    if (s.state === 'awaiting_payment' && s.payUrl) return en ? `Pay stage ${s.stageNo} ${name}: $${s.amountUsd}`.replace(/\s+:/, ':') : `Оплатите этап ${s.stageNo} ${name}: $${s.amountUsd}`.replace(/\s+:/, ':');
+    return null; // the stage runs, or its invoice is not issued yet
+  }
+  return null;
+}

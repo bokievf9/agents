@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS pm_milestones (
   amount_usd REAL,
   invoice_number TEXT,
   paid_at INTEGER,
-  accepted_at INTEGER
+  accepted_at INTEGER,
+  title_en TEXT
 );
 CREATE INDEX IF NOT EXISTS pm_milestones_project ON pm_milestones (project_id, id);
 `;
@@ -40,6 +41,14 @@ export type MilestoneKind = 'brief' | 'prototype' | 'delivery' | 'payment' | 'st
 export type LegacyMilestoneKind = Exclude<MilestoneKind, 'stage'>;
 export const MILESTONE_KINDS: LegacyMilestoneKind[] = ['brief', 'prototype', 'delivery', 'payment'];
 export type Product = 'site' | 'bot' | 'app' | 'automation';
+
+/** The state of a stage (payment by stages): what the cabinet and the owner's lists show. */
+export type StageState = 'awaiting_payment' | 'in_progress' | 'awaiting_acceptance' | 'accepted';
+export const stageState = (m: { paidAt: number | null; acceptedAt: number | null; status: string }): StageState =>
+  m.acceptedAt !== null ? 'accepted' : m.paidAt === null ? 'awaiting_payment' : m.status === 'done' ? 'awaiting_acceptance' : 'in_progress';
+
+/** The stage title without the «Этап N:» prefix. */
+export const stageTitleRu = (title: string): string => title.replace(/^Этап \d+:\s*/, '');
 
 export interface Project {
   id: number;
@@ -72,6 +81,8 @@ export interface Milestone {
   invoiceNumber: string | null;
   paidAt: number | null;
   acceptedAt: number | null;
+  /** The stage title in English, without the «Этап N:» prefix (the cabinet of an English-speaking client). */
+  titleEn: string | null;
 }
 
 interface ProjectRow {
@@ -80,7 +91,7 @@ interface ProjectRow {
 }
 interface MilestoneRow {
   id: number; project_id: number; kind: string; title: string; due_at: number; status: string; task_id: number | null; done_at: number | null;
-  stage_no: number | null; amount_usd: number | null; invoice_number: string | null; paid_at: number | null; accepted_at: number | null;
+  stage_no: number | null; amount_usd: number | null; invoice_number: string | null; paid_at: number | null; accepted_at: number | null; title_en: string | null;
 }
 
 const toProject = (r: ProjectRow): Project => ({
@@ -89,7 +100,7 @@ const toProject = (r: ProjectRow): Project => ({
 });
 const toMilestone = (r: MilestoneRow): Milestone => ({
   id: r.id, projectId: r.project_id, kind: r.kind as MilestoneKind, title: r.title, dueAt: r.due_at, status: r.status === 'done' ? 'done' : 'open',
-  taskId: r.task_id, doneAt: r.done_at, stageNo: r.stage_no ?? null, amountUsd: r.amount_usd ?? null, invoiceNumber: r.invoice_number ?? null, paidAt: r.paid_at ?? null, acceptedAt: r.accepted_at ?? null,
+  taskId: r.task_id, doneAt: r.done_at, stageNo: r.stage_no ?? null, amountUsd: r.amount_usd ?? null, invoiceNumber: r.invoice_number ?? null, paidAt: r.paid_at ?? null, acceptedAt: r.accepted_at ?? null, titleEn: r.title_en ?? null,
 });
 
 /** Tables `pm_projects` and `pm_milestones` in the shared HQ database. */
@@ -102,7 +113,7 @@ export class PmStore {
     if (!cols.some((c) => c.name === 'pack_id')) db.exec('ALTER TABLE pm_projects ADD COLUMN pack_id INTEGER');
     // added 2026-11-21: payment by stages (a milestone is a stage with its amount, invoice, payment and acceptance)
     const mcols = db.prepare('PRAGMA table_info(pm_milestones)').all() as { name: string }[];
-    for (const [c, t] of [['stage_no', 'INTEGER'], ['amount_usd', 'REAL'], ['invoice_number', 'TEXT'], ['paid_at', 'INTEGER'], ['accepted_at', 'INTEGER']] as const) {
+    for (const [c, t] of [['stage_no', 'INTEGER'], ['amount_usd', 'REAL'], ['invoice_number', 'TEXT'], ['paid_at', 'INTEGER'], ['accepted_at', 'INTEGER'], ['title_en', 'TEXT']] as const) {
       if (!mcols.some((x) => x.name === c)) db.exec(`ALTER TABLE pm_milestones ADD COLUMN ${c} ${t}`);
     }
   }
@@ -122,7 +133,7 @@ export class PmStore {
     const cur = this.db.prepare('SELECT * FROM pm_projects WHERE pack_id = ?').get(p.packId) as ProjectRow | undefined;
     const proj = cur ? toProject(cur) : this.createProject({ client: p.client, what: p.what, product: p.product, source: 'sales', taskId: null, leadId: p.leadId, packId: p.packId });
     if (p.stages?.length && this.stageMilestones(proj.id).length === 0 && this.milestones(proj.id).length === 0) {
-      p.stages.forEach((s, i) => this.addMilestone({ projectId: proj.id, kind: 'stage', title: `Этап ${s.no}: ${s.title.ru}`, dueAt: p.dueAts?.[i] ?? this.now(), stageNo: s.no, amountUsd: s.amountUsd }));
+      p.stages.forEach((s, i) => this.addMilestone({ projectId: proj.id, kind: 'stage', title: `Этап ${s.no}: ${s.title.ru}`, dueAt: p.dueAts?.[i] ?? this.now(), stageNo: s.no, amountUsd: s.amountUsd, titleEn: s.title.en }));
     }
     return proj;
   }
@@ -173,8 +184,8 @@ export class PmStore {
     this.db.prepare('UPDATE pm_milestones SET due_at = ? WHERE id = ?').run(dueAt, id);
   }
 
-  addMilestone(m: { projectId: number; kind: MilestoneKind; title: string; dueAt: number; stageNo?: number; amountUsd?: number }): Milestone {
-    const r = this.db.prepare('INSERT INTO pm_milestones (project_id, kind, title, due_at, stage_no, amount_usd) VALUES (?, ?, ?, ?, ?, ?)').run(m.projectId, m.kind, m.title, m.dueAt, m.stageNo ?? null, m.amountUsd ?? null);
+  addMilestone(m: { projectId: number; kind: MilestoneKind; title: string; dueAt: number; stageNo?: number; amountUsd?: number; titleEn?: string }): Milestone {
+    const r = this.db.prepare('INSERT INTO pm_milestones (project_id, kind, title, due_at, stage_no, amount_usd, title_en) VALUES (?, ?, ?, ?, ?, ?, ?)').run(m.projectId, m.kind, m.title, m.dueAt, m.stageNo ?? null, m.amountUsd ?? null, m.titleEn ?? null);
     return this.milestone(Number(r.lastInsertRowid))!;
   }
 

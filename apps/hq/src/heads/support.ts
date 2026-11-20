@@ -1,6 +1,8 @@
 import { errMsg, log, schedule, zonedParts, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type WorkerCtx } from '@fir/hq';
 import { BillingWorker, parseInvoiceArgs, parseSubArgs, usdt, type Invoice, type PaymentWatcher } from '@fir/worker-billing';
+import { leadStoreFor } from '@fir/worker-lead-intake';
+import { PmStore } from '@fir/worker-project-manager';
 import { CustomerSupportWorker, csStoreFor, parseClientArgs, parseTicketArgs, type TicketDelivery } from '@fir/worker-customer-support';
 import { FinanceWorker } from '@fir/worker-finance';
 import { MonitoringWorker, WORKER_ID as MONITORING_WORKER_ID, type MonEvent } from '@fir/worker-monitoring';
@@ -75,7 +77,7 @@ export interface SupportDeps {
 }
 
 type Action = 'monitor_add' | 'daily' | 'weekly' | 'status' | 'none' | 'ticket' | 'billing' | 'invoice' | 'kp_invoice' | 'paid' | 'onboard' | 'sub' | 'client';
-/** `kp_invoice` is made by the Sales chain (an approved КП): the invoice for the prepayment, linked to the lead, the pack and the reserved project. */
+/** `kp_invoice` is made by the chain: the invoice of ONE stage of an approved КП (stage 1 by Sales, the next ones by Production when the client accepts a stage), linked to the lead, the pack, the project and the stage. */
 const OWNER_ACTIONS: Action[] = ['ticket', 'billing', 'invoice', 'kp_invoice', 'paid', 'onboard', 'sub', 'client'];
 
 const MONITOR_URL_RE = /https?:\/\/[^\s<>"')]+/i;
@@ -444,16 +446,33 @@ export class SupportHead {
         const m = task.meta;
         const amountUsd = Number(m.amountUsd);
         if (!(amountUsd > 0) || typeof m.client !== 'string' || !m.client) {
-          this.hq.block(task.id, SUPPORT_HEAD_ID, 'В задаче нет клиента или суммы предоплаты');
+          this.hq.block(task.id, SUPPORT_HEAD_ID, 'В задаче нет клиента или суммы этапа');
           return 'Счёт по КП не создан: нет клиента или суммы.';
         }
+        const stageNo = Number(m.stageNo) || null;
+        const projectId = Number(m.projectId) || null;
+        const base = { db: this.hq.db, now: this.hq.now };
+        const bstore = this.billing.store(base);
+        // one live invoice per stage: a repeated task (or a second proposal) never makes a second invoice
+        const dup = projectId !== null && stageNo !== null ? bstore.forStage(projectId, stageNo) : undefined;
+        if (dup) return `Счёт этапа ${stageNo} уже есть: ${dup.number} (${dup.status}).`;
         const link = {
-          leadId: Number(m.leadId) || null, packId: Number(m.packId) || null, projectId: Number(m.projectId) || null, totalUsd: Number(m.totalUsd) || null,
+          leadId: Number(m.leadId) || null, packId: Number(m.packId) || null, projectId, totalUsd: Number(m.totalUsd) || null,
+          ...(stageNo !== null ? { stageNo, stageCount: Number(m.stageCount) || null } : {}),
           ...(typeof m.chain === 'string' ? { chain: m.chain } : {}),
         };
-        const infra = { hasDomain: typeof m.hasDomain === 'boolean' ? m.hasDomain : null, hasHosting: typeof m.hasHosting === 'boolean' ? m.hasHosting : null };
-        const inv = await this.billing.createInvoice(ctx, { client: m.client, amountUsd, what: typeof m.what === 'string' ? m.what : 'Предоплата по КП', newProject: true, link, infra });
-        return `Счёт ${inv.number} для ${inv.client}, $${inv.amountUsd}, по утверждённому КП: текст на утверждении (деньги, одна карточка).`;
+        // what the client already has: from the chain, else from the lead (the invoices of later stages are made without the pack in hand)
+        const lead = link.leadId !== null ? leadStoreFor(base).get(link.leadId) : undefined;
+        const infra = {
+          hasDomain: typeof m.hasDomain === 'boolean' ? m.hasDomain : lead?.hasDomain ?? null,
+          hasHosting: typeof m.hasHosting === 'boolean' ? m.hasHosting : lead?.hasHosting ?? null,
+        };
+        const inv = await this.billing.createInvoice(ctx, { client: m.client, amountUsd, what: typeof m.what === 'string' ? m.what : 'Оплата этапа по КП', newProject: stageNo === null || stageNo === 1, link, infra });
+        if (projectId !== null && stageNo !== null) {
+          const ms = new PmStore(this.hq.db, this.hq.now).stageMilestone(projectId, stageNo);
+          if (ms) new PmStore(this.hq.db, this.hq.now).setStageInvoice(ms.id, inv.number);
+        }
+        return `Счёт ${inv.number} для ${inv.client}, $${inv.amountUsd}, ${stageNo !== null ? `этап ${stageNo} ` : ''}по утверждённому КП: текст на утверждении (деньги, одна карточка).`;
       }
       case 'sub': {
         const s = parseSubArgs(args)!;

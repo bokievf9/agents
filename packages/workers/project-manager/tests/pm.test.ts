@@ -43,7 +43,7 @@ describe('project manager helpers', () => {
 
 describe('ТЗ', () => {
   const p = { client: 'Салон Роза', what: 'Бот для записи', product: 'bot' as const };
-  const ms = planMilestones('bot', T0, TZ).map((m, i) => ({ id: i, projectId: 1, taskId: null, doneAt: null, stageNo: null, amountUsd: null, invoiceNumber: null, paidAt: null, acceptedAt: null, status: 'open' as const, ...m }));
+  const ms = planMilestones('bot', T0, TZ).map((m, i) => ({ id: i, projectId: 1, taskId: null, doneAt: null, stageNo: null, amountUsd: null, invoiceNumber: null, paidAt: null, acceptedAt: null, titleEn: null, status: 'open' as const, ...m }));
 
   it('without a model it is the template with [цена] and [срок]', async () => {
     const spec = await buildSpec(new MockLlm(() => ''), p, ms, TZ);
@@ -79,6 +79,7 @@ describe('payment by stages: the milestones are the stages', () => {
     const ms = s.stageMilestones(p.id);
     expect(ms.map((m) => [m.stageNo, m.amountUsd, m.kind, m.paidAt, m.acceptedAt, m.invoiceNumber])).toEqual([[1, 300, 'stage', null, null, null], [2, 400, 'stage', null, null, null], [3, 300, 'stage', null, null, null]]);
     expect(ms[0]!.title).toBe('Этап 1: Структура и первый экран');
+    expect(ms[0]!.titleEn).toBe('Structure and first screen');
     expect(s.reserve({ client: 'Dilnoza', what: 'сайт', product: 'site', leadId: 1, packId: 5, stages }).id).toBe(p.id);
     expect(s.milestones(p.id)).toHaveLength(3);
     // a reserved stage project has not started: it can still be found by the client's name

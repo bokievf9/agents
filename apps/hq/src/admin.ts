@@ -26,6 +26,8 @@ export interface AdminDeps {
   now?: () => number;
   /** The Support head drafts the answer to a cabinet ticket (the row is already stored). Fire and forget. */
   cabinetTicket?: (t: { id: number; name: string; text: string; telegram: string; leadId?: number }) => Promise<unknown>;
+  /** The client accepts a stage of their project in the cabinet (Production `acceptStage`). */
+  acceptStage?: (projectId: number, stageNo: number) => Promise<{ status: 'accepted' | 'already' | 'not_paid' | 'not_ready' | 'unknown'; text: string }>;
   /** «Пульт v3»: Billing (reminder text, pay links), the client bot (replies to Telegram leads), the website chat (replies to web leads). */
   billing?: BillingWorker;
   client?: Pick<ClientChannel, 'send'>;
@@ -77,6 +79,8 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
         log('warn', 'cabinet lead journal failed', { err: errMsg(e) });
       }
     },
+    ...(d.billing ? { payUrl: (inv: { number: string; payKey: string | null; locale: 'ru' | 'en' }) => d.billing!.payUrl(inv) } : {}),
+    ...(d.acceptStage ? { acceptStage: d.acceptStage } : {}),
     ...(d.cabinetTicket ? { cabinetTicket: (t) => void d.cabinetTicket!(t).catch((e) => log('warn', 'cabinet ticket flow failed', { err: errMsg(e) })) } : {}),
   });
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));

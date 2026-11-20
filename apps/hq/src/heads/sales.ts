@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { errMsg, log, tryJson, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
+import { errMsg, log, parseStages, stagesFor, tryJson, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import { billingStoreFor, type Invoice } from '@fir/worker-billing';
 import { csStoreFor } from '@fir/worker-customer-support';
 import { LeadIntakeWorker, leadStoreFor, TEMP_RU, type Delivery, type Lead } from '@fir/worker-lead-intake';
-import { PmStore, type Product } from '@fir/worker-project-manager';
+import { planStageDates, PmStore, type Product } from '@fir/worker-project-manager';
 import {
   COPY_PREFIX, kindSpecs as prospectKinds, markReplied, onDecision as onProspectDecision, ProspectorWorker, PROSPECT_KINDS, statsText, storeFor as prospectStoreFor,
   STATUS_RU,
@@ -51,8 +51,7 @@ export interface SalesDeps {
   referral?: Worker;
   /** Reward for a referral after the referred client pays (env REFERRAL_REWARD). */
   referralReward?: string;
-  /** КП: prepayment share in percent and validity in days (env PREPAYMENT_PERCENT, KP_VALID_DAYS). */
-  prepaymentPercent?: number;
+  /** КП validity in days (env KP_VALID_DAYS). The payment split is by stages (`stagesFor`), no longer a prepayment share. */
   kpValidDays?: number;
   /** New Scout cards per daily batch. */
   batchSize?: number;
@@ -142,7 +141,7 @@ export class SalesHead implements ApprovalEditor {
     this.prospector = d.prospector ?? new ProspectorWorker({ ...(d.batchSize !== undefined ? { batchSize: d.batchSize } : {}) });
     this.leads = d.leads ?? new LeadIntakeWorker({ ...(d.slotHours ? { slotHours: d.slotHours } : {}), ...(d.replyLevel !== undefined ? { replyLevel: d.replyLevel } : {}) });
     this.presales = d.presales ?? new PresalesWorker({
-      ...(d.prepaymentPercent !== undefined ? { prepaymentPercent: d.prepaymentPercent } : {}), ...(d.kpValidDays !== undefined ? { validDays: d.kpValidDays } : {}),
+      ...(d.kpValidDays !== undefined ? { validDays: d.kpValidDays } : {}),
     });
     this.referral = d.referral ?? new ReferralWorker();
     const base = { db: d.hq.db, now: d.hq.now };
@@ -163,9 +162,10 @@ export class SalesHead implements ApprovalEditor {
   }
 
   /**
-   * An approved КП (owner decision 2026-11-19): (1) a `draft` project is reserved in `pm_projects` (no milestones, no ТЗ: the project starts
-   * when the first invoice is paid); (2) Documents drafts the contract and Billing drafts the invoice for the prepayment, both locked, in
-   * one go. The three cards name each other: «КП #12 → договор → счёт 50%». A drill task never makes a real project or invoice.
+   * An approved КП (owner decisions 2026-11-19 and 2026-11-21, payment by stages): (1) a `draft` project is reserved in `pm_projects` with one
+   * milestone per stage (nothing paid yet; the project starts when stage 1 is paid); (2) Documents drafts the contract and Billing drafts the
+   * invoice of STAGE 1 only, both locked, in one go. The three cards name each other: «КП #12 → договор → счёт этапа 1». The next invoice is
+   * proposed when the client accepts the previous stage (Production, `acceptStage`). A drill task never makes a real project or invoice.
    */
   private afterKpApproved(taskId: number, pack: Record<string, unknown>): void {
     const hq = this.hq;
@@ -178,52 +178,75 @@ export class SalesHead implements ApprovalEditor {
     const offer = OFFERS[direction];
     const client = lead?.name || (lead ? `лид #${lead.id}` : `КП #${packId}`);
     const what = (lead?.task || offer.title).trim() || 'по утверждённому КП';
-    const pct = Number(pack.prepayPercent) || this.d.prepaymentPercent || 50;
     const totalUsd = Number(pack.totalUsd) || offer.fromUsd;
     const monthlyUsd = Number(pack.monthlyUsd) || 0;
+    // the stage plan of the КП travels with the pack; an older pack without it gets the plan the price list would give now
+    const stages = parseStages(pack.stages) ?? stagesFor(totalUsd, [direction]);
+    const first = stages[0]!;
     // what the client already has travels with the chain: the contract and the invoice carry the same conditions line as the КП
     const infra = { ...(typeof pack.hasDomain === 'boolean' ? { hasDomain: pack.hasDomain } : {}), ...(typeof pack.hasHosting === 'boolean' ? { hasHosting: pack.hasHosting } : {}) };
-    const prepayUsd = Number(pack.prepayUsd) || Math.round((totalUsd * pct) / 100);
-    const project = new PmStore(hq.db, hq.now).reserve({ client, what, product: productOfDirection(direction), leadId: lead?.id ?? null, packId });
+    const product = productOfDirection(direction);
+    const dueAts = planStageDates(product, stages.map((x) => x.share), hq.now(), hq.tz);
+    const project = new PmStore(hq.db, hq.now).reserve({ client, what, product, leadId: lead?.id ?? null, packId, stages, dueAts });
     const line = (here: 'contract' | 'invoice') =>
-      `Цепочка: КП #${packId} (утверждено) → договор${here === 'contract' ? ' (эта карточка)' : ''} → счёт ${pct}%${here === 'invoice' ? ' (эта карточка)' : ''} → проект #${project.id} стартует после оплаты`;
+      `Цепочка: КП #${packId} (утверждено) → договор${here === 'contract' ? ' (эта карточка)' : ''} → счёт этапа 1${here === 'invoice' ? ' (эта карточка)' : ''} → проект #${project.id} стартует после оплаты этапа 1`;
     hq.createTask({
       title: `Договор: ${client}`, dept: 'backoffice', creator: 'head', priority: 1,
-      meta: { action: 'doc', type: 'contract', client, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project.id, priceUsd: totalUsd, ...(monthlyUsd > 0 ? { monthlyUsd } : {}), ...infra },
+      meta: { action: 'doc', type: 'contract', client, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project.id, priceUsd: totalUsd, stages, ...(monthlyUsd > 0 ? { monthlyUsd } : {}), ...infra },
     });
     hq.wake('backoffice-head', 'task');
     hq.createTask({
-      title: `Счёт ${pct}%: ${client}`, dept: 'support', creator: 'head', priority: 1,
-      meta: { action: 'kp_invoice', client, amountUsd: prepayUsd, totalUsd, what: `Предоплата ${pct}% по КП #${packId}: ${offer.title}`, packId, leadId: lead?.id ?? null, projectId: project.id, chain: line('invoice'), ...infra },
+      title: `Счёт этапа 1: ${client}`, dept: 'support', creator: 'head', priority: 1,
+      meta: {
+        action: 'kp_invoice', client, amountUsd: first.amountUsd, totalUsd, what: `Этап 1 из ${stages.length}: «${first.title.ru}», КП #${packId}: ${offer.title}`, packId, leadId: lead?.id ?? null,
+        projectId: project.id, stageNo: 1, stageCount: stages.length, chain: line('invoice'), ...infra,
+      },
     });
     hq.wake('support-head', 'task');
     hq.log(HEAD_ID, 'kp_chain', 'pack', String(packId), `project ${project.id}`);
-    void this.d.reporter.post(SALES, `КП #${packId} утверждено (${client}): проект #${project.id} зарезервирован, договор и счёт ${pct}% ($${prepayUsd}) готовятся и придут карточками. Проект стартует после оплаты.`);
+    void this.d.reporter.post(SALES, `КП #${packId} утверждено (${client}): проект #${project.id} зарезервирован (этапов: ${stages.length}), договор и счёт этапа 1 ($${first.amountUsd}) готовятся и придут карточками. Проект стартует после оплаты этапа 1, следующие счета после приёмки этапов.`);
   }
 
   /**
-   * The first invoice of a lead's КП was paid (called by Support after `/paid`): when the lead came with `ref:<slug>`, the payout of 10% of
-   * the estimate total in USD is asked of the owner (locked approval, the referrer's contact on the card). Returns lines for the owner.
+   * An invoice of a lead's КП was paid (called by Support after `/paid` or the watcher): when the lead came with `ref:<slug>`, the payout of 10% of
+   * THIS paid stage is asked of the owner, one locked approval per stage (idempotent: a repeated hook asks nothing). An invoice outside the stage
+   * plan (older chain) keeps the old rule: the first paid invoice of the lead, 10% of the estimate total. Returns lines for the owner.
    */
   async onInvoicePaid(inv: Invoice): Promise<string[]> {
     if (inv.leadId === null) return [];
     const base = { db: this.hq.db, now: this.hq.now };
-    if (billingStoreFor(base).paidCountForLead(inv.leadId) !== 1) return [];
+    if (inv.stageNo === null && billingStoreFor(base).paidCountForLead(inv.leadId) !== 1) return [];
     const lead = leadStoreFor(base).get(inv.leadId);
     const ref = lead ? referrerFromSource(lead.origin) : null;
     if (!lead || !ref || !(this.referral instanceof ReferralWorker)) return [];
     const { referral } = this.rstore().propose({ referrer: ref, referred: lead.name || `лид #${lead.id}`, leadId: lead.id, source: 'lead' });
     const contact = csStoreFor(base).clientByName(ref)?.contact ?? '';
-    const asked = this.referral.requestPayout(base, { referralId: referral.id, totalUsd: inv.totalUsd ?? inv.amountUsd, contact });
+    // the base of the payout: the paid stage (stage plan) or the estimate total (older chain)
+    const payBase = inv.stageNo !== null ? inv.amountUsd : inv.totalUsd ?? inv.amountUsd;
+    if (inv.stageNo !== null && inv.stageNo > 1) {
+      const later = this.referral.requestStagePayout(base, { referralId: referral.id, stageNo: inv.stageNo, stageUsd: payBase, contact, invoiceNumber: inv.number });
+      if (!later) return [];
+      const t = this.hq.createTask({ title: `Выплата рекомендателю #${referral.id}, этап ${inv.stageNo}`, dept: SALES, assigneeId: REFERRAL_ID, creator: 'head', priority: 1, meta: { action: 'referral_payout', referralId: referral.id, invoice: inv.number, stageNo: inv.stageNo } });
+      this.hq.claim(t.id, REFERRAL_ID);
+      const r = this.rstore().get(referral.id)!;
+      await this.hq.requestApproval(
+        t.id, REFERRAL_ID, KIND_PAYOUT,
+        { referralId: referral.id, amountUsd: later.usd, contact: contact || r.payoutContact, referrer: r.referrer, invoice: inv.number, stageNo: inv.stageNo },
+        payoutSummary({ ...r, payoutContact: contact || r.payoutContact }, inv.number, { no: inv.stageNo, usd: later.usd }),
+      );
+      return [`Рекомендатель ${r.referrer}: выплата $${later.usd} (10% этапа ${inv.stageNo}, USDT) придёт карточкой в пачке, выплатить в течение 7 дней.`];
+    }
+    const asked = this.referral.requestPayout(base, { referralId: referral.id, totalUsd: payBase, contact });
     if (!asked) return [];
+    const stage = inv.stageNo !== null ? { no: inv.stageNo, usd: asked.payoutUsd ?? 0 } : undefined;
     const t = this.hq.createTask({ title: `Выплата рекомендателю #${asked.id}`, dept: SALES, assigneeId: REFERRAL_ID, creator: 'head', priority: 1, meta: { action: 'referral_payout', referralId: asked.id, invoice: inv.number } });
     this.hq.claim(t.id, REFERRAL_ID);
     await this.hq.requestApproval(
       t.id, REFERRAL_ID, KIND_PAYOUT,
-      { referralId: asked.id, amountUsd: asked.payoutUsd, contact: asked.payoutContact, referrer: asked.referrer, invoice: inv.number },
-      payoutSummary(asked, inv.number),
+      { referralId: asked.id, amountUsd: asked.payoutUsd, contact: asked.payoutContact, referrer: asked.referrer, invoice: inv.number, ...(stage ? { stageNo: 1 } : {}) },
+      payoutSummary(asked, inv.number, stage),
     );
-    return [`Рекомендатель ${asked.referrer}: выплата $${asked.payoutUsd} (10% сметы, USDT) придёт карточкой в пачке, выплатить в течение 7 дней.`];
+    return [`Рекомендатель ${asked.referrer}: выплата $${asked.payoutUsd} (${stage ? '10% этапа 1' : '10% сметы'}, USDT) придёт карточкой в пачке, выплатить в течение 7 дней.`];
   }
 
   private get hq(): Hq {

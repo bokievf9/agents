@@ -162,7 +162,7 @@ const support = new SupportHead({
 director.onSupportCommand = (name, args) => support.onCommand(name, args);
 const sales = new SalesHead({
   hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel,
-  referralReward: cfg.referralReward, prepaymentPercent: cfg.prepaymentPercent, kpValidDays: cfg.kpValidDays,
+  referralReward: cfg.referralReward, kpValidDays: cfg.kpValidDays,
   ...(clientBot ? { client: clientBot } : {}), lost,
 });
 const auditGate = new AuditGate(hq.now);
@@ -372,6 +372,7 @@ webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePre
 
 const admin = cfg.adminToken
   ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: botCommands, drill: (arg) => drill.command(arg), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),
+      acceptStage: (projectId, stageNo) => Promise.resolve(production.acceptStage(projectId, stageNo, 'client')),
       billing, marketing, tools, rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
     })
   : null;

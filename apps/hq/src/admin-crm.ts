@@ -4,7 +4,8 @@ import { CsStore } from '@fir/worker-customer-support';
 import { builderTotal } from '@fir/worker-presales';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { addCabMessage, ensureCabinetTables, MESSAGE_CAP, nextStepOf, stageMoveTitle, timelineTitle } from './cabinet.js';
+import { addCabMessage, ensureCabinetTables, MESSAGE_CAP, nextStepOf, stageMoveTitle, stageNextStep, timelineTitle } from './cabinet.js';
+import { stageState, stageTitleRu } from '@fir/worker-project-manager';
 import { ensureStageColumn, nextActionOf, StageContext, type Stage } from './lead-stage.js';
 
 /**
@@ -45,6 +46,10 @@ export interface CrmHooks {
   cabinetTicket?: (t: { id: number; name: string; text: string; telegram: string; leadId?: number }) => void;
   /** A line for the Sales head's journal of a lead's task (a cabinet client wrote about the lead). */
   leadJournal?: (taskId: number, text: string) => void;
+  /** The pay page link of an invoice (`BillingWorker.payUrl`); without it a stage carries no `payUrl`. */
+  payUrl?: (inv: { number: string; payKey: string | null; locale: 'ru' | 'en' }) => string | null;
+  /** The client accepts a stage (Production: `acceptStage`, which proposes the next invoice). */
+  acceptStage?: (projectId: number, stageNo: number) => Promise<{ status: 'accepted' | 'already' | 'not_paid' | 'not_ready' | 'unknown'; text: string }>;
 }
 
 const clientPost = z.object({
@@ -286,7 +291,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
   // ---- documents: bo_documents (contract, offer, privacy, act), ps_documents (kp, estimate, contract draft), bl_invoices ----
   interface Doc {
     id: string; source: 'back_office' | 'presales' | 'billing'; kind: string; status: string; client: string; title: string; excerpt: string;
-    amountUsd: number | null; number: string | null; createdAt: number; link: null; leadId?: number;
+    amountUsd: number | null; number: string | null; createdAt: number; link: null; leadId?: number; stageNo?: number | null;
   }
   const docView = (doc: Doc) => {
     const d: Partial<Doc> = { ...doc };
@@ -306,8 +311,8 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       }
     }
     if (has('bl_invoices')) {
-      for (const d of all<{ id: number; number: string; client: string; amount_usd: number; what: string; status: string; created_at: number }>('SELECT * FROM bl_invoices'))
-        docs.push({ id: `bl:${d.id}`, source: 'billing', kind: 'invoice', status: d.status, client: d.client, title: d.what || d.number, excerpt: cap(d.what), amountUsd: d.amount_usd, number: d.number, createdAt: d.created_at, link: null });
+      for (const d of all<{ id: number; number: string; client: string; amount_usd: number; what: string; status: string; created_at: number; stage_no?: number | null }>('SELECT * FROM bl_invoices'))
+        docs.push({ id: `bl:${d.id}`, source: 'billing', kind: 'invoice', status: d.status, client: d.client, title: d.what || d.number, excerpt: cap(d.what), amountUsd: d.amount_usd, number: d.number, createdAt: d.created_at, link: null, stageNo: d.stage_no ?? null });
     }
     return docs;
   }
@@ -330,6 +335,26 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     });
   }
 
+  // ---- payment by stages: the milestones of a project are its stages ----
+  interface MsRow { id: number; project_id: number; kind: string; title: string; due_at: number; status: string; done_at: number | null; stage_no: number | null; amount_usd: number | null; invoice_number: string | null; paid_at: number | null; accepted_at: number | null; title_en: string | null }
+  const hasCol = (t: string, col: string) => has(t) && all<{ name: string }>(`PRAGMA table_info(${t})`).some((x) => x.name === col);
+  /** The stage fields of a milestone row (null for a milestone of the older plan); `payUrl` only while the invoice is issued and unpaid. */
+  function stageFields(m: MsRow, lang: string | null | undefined = 'ru') {
+    if (m.stage_no === null || m.stage_no === undefined) return { stageNo: null, title: null, amountUsd: null, invoiceNumber: null, payUrl: null, paidAt: null, acceptedAt: null, state: null };
+    const inv = m.invoice_number && has('bl_invoices') ? one<{ status: string; pay_key: string | null; locale: string | null }>('SELECT status, pay_key, locale FROM bl_invoices WHERE number = ?', m.invoice_number) : undefined;
+    const payUrl = inv?.status === 'issued' && hooks.payUrl ? hooks.payUrl({ number: m.invoice_number!, payKey: inv.pay_key, locale: inv.locale === 'en' ? 'en' : 'ru' }) : null;
+    return {
+      stageNo: m.stage_no, amountUsd: m.amount_usd, invoiceNumber: m.invoice_number, payUrl, paidAt: iso(m.paid_at), acceptedAt: iso(m.accepted_at),
+      state: stageState({ paidAt: m.paid_at, acceptedAt: m.accepted_at, status: m.status }),
+      title: lang === 'en' && m.title_en ? m.title_en : stageTitleRu(m.title),
+    };
+  }
+  /** The stages of a project in order, as the cabinet and the Пульт show them. */
+  function stageViews(projectId: number, lang: string | null | undefined = 'ru') {
+    if (!hasCol('pm_milestones', 'stage_no')) return [];
+    return all<MsRow>('SELECT * FROM pm_milestones WHERE project_id = ? AND stage_no IS NOT NULL ORDER BY stage_no', projectId).map((m) => ({ id: m.id, ...stageFields(m, lang), dueAt: iso(m.due_at) }));
+  }
+
   // ---- projects ----
   interface ProjRow { id: number; client: string; what: string; product: string; status: string; source: string; task_id: number | null; created_at: number }
   function projects(query: URLSearchParams): CrmReply {
@@ -337,9 +362,9 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     const p = page(query);
     const status = query.get('status');
     const r = idPage<ProjRow>('pm_projects', p, ['client', 'what', 'product'], status ? [{ sql: 'status = ?', params: [status] }] : []);
-    return ok({ available: true, items: r.items.map(projectView), nextCursor: r.nextCursor });
+    return ok({ available: true, items: r.items.map((x) => projectView(x)), nextCursor: r.nextCursor });
   }
-  function projectView(pr: ProjRow) {
+  function projectView(pr: ProjRow, lang: string | null | undefined = 'ru') {
         const msTable = has('pm_milestones');
         const ms = msTable ? all<{ kind: string; title: string; due_at: number; status: string }>('SELECT kind, title, due_at, status FROM pm_milestones WHERE project_id = ? ORDER BY due_at, id', pr.id) : [];
         const open = ms.filter((m) => m.status !== 'done');
@@ -350,6 +375,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
           stage: pr.status === 'draft' ? 'spec' : pr.status === 'done' ? 'done' : next?.kind ?? 'done',
           deadline: iso(next?.due_at ?? last?.due_at), nextMilestone: next ? { kind: next.kind, title: next.title, dueAt: iso(next.due_at) } : null,
           tasksTotal: ms.length, tasksDone: ms.length - open.length, createdAt: iso(pr.created_at),
+          milestones: stageViews(pr.id, lang),
         };
   }
 
@@ -462,7 +488,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     const mineName = (n: string) => names.has(n.trim().toLowerCase());
 
     const projectsOut = has('pm_projects')
-      ? newest(all<ProjRow & { lead_id?: number | null }>('SELECT * FROM pm_projects ORDER BY id DESC').filter((p) => mineName(p.client) || (p.lead_id != null && leadIds.has(p.lead_id))).map(projectView))
+      ? newest(all<ProjRow & { lead_id?: number | null }>('SELECT * FROM pm_projects ORDER BY id DESC').filter((p) => mineName(p.client) || (p.lead_id != null && leadIds.has(p.lead_id))).map((p) => projectView(p, c.locale)))
       : [];
     const docs = allDocs().filter((d) => {
       const own = d.leadId !== undefined ? leadIds.has(d.leadId) : mineName(d.client);
@@ -501,7 +527,6 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     const rows = all<LeadRow & { has_domain?: number | null; has_hosting?: number | null }>('SELECT * FROM li_leads WHERE client_id = ? ORDER BY id DESC LIMIT ?', clientId, CAB_LEADS_CAP);
     if (!rows.length) return [];
     const stages = StageContext.load(db);
-    const hasCol = (t: string, col: string) => has(t) && all<{ name: string }>(`PRAGMA table_info(${t})`).some((x) => x.name === col);
     const moves = has('activity') ? all<{ object_id: string; detail: string; at: number }>("SELECT object_id, detail, at FROM activity WHERE action = 'lead_stage' AND object_type = 'lead' ORDER BY id") : [];
     return rows.map((l) => {
       const stage = stages.stageOf(l);
@@ -522,15 +547,27 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       }
       let invoiceTotal: number | null = null;
       if (hasCol('bl_invoices', 'lead_id')) {
-        for (const i of all<{ status: string; created_at: number; paid_at: number | null; total_usd?: number | null }>("SELECT * FROM bl_invoices WHERE lead_id = ? AND status IN ('issued', 'paid') ORDER BY id", l.id)) {
-          events.push({ at: i.created_at, kind: 'invoice', title: timelineTitle('invoice', lang) });
-          if (i.status === 'paid') events.push({ at: i.paid_at ?? i.created_at, kind: 'paid', title: timelineTitle('paid', lang) });
+        for (const i of all<{ status: string; created_at: number; paid_at: number | null; total_usd?: number | null; stage_no?: number | null }>("SELECT * FROM bl_invoices WHERE lead_id = ? AND status IN ('issued', 'paid') ORDER BY id", l.id)) {
+          const sfx = i.stage_no ? `: ${lang === 'en' ? 'stage' : 'этап'} ${i.stage_no}` : '';
+          events.push({ at: i.created_at, kind: 'invoice', title: `${timelineTitle('invoice', lang)}${sfx}` });
+          if (i.status === 'paid') events.push({ at: i.paid_at ?? i.created_at, kind: 'paid', title: `${timelineTitle('paid', lang)}${sfx}` });
           if (invoiceTotal === null && i.total_usd) invoiceTotal = i.total_usd;
         }
       }
       if (hasCol('pm_projects', 'lead_id')) {
         const p = one<{ created_at: number }>("SELECT created_at FROM pm_projects WHERE lead_id = ? AND status != 'draft' ORDER BY id LIMIT 1", l.id);
         if (p) events.push({ at: p.created_at, kind: 'project', title: timelineTitle('project', lang) });
+      }
+      // the stages of the lead's project: the client's acceptance and the stage steps the track shows
+      let stagesOfLead: ReturnType<typeof stageViews> = [];
+      if (hasCol('pm_projects', 'lead_id') && hasCol('pm_milestones', 'stage_no')) {
+        const proj = one<{ id: number }>('SELECT id FROM pm_projects WHERE lead_id = ? ORDER BY id DESC LIMIT 1', l.id);
+        if (proj) {
+          stagesOfLead = stageViews(proj.id, lang);
+          for (const m of all<MsRow>('SELECT * FROM pm_milestones WHERE project_id = ? AND stage_no IS NOT NULL AND accepted_at IS NOT NULL ORDER BY stage_no', proj.id)) {
+            events.push({ at: m.accepted_at!, kind: 'stage_accepted', title: `${lang === 'en' ? 'Stage' : 'Этап'} ${m.stage_no} ${lang === 'en' ? 'accepted' : 'принят'}` });
+          }
+        }
       }
       for (const m of moves) if (m.object_id === String(l.id) && STAGE_SET.has(m.detail)) events.push({ at: m.at, kind: 'stage', title: stageMoveTitle(m.detail as Stage, lang) });
       events.sort((a, b) => a.at - b.at);
@@ -539,7 +576,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
         summary: (l.task || (l.estimate ?? '').split('\n')[0] || '').trim().slice(0, 200),
         estimateUsd: invoiceTotal ?? builderTotal(l.estimate ?? ''),
         hasDomain: l.has_domain == null ? null : l.has_domain === 1, hasHosting: l.has_hosting == null ? null : l.has_hosting === 1,
-        stage, nextStep: nextStepOf(stage, lang),
+        stage, nextStep: stageNextStep(stagesOfLead, lang) ?? nextStepOf(stage, lang),
         timeline: events.map((e) => ({ at: iso(e.at), kind: e.kind, title: e.title })),
         replies: replies.map((r) => ({ at: iso(r.at), text: r.text, from: r.from })),
       };
@@ -592,10 +629,34 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     return ok({ item: { at: iso(now()), text, from: 'client', leadId, ticketId: tk.id } });
   }
 
-  function clientsRoute(method: string, seg: string[], query: URLSearchParams, body: unknown): CrmReply {
+  /**
+   * `POST /admin/clients/:id/projects/:pid/milestones/:no/accept`: the client accepts a finished stage of THEIR project (found through the lead
+   * that belongs to the account; anyone else's project looks like a missing one). Idempotent. Accepting proposes the invoice of the next stage.
+   */
+  async function stageAccept(id: number, projectId: number, stageNo: number): Promise<CrmReply> {
+    const c = cabById(id);
+    if (!c) return fail(404, 'not_found');
+    const proj = has('pm_projects') && hasCol('pm_projects', 'lead_id') ? one<{ id: number; lead_id: number | null; client: string }>('SELECT id, lead_id, client FROM pm_projects WHERE id = ?', projectId) : undefined;
+    const lead = proj?.lead_id != null && has('li_leads') ? one<{ id: number; task_id: number; client_id: number | null }>('SELECT id, task_id, client_id FROM li_leads WHERE id = ?', proj.lead_id) : undefined;
+    if (!proj || !lead || lead.client_id !== c.id || !hasCol('pm_milestones', 'stage_no')) return fail(404, 'not_found');
+    if (!one<{ id: number }>('SELECT id FROM pm_milestones WHERE project_id = ? AND stage_no = ?', projectId, stageNo)) return fail(404, 'not_found');
+    if (!hooks.acceptStage) return fail(503, 'unavailable');
+    const r = await hooks.acceptStage(projectId, stageNo);
+    if (r.status === 'unknown') return fail(404, 'not_found');
+    if (r.status === 'not_paid' || r.status === 'not_ready') return fail(409, r.status);
+    if (r.status === 'accepted') {
+      hooks.leadJournal?.(lead.task_id, `Клиент принял этап ${stageNo} проекта #${projectId} в кабинете`);
+      hooks.notifyOwner?.(`${c.name || c.email} принял этап ${stageNo} проекта #${projectId}`);
+    }
+    const m = stageViews(projectId, c.locale).find((x) => x.stageNo === stageNo)!;
+    return ok({ already: r.status === 'already', milestone: m });
+  }
+
+  function clientsRoute(method: string, seg: string[], query: URLSearchParams, body: unknown): CrmReply | Promise<CrmReply> {
     if (method === 'POST' && seg.length === 0) return clientCreate(body);
     if (method === 'GET' && seg.length === 1 && seg[0] === 'by-email') return clientByEmail(query);
     if (method === 'POST' && seg.length === 4 && seg[1] === 'leads' && seg[3] === 'messages' && /^\d+$/.test(seg[0]!) && /^\d+$/.test(seg[2]!)) return leadMessageCreate(Number(seg[0]), Number(seg[2]), body);
+    if (method === 'POST' && seg.length === 6 && seg[1] === 'projects' && seg[3] === 'milestones' && seg[5] === 'accept' && [seg[0], seg[2], seg[4]].every((x) => /^\d+$/.test(x!))) return stageAccept(Number(seg[0]), Number(seg[2]), Number(seg[4]));
     if (method === 'POST' && seg.length === 2 && seg[1] === 'tickets' && /^\d+$/.test(seg[0]!)) return clientTicketCreate(Number(seg[0]), body);
     return fail(404, 'not_found');
   }
@@ -618,11 +679,13 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       const r = has('pm_projects') ? one<ProjRow>('SELECT * FROM pm_projects WHERE id = ?', id) : undefined;
       return r ? projectView(r) : undefined;
     },
-    projectsWhere: (where: string, params: unknown[] = []) => whereRows<ProjRow>('pm_projects', where, params).map(projectView),
+    projectsWhere: (where: string, params: unknown[] = []) => whereRows<ProjRow>('pm_projects', where, params).map((x) => projectView(x)),
     ticketsWhere: (where: string, params: unknown[] = []) => (() => { const resolve = clientResolver(); return whereRows<TicketRow>('cs_tickets', where, params).map((x) => ticketView(x, resolve)); })(),
     referralsWhere: (where: string, params: unknown[] = []) => whereRows<RefRow>('rf_referrals', where, params).map(refView),
     docs: () => allDocs(),
     docView,
+    stageViews,
+    stageFields,
     cabById,
     handleKey,
   };

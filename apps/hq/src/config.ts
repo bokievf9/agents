@@ -63,9 +63,8 @@ export interface Config extends BaseConfig {
   replyLevel: 0 | 1;
   /** Monthly limit of the Sales department in USD (0: none). Used only when the head is first created. */
   salesBudgetUsd: number;
-  /** Reward for a referral after the referred client pays; prepayment share (%) and validity (days) of a КП. */
+  /** Reward for a referral after the referred client pays; validity (days) of a КП (the payment split is by stages from the price list). */
   referralReward: string;
-  prepaymentPercent: number;
   kpValidDays: number;
   /** Production and Back Office bot tokens: without them the heads are silent in the group. */
   productionBotToken: string | undefined;
@@ -183,7 +182,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     replyLevel: num(env, 'REPLY_LEVEL', 1, 0, 1) === 0 ? 0 : 1,
     salesBudgetUsd: num(env, 'SALES_BUDGET_USD', 0, 0, 100_000),
     referralReward: optional(env, 'REFERRAL_REWARD') ?? DEFAULT_REFERRAL_REWARD,
-    prepaymentPercent: Math.round(num(env, 'PREPAYMENT_PERCENT', 50, 1, 100)),
     kpValidDays: Math.round(num(env, 'KP_VALID_DAYS', 14, 1, 90)),
     productionBotToken: optional(env, 'PRODUCTION_BOT_TOKEN'),
     backofficeBotToken: optional(env, 'BACKOFFICE_BOT_TOKEN'),
