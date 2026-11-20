@@ -1,5 +1,6 @@
 import { errMsg, log, zonedParts, type KindSpec, type Payload } from '@fir/core';
-import type { SubtaskSpec, Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
+import { toolsOf, type SubtaskSpec, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
+import { readSourcePage } from './source-page.js';
 import { fill, generateItem, loadPrompts, noTrends, type Prompts, type TrendHint, type TrendsProvider } from './generate.js';
 import { KIT_SECTIONS, PLATFORM_LABEL, kitLabel, kitRendersNote, kitScopeKey, kitScopeOf, parseKitArg, splitPlatforms, type ItemType, type Platform } from './format.js';
 import { ContentStore } from './store.js';
@@ -289,9 +290,17 @@ export class ContentMakerWorker implements Worker {
     } catch (e) {
       log('warn', 'trends provider failed, continuing without trends', { err: errMsg(e) });
     }
+    let pageText = '';
+    if (typeof task.meta.sourceUrl === 'string' && task.meta.sourceUrl) {
+      try {
+        pageText = (await readSourcePage(toolsOf(ctx, 'marketing', this.id), ctx.db, task.meta.sourceUrl))?.text ?? '';
+      } catch (e) {
+        log('warn', 'source page not read', { err: errMsg(e) });
+      }
+    }
     try {
       const gen = await generateItem(ctx.llm, this.prompts, {
-        type: item.type, topic, ...(item.type === 'profile' ? { sections: kitScopeOf(item.topicKey) } : {}), week: item.packId ? `с ${ddmm(item.plannedDate)}` : '', ...(feedback ? { comment: feedback, previous: typeof task.meta.previous === 'string' && task.meta.previous ? task.meta.previous : item.text } : {}), ...(trends.length ? { trends } : {}),
+        type: item.type, topic, ...(item.type === 'profile' ? { sections: kitScopeOf(item.topicKey) } : {}), week: item.packId ? `с ${ddmm(item.plannedDate)}` : '', ...(feedback ? { comment: feedback, previous: typeof task.meta.previous === 'string' && task.meta.previous ? task.meta.previous : item.text } : {}), ...(trends.length ? { trends } : {}), ...(pageText ? { pageText } : {}),
         ...(source ? { source: articleSource(articleSchema.parse(JSON.parse(source.json))) } : {}),
       });
       if (!gen) {
