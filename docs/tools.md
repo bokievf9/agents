@@ -73,6 +73,16 @@
 | `mac.poster.enqueue(itemId, platform)` | очередь публикатора на Маке (`mac_queue`), Мак читает `GET /admin/content?queued=1` | marketing | один открытый ряд на материал и площадку | база |
 | `clock.now()` / `clock.zoned(tz)` / `clock.week(date)` | время компании, часы в зоне, ISO-неделя | все | | ничего |
 
+## Списки хостов вызовов
+Политика даёт право по отделам, а хосты назначает вызов (`hosts` у `web.getJson`, `web.getText`, `web.readable`). Общие списки лежат в `@fir/core`, чтобы исполнители не писали свои:
+
+| Список | Хосты | Кто зовёт |
+|---|---|---|
+| `GOOGLE_HOSTS` | `oauth2.googleapis.com`, `www.googleapis.com`, `youtube.googleapis.com` | Публикатор, Аналитик, Трендвотчер (YouTube Data API) |
+| `SOCIAL_HOSTS` (2026-11-21) | `www.instagram.com`, `instagram.com`, `www.tiktok.com`, `vm.tiktok.com`, `vt.tiktok.com`, `www.youtube.com`, `m.youtube.com`, `youtube.com`, `youtu.be` (публичные страницы и oEmbed `https://www.youtube.com/oembed`, `https://www.tiktok.com/oembed`) | Трендвотчер, ссылки владельца (`/trend`, `POST /admin/trends`): `web.getText` страницы (тэги `og:*`) и `web.getJson` oEmbed; без входа в аккаунт, редиректы до 3 с проверкой хоста на каждом шаге |
+
+Новых инструментов в 2026-11-21 нет (тест реестра их бы потребовал): ревью-центр звёт `macEnqueue(db, itemId, platform, agent, at)` (чистая функция в `tools/channels.ts`, ту же вызывает `mac.poster.enqueue`) и `PublisherWorker.publishNow`.
+
 ## Как пользоваться
 ```ts
 const r = await ctx.tools?.web.search('тренды ИИ для салонов красоты', { limit: 5, lang: 'ru' });

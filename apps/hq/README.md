@@ -570,6 +570,9 @@ firtech.pro на том же хосте читает его через `/api/adm
 - `POST /events` (токен `SITE_EVENTS_TOKEN`, иначе `WEB_CHAT_TOKEN`, 120 в минуту с IP): счётчики в `site_events` без персональных данных; `GET /admin/metrics/week` складывает их с блогом, YouTube Аналитика, воронкой и счетами.
 - `GET /admin/company`: рутины с ближайшим запуском, расходы по отделам и дням, доверие, исполнители; переключение рутины, «запустить сейчас», уровень доверия. Плейбуки пока `[]` (ждём `loadPlaybook`).
 
+### Ревью-центр (2026-11-21): `src/review.ts`, `src/chats.ts`, `src/pult-trends.ts`
+Маршруты `/admin/review`, `/admin/chats`, `/admin/trends` под тем же `x-admin-token` (подключены в `src/pult.ts`). Ревью-центр показывает все виды одобрений одной формой и решает их тем же кодом, что кнопки Telegram (`decide` из `admin.ts`, затем `settleCard`); версии правок в `review_versions`, ответы владельца клиентам в `cab_messages` (`author`) и `ch_messages`, ссылки Трендвотчера в `ts_links`. Голова Маркетинга получила `addOwnerLink`, `requestRevision`, `publishNow`, `reschedule`, команда `/trend <ссылка> [заметка]` в `src/commands.ts`. Контракт для сайта: `docs/admin-crm-api.md`, «Ревью-центр (2026-11-21)». Тесты: `tests/review.test.ts`, `chats.test.ts`, `trends.test.ts`.
+
 ## Запуск
 `pnpm --filter hq dev` (`.env.local`). Docker: `apps/hq/Dockerfile`, сервис `hq` в `compose.yaml` (единственный порт `127.0.0.1:8787` для webhook лидов, `read_only`,
 данные `/opt/fir-agents/data/hq`), образ `agents-hq` в CI. Экспорт оргструктуры:
