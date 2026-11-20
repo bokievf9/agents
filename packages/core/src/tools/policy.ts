@@ -42,7 +42,7 @@ const NET = { timeoutMs: 8000, maxBytes: 1_000_000, perHost: 2, minGapMs: 250, r
 export const TOOL_POLICY: readonly ToolPolicy[] = [
   { name: 'web.getJson', departments: ALL, limits: NET, env: [], internal: ['support'], summary: 'GET JSON from listed https hosts' },
   { name: 'web.getText', departments: ['marketing', 'sales', 'support', 'director'], limits: { ...NET, maxBytes: 300_000 }, env: [], internal: ['support'], summary: 'GET HTML or text, cut at 300 KB' },
-  { name: 'web.readable', departments: ['marketing', 'sales', 'director'], limits: { ...NET, maxBytes: 300_000 }, env: [], summary: 'article text of a page' },
+  { name: 'web.readable', departments: ['marketing', 'sales', 'director'], limits: { ...NET, maxBytes: 300_000 }, env: [], summary: 'article text of a page; under 400 characters of own text: Jina Reader (r.jina.ai) fallback' },
   { name: 'web.search', departments: ['marketing', 'sales', 'director'], limits: { timeoutMs: 8000, minGapMs: 1000, perHost: 1, retries: 1, cacheTtlMs: 3_600_000, maxResults: 10 }, env: ['BRAVE_SEARCH_KEY'], summary: 'web search: Brave API, else DuckDuckGo HTML' },
   { name: 'web.post', departments: ALL, limits: { timeoutMs: 60_000, maxBytes: 1_000_000, perHost: 2, minGapMs: 250, retries: 0 }, env: [], summary: 'POST to listed https hosts (no retries)' },
   { name: 'cache.get', departments: ALL, limits: {}, env: [], quiet: true, summary: 'read the tool cache' },

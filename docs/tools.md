@@ -48,7 +48,7 @@
 |---|---|---|---|---|
 | `web.getJson(url, {hosts})` | GET JSON с allow-list, pinned DNS | все | 8 с, 1 МБ, 2 на хост, повтор 2 | ничего |
 | `web.getText(url, {hosts})` | GET HTML или текст, обрезка до 300 КБ (`truncated`), кодировка из `content-type` | marketing, sales, support, director | 8 с, 300 КБ, редиректы 3 | ничего |
-| `web.readable(url, {hosts?})` | статья: заголовок, текст без навигации, рекламы и cookie, дата публикации, язык, ссылки статьи | marketing, sales, director | как `getText`, свой парсер без зависимостей | ничего |
+| `web.readable(url, {hosts?})` | статья: заголовок, текст без навигации, рекламы и cookie, дата публикации, язык, ссылки статьи. Если свой разбор дал меньше 400 знаков (страница собирается скриптами), одна попытка через Jina Reader `https://r.jina.ai/<url>` (10 с, `via: 'jina'`, строка `tool:web.readable.jina` в журнале); сбой Jina оставляет свой результат; запасной путь только для страницы, которую свой запрос уже открыл | marketing, sales, director | как `getText`, свой парсер без зависимостей; Jina 10 с | ничего |
 | `web.search(q, {limit, lang})` | веб-поиск: Brave Search API при ключе, иначе DuckDuckGo HTML | marketing, sales, director | 10 результатов, 1 запрос/с на провайдера, кэш 1 ч | `BRAVE_SEARCH_KEY` (необязательно) |
 | `web.post(url, body, {hosts, as})` | POST/PUT JSON, формы или байтов к известным API | все | 60 с, без повторов | ничего |
 | `web.getBytes(url, {hosts})` | картинка или маленький файл: байты как есть, `contentType`, редиректы 3, каждый шаг проверяется | marketing, director | 8 с, 3 МБ, 2 на хост | ничего |

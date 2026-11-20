@@ -50,12 +50,41 @@ export interface Web {
   /** GET a picture or another small binary file (up to 3 MB) from listed https hosts: the bytes as they are. */
   getBytes(url: string, o: { hosts: readonly string[]; timeoutMs?: number }): Promise<ToolResult<{ bytes: Buffer; contentType: string; url: string }>>;
   /** Article of a page. Hosts: the listed ones, or any public host a `search` of this toolbox returned, or `'public'` explicitly. */
-  readable(url: string, o?: { hosts?: HostList; maxChars?: number }): Promise<ToolResult<Readable & { url: string }>>;
+  readable(url: string, o?: { hosts?: HostList; maxChars?: number }): Promise<ToolResult<Readable & { url: string; /** `jina` when the page's own HTML gave under 400 characters and Jina Reader supplied the text. */ via?: 'jina' }>>;
   search(q: string, o?: { limit?: number; lang?: string }): Promise<ToolResult<SearchHit[]>>;
   post(url: string, body: unknown, o: PostOptions): Promise<ToolResult<PostAnswer>>;
 }
 
 const lim = (name: string) => policyOf(name)!.limits;
+
+/** Jina Reader (https://r.jina.ai/<url>): a readable-page fallback for pages whose HTML holds no text (script-built pages). */
+export const JINA_HOST = 'r.jina.ai';
+/** Below this many characters the page's own extraction counts as empty and Jina is tried. */
+export const JINA_BELOW_CHARS = 400;
+const JINA_TIMEOUT_MS = 10_000;
+
+/** Title, date, text and links from Jina's markdown answer («Title: ...», «Published Time: ...», «Markdown Content:»). */
+export function parseJina(body: string, maxChars: number): (Readable & { text: string }) | null {
+  const at = body.indexOf('Markdown Content:');
+  const head = at >= 0 ? body.slice(0, at) : '';
+  const md = (at >= 0 ? body.slice(at + 'Markdown Content:'.length) : body).trim();
+  const links: Readable['links'] = [];
+  for (const m of md.matchAll(/(?<!!)\[([^\]]{1,160})\]\((https:\/\/[^)\s]+)[^)]*\)/g)) if (links.length < 30 && !links.some((l) => l.href === m[2])) links.push({ href: m[2]!, text: m[1]!.trim() });
+  const text = md
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^[ \t]*(?:#{1,6}|>|[-*+])\s+/gm, '')
+    .replace(/[*_`]{1,3}/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, maxChars);
+  if (!text) return null;
+  const title = /^Title:\s*(.+)$/m.exec(head)?.[1]?.trim() ?? /^#\s+(.+)$/m.exec(md)?.[1]?.trim() ?? '';
+  const when = /^Published Time:\s*(.+)$/m.exec(head)?.[1]?.trim();
+  const published = when && Number.isFinite(Date.parse(when)) ? new Date(Date.parse(when)).toISOString() : null;
+  return { title, text, published, links, lang: null };
+}
 const hostsOk = (hosts: unknown): hosts is readonly string[] => Array.isArray(hosts) && hosts.length > 0 && hosts.every((h) => typeof h === 'string' && /^[a-z0-9.-]+$/i.test(h));
 
 export function createWeb(k: Kit): Web {
@@ -99,6 +128,20 @@ export function createWeb(k: Kit): Web {
     } catch {
       return fail('upstream', `${new URL(url).hostname}: answer is not JSON`, { status: r.value.status, retryable: false });
     }
+  }
+
+  /** The text of a page through Jina Reader, or null (the answer is journaled either way; it never fails the call). */
+  async function jina(pageUrl: string, maxChars: number): Promise<(Readable & { text: string }) | null> {
+    const host = new URL(pageUrl).hostname;
+    const say = (detail: string) => k.deps.journal?.log(k.cx.agentId, 'tool:web.readable.jina', 'url', host, detail);
+    const r = await text('web.readable', `https://${JINA_HOST}/${pageUrl}`, [JINA_HOST], { timeoutMs: JINA_TIMEOUT_MS, headers: { accept: 'text/plain', 'x-return-format': 'markdown' } });
+    if (!r.ok) {
+      say(`failed ${r.error}`);
+      return null;
+    }
+    const parsed = parseJina(r.value.text, maxChars);
+    say(parsed ? `ok ${parsed.text.length} chars` : 'empty');
+    return parsed;
   }
 
   async function search(q: string, o: { limit?: number; lang?: string } = {}): Promise<ToolResult<SearchHit[]>> {
@@ -183,10 +226,17 @@ export function createWeb(k: Kit): Web {
         if (hosts !== 'public' && hosts.length === 0) return fail('blocked', 'no host list: pass hosts, or read a page a search returned');
         const page = await text('web.readable', url, hosts, {});
         if (!page.ok) return page;
-        if (!/html|xml/i.test(page.value.contentType) && !/<html|<body|<p[\s>]/i.test(page.value.text.slice(0, 2000))) {
-          return okv({ url: page.value.url, title: '', text: page.value.text.slice(0, o.maxChars ?? 20_000), published: page.value.lastModified ? new Date(page.value.lastModified).toISOString() : null, links: [], lang: null });
+        const max = o.maxChars ?? 20_000;
+        const own: Readable & { url: string; via?: 'jina' } =
+          !/html|xml/i.test(page.value.contentType) && !/<html|<body|<p[\s>]/i.test(page.value.text.slice(0, 2000))
+            ? { url: page.value.url, title: '', text: page.value.text.slice(0, max), published: page.value.lastModified ? new Date(page.value.lastModified).toISOString() : null, links: [], lang: null }
+            : { url: page.value.url, ...extractReadable(page.value.text, page.value.url, max) };
+        // a page whose HTML holds almost no text (built by scripts): Jina Reader gets one try, 10 s; its failure leaves the own result as it was
+        if (own.text.length < JINA_BELOW_CHARS) {
+          const j = await jina(page.value.url, max);
+          if (j && j.text.length > own.text.length) return okv({ ...own, title: j.title || own.title, text: j.text, published: own.published ?? j.published, links: own.links.length ? own.links : j.links, via: 'jina' as const });
         }
-        return okv({ url: page.value.url, ...extractReadable(page.value.text, page.value.url, o.maxChars ?? 20_000) });
+        return okv(own);
       }),
     search: (q, o) => k.call('web.search', () => search(q, o)),
     post: (url, body, o) =>

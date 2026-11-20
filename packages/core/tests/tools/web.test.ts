@@ -232,3 +232,65 @@ describe('web: internal hosts (policy flag, Monitoring only)', () => {
     expect(await s.t.web.getText('ftp://omniroute/healthz', O)).toMatchObject({ ok: false, error: 'invalid' });
   });
 });
+
+describe('web.readable: Jina Reader fallback for pages with no text of their own', () => {
+  const SPA = '<html><head><title>Салон</title></head><body><div id="app"></div><script>window.__DATA__={}</script></body></html>';
+  const JINA = [
+    'Title: Салон красоты: запись онлайн', '', 'URL Source: https://spa.example/booking', '', 'Published Time: 2026-11-10T08:00:00Z', '', 'Markdown Content:',
+    '# Запись в салон', '', 'Администратор салона тратит **несколько часов** в день на переписку с клиентами. '.repeat(6), '', '- [Прайс](https://spa.example/price)', '- ![фото](https://spa.example/a.png)', '- Контакты',
+  ].join('\n');
+
+  it('under 400 characters of own text: one try at r.jina.ai, markdown cleaned, journaled, via jina', async () => {
+    const net = fakeNet({ 'https://spa.example/booking': SPA, 'https://r.jina.ai/https://spa.example/booking': new Response(JINA, { headers: { 'content-type': 'text/plain; charset=utf-8' } }) });
+    const { t, journal } = tools({ fetch: net.fetch });
+    const r = await t.web.readable('https://spa.example/booking', { hosts: ['spa.example'] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.via).toBe('jina');
+    expect(r.value.title).toBe('Салон красоты: запись онлайн'); // Jina's title wins over an empty own one
+    expect(r.value.published).toBe('2026-11-10T08:00:00.000Z');
+    expect(r.value.text.length).toBeGreaterThanOrEqual(400);
+    expect(r.value.text).toContain('Администратор салона тратит несколько часов');
+    expect(r.value.text).not.toMatch(/\*\*|\]\(|!\[/);
+    expect(r.value.links).toEqual([{ href: 'https://spa.example/price', text: 'Прайс' }]);
+    expect(net.calls.map((c) => c.url)).toEqual(['https://spa.example/booking', 'https://r.jina.ai/https://spa.example/booking']);
+    expect((net.calls[1]!.init.headers as Record<string, string>).accept).toBe('text/plain');
+    expect(journal.lines.some((l) => l.action === 'tool:web.readable.jina' && l.detail?.startsWith('ok '))).toBe(true);
+  });
+
+  it('a page with enough own text never calls Jina', async () => {
+    const net = fakeNet({ 'https://studio.example/': fixture('blog.html') });
+    const r = await tools({ fetch: net.fetch }).t.web.readable('https://studio.example/blog/zapis', { hosts: ['studio.example'] });
+    expect(r.ok && r.value.text.length).toBeGreaterThan(400);
+    expect(r.ok && r.value.via).toBeUndefined();
+    expect(net.calls).toHaveLength(1);
+  });
+
+  it('when Jina fails, answers garbage or says less, the own result stays and the failure is journaled', async () => {
+    const down = fakeNet({ 'https://spa.example/booking': SPA, 'https://r.jina.ai/': new Response('nope', { status: 503 }) });
+    const a = tools({ fetch: down.fetch });
+    const r = await a.t.web.readable('https://spa.example/booking', { hosts: ['spa.example'] });
+    expect(r).toMatchObject({ ok: true, value: { url: 'https://spa.example/booking' } });
+    expect(r.ok && r.value.via).toBeUndefined();
+    expect(a.journal.lines.some((l) => l.action === 'tool:web.readable.jina' && l.detail?.startsWith('failed'))).toBe(true);
+    const short = fakeNet({ 'https://spa.example/booking': SPA, 'https://r.jina.ai/': 'Title: x\n\nMarkdown Content:\nкоротко' });
+    const b = await tools({ fetch: short.fetch }).t.web.readable('https://spa.example/booking', { hosts: ['spa.example'] });
+    expect(b.ok && b.value.via).toBe('jina'); // short but still more than nothing
+    const empty = fakeNet({ 'https://spa.example/booking': SPA, 'https://r.jina.ai/': 'Title: x\n\nMarkdown Content:\n' });
+    expect((await tools({ fetch: empty.fetch }).t.web.readable('https://spa.example/booking', { hosts: ['spa.example'] })).ok).toBe(true);
+  });
+
+  it('a timeout of Jina is 10 s and does not break the call', async () => {
+    const slow = fakeNet({ 'https://spa.example/booking': SPA, 'https://r.jina.ai/': () => new Promise<Response>(() => undefined) });
+    // the fake network never answers Jina: the request's own timer ends it; the call still answers with the own page
+    const { t } = tools({ fetch: (u, i) => (u.startsWith('https://r.jina.ai/') ? Promise.reject(new DOMException('timeout', 'TimeoutError')) : slow.fetch(u, i)) });
+    expect(await t.web.readable('https://spa.example/booking', { hosts: ['spa.example'] })).toMatchObject({ ok: true });
+  });
+
+  it('only a page the own request opened gets the fallback: a blocked host never reaches Jina', async () => {
+    const net = fakeNet({ 'https://spa.example/': SPA });
+    const { t } = tools({ fetch: net.fetch });
+    expect(await t.web.readable('https://spa.example/booking', { hosts: ['other.example'] })).toMatchObject({ ok: false, error: 'blocked' });
+    expect(net.calls).toHaveLength(0);
+  });
+});
