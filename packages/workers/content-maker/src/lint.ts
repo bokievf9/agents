@@ -1,4 +1,6 @@
+import { detectText, lintCaption, type DetectResult } from '@fir/core';
 import { allowedPrices } from './directions.js';
+import { splitPlatforms } from './format.js';
 import { parseReel } from './reel.js';
 
 /**
@@ -70,4 +72,76 @@ export function lintReelScript(text: string): string[] {
   if (SELF_ANSWER.test(body)) issues.push('самоответный вопрос («Результат? Быстрее.»)');
   if (COLON_REVEAL.test(body)) issues.push('разоблачение через двоеточие («Главное: ...»)');
   return issues;
+}
+
+const SHAPE = /^(?:Клип(?:,\s*\d+\s*с)?|Карусель[^:\n]*|Пост|История[^:\n]*):/m;
+
+export interface CopyLint {
+  /** Remarks that send the text back to the Content maker once (empty: the text passes). */
+  issues: string[];
+  /** `text.detect` score of the script and of the caption, the lower one; null when there was nothing to score. */
+  human: number | null;
+  /** `text.captionLint` verdict of the Instagram caption; null when the item has none (stories). */
+  caption: 'ready' | 'review' | 'fix' | null;
+  /** One line for the approval card: «Проверка текста: человечность 81, подпись ок». */
+  line: string;
+}
+
+/** Script lines of an item without labels and numbering, one per line: what a person would hear or read on the slides. */
+function scriptLines(body: string): string {
+  const reel = parseReel(body);
+  if (reel) return [reel.hook, ...reel.scenes.map((s) => s.voice), reel.cta].filter(Boolean).join('\n');
+  return body
+    .split('\n')
+    .slice(1)
+    .map((l) => l.trim().replace(/^\d+[.)]\s*/, '').replace(/^(?:CTA|Куда ведёт|На картинке):?\s*/, ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
+const CAPTION_VERDICT_RU = { ready: 'ок', review: 'есть замечания', fix: 'исправить' } as const;
+
+function slopIssue(where: string, d: DetectResult): string | null {
+  const stock = d.slop.slice(0, 4).map((s) => `«${s.find.replace(/\*$/, '')}»`).join(', ');
+  const shapes = d.structures.filter((x) => x.id !== 'uniform-length').slice(0, 2).map((x) => x.name).join('; ');
+  // a rework is for clearly machine-written text: stock words, a visible fingerprint or a very low score; a bland script only shows its number on the card
+  if (d.checks.slop_density.score >= 40 && d.checks.fingerprint.score >= 40 && d.score >= 35) return null;
+  return `${where}: человечность ${Math.round(d.score)}${stock ? `, штампы ${stock}` : ''}${shapes ? `, переписать обороты: ${shapes}` : ''}`;
+}
+
+/**
+ * The text checks of the marketing head, run before a content item reaches the owner: `text.detect` on the script and on the caption,
+ * `text.captionLint` on the Instagram caption (the 125-character window, 2200, hashtags up to 5, search terms none here). A failing
+ * result is `issues`: the head sends it back for one rework. Returns null for a text that is not a content item (profile kits, reports).
+ */
+export function lintCopy(result: string): CopyLint | null {
+  const at = result.search(SHAPE);
+  if (at < 0) return null;
+  const { body, sections } = splitPlatforms(result.slice(at));
+  const issues: string[] = [];
+  const scores: number[] = [];
+  const script = scriptLines(body);
+  if (script.trim()) {
+    const d = detectText(script, 'ru');
+    scores.push(d.score);
+    const issue = slopIssue('сценарий', d);
+    if (issue) issues.push(issue);
+  }
+  let caption: CopyLint['caption'] = null;
+  const ig = sections.instagram;
+  if (ig) {
+    const plain = ig.replace(/(?:^|\s)#[\p{L}\p{N}_]+/gu, ' ').trim();
+    if (plain) {
+      const d = detectText(plain, 'ru');
+      scores.push(d.score);
+      const issue = slopIssue('подпись', d);
+      if (issue) issues.push(issue);
+    }
+    const c = lintCaption(ig, { lang: 'ru' });
+    caption = c.verdict;
+    if (c.verdict === 'fix') issues.push(`подпись Instagram: ${c.checks.filter((x) => x.status === 'fail').map((x) => x.detail).join('; ')}`);
+  }
+  const human = scores.length ? Math.round(Math.min(...scores)) : null;
+  const parts = [human === null ? '' : `человечность ${human}`, caption ? `подпись ${CAPTION_VERDICT_RU[caption]}` : ''].filter(Boolean);
+  return { issues, human, caption, line: parts.length ? `Проверка текста: ${parts.join(', ')}.` : '' };
 }

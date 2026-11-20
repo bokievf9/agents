@@ -4,7 +4,7 @@ import { GoogleAuth, errMsg, escapeHtml, log, parseClientJson, tryJson, zonedPar
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import {
   ARTICLE_KIND, KIND, ContentMakerWorker, TYPE_RU, approveArticle, articleLineOn, dayLabel, editableParts, isAiAsk, partLabel, replacePart,
-  findNiche, kitLabel, kitRendersNote, lintReelScript, parseKitArg, splitPlatforms, storeFor, titleOf, ymd, RenderQueue, parseReel, shortReason, type RenderJob,
+  findNiche, kitLabel, kitRendersNote, lintCopy, lintReelScript, parseKitArg, splitPlatforms, storeFor, titleOf, ymd, RenderQueue, parseReel, shortReason, type RenderJob,
   type PartId,
 } from '@fir/worker-content-maker';
 import { AnalystWorker } from '@fir/worker-analyst';
@@ -649,6 +649,10 @@ export class MarketingHead implements ApprovalEditor {
     // a script that fails them goes back for the one rework without asking the model.
     const hard = lintReelScript(result);
     if (hard.length > 0) return { ok: false, issues: hard };
+    // then the text tools of @fir/core (text.detect on the script and the caption, text.captionLint on the Instagram caption): a failing result is
+    // the same one rework; what stays is shown on the card (`copyLine`)
+    const copy = lintCopy(result);
+    if (copy && copy.issues.length > 0) return { ok: false, issues: copy.issues };
     const res = await tryJson(
       this.llmFor(HEAD_ID, task.id),
       {
@@ -696,7 +700,9 @@ export class MarketingHead implements ApprovalEditor {
     }
     const warn = verdict.skipped ? '\nРевью по чек-листу пропущено (модель не ответила): проверьте текст сами.' : verdict.ok ? '' : `\nРевью отдела после доработки: ${verdict.issues.join('; ')}.`;
     this.hq.complete(taskId, actor, res.result, staged.length > 0 ? 'review' : 'done');
-    for (const s of staged) await this.hq.requestApproval(taskId, actor, s.kind, s.payload, s.summary + warn);
+    // «Проверка текста: человечность 81, подпись ок» goes on the card of every content item
+    const scores = lintCopy(res.result)?.line;
+    for (const s of staged) await this.hq.requestApproval(taskId, actor, s.kind, s.payload, s.summary + warn + (scores && s.kind === KIND ? `\n${scores}` : ''));
     const t = this.hq.task(taskId)!;
     if (!t.parentId) await this.report(taskId, staged.length > 0 ? `Задача #${taskId} «${t.title}»: ${staged.length} на одобрение (придёт в пачке).` : `Задача #${taskId} «${t.title}» выполнена.`);
   }
