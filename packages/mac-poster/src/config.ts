@@ -25,6 +25,11 @@ export interface Config {
   lockFile: string;
   /** `~/Library/Logs/fir-mac-poster`: run logs and failure screenshots. */
   logsDir: string;
+  /** Agent Reach (`reach:*` commands): the CLI, one run at a time (own lock), jobs per run, hard limit per job. */
+  agentReachBin: string;
+  reachLockFile: string;
+  reachMax: number;
+  reachTimeoutS: number;
 }
 
 export const ENV_FILE = join(homedir(), '.fir-mac-poster.env');
@@ -83,5 +88,10 @@ export function buildConfig(env: Record<string, string | undefined>, home = home
     stateFile: join(appDir, 'state.json'),
     lockFile: join(appDir, 'run.lock'),
     logsDir: join(home, 'Library', 'Logs', 'fir-mac-poster'),
+    // launchd has a short PATH: the uv install puts the CLI in ~/.local/bin
+    agentReachBin: expand(env.MP_AGENT_REACH || '~/.local/bin/agent-reach'),
+    reachLockFile: join(appDir, 'reach.lock'),
+    reachMax: int(env.MP_REACH_MAX, 20, 'MP_REACH_MAX'),
+    reachTimeoutS: int(env.MP_REACH_TIMEOUT, 120, 'MP_REACH_TIMEOUT'),
   };
 }

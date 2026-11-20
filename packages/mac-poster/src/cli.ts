@@ -9,12 +9,15 @@ import { HqClient } from './hq.js';
 import { InstagramWeb, loginFlow } from './instagram/web.js';
 import { installLaunchd, uninstallLaunchd } from './launchd.js';
 import { LockedError, acquireLock } from './lock.js';
+import { enabledChannels, execAgentReach, parseDoctor, runReach } from './reach/runner.js';
+import { reachStatus } from './reach/status.js';
+import { ACTIONS } from './reach/spec.js';
 import { runInstagram } from './run.js';
 import { loadState, saveState } from './state.js';
 import { openTunnel } from './tunnel.js';
 import { isDate, localDate } from './week.js';
 
-export type Command = 'login' | 'instagram' | 'install-launchd' | 'uninstall-launchd';
+export type Command = 'login' | 'instagram' | 'install-launchd' | 'uninstall-launchd' | 'reach' | 'reach-status' | 'reach-install-launchd' | 'reach-uninstall-launchd';
 export interface CliArgs {
   command: Command;
   date: string;
@@ -24,7 +27,7 @@ export interface CliArgs {
   jitterMin: number;
 }
 
-const COMMANDS: Command[] = ['login', 'instagram', 'install-launchd', 'uninstall-launchd'];
+const COMMANDS: Command[] = ['login', 'instagram', 'install-launchd', 'uninstall-launchd', 'reach', 'reach-status', 'reach-install-launchd', 'reach-uninstall-launchd'];
 
 /** `instagram [--date YYYY-MM-DD] [--dry-run] [--limit N] [--headless] [--jitter MIN]`; `run instagram` is accepted too. */
 export function parseCli(argv: string[], now: number): CliArgs {
@@ -65,6 +68,40 @@ function notify(title: string, text: string): void {
   execFile('osascript', ['-e', `display notification ${s(text)} with title ${s(title)}`], () => undefined);
 }
 
+/** `reach` (one run: pull the queue, run `agent-reach`, answer) and `reach-status` (channels and queue counts). One run at a time (own lock). */
+async function reachMain(args: CliArgs, cfg: Config): Promise<number> {
+  const runCli = execAgentReach(cfg.agentReachBin);
+  const withHq = async <T>(f: (client: HqClient) => Promise<T>, log: (l: string) => void): Promise<T> => {
+    const tunnel = await openTunnel(cfg);
+    log(tunnel.reused ? `Туннель на 127.0.0.1:${cfg.localPort} уже есть, использую его.` : `Туннель к HQ поднят (127.0.0.1:${cfg.localPort}).`);
+    try {
+      return await f(new HqClient(`http://127.0.0.1:${cfg.localPort}`, cfg.adminToken));
+    } finally {
+      tunnel.close();
+    }
+  };
+  if (args.command === 'reach-status') {
+    const lines = await reachStatus({
+      runCli,
+      ...(cfg.adminToken ? { counts: () => withHq(async (c) => (await c.reachJobs()).counts, () => undefined) } : {}),
+    });
+    for (const l of lines) console.log(l);
+    return 0;
+  }
+  const release = acquireLock(cfg.reachLockFile);
+  try {
+    const log = logger(cfg, `reach-${args.date}`);
+    const doctor = await runCli(['doctor'], 30_000);
+    const list = doctor.spawnError ? null : parseDoctor(doctor.stdout);
+    if (!list) log(`agent-reach doctor не разобрался${doctor.spawnError ? `: ${doctor.spawnError}` : ''}: каналы не сообщаю, пробую все задания.`);
+    const enabled = list ? enabledChannels(list, Object.keys(ACTIONS)) : undefined;
+    const r = await withHq((client) => runReach({ client, runCli, enabled, max: args.limit ?? cfg.reachMax, timeoutMs: cfg.reachTimeoutS * 1000, log }), log);
+    return r.stopped ? 2 : r.failed ? 1 : 0;
+  } finally {
+    release();
+  }
+}
+
 async function main(): Promise<number> {
   const args = parseCli(process.argv.slice(2), Date.now());
   const here = dirname(fileURLToPath(import.meta.url));
@@ -73,7 +110,18 @@ async function main(): Promise<number> {
     console.log(f ? `Удалил ${f}` : 'Расписания не было.');
     return 0;
   }
-  const cfg = buildConfig(loadEnv(), homedir(), { needToken: args.command === 'instagram' || args.command === 'install-launchd' });
+  if (args.command === 'reach-uninstall-launchd') {
+    const f = uninstallLaunchd(homedir(), 'reach');
+    console.log(f ? `Удалил ${f}` : 'Расписания Agent Reach не было.');
+    return 0;
+  }
+  const cfg = buildConfig(loadEnv(), homedir(), { needToken: ['instagram', 'install-launchd', 'reach', 'reach-install-launchd'].includes(args.command) });
+  if (args.command === 'reach-install-launchd') {
+    const f = installLaunchd({ node: process.execPath, cli: resolve(here, 'cli.ts'), cwd: resolve(here, '..'), logsDir: cfg.logsDir, home: homedir() }, 'reach');
+    console.log(`Расписание: ${f} (каждые 15 минут). Логи: ${cfg.logsDir}. Первый запуск сразу: pnpm --filter mac-poster reach:now`);
+    return 0;
+  }
+  if (args.command === 'reach' || args.command === 'reach-status') return reachMain(args, cfg);
   if (args.command === 'install-launchd') {
     const f = installLaunchd({ node: process.execPath, cli: resolve(here, 'cli.ts'), cwd: resolve(here, '..'), logsDir: cfg.logsDir, home: homedir() });
     console.log(`Расписание: ${f} (10:00, 14:00, 19:00 по часам Мака). Логи: ${cfg.logsDir}. Мак должен не спать в это время.`);

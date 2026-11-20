@@ -3,12 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Publishes approved Instagram items from the owner's Mac through instagram.com in a real browser profile. Mac-only tool, not part of the Docker image.",
+  "description": "Publishes approved Instagram items from the owner's Mac through instagram.com in a real browser profile, and runs Agent Reach jobs (reach:*) for the agents. Mac-only tool, not part of the Docker image.",
   "scripts": {
     "ig:login": "tsx src/cli.ts login",
     "ig:run": "tsx src/cli.ts instagram",
     "ig:install-launchd": "tsx src/cli.ts install-launchd",
     "ig:uninstall-launchd": "tsx src/cli.ts uninstall-launchd",
+    "reach:run": "tsx src/cli.ts reach",
+    "reach:now": "tsx src/cli.ts reach",
+    "reach:status": "tsx src/cli.ts reach-status",
+    "reach:install-launchd": "tsx src/cli.ts reach-install-launchd",
+    "reach:uninstall-launchd": "tsx src/cli.ts reach-uninstall-launchd",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

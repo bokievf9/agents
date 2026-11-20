@@ -79,6 +79,27 @@ export class HqClient {
     return Buffer.from(await r.arrayBuffer());
   }
 
+  /** Agent Reach jobs waiting for the Mac (`GET /admin/reach/jobs?status=queued`); the channels the Mac has set up are reported in the same call. */
+  async reachJobs(channels?: string[]): Promise<{ items: { id: number; channel: string; action: string; args: unknown }[]; counts: Record<string, number> }> {
+    const qs = `status=queued&limit=20${channels ? `&channels=${encodeURIComponent(channels.join(','))}` : ''}`;
+    const j = await this.json('GET', `/admin/reach/jobs?${qs}`);
+    if (!Array.isArray(j.items)) throw new HqError(200, 'HQ: в ответе нет items');
+    return { items: j.items as { id: number; channel: string; action: string; args: unknown }[], counts: (j.counts ?? {}) as Record<string, number> };
+  }
+
+  /** true: the job is ours; false: another run took it (409). */
+  async reachClaim(id: number, channels?: string[]): Promise<boolean> {
+    const r = await this.req('POST', `/admin/reach/jobs/${id}/claim`, channels ? { channels } : {});
+    if (r.status === 409) return false;
+    const j = (await r.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!r.ok || !j || j.ok !== true) throw new HqError(r.status, `HQ claim ${id}: ${r.status} ${String(j?.error ?? 'bad answer')}`);
+    return true;
+  }
+
+  async reachResult(id: number, body: { ok: true; result: unknown } | { ok: false; error: string }): Promise<void> {
+    await this.json('POST', `/admin/reach/jobs/${id}/result`, body);
+  }
+
   async published(id: HqItem['id'], url: string): Promise<HqItem> {
     return (await this.json('POST', `/admin/content/${id}`, { action: 'published', platform: 'instagram', url })).item as HqItem;
   }
