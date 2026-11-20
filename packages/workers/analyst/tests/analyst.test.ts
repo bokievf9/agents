@@ -1,7 +1,7 @@
-import { MockLlm, OffLlm, createTools, openDb, type LlmClient, type ToolFetch } from '@fir/core';
+import { MockLlm, OffLlm, ReachStore, createTools, openDb, type LlmClient, type ToolFetch } from '@fir/core';
 import { Hq, type Task, type WorkerCtx } from '@fir/hq';
 import { describe, expect, it } from 'vitest';
-import { AnalystWorker, aggregate, weekVideoIds, youtubeWeekLine, fallbackRecommendations, numbersText } from '../src/index.js';
+import { AnalystWorker, watchedChannelsLine, aggregate, weekVideoIds, youtubeWeekLine, fallbackRecommendations, numbersText } from '../src/index.js';
 
 const DAY = 86_400_000;
 // Mon 2026-11-23 08:00 Tashkent. The report covers Mon 16.11 - Sun 22.11.
@@ -183,5 +183,39 @@ describe('Instagram line', () => {
     const bad = await new AnalystWorker({ instagramLine: () => Promise.reject(new Error('Instagram: HTTP 400')) }).run(w.task, w.ctx);
     expect(bad.ok).toBe(true);
     expect(bad.result).toContain('Instagram: Instagram: HTTP 400');
+  });
+});
+
+describe('«Чужие YouTube за неделю» from the Mac (reach, setting analyst.watchChannels)', () => {
+  const CH = 'https://www.youtube.com/@rival';
+  const withReach = (w: ReturnType<typeof world>): WorkerCtx => ({ ...w.ctx, tools: createTools({ agentId: 'analyst', dept: 'marketing', db: w.db, now: () => w.clock.t }) });
+  const DONE = { ok: true, items: [{ title: 'Как мы автоматизировали запись', author: 'Rival Studio', url: CH }], meta: {} };
+
+  it('no setting: no line and no job; queued: no line, one job; done: the line, then served from the cache', async () => {
+    const w = world();
+    const ctx = withReach(w);
+    expect(await watchedChannelsLine(ctx, 'analyst')).toBe('');
+    expect(w.db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name = 'rc_jobs'").get()).toEqual({ n: 0 });
+    w.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('analyst.watchChannels', `${CH}, http://insecure.example/x not-a-url`);
+    expect(await watchedChannelsLine(ctx, 'analyst')).toBe(''); // queued: the Mac has not answered
+    const store = new ReachStore(w.db, () => w.clock.t);
+    expect(store.get(1)).toMatchObject({ status: 'queued', channel: 'youtube', action: 'read' });
+    expect(store.claim(1)).toBe(true);
+    store.finish(1, { ok: true, result: DONE });
+    expect(await watchedChannelsLine(ctx, 'analyst')).toBe('\nЧужие YouTube за неделю: Rival Studio: «Как мы автоматизировали запись».');
+    const r = await new AnalystWorker().run(w.task, ctx);
+    expect(r.result).toContain('Чужие YouTube за неделю: Rival Studio');
+  });
+
+  it('a failed job and a CLI answer without items leave the report as it was', async () => {
+    const w = world();
+    w.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('analyst.watchChannels', CH);
+    const ctx = withReach(w);
+    await watchedChannelsLine(ctx, 'analyst');
+    const store = new ReachStore(w.db, () => w.clock.t);
+    store.claim(1);
+    store.finish(1, { ok: false, error: 'NEED_SETUP' });
+    expect(await watchedChannelsLine(ctx, 'analyst')).toBe('');
+    expect((await new AnalystWorker().run(w.task, ctx)).result).not.toContain('Чужие YouTube');
   });
 });

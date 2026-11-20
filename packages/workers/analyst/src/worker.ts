@@ -261,7 +261,8 @@ export class AnalystWorker implements Worker {
         log('warn', 'analyst: instagram failed', { err: errMsg(e) });
       }
     }
-    const text = numbersText(n) + ytLine + igLine;
+    const watchLine = await watchedChannelsLine(ctx, this.id);
+    const text = numbersText(n) + ytLine + igLine + watchLine;
     const funnel = n.funnel ? `\nВоронка разведчика: ${Object.entries(n.funnel).map(([k, v]) => `${k} ${v}`).join(', ')}.` : '';
     const llm = await tryJson(
       ctx.llm,
@@ -276,4 +277,41 @@ export class AnalystWorker implements Worker {
     const result = `Недельный отчёт маркетинга, ${from.slice(8)}.${from.slice(5, 7)} - ${to.slice(8)}.${to.slice(5, 7)}\n${text}${funnel}\n\nРекомендации:\n${recs.map((r, i) => `${i + 1}. ${r}`).join('\n')}\n\n${igLine ? 'TikTok' : 'Instagram и TikTok'}: статистики пока нет (этап 2).${note ? `\n${note}` : ''}`;
     return { ok: true, result };
   }
+}
+
+/** Setting `analyst.watchChannels`: up to three https channel URLs of other people's YouTube channels (spaces, commas or lines). */
+export const WATCH_SETTING = 'analyst.watchChannels';
+
+function watchedChannels(db: WorkerCtx['db']): string[] {
+  try {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(WATCH_SETTING) as { value: string } | undefined;
+    return (row?.value ?? '').split(/[\s,]+/).filter((u) => /^https:\/\/\S+$/i.test(u)).slice(0, 3);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * «Чужие YouTube за неделю: ...» from the Mac's Agent Reach (`reach.youtube.read`, never waited for: a queued job is answered by the next weekly run
+ * from the 24-hour cache). Empty string when nothing is listed, the Mac has not answered or a job failed.
+ */
+export async function watchedChannelsLine(ctx: WorkerCtx, agentId: string): Promise<string> {
+  const urls = watchedChannels(ctx.db);
+  if (!urls.length) return '';
+  const tools = toolsOf(ctx, 'marketing', agentId);
+  const parts: string[] = [];
+  for (const url of urls) {
+    try {
+      const r = await tools.reach.youtube.read({ target: url });
+      if (!r.ok || r.value.state !== 'done' || !r.value.result.ok) continue;
+      const it = r.value.result.items[0];
+      if (!it) continue;
+      const who = typeof it.author === 'string' && it.author ? it.author : new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? 'канал';
+      const title = typeof it.title === 'string' ? it.title.replace(/\s+/g, ' ').trim().slice(0, 80) : '';
+      parts.push(title ? `${who}: «${title}»` : who);
+    } catch (e) {
+      log('warn', 'analyst: watched channel failed', { err: errMsg(e) });
+    }
+  }
+  return parts.length ? `\nЧужие YouTube за неделю: ${parts.join('; ')}.` : '';
 }
