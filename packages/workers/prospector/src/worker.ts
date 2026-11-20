@@ -1,5 +1,5 @@
-import { log, type Button, type KindSpec, type Payload } from '@fir/core';
-import type { TaskApproval, ApprovalState, Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
+import { log, reachChannels, type Button, type KindSpec, type Payload } from '@fir/core';
+import { toolsOf, type TaskApproval, type ApprovalState, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import { draftFirst, draftFollowup, draftReply, loadPrompts, PLACEHOLDER, type Prompts } from './draft.js';
 import { offerFor, priceLabel } from './offers.js';
 import { FOLLOWUP_DAYS, ProspectStore, STATUSES, STATUS_RU, type DraftKind, type Prospect } from './store.js';
@@ -144,8 +144,8 @@ export class ProspectorWorker implements Worker {
     this.batchSize = opts.batchSize ?? 10;
   }
 
-  private async propose(ctx: WorkerCtx, p: Prospect, kind: DraftKind, draft: string): Promise<void> {
-    await ctx.requestApproval(KIND_OF[kind], { text: draft, prospectId: p.id, draftKind: kind }, renderSummary(p, kind, draft));
+  private async propose(ctx: WorkerCtx, p: Prospect, kind: DraftKind, draft: string, extra = ''): Promise<void> {
+    await ctx.requestApproval(KIND_OF[kind], { text: draft, prospectId: p.id, draftKind: kind }, renderSummary(p, kind, draft) + extra);
   }
 
   async run(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
@@ -158,7 +158,7 @@ export class ProspectorWorker implements Worker {
         const draft = await draftFirst(ctx.llm, this.prompts, p);
         store.transition(p.id, 'proposed');
         store.setDraft(p.id, 'first', draft);
-        await this.propose(ctx, store.get(p.id)!, 'first', draft);
+        await this.propose(ctx, store.get(p.id)!, 'first', draft, await enrichment(ctx, p));
       }
       const left = store.stats().byStatus.new;
       log('info', 'prospector batch', { proposed: fresh.length, left });
@@ -192,4 +192,36 @@ export class ProspectorWorker implements Worker {
     }
     return { ok: false, result: '', error: `Неизвестное действие: ${String(action)}` };
   }
+}
+
+/**
+ * Optional extra lines for a first-message card from the Mac's Agent Reach: LinkedIn jobs of the business (hiring is a reason to write) and a Reddit
+ * mention. Only for channels the Mac reported (`settings.reach.channels`), only from an answer already in the table (a queued job is never waited for,
+ * the next card of the same business finds it cached); every failure or silence gives an empty string.
+ */
+export async function enrichment(ctx: WorkerCtx, p: Prospect): Promise<string> {
+  let channels: string[];
+  try {
+    channels = reachChannels(ctx.db);
+  } catch {
+    return '';
+  }
+  const lines: string[] = [];
+  const tools = toolsOf(ctx, 'sales', 'prospector');
+  try {
+    if (channels.includes('linkedin')) {
+      const r = await tools.reach.linkedin.jobs({ query: p.name, ...(p.city ? { location: p.city } : {}), limit: 3 });
+      if (r.ok && r.value.state === 'done' && r.value.result.ok && r.value.result.items.length) {
+        const t = r.value.result.items[0]!.title;
+        lines.push(`LinkedIn: открытых вакансий ${r.value.result.items.length}${typeof t === 'string' ? `, например «${t.slice(0, 80)}»` : ''}`);
+      }
+    }
+    if (channels.includes('reddit')) {
+      const r = await tools.reach.reddit.search({ query: p.name, limit: 3 });
+      if (r.ok && r.value.state === 'done' && r.value.result.ok && r.value.result.items.length) lines.push(`Reddit: упоминаний ${r.value.result.items.length}`);
+    }
+  } catch (e) {
+    log('warn', 'prospector: enrichment failed', { err: e instanceof Error ? e.message : String(e) });
+  }
+  return lines.length ? `\n${lines.join('\n')}` : '';
 }

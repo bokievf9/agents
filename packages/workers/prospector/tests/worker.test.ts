@@ -1,6 +1,7 @@
+import { ReachStore } from '@fir/core';
 import { describe, expect, it } from 'vitest';
 import { checkFirst, checkFollowup, checkReply, firstFallback } from '../src/draft.js';
-import { cardButtons, KIND_FIRST, KIND_FOLLOWUP, KIND_REPLY, kindSpecs, markReplied, onDecision, renderSummary, statsText } from '../src/worker.js';
+import { enrichment, cardButtons, KIND_FIRST, KIND_FOLLOWUP, KIND_REPLY, kindSpecs, markReplied, onDecision, renderSummary, statsText } from '../src/worker.js';
 import { DAY, json, rig, T0 } from './helpers.js';
 
 const GOOD = 'Здравствуйте! Это Фирдавс из Fir Tech. У Cambridge запись на курс идёт только по звонку, поэтому вечером заявки теряются. Настроим бота для записи на пробный урок, от $290. Как сейчас обрабатываете вечерние заявки?';
@@ -223,5 +224,51 @@ describe('stats', () => {
     const { store } = rig();
     expect(statsText(store)).toContain('Воронка, всего 5: новые 5');
     expect(statsText(store)).toContain('Учебные центры и репетиторы (2)');
+  });
+});
+
+describe('Mac enrichment of a first-message card (reach, only for channels the Mac reported)', () => {
+  const channels = (db: ReturnType<typeof rig>['db'], list: string[]) => {
+    db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('reach.channels', JSON.stringify(list));
+  };
+  const answer = (db: ReturnType<typeof rig>['db'], id: number, items: Record<string, unknown>[]) => {
+    const store = new ReachStore(db, () => T0);
+    store.claim(id);
+    store.finish(id, { ok: true, result: { ok: true, items, meta: {} } });
+  };
+
+  it('the Mac never reported a channel: the card is as before and no job is made', async () => {
+    const r = rig(() => 'not json');
+    const out = await enrichment(r.ctx, r.store.pickNew(1)[0]!);
+    expect(out).toBe('');
+    expect(r.db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE name = 'rc_jobs'").get()).toEqual({ n: 0 });
+  });
+
+  it('queued: a job is asked and the card goes without it; done: LinkedIn jobs and Reddit mentions appear in the next card summary', async () => {
+    const r = rig(() => 'not json');
+    channels(r.db, ['linkedin', 'reddit']);
+    const p = r.store.pickNew(1)[0]!;
+    expect(await enrichment(r.ctx, p)).toBe('');
+    const store = new ReachStore(r.db, () => T0);
+    expect(store.get(1)).toMatchObject({ channel: 'linkedin', action: 'jobs', status: 'queued' });
+    expect(store.get(2)).toMatchObject({ channel: 'reddit', action: 'search', status: 'queued' });
+    answer(r.db, 1, [{ title: 'Администратор салона' }, { title: 'Мастер' }]);
+    answer(r.db, 2, [{ title: 'Отзыв о салоне' }]);
+    expect(await enrichment(r.ctx, p)).toBe('\nLinkedIn: открытых вакансий 2, например «Администратор салона»\nReddit: упоминаний 1');
+    await r.run({ action: 'batch', limit: 1 });
+    expect(r.staged[0]!.summary).toContain('LinkedIn: открытых вакансий 2');
+  });
+
+  it('a failed job or a channel the Mac does not have is skipped silently', async () => {
+    const r = rig(() => 'not json');
+    channels(r.db, ['linkedin']);
+    const p = r.store.pickNew(1)[0]!;
+    await enrichment(r.ctx, p);
+    const store = new ReachStore(r.db, () => T0);
+    store.claim(1);
+    store.finish(1, { ok: false, error: 'NEED_LOGIN' });
+    expect(await enrichment(r.ctx, p)).toBe('');
+    expect(store.get(2)).toBeUndefined(); // reddit was not reported: never asked
   });
 });
