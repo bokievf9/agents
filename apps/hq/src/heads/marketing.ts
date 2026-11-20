@@ -16,6 +16,7 @@ import { AuditStore, type AuditInput } from '../audit-shared.js';
 import { ClientBlockedError, type ClientChannel } from '../client/channel.js';
 import type { ApprovalEditor } from '../editor.js';
 import type { LostLeads } from '../lost-leads.js';
+import { createReach } from '../reach.js';
 import type { Reporter } from '../reporter.js';
 import { toolsFor, type AppTools } from '../tools.js';
 
@@ -726,6 +727,8 @@ export class MarketingHead implements ApprovalEditor {
   private async runDirect(taskId: number, worker: Worker): Promise<void> {
     const staged: { kind: string; payload: Record<string, unknown>; summary: string }[] = [];
     const res = await this.runOnce(taskId, worker.id, staged, worker);
+    // the worker asked the owner's Mac (Agent Reach) and has to wait: the task is parked, HQ puts it back when the job is answered
+    if (res.waiting) return void createReach({ hq: this.hq, now: this.hq.now }).park(taskId, worker.id, res.waiting.jobId);
     if (!res.ok) {
       this.hq.block(taskId, worker.id, res.error ?? 'исполнитель не вернул результат');
       return void (await this.hq.alert(`Маркетинг: задача #${taskId} (${worker.id}) не выполнена: ${(res.error ?? '').slice(0, 200)}`));
@@ -872,6 +875,7 @@ export class MarketingHead implements ApprovalEditor {
     const linkId = Number(task.meta.linkId);
     const row = links.get(linkId);
     if (!row) return;
+    if (row.status === 'waiting') return; // the transcript is on the owner's Mac: HQ runs this task again when it arrives
     if (!row.analysis) {
       if (row.status !== 'failed') links.setState(linkId, 'failed', 'Разбор не получился');
       return;

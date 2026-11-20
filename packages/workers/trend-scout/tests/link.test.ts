@@ -1,7 +1,7 @@
-import { HostQueue, MockLlm, OffLlm, createTools, openDb, type LlmClient, type ToolFetch } from '@fir/core';
+import { HostQueue, MockLlm, OffLlm, ReachStore, createTools, openDb, type Db, type LlmClient, type ReachResult, type ToolFetch } from '@fir/core';
 import type { Task, WorkerCtx } from '@fir/hq';
 import { describe, expect, it } from 'vitest';
-import { LinkStore, analysisText, ogTags, parseLink } from '../src/link.js';
+import { LinkStore, analysisText, ogTags, parseLink, parseTranscript } from '../src/link.js';
 import { TrendScoutWorker } from '../src/worker.js';
 
 const NOW = Date.UTC(2026, 10, 21, 3, 30);
@@ -40,8 +40,24 @@ function setup(llm: LlmClient, fetch: ToolFetch) {
     id: 1, title: 't', body: '', dept: 'marketing', assigneeId: null, creator: 'owner', parentId: null, status: 'running', priority: 0, dueAt: null, result: null, costUsd: 0,
     meta: { action: 'owner_link', linkId }, tags: [], routineId: null, createdAt: 0, updatedAt: 0,
   } as Task, ctx);
-  return { ctx, links, run, logs };
+  return { ctx, links, run, logs, db };
 }
+
+/** The owner's Mac in a test: claims every queued Reach job and answers it. */
+function mac(db: Db, answer: (job: { channel: string; action: string }) => ReachResult): number {
+  const s = new ReachStore(db, () => NOW);
+  const jobs = s.list('queued', 50);
+  for (const j of jobs) {
+    s.claim(j.id);
+    s.finish(j.id, { ok: true, result: answer(j) });
+  }
+  return jobs.length;
+}
+const NO_SUBTITLES: ReachResult = { ok: false, items: [], meta: {}, error: { code: 'NOT_FOUND', message: 'no subtitles' } };
+const READ: ReachResult = { ok: true, items: [{ title: 'Бот для салона за минуту', url: YT, author: 'Мастер Айдар', text: 'описание', raw: { duration: 20, view_count: 120_000, like_count: 8500 } }], meta: {} };
+const SUBTITLE: ReachResult = {
+  ok: true, items: [{ title: 'Бот для салона за минуту', url: YT, text: '[Музыка]\nКлиент пишет вам в два часа ночи.\nА салон закрыт.\nБот отвечает за вас\nи записывает его на среду.\nНапишите слово БОТ в комментариях.' }], meta: {},
+};
 
 describe('parseLink', () => {
   it('takes https links of Instagram, TikTok and YouTube and tells the platform', () => {
@@ -71,6 +87,12 @@ describe('Trend scout: owner link', () => {
     const llm = new MockLlm(() => JSON.stringify(ANALYSIS));
     const t = setup(llm, fn);
     const id = t.links.add(YT, 'www.youtube.com', 'ценю хук');
+    // the Mac is asked first: nothing is read and nothing is analysed until the answer is in
+    expect(await t.run(id)).toMatchObject({ ok: true, waiting: { jobId: 1 } });
+    expect(t.links.get(id)!.status).toBe('waiting');
+    expect(calls).toEqual([]);
+    expect(llm.calls).toHaveLength(0);
+    expect(mac(t.db, () => NO_SUBTITLES)).toBe(2); // no subtitles for this video: the page path goes on alone
     const res = await t.run(id);
     expect(res.error ?? '').toBe('');
     expect(res.ok).toBe(true);
@@ -126,5 +148,74 @@ describe('Trend scout: owner link', () => {
     expect((await c.run(id)).error).toContain('не подходит');
     expect(bad.calls).toHaveLength(0);
     expect((await c.run(999)).error).toContain('не найдена');
+  });
+});
+
+describe('Trend scout: the transcript from the Mac (Agent Reach)', () => {
+  it('YouTube: the transcript, the pace and the numbers of the video go into the analysis prompt, the sources say reach', async () => {
+    const { fn } = fakeFetch();
+    const llm = new MockLlm(() => JSON.stringify(ANALYSIS));
+    const t = setup(llm, fn);
+    const id = t.links.add(YT, 'www.youtube.com', '');
+    await t.run(id);
+    const queued = new ReachStore(t.db, () => NOW).list('queued', 10);
+    expect(queued.map((j) => `${j.channel}.${j.action}`).sort()).toEqual(['youtube.read', 'youtube.subtitle']);
+    mac(t.db, (j) => (j.action === 'read' ? READ : SUBTITLE));
+    const res = await t.run(id);
+    expect(res.ok).toBe(true);
+    expect(res.waiting).toBeUndefined();
+    const prompt = llm.calls[0]!.messages[0]!.content;
+    expect(prompt).toContain('Транскрипт (24 слов, ролик 20 с):');
+    expect(prompt).toContain('Клиент пишет вам в два часа ночи. А салон закрыт. Бот отвечает за вас и записывает его на среду.');
+    expect(prompt).not.toContain('[Музыка]');
+    expect(prompt).toContain('Темп: 1.2 слов в секунду');
+    expect(prompt).toContain('Просмотры: 120000, лайки: 8500');
+    expect(prompt).toContain('Название: Бот для салона за минуту');
+    expect(llm.calls[0]!.system).toContain('Если есть транскрипт');
+    expect(t.links.get(id)!.status).toBe('analysed');
+    // a second run is served from the 24-hour cache: no new jobs
+    await t.run(id);
+    expect(new ReachStore(t.db, () => NOW).counts()).toMatchObject({ queued: 0, running: 0, done: 2 });
+  });
+
+  it('the transcript alone is enough when the page cannot be read', async () => {
+    const llm = new MockLlm(() => JSON.stringify(ANALYSIS));
+    const t = setup(llm, fakeFetch('closed').fn);
+    const id = t.links.add(YT, 'www.youtube.com', '');
+    await t.run(id);
+    mac(t.db, (j) => (j.action === 'read' ? READ : SUBTITLE));
+    expect((await t.run(id)).ok).toBe(true);
+    expect(llm.calls[0]!.messages[0]!.content).toContain('Автор: Мастер Айдар');
+  });
+
+  it('parseTranscript: lines with times keep them, words and pace are counted, junk is refused', () => {
+    const timed = parseTranscript('0:00 Привет, вот хук\n0:03 Дальше суть\n[1:02] И призыв в конце', 30)!;
+    expect(timed.timed).toEqual([{ t: 0, text: 'Привет, вот хук' }, { t: 3, text: 'Дальше суть' }, { t: 62, text: 'И призыв в конце' }]);
+    expect(timed.words).toBe(9);
+    expect(timed.wps).toBe(0.3);
+    expect(timed.opening).toBe('Привет, вот хук Дальше суть И призыв в конце');
+    expect(parseTranscript('plain text without times here', null)).toMatchObject({ timed: [], wps: null, durationS: null, words: 5 });
+    expect(parseTranscript('[♪♪♪]\n♪ ♪', 10)).toBeNull();
+    expect(parseTranscript('', 10)).toBeNull();
+  });
+
+  it('Instagram and TikTok never wait; Instagram profile and posts are queued only after the Mac reported the channel', async () => {
+    const llm = new MockLlm(() => JSON.stringify(ANALYSIS));
+    const t = setup(llm, fakeFetch().fn);
+    const a = t.links.add('https://www.instagram.com/anna.salon/reel/ABC123/', 'www.instagram.com', '');
+    expect((await t.run(a)).ok).toBe(true);
+    expect(new ReachStore(t.db, () => NOW).counts()).toEqual({ queued: 0, running: 0, done: 0, failed: 0 });
+    t.db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    t.db.prepare("INSERT INTO settings (key, value) VALUES ('reach.channels', ?)").run(JSON.stringify(['instagram', 'youtube']));
+    const b = t.links.add('https://www.instagram.com/anna.salon/reel/DEF456/', 'www.instagram.com', '');
+    expect((await t.run(b)).ok).toBe(true);
+    expect(new ReachStore(t.db, () => NOW).list('queued', 10).map((j) => `${j.channel}.${j.action}`).sort()).toEqual(['instagram.posts', 'instagram.profile']);
+    // a link without the account in its path (the /reel/<code> form) has nothing to ask for
+    const before = new ReachStore(t.db, () => NOW).counts().queued;
+    const c = t.links.add('https://www.instagram.com/reel/GHI789/', 'www.instagram.com', '');
+    expect((await t.run(c)).ok).toBe(true);
+    const tt = t.links.add(TT, 'www.tiktok.com', '');
+    expect((await t.run(tt)).ok).toBe(true);
+    expect(new ReachStore(t.db, () => NOW).counts().queued).toBe(before);
   });
 });

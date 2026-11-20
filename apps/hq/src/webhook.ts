@@ -42,6 +42,9 @@ export const webLeadSchema = z.object({
 });
 
 const MAX_BODY = 16 * 1024;
+/** The Mac's answer of an Agent Reach job (`POST /admin/reach/jobs/:id/result`, result up to 200 KB) is the one body that may be larger. */
+export const MAX_REACH_BODY = 420 * 1024;
+const REACH_RESULT_PATH = /^\/admin\/reach\/jobs\/\d+\/result$/;
 const digest = (s: string) => createHash('sha256').update(s).digest();
 
 export function tokenOk(given: string | undefined, expected: string): boolean {
@@ -53,7 +56,7 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-function readBody(req: IncomingMessage, res: ServerResponse): Promise<string | null> {
+function readBody(req: IncomingMessage, res: ServerResponse, max = MAX_BODY): Promise<string | null> {
   return new Promise((resolve, reject) => {
     let size = 0;
     let over = false;
@@ -61,7 +64,7 @@ function readBody(req: IncomingMessage, res: ServerResponse): Promise<string | n
     req.on('data', (c: Buffer) => {
       size += c.length;
       if (over) return; // the rest of an oversized body is dropped, not stored
-      if (size > MAX_BODY) {
+      if (size > max) {
         over = true;
         chunks.length = 0;
         // the 413 must reach the caller: the socket is cut only after the answer went out (destroying it now made the caller see a reset, not a 413)
@@ -199,7 +202,7 @@ export function createWebhook(
           }
           let body: unknown = null;
           if (req.method === 'POST') {
-            const raw = await readBody(req, res);
+            const raw = await readBody(req, res, REACH_RESULT_PATH.test(url.pathname) ? MAX_REACH_BODY : MAX_BODY);
             if (raw === null) return json(res, 413, { ok: false, error: 'too_large' });
             try {
               body = raw.trim() ? JSON.parse(raw) : {};

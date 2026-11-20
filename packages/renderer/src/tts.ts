@@ -33,9 +33,10 @@ export function speakable(text: string): string {
 }
 
 /** Synthesises `text` into a WAV with Piper (text on stdin) and returns its length in seconds. */
-export function synthesize(text: string, outFile: string, env: TtsEnv): Promise<number> {
+/** `lengthScale` below 1 speaks faster (Piper `--length-scale`); the launch film uses it to fit a line into its beat. */
+export function synthesize(text: string, outFile: string, env: TtsEnv, lengthScale?: number): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(env.piperBin, ['--model', join(env.voicesDir, `${env.voice}.onnx`), '--output_file', outFile], { stdio: ['pipe', 'ignore', 'pipe'] });
+    const child = spawn(env.piperBin, ['--model', join(env.voicesDir, `${env.voice}.onnx`), '--output_file', outFile, ...(lengthScale && lengthScale !== 1 ? ['--length-scale', String(lengthScale)] : [])], { stdio: ['pipe', 'ignore', 'pipe'] });
     let err = '';
     child.stderr.on('data', (d: Buffer) => (err = (err + d.toString()).slice(-600)));
     const timer = setTimeout(() => {

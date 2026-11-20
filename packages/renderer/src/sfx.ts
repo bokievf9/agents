@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Timeline } from './timing.js';
@@ -46,7 +46,8 @@ export const sfxAvailable = (dir: string = SFX_DIR): boolean => Object.values(SF
 export function prepareSfx(publicDir: string, dir: string = SFX_DIR): void {
   const dst = join(publicDir, 'sfx');
   mkdirSync(dst, { recursive: true });
-  for (const s of Object.values(SFX)) if (existsSync(join(dir, s.file))) copyFileSync(join(dir, s.file), join(dst, s.file));
+  // every WAV of the bank: the reel layer uses three, the launch film a few more
+  for (const f of existsSync(dir) ? readdirSync(dir) : []) if (f.endsWith('.wav')) copyFileSync(join(dir, f), join(dst, f));
 }
 
 /**

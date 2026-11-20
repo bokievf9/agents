@@ -8,6 +8,7 @@ import { fmtDate, PmStore } from '@fir/worker-project-manager';
 import type { Reporter } from '../reporter.js';
 import { makeBackup, MAX_SEND_BYTES } from '../backup.js';
 import { cleanRenders } from '../housekeeping.js';
+import { createReach } from '../reach.js';
 import { toolsFor, type AppTools } from '../tools.js';
 
 export const BACKOFFICE = 'backoffice';
@@ -264,7 +265,8 @@ export class BackofficeHead {
     const ops = this.d.ops;
     if (!ops) return void this.hq.complete(task.id, BACKOFFICE_HEAD_ID, 'Очистка рендеров не подключена.');
     const removed = cleanRenders({ db: this.hq.db, rendersDir: ops.rendersDir, now: this.hq.now() });
-    this.hq.complete(task.id, BACKOFFICE_HEAD_ID, `Рендеры: удалено папок ${removed.length}${removed.length ? ` (${removed.slice(0, 20).join(', ')})` : ''}.`);
+    const reachPurged = createReach({ hq: this.hq, now: this.hq.now }).purge(); // Agent Reach jobs older than 7 days
+    this.hq.complete(task.id, BACKOFFICE_HEAD_ID, `Рендеры: удалено папок ${removed.length}${removed.length ? ` (${removed.slice(0, 20).join(', ')})` : ''}. Задания Agent Reach старше 7 дней: удалено ${reachPurged}.`);
   }
 
   /** Sunday routine: unexported lessons become one builder task; no lessons, no task. */

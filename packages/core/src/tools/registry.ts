@@ -8,6 +8,7 @@ import { createGoogle, type Google } from './google.js';
 import { sharedHostQueue } from './http.js';
 import { makeCall, type Kit, type ToolDeps, type ToolsConfig } from './kit.js';
 import { createMedia, type Media } from './media.js';
+import { createReach, type Reach } from './reach.js';
 import { TOOL_POLICY, isAllowed, policyOf, type ToolLimits } from './policy.js';
 import { dayIn, fail, okv, readToolStats, withTool, type CallContext, type Dept, type ToolJournal, type ToolResult } from './result.js';
 import { createText, type TextTools } from './text.js';
@@ -40,6 +41,8 @@ export interface Tools {
   telegram: Telegram;
   email: Email;
   mac: { poster: MacPoster };
+  /** Agent Reach on the owner's Mac: `reach.youtube.subtitle({ target })` answers `queued` (a job id) or the cached result of the last 24 hours. */
+  reach: Reach;
   clock: Clock;
   text: TextTools;
   /** Is the tool set up (keys, adapters) and allowed for this department. */
@@ -114,6 +117,7 @@ export function createTools(deps: ToolDeps): Tools {
     telegram: createTelegram(k),
     email: createEmail(k),
     mac: { poster: createMacPoster(k) },
+    reach: createReach(k),
     clock: createClock(now, tz),
     text: createText(k),
     configured: (name) => Boolean(policyOf(name)) && isConfigured(name, deps),

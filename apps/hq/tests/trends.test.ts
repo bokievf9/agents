@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { HELP } from '../src/director.js';
 import { carouselJson, clipJson, OWNER } from './helpers.js';
 import { serve } from './pult-helpers.js';
+import { NO_SUBTITLES, macAnswers } from './reach-helpers.js';
 import { reviewWorld } from './review-helpers.js';
 
 const IG = 'https://www.instagram.com/reel/ABC123/';
@@ -90,6 +91,9 @@ describe('the Trendwatcher works the link: analysis, the Fir Tech analogue throu
   it('reads the page through the toolbox, analyses it, makes a content item that lands in the review center with the analysis as the first note', async () => {
     const p = trendWorld();
     await p.post(YT, 'ценю хук');
+    // the transcript is asked of the owner's Mac first; here the Mac has no subtitles for the video, so the page path goes on alone
+    await p.w.marketing.onHeartbeat();
+    await macAnswers(p, () => NO_SUBTITLES.error && { ok: false, items: [], meta: {}, error: NO_SUBTITLES.error });
     await p.w.marketing.onHeartbeat();
     // only the allowed hosts were asked, oEmbed and the page
     expect(p.f.calls.map((u) => new URL(u).hostname)).toEqual(['www.youtube.com', 'www.youtube.com']);

@@ -55,6 +55,7 @@ export function isConfigured(name: string, d: Pick<ToolDeps, 'config' | 'db' | '
     case 'email.send':
       return Boolean(c.resendApiKey && c.emailFrom);
     default:
+      if (name.startsWith('reach.')) return Boolean(d.db);
       return true; // web, cache, qr, prices, playbook, trends, chain, clock: nothing to set up
   }
 }
