@@ -306,7 +306,8 @@ export class ApprovalQueue {
    */
   async propose(kind: string, payload: Payload, summary: string, opts: { onCreated?: (id: number) => void } = {}): Promise<{ id: number; auto: boolean; ok?: boolean }> {
     const spec = this.spec(kind);
-    if (this.level(kind) === 1) {
+    // level 1 acts alone, but a draft with a template left in it (`[цена]`) cannot: it waits as a card for the owner to fill it
+    if (this.level(kind) === 1 && !spec.ready?.(payload)) {
       const id = this.insert(kind, payload, summary, 'running');
       opts.onCreated?.(id);
       const ok = await this.run(id, spec, payload);

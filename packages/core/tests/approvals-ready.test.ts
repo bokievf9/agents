@@ -15,6 +15,24 @@ function setup() {
   return { queue, executed };
 }
 
+describe('KindSpec.ready on a level 1 kind', () => {
+  it('a draft with a template waits as a card instead of acting alone and failing; a clean draft acts at once', async () => {
+    const queue = new ApprovalQueue(openDb(':memory:'), new MemoryMessenger(), OWNER, 3);
+    const executed: Payload[] = [];
+    queue.register('answer', {
+      initialLevel: 1, ready: (p) => placeholderHold(String(p.text).match(/\[[^\]]*\]/g) ?? []),
+      execute: (p) => { executed.push(p); return Promise.resolve(); },
+    });
+    const held = await queue.propose('answer', { text: 'Ответ: [решение владельца]' }, 's');
+    expect(held.auto).toBe(false);
+    expect(queue.get(held.id)!.status).toBe('pending');
+    expect(executed).toHaveLength(0);
+    const clean = await queue.propose('answer', { text: 'Всё работает, спасибо.' }, 's');
+    expect(clean).toMatchObject({ auto: true, ok: true });
+    expect(executed).toHaveLength(1);
+  });
+});
+
 describe('KindSpec.ready: a template left in the text holds the approval open', () => {
   it('approve answers the reason, runs nothing and keeps the proposal pending; after the edit the same card approves', async () => {
     const { queue, executed } = setup();
