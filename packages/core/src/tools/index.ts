@@ -19,3 +19,4 @@ export * from './search.js';
 export * from './web.js';
 export * from './text.js';
 export * from './openverse.js';
+export * from './reach.js';

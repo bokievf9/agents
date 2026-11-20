@@ -1,3 +1,4 @@
+import { REACH_ACTIONS, REACH_DEPTS, type ReachChannel } from './reach-spec.js';
 import { DEPARTMENTS, type Dept } from './result.js';
 
 /** Limits a tool runs with (shown in `/admin/company`). Absent fields: not applicable. */
@@ -39,7 +40,7 @@ const NET = { timeoutMs: 8000, maxBytes: 1_000_000, perHost: 2, minGapMs: 250, r
  * Who may call what. The single place of tool rights: the registry refuses a call outside this table with `not_allowed`, the
  * `/admin/company` listing is built from it, and a test checks that every tool of the registry is here and in `docs/tools.md`.
  */
-export const TOOL_POLICY: readonly ToolPolicy[] = [
+export const TOOL_POLICY: ToolPolicy[] = [
   { name: 'web.getJson', departments: ALL, limits: NET, env: [], internal: ['support'], summary: 'GET JSON from listed https hosts' },
   { name: 'web.getText', departments: ['marketing', 'sales', 'support', 'director'], limits: { ...NET, maxBytes: 300_000 }, env: [], internal: ['support'], summary: 'GET HTML or text, cut at 300 KB' },
   { name: 'web.readable', departments: ['marketing', 'sales', 'director'], limits: { ...NET, maxBytes: 300_000 }, env: [], summary: 'article text of a page; under 400 characters of own text: Jina Reader (r.jina.ai) fallback' },
@@ -90,6 +91,14 @@ export const TOOL_POLICY: readonly ToolPolicy[] = [
   { name: 'media.openverse.search', departments: ['marketing', 'director'], limits: { ...NET, perDay: 150, perMinute: 15, retries: 0, maxResults: 20, cacheTtlMs: 6 * 3_600_000 }, env: ['OPENVERSE_CLIENT_ID', 'OPENVERSE_CLIENT_SECRET'], summary: 'search openly licensed images and audio (Openverse), 15 a minute and 150 a day' },
   { name: 'web.getBytes', departments: ['marketing', 'director'], limits: { ...NET, maxBytes: 3_000_000, retries: 1 }, env: [], summary: 'GET a picture (bytes, up to 3 MB) from listed https hosts' },
 ];
+
+/** `reach.<channel>.<action>`: Agent Reach on the owner's Mac (queue `rc_jobs`, 200 jobs a day for the company). */
+const REACH_POLICY: ToolPolicy[] = Object.entries(REACH_ACTIONS).flatMap(([channel, actions]) =>
+  Object.entries(actions).map(([action, spec]): ToolPolicy => ({
+    name: `reach.${channel}.${action}`, departments: REACH_DEPTS[channel as ReachChannel], limits: { perDay: 200 }, env: [], summary: `Mac Agent Reach: ${spec.summary}`,
+  })),
+);
+TOOL_POLICY.push(...REACH_POLICY);
 
 const BY_NAME = new Map(TOOL_POLICY.map((p) => [p.name, p]));
 
