@@ -14,7 +14,7 @@ const reply = (body: unknown, status = 200): typeof fetch => (() => Promise.reso
 
 describe('the bundled fallback snapshot', () => {
   it('has the site shape and today\'s numbers', () => {
-    expect(Object.keys(fallbackJson).sort()).toEqual(['agentPlans', 'catalog', 'contentPlans', 'currency', 'extraPrice', 'products', 'referralPercent', 'startingPrice', 'updatedAt']);
+    expect(Object.keys(fallbackJson).sort()).toEqual(['agentPlans', 'catalog', 'contentPlans', 'currency', 'extraPrice', 'products', 'referralPercent', 'smallProjectMaxUsd', 'stages', 'startingPrice', 'updatedAt']);
     expect(parsePrices(fallbackJson)).not.toBeNull();
     const p = FALLBACK_PRICES;
     expect(p.currency).toBe('USD');

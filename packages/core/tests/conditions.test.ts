@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { costsLine, detectInfrastructure } from '../src/index.js';
+import { costsLine, detectInfrastructure, guaranteeLine, paymentLine, stagesFor } from '../src/index.js';
 
 describe('the conditions line (domain, hosting, third-party services)', () => {
   it('the default line is the owner\'s sentence', () => {
@@ -31,5 +31,35 @@ describe('the conditions line (domain, hosting, third-party services)', () => {
     expect(detectInfrastructure('You already have a domain and hosting, we will use them')).toEqual({ hasDomain: true, hasHosting: true });
     expect(detectInfrastructure('Домен, хостинг, сервер и платные сторонние сервисы в сумму не входят')).toEqual({ hasDomain: null, hasHosting: null });
     expect(detectInfrastructure('нужен сайт для салона')).toEqual({ hasDomain: null, hasHosting: null });
+  });
+});
+
+describe('payment by stages (owner decision 2026-11-21)', () => {
+  it('a template project lists every stage with its amount and share; each stage before its start, the last before handover', () => {
+    const line = paymentLine(stagesFor(1000, ['site']));
+    expect(line).toBe('Оплата по этапам, каждый этап оплачивается до его начала, последний до передачи доступов: этап 1 «Структура и первый экран»: $300 (30%); этап 2 «Все страницы и наполнение»: $400 (40%); этап 3 «Запуск, SEO, передача»: $300 (30%).');
+    expect(paymentLine(stagesFor(1000, ['site']), 'en')).toContain('stage 2 "All pages and content": $400 (40%)');
+  });
+
+  it('the 50/50 wording is only the small-project sentence', () => {
+    const small = paymentLine(stagesFor(290, ['admin']));
+    expect(small).toBe('Небольшой проект оплачивается двумя этапами: 50% до начала работ ($145) и 50% до запуска и передачи доступов ($145).');
+    expect(paymentLine(stagesFor(290, ['admin']), 'en')).toContain('50% before work starts ($145)');
+    for (const total of [300, 450, 1200]) for (const id of ['site', 'admin', 'automation', 'miniapp']) expect(paymentLine(stagesFor(total, [id]))).not.toContain('Небольшой проект');
+  });
+
+  it('a subscription has one setup stage; no stages is the general rule', () => {
+    expect(paymentLine(stagesFor(90, ['content']))).toBe('Настройка ($90) оплачивается до начала работ; ежемесячная плата, если она есть, вносится вперёд за месяц.');
+    expect(paymentLine([])).toContain('каждый этап оплачивается до его начала');
+  });
+
+  it('the guarantee returns the first stage', () => {
+    expect(guaranteeLine()).toContain('оплату первого этапа');
+    expect(guaranteeLine('en')).toContain('first stage');
+  });
+
+  it('no long dashes', () => {
+    for (const t of [1000, 290]) expect(paymentLine(stagesFor(t, ['site']))).not.toMatch(/[—–]/);
+    expect(guaranteeLine()).not.toMatch(/[—–]/);
   });
 });

@@ -1,3 +1,5 @@
+import type { PaymentStage } from './stage-templates.js';
+
 /**
  * What the price of a project does not include (owner decision 2026-11-19): domain, hosting, server and paid third-party services
  * are paid by the client directly. One fixed line for the КП, the estimate, the contract and the invoice; it lives here, not in the
@@ -32,4 +34,37 @@ export function detectInfrastructure(text: string): { hasDomain: boolean | null;
   const domain = both || /домен (?:у (?:вас|заказчика|клиента|меня|нас) )?(?:уже )?есть|(?:уже )?есть (?:свой )?домен|already have a domain|have (?:a )?domain/.test(t);
   const hosting = both || /хостинг (?:у (?:вас|заказчика|клиента|меня|нас) )?(?:уже )?есть|(?:уже )?есть (?:свой )?хостинг|already have hosting|have (?:a )?hosting/.test(t);
   return { hasDomain: domain ? true : null, hasHosting: hosting ? true : null };
+}
+
+const money = (n: number): string => `$${Number.isInteger(n) ? n : n.toFixed(2)}`;
+
+/**
+ * The payment rule of every client text (owner decision 2026-11-21): by stages, each stage paid BEFORE it starts, the last before handover.
+ * One sentence for the КП, the estimate, the contract and the invoice; the 50/50 wording exists only for a small project (two stages).
+ */
+export function paymentLine(stages: PaymentStage[], lang: 'ru' | 'en' = 'ru'): string {
+  const ru = lang !== 'en';
+  if (stages.length === 0) return ru ? 'Оплата по этапам: каждый этап оплачивается до его начала, последний до передачи доступов.' : 'Payment by stages: each stage is paid before it starts, the last one before handover.';
+  if (stages.length === 1) {
+    return ru
+      ? `Настройка (${money(stages[0]!.amountUsd)}) оплачивается до начала работ; ежемесячная плата, если она есть, вносится вперёд за месяц.`
+      : `The setup (${money(stages[0]!.amountUsd)}) is paid before work starts; the monthly fee, if any, is paid a month in advance.`;
+  }
+  if (stages.length === 2 && stages[0]!.id === 'start') {
+    const [a, b] = stages as [PaymentStage, PaymentStage];
+    return ru
+      ? `Небольшой проект оплачивается двумя этапами: ${a.share}% до начала работ (${money(a.amountUsd)}) и ${b.share}% до запуска и передачи доступов (${money(b.amountUsd)}).`
+      : `A small project is paid in two stages: ${a.share}% before work starts (${money(a.amountUsd)}) and ${b.share}% before launch and handover (${money(b.amountUsd)}).`;
+  }
+  const list = stages.map((s) => (ru ? `этап ${s.no} «${s.title.ru}»: ${money(s.amountUsd)} (${s.share}%)` : `stage ${s.no} "${s.title.en}": ${money(s.amountUsd)} (${s.share}%)`)).join('; ');
+  return ru
+    ? `Оплата по этапам, каждый этап оплачивается до его начала, последний до передачи доступов: ${list}.`
+    : `Payment by stages, each stage is paid before it starts, the last one before handover: ${list}.`;
+}
+
+/** The guarantee in one sentence: it returns the first stage's payment. */
+export function guaranteeLine(lang: 'ru' | 'en' = 'ru'): string {
+  return lang === 'en'
+    ? 'Guarantee: if you do not like the first result, we return the payment of the first stage within 7 days, minus network fees.'
+    : 'Гарантия: если первый результат не понравился, мы возвращаем оплату первого этапа в течение 7 дней, за вычетом комиссий сети.';
 }
