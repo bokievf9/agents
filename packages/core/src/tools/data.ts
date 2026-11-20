@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import type { z } from 'zod';
 import { tryComplete, tryJson, type LlmRequest } from '../llm.js';
-import { isPlaybookRole, knowledgeDir, playbookExcerpt } from '../playbooks.js';
+import { isPlaybookRole, isPlaybookTopic, knowledgeDir, playbookExcerpt, topicExcerpt } from '../playbooks.js';
 import { getPrices, type Prices } from '../prices.js';
 import type { Kit } from './kit.js';
 import { policyOf } from './policy.js';
@@ -161,8 +161,10 @@ export function createDataTools(k: Kit): DataTools {
     playbook: {
       excerpt: (role, max) =>
         k.call('playbook.excerpt', async () => {
-          if (!isPlaybookRole(role)) return fail('invalid', `unknown role ${String(role).slice(0, 40)}`);
-          const text = playbookExcerpt(role, Math.min(max ?? 2500, 2500), k.cfg.knowledgeDir);
+          // a role (the whole craft excerpt) or a topic (`ig-reels`, `ig-engage`...: the Instagram craft conspects)
+          const name = String(role);
+          if (!isPlaybookRole(name) && !isPlaybookTopic(name)) return fail('invalid', `unknown role or topic ${name.slice(0, 40)}`);
+          const text = isPlaybookRole(name) ? playbookExcerpt(name, Math.min(max ?? 2500, 2500), k.cfg.knowledgeDir) : topicExcerpt(name, Math.min(max ?? 1500, 1500), k.cfg.knowledgeDir);
           return text ? okv(text) : fail('not_found', `no playbook for ${role}`);
         }),
     },

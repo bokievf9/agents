@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tryJson, withPlaybook, type Db, type LlmClient } from '@fir/core';
+import { profileRubricText, tryJson, topicsExcerpt, withPlaybook, type Db, type LlmClient, type PlaybookTopic } from '@fir/core';
 import { DIRECTIONS, priceLine } from './directions.js';
 import { carouselSchema, clipSchema, postSchema, profileSchema, renderCarousel, renderKit, renderTiktok, renderYoutube, splitKit, tiktokProfileSchema, youtubeProfileSchema, KIT_SECTIONS, type KitSection, renderClip, renderPost, renderProfile, renderStory, storySchema, titleOf, type ItemType } from './format.js';
 import { estimateSeconds, lintText } from './lint.js';
@@ -64,6 +64,22 @@ export interface Generated {
   issues: string[];
 }
 
+/** The craft topics (`knowledge/playbooks/ig-*.md`) that matter for an item type: they go into the request, the role playbook stays in the system prompt. */
+export const CRAFT_TOPICS: Record<ItemType, readonly PlaybookTopic[]> = {
+  clip: ['ig-reels', 'ig-human'],
+  carousel: ['ig-carousel-story', 'ig-captions', 'ig-human'],
+  post: ['ig-captions', 'ig-human'],
+  story: ['ig-carousel-story', 'ig-human'],
+  profile: ['ig-profile'],
+};
+
+/** The craft excerpts of the type plus, for the profile kit, the 100-point rubric; empty when the knowledge folder is missing. */
+export function craftNotes(type: ItemType): string {
+  const notes = topicsExcerpt(CRAFT_TOPICS[type]);
+  const rubric = type === 'profile' ? profileRubricText() : '';
+  return [notes, rubric].filter(Boolean).join('\n\n');
+}
+
 export function fill(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_, k: string) => vars[k] ?? '');
 }
@@ -79,6 +95,8 @@ function userPrompt(p: Prompts, spec: GenSpec, fix?: { text: string; issues: str
         .join('\n')}`,
     );
   }
+  const craft = craftNotes(spec.type);
+  if (craft) extra.push(craft);
   if (spec.source) extra.push(spec.source);
   if (spec.previous) extra.push(`Отклонённый вариант (не повторяй его):\n${spec.previous}`);
   if (fix) extra.push(`В черновике найдены нарушения правил: ${fix.issues.join('; ')}. Исправь их и верни полный JSON.\nЧерновик:\n${fix.text}`);

@@ -63,3 +63,25 @@ describe('lintReelScript: the hard rules of the Content maker checklist', () => 
     expect(lintReelScript(script({ cta: 'Бот от $12345, ссылка firtech.pro' })).join(' ')).toContain('цена не из справки');
   });
 });
+
+describe('Content maker: the craft topics of the item type go into the request', () => {
+  it('a reel gets the reel and human-text topics, a post the caption topic, the profile kit the rubric', async () => {
+    const { craftNotes, CRAFT_TOPICS } = await import('../src/generate.js');
+    expect(CRAFT_TOPICS.clip).toEqual(['ig-reels', 'ig-human']);
+    expect(craftNotes('clip')).toContain('Рилсы: хук, сценарий, тайминг');
+    expect(craftNotes('clip')).toContain('Человеческий текст');
+    expect(craftNotes('post')).toContain('Подписи и хэштеги');
+    expect(craftNotes('profile')).toContain('Рубрика профиля, 100 баллов');
+    expect(craftNotes('profile')).toContain('Поле имени (12)');
+  });
+
+  it('the request of a generation carries them and the system prompt stays as before', async () => {
+    const llm = new MockLlm(() => clipJson());
+    const prompts = loadPrompts(promptsDir);
+    await generateItem(llm, prompts, { type: 'clip', topic: ALL_TOPICS[0]!, week: 'с 23.11' });
+    const user = llm.calls[0]!.messages[0]!.content;
+    expect(user.startsWith('Составь сценарий')).toBe(true);
+    expect(user).toContain('Приёмы ремесла: Рилсы: хук, сценарий, тайминг');
+    expect(llm.calls[0]!.system).not.toContain('Приёмы ремесла');
+  });
+});

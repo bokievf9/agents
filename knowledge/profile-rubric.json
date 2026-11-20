@@ -1,0 +1,165 @@
+{
+ "version": "1.0",
+ "source": "instagram-agent-skill, skills/ig-profile/rubric.json (MIT, 2026, Jake Schincariol); weights as in the source, text rewritten in Russian by us",
+ "total": 100,
+ "note_ru": "Двенадцать пунктов. Оценивайте честно: щедрая оценка никому не помогает. Первые проходы чаще всего дают 30-40 баллов. Вес намеренный: поле имени, первая строка био и закреплённые три весят больше фото, потому что именно их обрабатывает человек, пришедший с одного ролика, прежде чем решить, подписываться.",
+ "note_en": "Twelve items. Score each honestly - a generous score helps nobody. Most first-pass profiles land in the 30s and 40s. The weighting is deliberate: the name field, the first bio line and the pinned three are worth more than the photo, because they are what a stranger who arrived from one reel actually processes before deciding to follow.",
+ "items": [
+  {
+   "id": "name_field",
+   "points": 12,
+   "ru": {
+    "name": "Поле имени",
+    "full_marks": "Поле имени (30 знаков, жирная строка, не ручка) несёт имя и то, чем человек занимается, словами, которые ищут: «Дана Руис | Шаблоны КП». Поле индексируется поиском Instagram, и большинство тратят его только на имя.",
+    "common_fail": "Только имя или имя с эмодзи."
+   },
+   "en": {
+    "full_marks": "The name field (30 characters, the bold line, not the handle) carries the name plus what they do in words people search: 'Dana Ruiz | Proposal templates'. This field is indexed by Instagram search and most accounts waste it on a name alone.",
+    "common_fail": "Just a name, or a name with an emoji."
+   }
+  },
+  {
+   "id": "bio_first_line",
+   "points": 12,
+   "ru": {
+    "name": "Первая строка био",
+    "full_marks": "Строка один говорит, для кого это и что для них меняется, словами аудитории. Не должность, не прилагательные, не три эмодзи через палочки.",
+    "common_fail": "«Предприниматель | Кофеман | Папа собаки»."
+   },
+   "en": {
+    "full_marks": "Line one names who this is for and what changes for them, in their words. Not a job title, not a list of adjectives, not three emoji separated by bars.",
+    "common_fail": "'Entrepreneur | Coffee lover | Dog dad'."
+   }
+  },
+  {
+   "id": "bio_body",
+   "points": 8,
+   "ru": {
+    "name": "Остальное био",
+    "full_marks": "Остаток 150 знаков несёт одно доказательство или одно конкретное предложение и читается предложениями, а не списком через палочки.",
+    "common_fail": "Набор ключевых слов или пустота."
+   },
+   "en": {
+    "full_marks": "The rest of the 150 characters carries one piece of proof or one specific offer, and reads as sentences rather than a pipe-separated list.",
+    "common_fail": "Keyword soup, or blank space."
+   }
+  },
+  {
+   "id": "pinned_three",
+   "points": 10,
+   "ru": {
+    "name": "Закреплённые три",
+    "full_marks": "Три поста сверху сетки выполняют три разные работы: лучшее доказательство, самое ясное объяснение предложения, лучшее знакомство с человеком. Не три самых просматриваемых по случайности.",
+    "common_fail": "Ничего не закреплено, и верх сетки это то, что вышло последним."
+   },
+   "en": {
+    "full_marks": "Three posts pinned to the top of the grid, doing three different jobs: the best proof, the clearest explanation of the offer, and the best introduction to the person. Not the three highest-view posts by accident.",
+    "common_fail": "Nothing pinned, so the top of the grid is whatever was posted last."
+   }
+  },
+  {
+   "id": "link",
+   "points": 8,
+   "ru": {
+    "name": "Ссылка",
+    "full_marks": "Одно место назначения, совпадающее с обещанием био. Разрешено до пяти ссылок; больше двух это меню, а меню конвертирует хуже двери.",
+    "common_fail": "Сборник ссылок на одиннадцать пунктов или ссылки нет."
+   },
+   "en": {
+    "full_marks": "One destination that matches what the bio just promised. Up to five links are allowed; more than two is a menu, and a menu converts worse than a door.",
+    "common_fail": "A link tree with eleven options, or no link at all."
+   }
+  },
+  {
+   "id": "highlights",
+   "points": 8,
+   "ru": {
+    "name": "Актуальное",
+    "full_marks": "Четыре-шесть актуальных, названных вопросами покупателя: Цены, Результаты, Как это работает, О нас. Единые обложки. Впереди ничего старше года.",
+    "common_fail": "«Разное», «Жизнь», «Любимое» или 14 актуальных без порядка."
+   },
+   "en": {
+    "full_marks": "Four to six highlights named for the questions a buyer actually asks: Pricing, Results, How it works, About. Covers consistent. Nothing older than a year sitting at the front.",
+    "common_fail": "'Random', 'Life', 'Faves', or 14 highlights in no order."
+   }
+  },
+  {
+   "id": "grid_legibility",
+   "points": 8,
+   "ru": {
+    "name": "Читаемость сетки",
+    "full_marks": "Первые девять обложек читаются в миниатюре и говорят, о чём аккаунт, без единого нажатия. Обложки рилсов выбраны, а не оставлены первым кадром.",
+    "common_fail": "Девять обложек с лицом на полуслове и без текста."
+   },
+   "en": {
+    "full_marks": "The first nine covers are legible at thumbnail size and say what the account is about without a single tap. Reel covers are chosen deliberately, not left as frame one.",
+    "common_fail": "Nine covers of a face mid-word with no text."
+   }
+  },
+  {
+   "id": "photo",
+   "points": 6,
+   "ru": {
+    "name": "Фото",
+    "full_marks": "Лицо занимает около 60% круга, который рисуется примерно в 40 пикселей. Глаза видны, снято за последние два года, фон не спорит.",
+    "common_fail": "Фото в полный рост, логотип для личного бренда или снимок с вытянутой руки в тёмной комнате."
+   },
+   "en": {
+    "full_marks": "Face fills roughly 60% of a circle that renders at about 40 pixels. Eyes visible, shot in the last two years, background not competing.",
+    "common_fail": "A full-body shot, a logo for a personal brand, or a photo taken at arm's length in a dark room."
+   }
+  },
+  {
+   "id": "handle",
+   "points": 6,
+   "ru": {
+    "name": "Ручка",
+    "full_marks": "Читается, произносится вслух и совпадает с ручкой на других площадках. Без нагромождения подчёркиваний и цифр вместо букв.",
+    "common_fail": "Ручку, которую никто не напишет после того, как услышал один раз."
+   },
+   "en": {
+    "full_marks": "Readable, sayable out loud, and the same handle as the other platforms. No stacked underscores or numbers standing in for letters.",
+    "common_fail": "A handle nobody can spell after hearing it once."
+   }
+  },
+  {
+   "id": "category_contact",
+   "points": 6,
+   "ru": {
+    "name": "Категория и контакты",
+    "full_marks": "Профессиональный аккаунт с категорией, совпадающей с предложением, и работающими кнопками контакта. Почта, которую читают, а не та, что с 2019 года.",
+    "common_fail": "Личный аккаунт: нет статистики и кнопки контакта."
+   },
+   "en": {
+    "full_marks": "Professional account with a category that matches the offer, and contact buttons that work. Email that is checked, not the one from 2019.",
+    "common_fail": "Personal account, so there are no insights and no contact button."
+   }
+  },
+  {
+   "id": "recent_activity",
+   "points": 10,
+   "ru": {
+    "name": "Свежая активность",
+    "full_marks": "Пост за последние семь дней и ответы на комментарии под последним постом. Аккаунт, где последний пост в марте, выглядит закрытым.",
+    "common_fail": "Пауза в пять недель или стена комментариев без ответа."
+   },
+   "en": {
+    "full_marks": "Posted in the last seven days and replied to comments on the most recent post. An account that last posted in March reads as closed.",
+    "common_fail": "A five-week gap, or a wall of unanswered comments."
+   }
+  },
+  {
+   "id": "story_presence",
+   "points": 6,
+   "ru": {
+    "name": "Истории",
+    "full_marks": "История сейчас или хотя бы в большинство дней. Это разница между профилем и человеком.",
+    "common_fail": "Кольца нет никогда."
+   },
+   "en": {
+    "full_marks": "A story up right now, or at least most days. It is the difference between a profile and a person.",
+    "common_fail": "No ring, ever."
+   }
+  }
+ ]
+}
