@@ -240,7 +240,7 @@ describe('the intake (3 steps and one short question about domain and hosting)',
     const done = w.transport.edits.at(-1)!;
     expect(done.html).toContain('Готово');
     expect(done.html).toContain('Telegram-бот');
-    expect(done.html).toContain('в течение рабочего дня');
+    expect(done.html).toContain('Первый ответ за 5 минут, круглосуточно');
     expect(done.buttons).toBeUndefined(); // buttons disappear after use
     const tasks = w.leadTasks();
     expect(tasks).toHaveLength(1);

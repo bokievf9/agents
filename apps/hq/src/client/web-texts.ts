@@ -44,11 +44,11 @@ const RU: WebTexts = {
   askContact: 'Последний шаг. Как с вами связаться? Напишите Telegram @username, телефон или email.',
   contactBad: 'Не похоже на контакт. Напишите Telegram @username, телефон с кодом страны или email.',
   done: (need, deadline, budget, night) =>
-    `Готово, заявка принята.\nЗадача: ${need}\nСрок: ${deadline}\nБюджет: ${budget}\n\nМы свяжемся с вами по этому контакту с предложением в течение рабочего дня.${night ? ' Сейчас у нас ночь, поэтому ответ придёт утром.' : ''}`,
+    `Готово, заявка принята.\nЗадача: ${need}\nСрок: ${deadline}\nБюджет: ${budget}\n\nМы свяжемся с вами по этому контакту. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.${night ? ' Сейчас у нас ночь, поэтому ответ придёт утром.' : ''}`,
   clientDone: (ticket, night) =>
-    `Приняли. ${ticket ? 'Ответим по вашему контакту в течение часа в рабочее время.' : 'Передали команде, свяжемся по вашему контакту в течение рабочего дня.'}${night ? ' Сейчас ночь, поэтому ответ придёт утром.' : ''}`,
+    `Приняли. ${ticket ? 'Ответим по вашему контакту в течение часа в рабочее время.' : 'Передали команде, свяжемся по вашему контакту. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.'}${night ? ' Сейчас ночь, поэтому ответ придёт утром.' : ''}`,
   get price() {
-    return `${startingPrices('ru')}.\n\nТочную цену и срок считаем под задачу и записываем в смете. Ответьте на три коротких вопроса, и мы вернёмся с предложением в течение рабочего дня.`;
+    return `${startingPrices('ru')}.\n\nТочную цену и срок считаем под задачу и записываем в смете. Ответьте на три коротких вопроса, и мы вернёмся с предложением. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.`;
   },
   night: 'Сейчас у нас ночь, человек ответит утром. Если хотите, оставьте заявку: это три коротких вопроса и контакт.',
   fallback: 'На этот вопрос лучше ответит команда. Оставьте заявку: три коротких вопроса и контакт, и мы вернёмся с ответом.',
@@ -68,11 +68,11 @@ const EN: WebTexts = {
   askContact: 'Last step. How can we reach you? Send a Telegram @username, a phone number or an email.',
   contactBad: 'That does not look like a contact. Send a Telegram @username, a phone number with country code or an email.',
   done: (need, deadline, budget, night) =>
-    `Done, request received.\nTask: ${need}\nTiming: ${deadline}\nBudget: ${budget}\n\nWe will contact you with a proposal within one working day.${night ? ' It is night here now, so the answer will come in the morning.' : ''}`,
+    `Done, request received.\nTask: ${need}\nTiming: ${deadline}\nBudget: ${budget}\n\nWe will contact you. First reply within 5 minutes, around the clock; prices and timing are confirmed by the founder.${night ? ' It is night here now, so the answer will come in the morning.' : ''}`,
   clientDone: (ticket, night) =>
-    `Got it. ${ticket ? 'We will answer through your contact within an hour during working hours.' : 'Passed to the team, we will reach out within one working day.'}${night ? ' It is night here now, so the answer will come in the morning.' : ''}`,
+    `Got it. ${ticket ? 'We will answer through your contact within an hour during working hours.' : 'Passed to the team, we will reach out. First reply within 5 minutes, around the clock; prices and timing are confirmed by the founder.'}${night ? ' It is night here now, so the answer will come in the morning.' : ''}`,
   get price() {
-    return `${startingPrices('en')}.\n\nWe set the exact price and timing for each task and write them in the estimate. Answer three short questions and we will come back with a proposal within one working day.`;
+    return `${startingPrices('en')}.\n\nWe set the exact price and timing for each task and write them in the estimate. Answer three short questions and we will come back with a proposal. First reply within 5 minutes, around the clock; prices and timing are confirmed by the founder.`;
   },
   night: 'It is night here now, a person will answer in the morning. If you like, leave a request: three short questions and a contact.',
   fallback: 'The team can answer this better. Leave a request: three short questions and a contact, and we will come back with an answer.',

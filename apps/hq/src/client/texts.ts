@@ -131,17 +131,17 @@ const RU: Texts = {
   step3: '<b>Новый проект · 3 из 4</b>\nНа какой бюджет ориентируетесь?\n\nЭто поможет предложить подходящее решение, а не самое дорогое.',
   step4: '<b>Новый проект · 4 из 4</b>\nУ вас уже есть домен и хостинг?\n\nЕсли нет, мы подскажем, что выбрать: за них платите вы напрямую, в цену проекта они не входят.',
   done: (need, deadline, budget) =>
-    `<b>Готово, заявка принята</b>\nЗадача: ${esc(need)}\nСрок: ${esc(deadline)}\nБюджет: ${esc(budget)}\n\nМы вернёмся с предложением в течение рабочего дня. Ответ придёт сюда, в этот чат.`,
+    `<b>Готово, заявка принята</b>\nЗадача: ${esc(need)}\nСрок: ${esc(deadline)}\nБюджет: ${esc(budget)}\n\nОтвет придёт сюда, в этот чат. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.`,
   doneNight: 'Сейчас у нас ночь, поэтому ответ придёт утром.',
   askClient: '<b>Вы уже с нами</b>\nНапишите название компании или номер счёта, например FT-2026-001.',
   askQuestion: 'Спасибо. Теперь опишите вопрос одним сообщением.',
   ticketAck: (night) => `<b>Приняли</b>\nОтветим в течение часа в рабочее время.${night ? ' Сейчас ночь, поэтому ответ придёт утром.' : ''}`,
-  clientLeadAck: (night) => `<b>Приняли</b>\nПередали команде, ответим здесь в течение рабочего дня.${night ? ' Сейчас ночь, поэтому ответ придёт утром.' : ''}`,
+  clientLeadAck: (night) => `<b>Приняли</b>\nПередали команде, ответим здесь. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.${night ? ' Сейчас ночь, поэтому ответ придёт утром.' : ''}`,
   human: (night) =>
     `<b>Зову человека</b>\n${night ? 'Сейчас ночь, команда ответит утром, здесь же.' : 'Ответим здесь же, обычно в течение часа в рабочее время.'} Пока можно писать дальше: всё передам.`,
   humanAlready: 'Человек уже в курсе и ответит здесь. Всё, что вы пишете, я передаю.',
   get priceAnswer() {
-    return `<b>Про стоимость</b>\n${esc(startingPrices('ru'))}.\n\nТочную цену и срок считаем под задачу и записываем в смете. Ответьте на три коротких вопроса, и мы вернёмся с предложением в течение рабочего дня.`;
+    return `<b>Про стоимость</b>\n${esc(startingPrices('ru'))}.\n\nТочную цену и срок считаем под задачу и записываем в смете. Ответьте на три коротких вопроса, и мы вернёмся с предложением. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.`;
   },
   night: '<b>Сообщение у команды</b>\nСейчас у нас ночь, человек ответит утром, здесь же. Если хотите, оставьте заявку: это три коротких вопроса.',
   fallback: '<b>Передал команде</b>\nОтвечу точнее, когда уточню у коллег. Ответ придёт сюда, в этот чат.',
@@ -176,17 +176,17 @@ const EN: Texts = {
   step3: '<b>New project · 3 of 4</b>\nWhat budget do you have in mind?\n\nIt helps us suggest the right solution, not the most expensive one.',
   step4: '<b>New project · 4 of 4</b>\nDo you already have a domain and hosting?\n\nIf not, we will help you choose: you pay for them directly, they are not part of the project price.',
   done: (need, deadline, budget) =>
-    `<b>Done, request received</b>\nTask: ${esc(need)}\nTiming: ${esc(deadline)}\nBudget: ${esc(budget)}\n\nWe will come back with a proposal within one working day. The answer will arrive here, in this chat.`,
+    `<b>Done, request received</b>\nTask: ${esc(need)}\nTiming: ${esc(deadline)}\nBudget: ${esc(budget)}\n\nThe answer will arrive here, in this chat. First reply within 5 minutes, around the clock; prices and timing are confirmed by the founder.`,
   doneNight: 'It is night here now, so the answer will come in the morning.',
   askClient: '<b>Welcome back</b>\nPlease send your company name or invoice number, for example FT-2026-001.',
   askQuestion: 'Thank you. Now describe your question in one message.',
   ticketAck: (night) => `<b>Got it</b>\nWe will answer within an hour during working hours.${night ? ' It is night here now, so the answer will come in the morning.' : ''}`,
-  clientLeadAck: (night) => `<b>Got it</b>\nPassed to the team, we will answer here within one working day.${night ? ' It is night here now, so the answer will come in the morning.' : ''}`,
+  clientLeadAck: (night) => `<b>Got it</b>\nPassed to the team, we will answer here. First reply within 5 minutes, around the clock; prices and timing are confirmed by the founder.${night ? ' It is night here now, so the answer will come in the morning.' : ''}`,
   human: (night) =>
     `<b>Calling a person</b>\n${night ? 'It is night here, the team will answer in the morning, right here.' : 'We will answer right here, usually within an hour during working hours.'} Feel free to keep writing: I pass everything on.`,
   humanAlready: 'A person already knows and will answer here. I pass on everything you write.',
   get priceAnswer() {
-    return `<b>About the price</b>\n${esc(startingPrices('en'))}.\n\nWe set the exact price and timing for each task and write them in the estimate. Answer three short questions and we will come back with a proposal within one working day.`;
+    return `<b>About the price</b>\n${esc(startingPrices('en'))}.\n\nWe set the exact price and timing for each task and write them in the estimate. Answer three short questions and we will come back with a proposal. First reply within 5 minutes, around the clock; prices and timing are confirmed by the founder.`;
   },
   night: '<b>Message is with the team</b>\nIt is night here now, a person will answer in the morning, right here. If you like, leave a request: it is three short questions.',
   fallback: '<b>Passed to the team</b>\nI will answer more precisely once I check with my colleagues. The answer will arrive here, in this chat.',
@@ -298,14 +298,14 @@ export const OWNER_COMMANDS = [
 
 export const PROFILE: Record<Lang, { short: string; description: string }> = {
   ru: {
-    short: 'Fir Tech: сайты, Telegram-боты, приложения и автоматизация. Расскажите о задаче, ответим в течение рабочего дня.',
+    short: 'Fir Tech: сайты, Telegram-боты, приложения и автоматизация. Расскажите о задаче: ответ за 5 минут, круглосуточно.',
     description:
-      'Здесь можно обсудить проект с Fir Tech: сайт, Telegram-бот, приложение или автоматизацию. Три коротких вопроса, и команда вернётся с предложением в течение рабочего дня.\n\nЭтот бот тоже наша работа: так выглядит ИИ-приёмщик заявок для вашего бизнеса.',
+      'Здесь можно обсудить проект с Fir Tech: сайт, Telegram-бот, приложение или автоматизацию. Три коротких вопроса, и команда вернётся с предложением. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.\n\nЭтот бот тоже наша работа: так выглядит ИИ-приёмщик заявок для вашего бизнеса.',
   },
   en: {
-    short: 'Fir Tech: websites, Telegram bots, apps and automation. Tell us about your task, we answer within one working day.',
+    short: 'Fir Tech: websites, Telegram bots, apps and automation. Tell us about your task: reply within 5 minutes, 24/7.',
     description:
-      'Discuss a project with Fir Tech: a website, a Telegram bot, an app or automation. Three short questions, and the team comes back with a proposal within one working day.\n\nThis bot is our work too: this is what an AI request handler for your business looks like.',
+      'Discuss a project with Fir Tech: a website, a Telegram bot, an app or automation. Three short questions, and the team comes back with a proposal. First reply within 5 minutes, around the clock; prices and timing are confirmed by the founder.\n\nThis bot is our work too: this is what an AI request handler for your business looks like.',
   },
 };
 
