@@ -9,6 +9,7 @@
     "dev": "tsx --conditions=source --env-file-if-exists=.env.local src/index.ts",
     "preview": "node scripts/prep-public.mjs && remotion studio src/remotion/index.ts --public-dir=.public",
     "render:sample": "node scripts/prep-public.mjs && tsx --conditions=source src/sample.ts",
+    "render:launch": "tsx --conditions=source src/launch/render.ts",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

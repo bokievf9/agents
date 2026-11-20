@@ -1,0 +1,24 @@
+# hook
+AI agents instead of an employee.
+# problem
+A request at night. No answer. The client left.
+# bot
+The bot books your clients.
+# intake
+The intake collects requests.
+# automation
+Automation takes the routine.
+# content
+Content on autopilot.
+# miniapp
+A Mini App in Telegram.
+# agent
+Mail, calendar, reminders.
+# department
+A whole department of AI agents.
+# office
+Our own office. Approvals come to Telegram.
+# cta
+Build it in the builder. A first-stage guarantee.
+# teaser-cta
+Build it in the builder.

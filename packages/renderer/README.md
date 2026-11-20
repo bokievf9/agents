@@ -75,3 +75,8 @@ Chrome Headless Shell Remotion скачает сам при первом зап�
 `deploy/bootstrap-vps.sh`; затем `docker compose pull && docker compose up -d renderer`. Образ на Mac не собирали (нет Docker): не проверено, что
 Chromium стартует под `cap_drop ALL` и `read_only`, хватает ли `shm_size 256m` и tmpfs 384m, что колёса Piper с хэшами встали на bookworm.
 Если Chromium не стартует, первое, что смотреть: `docker compose logs renderer`, затем ослабить `read_only` или `network_mode`.
+
+## Launch-фильм (2026-11-21)
+`LaunchFilm` (38 с) и `LaunchTeaser` (15 с): композиции в `src/remotion/Launch.tsx`, план битов и звука в `src/launch/plan.ts` (чистый, без node), тексты RU/EN в `src/launch/copy.ts`,
+реплики голоса в `scripts/launch-ru.txt` и `launch-en.txt`. `pnpm --filter renderer render:launch [--lang en] [--only film|teaser] [--music файл]` кладёт `out/launch-<lang>.mp4`
+и `out/launch-teaser-<lang>.mp4`. Английского голоса нет: EN собирается без голоса. Музыка не входит в репозиторий (лицензия), `--music` подкладывает трек. Подробно: `docs/launch-film.md`.

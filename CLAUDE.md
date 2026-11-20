@@ -134,7 +134,7 @@ Instagram с Мака (2026-11-20): Meta не пускает приложени�
 
 Видео рилсов (2026-11-19): `packages/renderer` (Remotion + Piper `ru_RU-denis-medium`), сервис `renderer` в `compose.yaml` (1,5 ГБ, без сети, общий том с `hq`),
 очередь `cm_render_jobs` в SQLite HQ, образ `agents-renderer` в CI. Одобренный рилс ставится в очередь, утром Публикатор шлёт MP4; `/render <id>`; `REELS_RENDER=off`
-возвращает путь через `builder`. `packages/clips` (локальный инструмент на Mac) остаётся как есть. Подробно: `packages/renderer/README.md`.
+возвращает путь через `builder`. `packages/clips` (локальный инструмент на Mac) остаётся как есть. Подробно: `packages/renderer/README.md`. Launch-фильм (2026-11-21): композиции `LaunchFilm` (38 с) и `LaunchTeaser` (15 с), `pnpm --filter renderer render:launch`, сценарий и серия постов в `docs/launch-film.md`.
 
 ## Цены, токены, аудит (2026-11-19, по аудиту)
 - Цены в одном месте: прайс-лист сайта `GET https://firtech.pro/api/prices`. `packages/core/src/prices.ts` (`getPrices()`, `loadPrices()`, снимок `prices.fallback.json`):
