@@ -53,15 +53,21 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-function readBody(req: IncomingMessage): Promise<string | null> {
+function readBody(req: IncomingMessage, res: ServerResponse): Promise<string | null> {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let over = false;
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => {
       size += c.length;
+      if (over) return; // the rest of an oversized body is dropped, not stored
       if (size > MAX_BODY) {
+        over = true;
+        chunks.length = 0;
+        // the 413 must reach the caller: the socket is cut only after the answer went out (destroying it now made the caller see a reset, not a 413)
+        res.setHeader('connection', 'close');
+        res.once('finish', () => req.destroy());
         resolve(null);
-        req.destroy();
       } else chunks.push(c);
     });
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
@@ -193,7 +199,7 @@ export function createWebhook(
           }
           let body: unknown = null;
           if (req.method === 'POST') {
-            const raw = await readBody(req);
+            const raw = await readBody(req, res);
             if (raw === null) return json(res, 413, { ok: false, error: 'too_large' });
             try {
               body = raw.trim() ? JSON.parse(raw) : {};
@@ -282,7 +288,7 @@ export function createWebhook(
           if (auditHits.length >= 60) return json(res, 429, { ok: false, error: 'rate_limited' });
           if (!auditByIp.take(visitorIp(req, true), t)) return json(res, 429, { ok: false, error: 'rate_limited' });
           auditHits.push(t);
-          const raw = await readBody(req);
+          const raw = await readBody(req, res);
           if (raw === null) return json(res, 413, { ok: false, error: 'too_large' });
           let data: unknown = null;
           try {
@@ -300,7 +306,7 @@ export function createWebhook(
         if (req.method === 'POST' && req.url === '/events' && extra.events) {
           if (!tokenOk(req.headers['x-site-token'] as string | undefined, extra.events.token)) return json(res, 401, { ok: false, error: 'unauthorized' });
           if (!eventsByIp.take(visitorIp(req, true), now())) return json(res, 429, { ok: false, error: 'rate_limited' });
-          const raw = await readBody(req);
+          const raw = await readBody(req, res);
           if (raw === null) return json(res, 413, { ok: false, error: 'too_large' });
           let data: unknown = null;
           try {
@@ -318,7 +324,7 @@ export function createWebhook(
         if (req.method === 'POST' && req.url === '/chat') {
           if (!chat) return json(res, 404, { ok: false }); // no WEB_CHAT_TOKEN: the route does not exist
           if (!tokenOk(req.headers['x-chat-token'] as string | undefined, chat.token)) return json(res, 401, { ok: false, error: 'unauthorized' });
-          const raw = await readBody(req);
+          const raw = await readBody(req, res);
           if (raw === null) return json(res, 413, { ok: false, error: 'too_large' });
           let data: unknown = null;
           try {
@@ -341,7 +347,7 @@ export function createWebhook(
         if (hits.length >= 60) return json(res, 429, { ok: false, error: 'rate_limited' });
         if (!leadByIp.take(visitorIp(req, true), t)) return json(res, 429, { ok: false, error: 'rate_limited' });
         hits.push(t);
-        const raw = await readBody(req);
+        const raw = await readBody(req, res);
         if (raw === null) return json(res, 413, { ok: false, error: 'too_large' });
         let data: unknown = null;
         try {

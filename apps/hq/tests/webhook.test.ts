@@ -77,8 +77,13 @@ describe('POST /lead', () => {
   it('rejects oversized bodies', async () => {
     const { server, url } = await start();
     try {
-      const res = await post(url, 'secret-token', { ...body, message: 'x'.repeat(20_000) }).catch(() => null);
-      expect(res === null || res.status === 413).toBe(true);
+      // the caller gets its 413 (the socket used to be destroyed before the answer, the site saw a reset: drill 2026-11-21), and the server goes on serving
+      for (let i = 0; i < 3; i++) {
+        const res = await post(url, 'secret-token', { ...body, message: 'x'.repeat(200_000) });
+        expect(res.status).toBe(413);
+        expect(await res.json()).toEqual({ ok: false, error: 'too_large' });
+      }
+      expect((await post(url, 'secret-token', body)).status).toBe(200);
     } finally {
       server.close();
     }
