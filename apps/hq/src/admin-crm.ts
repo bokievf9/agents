@@ -617,11 +617,12 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     const parsed = leadMessage.safeParse(body ?? {});
     if (!parsed.success) return fail(400, 'invalid');
     const since = now() - 3_600_000;
+    const cs = new CsStore(db, now); // makes the support tables when nobody has used them yet (the counts below read cs_tickets)
     const sentMessages = one<{ n: number }>('SELECT COUNT(*) n FROM cab_messages WHERE client_id = ? AND "from" = \'client\' AND at > ?', c.id, since)?.n ?? 0;
     const sentTickets = one<{ n: number }>("SELECT COUNT(*) n FROM cs_tickets WHERE source = 'cabinet' AND lower(contact) = ? AND created_at > ?", c.email, since)?.n ?? 0;
     if (sentMessages >= CAB_TICKETS_PER_HOUR || sentTickets >= CAB_TICKETS_PER_HOUR) return fail(429, 'rate_limited');
     const text = parsed.data.text;
-    const tk = new CsStore(db, now).addCabinetTicket({ clientName: c.name || c.email, contact: c.email, text, leadId });
+    const tk = cs.addCabinetTicket({ clientName: c.name || c.email, contact: c.email, text, leadId });
     addCabMessage(db, now(), { clientId: c.id, leadId, from: 'client', text, ticketId: tk.id });
     hooks.leadJournal?.(lead.task_id, `Сообщение клиента из кабинета по лиду #${leadId}: ${text.slice(0, 300)}`);
     hooks.notifyOwner?.(`Сообщение по заявке #${leadId} от ${c.name || c.email}`);

@@ -231,3 +231,16 @@ describe('cabinet: rate limit is the shared admin one', () => {
     expect((await admin.handle(req)).status).toBe(429);
   });
 });
+
+describe('cabinet: a lead message on a database where the support tables do not exist yet', () => {
+  it('is stored, not a 500 "no such table: cs_tickets" (drill 2026-11-21: the rate-limit count ran before the support store was made)', async () => {
+    const { call, lead, reg, db } = setup();
+    const c = (await reg()).json.client;
+    const leadId = lead('Алиса', 'alice@example.com');
+    db.prepare('UPDATE li_leads SET client_id = ? WHERE id = ?').run(c.id, leadId);
+    expect(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'cs_tickets'").get()).toBeUndefined();
+    const r = await call('POST', `/admin/clients/${c.id}/leads/${leadId}/messages`, { text: 'Когда будет КП?' });
+    expect(r.status).toBe(200);
+    expect(r.json.item).toMatchObject({ from: 'client', leadId, ticketId: 1 });
+  });
+});
