@@ -150,6 +150,14 @@ export class ReachStore {
     return failed ? toJob(failed) : undefined;
   }
 
+  /** The open job a task waits on (its own or as a waiter): a running one first, else the newest. */
+  openForTask(taskId: number): ReachJob | undefined {
+    const r = this.db
+      .prepare("SELECT * FROM rc_jobs WHERE status IN ('queued','running') AND (task_id = ? OR EXISTS (SELECT 1 FROM json_each(rc_jobs.waiters) WHERE value = ?)) ORDER BY (status = 'running') DESC, id DESC LIMIT 1")
+      .get(taskId, taskId) as Row | undefined;
+    return r ? toJob(r) : undefined;
+  }
+
   createdSince(ms: number): number {
     return (this.db.prepare('SELECT COUNT(*) c FROM rc_jobs WHERE created_at >= ?').get(ms) as { c: number }).c;
   }
@@ -168,6 +176,25 @@ export class ReachStore {
       if (open) return toJob(open);
       throw e;
     }
+  }
+
+  /**
+   * The one entry of every asker (the tool, the owner's `POST /admin/reach`): the open job of the same key (a waiting task is remembered), a `done` one of the
+   * last 24 h, a `failed` one of the last hour, else a new queued job unless 200 were made in 24 h.
+   */
+  request(channel: string, action: string, args: Record<string, string | number>, taskId: number | null, agentId: string | null):
+    | { kind: 'cap' }
+    | { kind: 'queued' | 'done' | 'failed'; job: ReachJob; created: boolean } {
+    const now = this.now();
+    const found = this.find(reachKey(channel, action, args), now - REACH_CACHE_MS, now - REACH_FAIL_MS);
+    if (found) {
+      if (found.status === 'done') return { kind: 'done', job: found, created: false };
+      if (found.status === 'failed') return { kind: 'failed', job: found, created: false };
+      if (taskId !== null) this.addWaiter(found.id, taskId);
+      return { kind: 'queued', job: found, created: false };
+    }
+    if (this.createdSince(now - 86_400_000) >= REACH_DAILY_CAP) return { kind: 'cap' };
+    return { kind: 'queued', job: this.create(channel, action, args, taskId, agentId), created: true };
   }
 
   /** Another task waits for the same open job: it is resumed with the first one. */
@@ -223,6 +250,20 @@ export class ReachStore {
   }
 }
 
+/** The Mac reports the channels it has set up in `settings.reach.channels` (a JSON array); only those get jobs that need a login (Instagram, X, LinkedIn). */
+export const REACH_SETTING_CHANNELS = 'reach.channels';
+
+/** The channels the Mac reported (empty when it never did or the setting is unreadable). */
+export function reachChannels(db: Db): string[] {
+  try {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(REACH_SETTING_CHANNELS) as { value: string } | undefined;
+    const v = row ? (JSON.parse(row.value) as unknown) : [];
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 export type ReachOutcome =
   | { state: 'queued'; jobId: number }
   | { state: 'done'; jobId: number; result: ReachResult; finishedAt: number };
@@ -240,20 +281,12 @@ export function createReach(k: Kit): Reach {
       if (!spec) return fail('invalid', 'unknown action');
       const clean = cleanArgs(spec, args);
       if (!clean.ok) return fail('invalid', clean.reason);
-      const s = st();
-      const now = k.now();
-      const key = reachKey(channel, action, clean.args);
-      const found = s.find(key, now - REACH_CACHE_MS, now - REACH_FAIL_MS);
-      const taskId = k.cx.taskId ?? null;
-      if (found) {
-        if (found.status === 'done' && found.result) return okv({ state: 'done' as const, jobId: found.id, result: found.result, finishedAt: found.finishedAt ?? now });
-        if (found.status === 'failed') return fail(/NEED_LOGIN|NEED_SETUP|PLATFORM_BLOCKED|BAD_INPUT/.test(found.error ?? '') ? 'not_configured' : 'upstream', `reach job ${found.id}: ${found.error ?? 'failed'}`, { retryable: false });
-        if (taskId !== null) s.addWaiter(found.id, taskId);
-        return okv({ state: 'queued' as const, jobId: found.id });
-      }
-      if (s.createdSince(now - 86_400_000) >= REACH_DAILY_CAP) return fail('rate_limited', `reach cap of ${REACH_DAILY_CAP} jobs a day reached`, { retryable: false });
-      const job = s.create(channel, action, clean.args, taskId, k.cx.agentId);
-      return okv({ state: 'queued' as const, jobId: job.id });
+      const r = st().request(channel, action, clean.args, k.cx.taskId ?? null, k.cx.agentId);
+      if (r.kind === 'cap') return fail('rate_limited', `reach cap of ${REACH_DAILY_CAP} jobs a day reached`, { retryable: false });
+      const found = r.job;
+      if (r.kind === 'failed') return fail(/NEED_LOGIN|NEED_SETUP|PLATFORM_BLOCKED|BAD_INPUT/.test(found.error ?? '') ? 'not_configured' : 'upstream', `reach job ${found.id}: ${found.error ?? 'failed'}`, { retryable: false });
+      if (r.kind === 'done') return okv({ state: 'done' as const, jobId: found.id, result: found.result!, finishedAt: found.finishedAt ?? k.now() });
+      return okv({ state: 'queued' as const, jobId: found.id });
     });
   const out: Record<string, Record<string, unknown>> = {};
   for (const [channel, actions] of Object.entries(REACH_ACTIONS)) {

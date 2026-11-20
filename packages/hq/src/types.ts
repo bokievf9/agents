@@ -138,6 +138,11 @@ export interface WorkerResult {
   /** Markdown result for the task and the head's review. */
   result: string;
   error?: string;
+  /**
+   * The worker asked the owner's Mac (`ctx.tools.reach`, a job that is not answered yet) and cannot go on: the head parks the task (`blocked`, tag `reach-wait`, no
+   * alert) and HQ puts it back in the inbox when the job is answered or expires; the worker then runs again and finds the answer cached.
+   */
+  waiting?: { jobId: number };
 }
 
 /** A piece of a task that a worker's `plan` carved out. */

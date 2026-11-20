@@ -16,6 +16,7 @@ import { createPultCrm, fail, ok } from './pult-crm.js';
 import { createChats } from './chats.js';
 import { createReview } from './review.js';
 import { createPultTrends } from './pult-trends.js';
+import { createReach } from './reach.js';
 
 /**
  * «Пульт v3»: the owner workplace routes added on top of `/admin/*` (hub, CRM writes, content, metrics, company).
@@ -55,6 +56,7 @@ export function createPult(d: PultDeps) {
   });
   const chats = createChats({ hq: d.hq, now: d.now, client: d.client, webReply: d.webReply });
   const trends = createPultTrends({ hq: d.hq, now: d.now, marketing: d.marketing });
+  const reach = createReach({ hq: d.hq, now: d.now });
 
   /** `seg`: the path after `/admin/`. null: not a «Пульт v3» route. */
   async function handle(method: string, seg: string[], query: URLSearchParams, body: unknown): Promise<AdminReply | null> {
@@ -87,6 +89,7 @@ export function createPult(d: PultDeps) {
       if (method === 'POST' && seg.length === 1) return trends.post(body);
       return fail(404, 'not_found');
     }
+    if (a === 'reach') return reach.handle(method, seg, query, body);
     if (a === 'metrics') return method === 'GET' && seg.length === 2 && seg[1] === 'week' ? metrics.week(query) : fail(404, 'not_found');
     if (a === 'company') {
       const [, kind, rawName, act] = seg;

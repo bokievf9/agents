@@ -1,7 +1,7 @@
 import { errMsg, log, tryJson, withPlaybook, zonedParts } from '@fir/core';
 import { toolsOf, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import { z } from 'zod';
-import { LinkStore, analyseLink, analysisText, fetchLinkMeta, parseLink } from './link.js';
+import { LinkStore, analyseLink, analysisText, fetchLinkMeta, gatherReach, parseLink, type LinkMeta } from './link.js';
 import { fetchGoogleTrends, fetchYoutube, type Candidate } from './sources.js';
 import { TrendStore, type NewTrendItem, type TrendItem } from './store.js';
 
@@ -164,7 +164,24 @@ export class TrendScoutWorker implements Worker {
     if (!parsed.ok) return fail(`Ссылка не подходит: ${parsed.reason}`);
     if (!ctx.llm.enabled) return fail('LLM off: нет LLM_API_KEY, разбор невозможен');
     links.setState(row.id, 'analysing');
-    const meta = await fetchLinkMeta(toolsOf(ctx, 'marketing', this.id), parsed);
+    const tools = toolsOf(ctx, 'marketing', this.id);
+    // the owner's Mac first (YouTube subtitles through Agent Reach): a job not answered yet parks the task, it runs again when the answer is in
+    const reach = await gatherReach(tools, ctx.db, parsed);
+    if ('waiting' in reach) {
+      links.setState(row.id, 'waiting');
+      ctx.log('owner_link_waiting', `link ${row.id}, reach job ${reach.waiting}`);
+      return { ok: true, result: `Жду Мак: субтитры и данные видео читает Agent Reach (задание ${reach.waiting}).`, waiting: { jobId: reach.waiting } };
+    }
+    let meta: LinkMeta | null = await fetchLinkMeta(tools, parsed);
+    if (reach.transcript || reach.title) {
+      meta ??= { platform: parsed.platform, title: '', description: '', author: '', image: '', sources: [] };
+      meta.title ||= reach.title ?? '';
+      meta.author ||= reach.author ?? '';
+      if (reach.transcript) meta.transcript = reach.transcript;
+      if (reach.views !== undefined) meta.views = reach.views;
+      if (reach.likes !== undefined) meta.likes = reach.likes;
+      meta.sources.push('reach');
+    }
     if (!meta) return fail('Страница не отдала название и описание без входа в аккаунт (закрытая или недоступная ссылка)');
     const analysis = await analyseLink(ctx.llm, meta, row.note);
     if (!analysis) return fail('Модель не дала валидный разбор');

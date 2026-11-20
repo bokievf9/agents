@@ -1,3 +1,4 @@
+import { ReachStore } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import { storeFor } from '@fir/worker-content-maker';
 import type { LinkRow } from '@fir/worker-trend-scout';
@@ -41,7 +42,10 @@ export function createPultTrends(d: PultTrendsDeps) {
     } else status = 'analysing';
     const approval = r.itemId !== null ? (db.prepare("SELECT id FROM task_approvals WHERE kind = 'content_item' AND json_extract(payload, '$.itemId') = ? ORDER BY id DESC LIMIT 1").get(r.itemId) as { id: number } | undefined) : undefined;
     const parsed = parseLink(r.url);
+    // the chip while Agent Reach on the owner's Mac works for this link: the transcript is queued («ждёт Мак») or being read («Мак читает»)
+    const job = r.taskId !== null && status === 'analysing' ? new ReachStore(db, d.now).openForTask(r.taskId) : undefined;
     return {
+      chip: job ? (job.status === 'running' ? 'Мак читает' : 'ждёт Мак') : null, reach: job ? { jobId: job.id, status: job.status, channel: job.channel, action: job.action } : null,
       id: r.id, url: r.url, host: r.host, platform: parsed.ok ? parsed.platform : null, note: r.note, status, error, createdAt: iso(r.createdAt), updatedAt: iso(r.updatedAt), taskId: r.taskId,
       analysis: r.analysis ? { format: r.analysis.format, hook: r.analysis.hook, structure: r.analysis.structure, whyItWorks: r.analysis.whyItWorks, numbers: r.analysis.numbers ?? null, analogue: r.analysis.analogue } : null,
       reviewId: approval ? `ap_${approval.id}` : null, itemId: r.itemId,

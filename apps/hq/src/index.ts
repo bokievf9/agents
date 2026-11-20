@@ -44,6 +44,7 @@ import { clientSinks } from './client/sinks.js';
 import { gatewayGate } from './client/shared.js';
 import { DIRECTOR_COMMANDS, DIRECTOR_PROFILE, deptBotMenu, menuCommand } from './tg.js';
 import { COMMAND_NAMES, routedTo } from './commands.js';
+import { createReach } from './reach.js';
 import { appTools } from './tools.js';
 
 const cfg = loadConfig();
@@ -321,6 +322,9 @@ const beat = () => {
 beat();
 const beatTimer = setInterval(beat, 30_000);
 beatTimer.unref();
+// Agent Reach jobs the Mac never answers (off, no tunnel) fail after 6 h and release the tasks waiting on them.
+const reachTimer = setInterval(() => { try { createReach({ hq, now: hq.now }).sweep(); } catch (e) { log('warn', 'reach sweep failed', { err: errMsg(e) }); } }, 300_000);
+reachTimer.unref();
 let routineJobs = startRoutines(hq);
 // A clock or a time changed through the Director: the routines and the heads' own crons follow it at once (no restart needed).
 director.onTimingChange = () => {
