@@ -112,7 +112,7 @@
 | `GOOGLE_HOSTS` | `oauth2.googleapis.com`, `www.googleapis.com`, `youtube.googleapis.com` | Публикатор, Аналитик, Трендвотчер (YouTube Data API) |
 | `SOCIAL_HOSTS` (2026-11-21) | `www.instagram.com`, `instagram.com`, `www.tiktok.com`, `vm.tiktok.com`, `vt.tiktok.com`, `www.youtube.com`, `m.youtube.com`, `youtube.com`, `youtu.be` (публичные страницы и oEmbed `https://www.youtube.com/oembed`, `https://www.tiktok.com/oembed`) | Трендвотчер, ссылки владельца (`/trend`, `POST /admin/trends`): `web.getText` страницы (тэги `og:*`) и `web.getJson` oEmbed; без входа в аккаунт, редиректы до 3 с проверкой хоста на каждом шаге |
 
-Новых инструментов в 2026-11-21 нет (тест реестра их бы потребовал): ревью-центр звёт `macEnqueue(db, itemId, platform, agent, at)` (чистая функция в `tools/channels.ts`, ту же вызывает `mac.poster.enqueue`) и `PublisherWorker.publishNow`.
+Новых инструментов в 2026-11-21, кроме `reach.*` (раздел выше), нет (тест реестра их бы потребовал): ревью-центр звёт `macEnqueue(db, itemId, platform, agent, at)` (чистая функция в `tools/channels.ts`, ту же вызывает `mac.poster.enqueue`) и `PublisherWorker.publishNow`.
 
 ## Как пользоваться
 ```ts

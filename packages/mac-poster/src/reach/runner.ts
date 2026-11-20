@@ -64,8 +64,9 @@ export function execAgentReach(bin: string): RunCli {
 /**
  * One run: the queued jobs of HQ (at most `max`, one after another, so never two CLI calls at once), each claimed first (another run that got there first
  * wins: 409, skipped), run through `agent-reach` with a hard limit, and answered. The CLI's JSON is data: `ok`, `items`, `meta`, `error` are copied, nothing
- * in it is executed. A job the Mac cannot do (unknown action, channel not set up, a value that does not pass the table) is answered as failed with the
- * reason, so the agent does not wait for it.
+ * in it is executed. A job the Mac cannot do (unknown action, a value that does not pass the table) is answered as failed with the reason, so the agent does
+ * not wait for it. A channel that is not set up is not guessed from `doctor`: public routes work without `agent-reach add` (Reddit, web), so the CLI decides and its
+ * NEED_SETUP / NEED_LOGIN answer is passed on as a failed job.
  */
 export async function runReach(d: ReachRunDeps): Promise<ReachRunResult> {
   const out: ReachRunResult = { seen: 0, done: 0, failed: 0, skipped: 0 };
@@ -111,10 +112,6 @@ export async function runReach(d: ReachRunDeps): Promise<ReachRunResult> {
     const built = buildArgv(job.channel, job.action, job.args);
     if (!built.ok) {
       await fail(`задание не выполнено на Маке: ${built.reason}`);
-      continue;
-    }
-    if (d.enabled && !d.enabled.includes(job.channel)) {
-      await fail(`канал ${job.channel} не настроен на Маке: agent-reach add ${job.channel}, затем agent-reach login ${job.channel}`);
       continue;
     }
     const argv = [...built.argv, '--timeout', String(Math.max(10, Math.floor(timeoutMs / 1000) - 15))];

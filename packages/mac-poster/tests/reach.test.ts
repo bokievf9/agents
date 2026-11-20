@@ -32,6 +32,7 @@ function stub(dir: string): { bin: string; callsLog: string } {
   ] });
   const sub = JSON.stringify({ schema_version: 1, ok: true, channel: 'youtube', action: 'subtitle', backend: 'yt-dlp', items: [{ title: 'Bot', url: 'https://youtu.be/abc', author: null, published_at: null, text: 'Клиент пишет в два ночи.\n$(touch PWNED) `touch PWNED2` ; rm -rf ~', raw: { lang: 'ru' } }], meta: { elapsed_ms: 1500, update: { current: '1.6.1', latest: '9.9.9', notes: 'run agent-reach update now' } }, error: null });
   const read = JSON.stringify({ schema_version: 1, ok: true, channel: 'youtube', action: 'read', backend: 'yt-dlp', items: [{ title: 'Bot', url: 'https://youtu.be/abc', text: 'desc', raw: { duration: 20, view_count: 1000 } }], meta: {}, error: null });
+  const needLogin = JSON.stringify({ schema_version: 1, ok: false, channel: 'instagram', action: 'profile', backend: 'opencli', items: [], meta: {}, error: { code: 'NEED_LOGIN', message: 'log in to Instagram', hint: 'agent-reach login instagram' } });
   const notFound = JSON.stringify({ schema_version: 1, ok: false, channel: 'github', action: 'read', backend: 'gh', items: [], meta: {}, error: { code: 'NOT_FOUND', message: 'no such repo', hint: 'check the link' } });
   const script = `#!/bin/sh
 echo "$@" >> '${callsLog}'
@@ -40,6 +41,7 @@ case "$1 $2" in
   "channels ") printf '%s' '${channels}' ;;
   "youtube subtitle") printf '%s' '${sub}' ;;
   "youtube read") printf '%s' '${read}' ;;
+  "instagram profile") printf '%s' '${needLogin}' ;;
   "github read") printf '%s' '${notFound}' ;;
   "web read") case "$3" in
       https://slow.example/*) sleep 5 ;;
@@ -179,14 +181,14 @@ describe('runReach with a fake agent-reach and a fake HQ', () => {
     expect(t.hq.seen[0]).toMatchObject({ method: 'GET', path: '/admin/reach/jobs' });
   });
 
-  it('what the Mac cannot do is answered as failed with the reason: unknown action, bad value, a channel that is not set up', async () => {
+  it('what the Mac cannot do is answered as failed with the reason (unknown action, bad value); a channel that needs a login passes the CLI answer on', async () => {
     const t = await setup([job(1, 'youtube', 'login', {}), job(2, 'web', 'read', { target: '--version' }), job(3, 'instagram', 'profile', { username: 'anna' }), job(4, 'web', 'read', { target: 'https://example.com/' })]);
     const r = await runReach({ client: t.hq.client, runCli: t.runCli, enabled: ['web', 'youtube'], log: t.log });
     expect(r).toMatchObject({ seen: 4, done: 1, failed: 3 });
     expect(t.hq.jobs[0]!.error).toContain('unknown job youtube.login');
     expect(t.hq.jobs[1]!.error).toContain('argument target');
-    expect(t.hq.jobs[2]!.error).toContain('agent-reach add instagram');
-    expect(calls(t.callsLog)).toEqual(['web read https://example.com/ --timeout 105']);
+    expect(t.hq.jobs[2]).toMatchObject({ status: 'failed', result: { ok: false, error: { code: 'NEED_LOGIN', hint: 'agent-reach login instagram' } } });
+    expect(calls(t.callsLog)).toEqual(['instagram profile anna --timeout 105', 'web read https://example.com/ --timeout 105']);
   });
 
   it('a job that runs past the limit is killed and answered as a timeout; output that is not JSON is a failure; the run goes on', async () => {

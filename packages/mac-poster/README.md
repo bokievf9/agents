@@ -51,6 +51,20 @@
    или `caffeinate -dims` в отдельном окне Терминала. Пропущенный из-за сна запуск launchd выполнит при пробуждении.
    После переезда клона (`git clone` в другое место) расписание нужно поставить заново.
 
+## Agent Reach для агентов (reach:*), 2026-11-21
+Тот же помощник на Маке выполняет задания Agent Reach (`~/Agent-Reach`, MIT, `agent-reach` в `~/.local/bin`) для агентов: субтитры и данные YouTube для Трендвотчера, Reddit и LinkedIn для Разведчика, публичные цифры чужих каналов для Аналитика, чтение страниц для Контент-мейкера. В контейнере HQ нет браузера и Python, поэтому агент кладёт задание в очередь HQ (`ctx.tools.reach`), а Мак забирает его по тому же SSH-туннелю и тому же `~/.fir-mac-poster.env` (`MP_ADMIN_TOKEN`, `MP_SSH_*`).
+```sh
+pnpm --filter mac-poster reach:status            # каналы Agent Reach (состояние, нужен ли вход) и очередь HQ
+pnpm --filter mac-poster reach:now               # один запуск сейчас (то же, что reach:run)
+pnpm --filter mac-poster reach:run [--limit N]   # один запуск: забрать очередь, выполнить, ответить (до 20 заданий, N 1..10)
+pnpm --filter mac-poster reach:install-launchd   # расписание pro.firtech.reach: каждые 15 минут
+pnpm --filter mac-poster reach:uninstall-launchd
+```
+- Запуск: поднимает туннель (как `ig:run`), читает `agent-reach doctor` и сообщает HQ, какие каналы настроены, берёт `GET /admin/reach/jobs?status=queued`, для каждого задания `claim` (409: взял другой запуск), `agent-reach <канал> <действие> ... --timeout 105` без shell, жёсткий предел 120 с (`MP_REACH_TIMEOUT`), ответ `POST .../result`. Не больше 20 заданий за запуск (`MP_REACH_MAX`), по одному, второй запуск не стартует (`~/Library/Application Support/fir-mac-poster/reach.lock`). Логи: `~/Library/Logs/fir-mac-poster/run-reach-YYYY-MM-DD.log` и `launchd.log`.
+- Что в JSON от CLI берётся как данные: `ok`, `items`, `meta`, `error`; ничего оттуда не исполняется. Аргументы собираются только по таблице `src/reach/spec.ts` (известные каналы и действия, значение не начинается с `-`, без управляющих знаков); задание не из таблицы получает ответ `failed` с причиной.
+- Без входа работают YouTube (поиск, карточка, субтитры; `transcribe` нужен ключ Groq: `agent-reach configure groq-key`), веб, GitHub, Reddit. **Instagram и X**: владелец сам делает на Маке `agent-reach add instagram`, затем `agent-reach login instagram` (откроется окно, вход руками, отдельным аккаунтом, не основным), так же `twitter`. Пока это не сделано, Мак не сообщает канал HQ, и HQ не ставит туда задания; задание, пришедшее раньше, закончится ответом CLI `NEED_LOGIN` как `failed`. LinkedIn: `agent-reach add linkedin` и `agent-reach login linkedin`.
+- `agent-reach` ищется в `~/.local/bin/agent-reach` (другое место: `MP_AGENT_REACH`); в расписании этот каталог добавлен в `PATH`. Мак в нужное время должен не спать (как для `ig:install-launchd`): пропущенный запуск launchd выполнит при пробуждении, а задание, которое Мак не взял за 6 часов, HQ закрывает как `failed`, агент идёт дальше без него.
+
 ## Логи и скриншоты
 - `~/Library/Logs/fir-mac-poster/run-YYYY-MM-DD.log`: каждый запуск, план, итог.
 - `~/Library/Logs/fir-mac-poster/launchd.log`: вывод запусков по расписанию.
@@ -72,6 +86,6 @@
 `platform: 'tiktok'` (HQ уже принимает `failed`/`url` для любой платформы материала).
 
 ## Проверки
-`pnpm --filter mac-poster typecheck`, `pnpm --filter mac-poster test` (без сети и браузера: отбор и порядок, недели, план
+`pnpm --filter mac-poster typecheck`, `pnpm --filter mac-poster test` (без сети и браузера; `tests/reach.test.ts`: заглушка `agent-reach` на shell и поддельный HQ по HTTP; без сети и браузера: отбор и порядок, недели, план
 сухого прогона, счётчик и лимит, lock, разбор ссылок, клиент HQ на подменённом fetch, туннель на подменённом ssh, plist).
 Настоящий instagram.com тестами не проверяется: первый запуск после `ig:login` всегда `--dry-run`, затем `--limit 1`.
