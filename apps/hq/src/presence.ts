@@ -242,6 +242,8 @@ export class OwnerChannel implements Messenger {
     const inReply = scope?.mode === 'reply';
     const k: InboxKind = c.kind === 'approval' ? 'approval' : inReply ? 'reply' : (kind ?? c.kind);
     const toTg = Boolean(o.force) || inReply || this.effective() === 'away';
+    // the same card sent again (the first send failed, or a re-ask): the old undelivered copy is replaced, not shown twice on the site and resent by /approve
+    if (c.approvalId !== null) this.db.prepare("DELETE FROM owner_inbox WHERE approval_id = ? AND kind = 'approval' AND delivered_tg = 0").run(c.approvalId);
     const id = this.insert(k, plain, o.taskId ?? null, c.approvalId, o.buttons, inReply && k === 'reply', false, o.html ? text : null);
     if (!toTg) return 0;
     const msgId = await this.d.inner.sendMessage(this.d.ownerId, text, o.buttons, { ...(o.html ? { html: true } : {}), ...(o.keyboard && !o.buttons ? { keyboard: o.keyboard } : {}) });
@@ -273,6 +275,8 @@ export class OwnerChannel implements Messenger {
     let n = 0;
     for (const r of rows) {
       if (r.approval_id !== null && this.d.approvalPending && !this.d.approvalPending(r.approval_id)) continue;
+      // still queued in its department: the batch that follows sends it (and replaces this row), sending it here too would show the card twice
+      if (r.approval_id !== null && this.d.hq.approvalByCoreId(r.approval_id)?.state === 'queued') continue;
       const msgId = await this.d.inner.sendMessage(this.d.ownerId, r.html ?? r.text, JSON.parse(r.buttons) as Button[][], r.html ? { html: true } : undefined);
       if (r.approval_id !== null) this.d.onCardSent?.(r.approval_id, msgId);
       this.db.prepare('UPDATE owner_inbox SET delivered_tg = 1 WHERE id = ?').run(r.id);
