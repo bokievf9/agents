@@ -1,3 +1,4 @@
+import type { SfxCue } from './sfx.js';
 import type { Timeline } from './timing.js';
 
 /** Everything the «Reel» composition needs; JSON-serialisable (it travels as Remotion input props). */
@@ -7,4 +8,6 @@ export type ReelProps = {
   scenes: { subtitle: string; voice: string; /** Path inside the public dir, null without voice. */ audio: string | null }[];
   ctaAudio: string | null;
   timeline: Timeline;
+  /** Sound effects under the voice (`planSfx`); absent or empty: none. */
+  sfx?: SfxCue[];
 };

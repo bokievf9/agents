@@ -15,6 +15,8 @@ const pollMs = Math.max(2, Number(process.env.RENDERER_POLL_SECONDS) || 20) * 10
 const timeoutMs = (Number(process.env.RENDER_TIMEOUT_SECONDS) || 600) * 1000;
 const noTts = process.env.RENDER_NO_TTS === '1';
 const concurrency = Math.max(1, Number(process.env.RENDER_CONCURRENCY) || 2);
+/** `RENDER_SFX=off`: reels without the sound-effect layer. */
+const sfx = (process.env.RENDER_SFX ?? 'on').toLowerCase() !== 'off';
 
 const log = (level: 'info' | 'warn' | 'error', msg: string, extra: Record<string, unknown> = {}) =>
   console.log(JSON.stringify({ t: new Date().toISOString(), level, svc: 'renderer', msg, ...extra }));
@@ -27,7 +29,7 @@ if (stale) log('warn', 'recovered jobs left running', { n: stale });
 
 const bundle = new BundleCache((m) => log('info', m));
 const tts = noTts ? null : ttsEnvFrom();
-log('info', 'renderer started', { pollSeconds: pollMs / 1000, voice: tts?.voice ?? 'off', concurrency });
+log('info', 'renderer started', { pollSeconds: pollMs / 1000, voice: tts?.voice ?? 'off', concurrency, sfx });
 
 // Heartbeat for the Docker healthcheck and the HQ monitoring: touched every 30 s, also during a long render.
 const beatFile = join(dataDir, 'renderer.heartbeat');
@@ -50,7 +52,7 @@ await runLoop(
     db, queue, now: Date.now, timeoutMs, log,
     render: async (job, script) => {
       const out = join(dataDir, 'renders', String(job.itemId), 'reel.mp4');
-      const r = await renderReel(script, bundle, { outFile: out, tts, concurrency, timeoutMs, jobKey: String(job.id), log: (m) => log('info', m, { job: job.id }) });
+      const r = await renderReel(script, bundle, { outFile: out, tts, concurrency, timeoutMs, jobKey: String(job.id), sfx, log: (m) => log('info', m, { job: job.id }) });
       log('info', 'reel written', { job: job.id, item: job.itemId, bytes: r.bytes, seconds: Math.round(r.seconds), voiced: r.voiced });
       return r.path;
     },

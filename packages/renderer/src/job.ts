@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { WebpackOverrideFn } from '@remotion/bundler';
 import { FONT_DIR, type ReelScript } from '@fir/worker-content-maker';
 import type { ReelProps } from './props.js';
+import { planSfx, prepareSfx, sfxAvailable } from './sfx.js';
 import { speakable, synthesize, type TtsEnv } from './tts.js';
 import { buildTimeline, estimateVoiceSec, type SceneInput } from './timing.js';
 
@@ -24,6 +25,8 @@ export interface RenderOptions {
   timeoutMs: number;
   /** Unique per job: names the folder of the job's WAV files inside the bundle. */
   jobKey: string;
+  /** `false`: no sound effects under the voice (whoosh on scene changes, pop on text, hit on the final card). Default on. */
+  sfx?: boolean;
   log?: (msg: string) => void;
 }
 
@@ -60,6 +63,7 @@ export class BundleCache {
     rmSync(root, { recursive: true, force: true });
     const publicDir = join(root, 'public-src');
     prepareFonts(publicDir);
+    prepareSfx(publicDir);
     this.log('bundling composition');
     return bundle({ entryPoint: ENTRY, publicDir, outDir: join(root, 'bundle'), webpackOverride: aliasJs });
   }
@@ -69,7 +73,7 @@ export class BundleCache {
 const jobDir = (serveUrl: string, key: string) => join(serveUrl, 'public', 'jobs', key);
 
 /** Voice per scene, timeline, props. Exported separately so the sample and tests can build props without Chrome. */
-export async function buildProps(script: ReelScript, opts: { tts: TtsEnv | null; dir: string; rel: string; log?: (m: string) => void }): Promise<{ props: ReelProps; voiced: boolean }> {
+export async function buildProps(script: ReelScript, opts: { tts: TtsEnv | null; dir: string; rel: string; sfx?: boolean; log?: (m: string) => void }): Promise<{ props: ReelProps; voiced: boolean }> {
   const log = opts.log ?? (() => {});
   const useVoice = opts.tts !== null && script.lang === 'ru';
   if (opts.tts !== null && !useVoice) log('English script: no voice (only the Russian Piper voice is installed), subtitles from the script timing');
@@ -94,12 +98,15 @@ export async function buildProps(script: ReelScript, opts: { tts: TtsEnv | null;
     ctaAudio = `${opts.rel}/cta.wav`;
   }
   const timeline = buildTimeline(scenes, ctaSec, script.durationSec);
+  const withSfx = opts.sfx !== false && sfxAvailable();
+  if (opts.sfx !== false && !withSfx) log('sound effects are missing (assets/sfx), rendering without them');
   const props: ReelProps = {
     hook: script.hook,
     cta: script.cta,
     scenes: script.scenes.map((s, i) => ({ subtitle: s.subtitle, voice: s.voice, audio: audio[i]! })),
     ctaAudio,
     timeline,
+    sfx: withSfx ? planSfx(timeline) : [],
   };
   return { props, voiced: useVoice };
 }
@@ -110,7 +117,7 @@ export async function renderReel(script: ReelScript, bundleCache: BundleCache, o
   const serveUrl = await bundleCache.get();
   const dir = jobDir(serveUrl, opts.jobKey);
   try {
-    const { props, voiced } = await buildProps(script, { tts: opts.tts, dir, rel: `jobs/${opts.jobKey}`, log });
+    const { props, voiced } = await buildProps(script, { tts: opts.tts, dir, rel: `jobs/${opts.jobKey}`, ...(opts.sfx === false ? { sfx: false } : {}), log });
     const { ensureBrowser, makeCancelSignal, renderMedia, selectComposition } = await import('@remotion/renderer');
     await ensureBrowser();
     const inputProps = props as unknown as Record<string, unknown>;

@@ -150,6 +150,11 @@ export const Reel = (props: ReelProps) => {
           </Sequence>
         ),
       )}
+      {(props.sfx ?? []).map((c, i) => (
+        <Sequence key={`sfx${i}`} from={c.startFrame} durationInFrames={c.durationFrames}>
+          <Audio src={staticFile(`sfx/${c.file}`)} volume={c.volume} />
+        </Sequence>
+      ))}
       <Sequence from={0} durationInFrames={timeline.hookFrames}>
         <Hook text={props.hook} frames={timeline.hookFrames} />
       </Sequence>

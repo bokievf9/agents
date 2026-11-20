@@ -53,6 +53,7 @@ RUN mkdir -p /opt/piper/voices && cd /opt/piper/voices \
 WORKDIR /app
 COPY --from=build /out/node_modules ./node_modules
 COPY --from=build /out/dist ./dist
+COPY --from=build /out/assets ./assets
 COPY --from=build /out/package.json ./
 # The browser goes to /app/node_modules/.remotion (Remotion looks it up from the working directory's package.json).
 RUN node -e "import('@remotion/renderer').then((m) => m.ensureBrowser()).then(() => console.log('chrome ready'))" \
