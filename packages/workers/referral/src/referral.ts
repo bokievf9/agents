@@ -50,16 +50,21 @@ export function statsText(store: ReferralStore): string {
   if (s.total === 0) return 'Рекомендаций пока нет. Записать: /referral <клиент> -> <новый лид>.';
   const payouts = store.pendingPayouts();
   const open = store.all().filter((r) => r.status !== 'rewarded' && !payouts.includes(r));
+  const later = store.stagePayouts().filter((x) => x.paidAt === null);
   return [
     `Рекомендации, всего ${s.total}: ${STATUSES.filter((k) => s.byStatus[k]).map((k) => `${STATUS_RU[k]} ${s.byStatus[k]}`).join(', ')}`,
-    ...(payouts.length ? ['', `К выплате (${PAYOUT_PERCENT}% первой сметы, USDT, в течение 7 дней после оплаты клиента): ${usd(payouts.reduce((a, r) => a + (r.payoutUsd ?? 0), 0))}`, ...payouts.map((r) => `${describe(r)}: ${usd(r.payoutUsd ?? 0)}, контакт ${r.payoutContact || '-'}, ждёт с ${ddmm(r.payoutRequestedAt!)} (карточка в /approve)`)] : []),
+    ...(payouts.length ? ['', `К выплате (${PAYOUT_PERCENT}% каждого оплаченного этапа, USDT, в течение 7 дней после оплаты клиента): ${usd(payouts.reduce((a, r) => a + (r.payoutUsd ?? 0), 0))}`, ...payouts.map((r) => `${describe(r)}: ${usd(r.payoutUsd ?? 0)}, контакт ${r.payoutContact || '-'}, ждёт с ${ddmm(r.payoutRequestedAt!)} (карточка в /approve)`)] : []),
+    ...(later.length ? ['', `К выплате за следующие этапы: ${usd(later.reduce((a, x) => a + x.usd, 0))}`, ...later.map((x) => `рекомендация #${x.referralId}, этап ${x.stageNo}, счёт ${x.invoiceNumber}: ${usd(x.usd)}, контакт ${x.contact || '-'} (карточка в /approve)`)] : []),
     ...(open.length ? ['', 'Открытые:', ...open.map((r) => `${describe(r)}: ${STATUS_RU[r.status]}`)] : []),
   ].join('\n');
 }
 
 /** The owner's card of a payout: who, how much, where to send it. */
-export function payoutSummary(r: Referral, invoiceNumber: string): string {
-  return `Выплата рекомендателю ${describe(r)}: клиент оплатил первый счёт ${invoiceNumber}.\nСумма: ${usd(r.payoutUsd ?? 0)} (${PAYOUT_PERCENT}% первой сметы), USDT.\nКонтакт рекомендателя: ${r.payoutContact || '[контакт не найден: уточните]'}.\n«Утвердить» значит, что вы выплатили сами. Система денег не двигает.`;
+export function payoutSummary(r: Referral, invoiceNumber: string, stage?: { no: number; usd: number }): string {
+  if (stage && stage.no > 1) {
+    return `Выплата рекомендателю ${describe(r)}: клиент оплатил этап ${stage.no}, счёт ${invoiceNumber}.\nСумма: ${usd(stage.usd)} (${PAYOUT_PERCENT}% оплаты этапа ${stage.no}), USDT.\nКонтакт рекомендателя: ${r.payoutContact || '[контакт не найден: уточните]'}.\n«Утвердить» значит, что вы выплатили сами. Система денег не двигает.`;
+  }
+  return `Выплата рекомендателю ${describe(r)}: клиент оплатил ${stage ? `этап 1, счёт ${invoiceNumber}` : `первый счёт ${invoiceNumber}`}.\nСумма: ${usd(r.payoutUsd ?? 0)} (${PAYOUT_PERCENT}% ${stage ? 'оплаты этапа 1' : 'первой сметы'}), USDT.\nКонтакт рекомендателя: ${r.payoutContact || '[контакт не найден: уточните]'}.\n«Утвердить» значит, что вы выплатили сами. Система денег не двигает.`;
 }
 
 /** Owner's `/paid <id>`: the referred client paid. Only a proposed referral moves; the reward is asked by the caller. */
@@ -102,6 +107,13 @@ export function payoutKindSpecs(ctx: Pick<WorkerCtx, 'db' | 'now'>): Record<stri
       execute: async (payload: Payload) => {
         const store = storeFor(ctx);
         const id = Number(payload.referralId);
+        // the payout of a later stage (payment by stages): the referral row belongs to the first stage's payout
+        const stageNo = Number(payload.stageNo);
+        if (stageNo > 1) {
+          if (!store.get(id)) throw new Error('unknown referral');
+          store.settleStagePayout(id, stageNo);
+          return;
+        }
         if (store.get(id)?.status !== 'paid') throw new Error('payout only after the referred client paid');
         store.transition(id, 'rewarded');
       },
@@ -113,7 +125,11 @@ export function payoutKindSpecs(ctx: Pick<WorkerCtx, 'db' | 'now'>): Record<stri
 export function onDecision(ctx: Pick<WorkerCtx, 'db' | 'now'>, link: Pick<TaskApproval, 'kind' | 'payload'>, state: ApprovalState): void {
   if (state === 'executed') return;
   if (link.kind === KIND_REWARD) storeFor(ctx).setRewardRequested(Number(link.payload.referralId), false);
-  if (link.kind === KIND_PAYOUT) storeFor(ctx).clearPayout(Number(link.payload.referralId));
+  if (link.kind === KIND_PAYOUT) {
+    const stageNo = Number(link.payload.stageNo);
+    if (stageNo > 1) storeFor(ctx).releaseStagePayout(Number(link.payload.referralId), stageNo);
+    else storeFor(ctx).clearPayout(Number(link.payload.referralId));
+  }
 }
 
 /**
@@ -151,5 +167,18 @@ export class ReferralWorker implements Worker {
     if (r.status === 'proposed') store.transition(r.id, 'paid');
     if (!store.requestPayout(r.id, { usd: payoutAmount(a.totalUsd), contact: a.contact })) return null;
     return store.get(r.id)!;
+  }
+
+  /**
+   * A later stage (2, 3, ...) of the referred client's project was paid: 10% of THAT stage is asked of the owner, once per stage
+   * (idempotent by referral and stage). Returns the amount, or null when it was asked before or the referral is unknown.
+   */
+  requestStagePayout(ctx: Pick<WorkerCtx, 'db' | 'now'>, a: { referralId: number; stageNo: number; stageUsd: number; contact: string; invoiceNumber: string }): { usd: number } | null {
+    const store = storeFor(ctx);
+    const r = store.get(a.referralId);
+    if (!r || a.stageNo < 2) return null;
+    if (r.status === 'proposed') store.transition(r.id, 'paid');
+    const usd = payoutAmount(a.stageUsd);
+    return store.claimStagePayout({ referralId: r.id, stageNo: a.stageNo, invoiceNumber: a.invoiceNumber, usd, contact: a.contact }) ? { usd } : null;
   }
 }
