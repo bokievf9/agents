@@ -31,6 +31,8 @@ export function ensureCabinetTables(db: Db): void {
   if (ready.has(db)) return;
   db.exec(CAB_CLIENTS_SCHEMA);
   db.exec(CAB_MESSAGES_SCHEMA);
+  // who wrote a manager line: the owner himself (his own reply, no approval) or HQ (an approved draft); the chats of the review center show the difference
+  if (!hasColumn(db, 'cab_messages', 'author')) db.exec("ALTER TABLE cab_messages ADD COLUMN author TEXT NOT NULL DEFAULT 'hq'");
   ready.add(db);
 }
 
@@ -38,20 +40,20 @@ const hasTable = (db: Db, t: string) => db.prepare("SELECT 1 FROM sqlite_master 
 const hasColumn = (db: Db, t: string, c: string) => (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).some((x) => x.name === c);
 
 /** Stores one message of a lead's thread. */
-export function addCabMessage(db: Db, now: number, m: { clientId: number; leadId: number; from: MessageFrom; text: string; ticketId?: number }): void {
+export function addCabMessage(db: Db, now: number, m: { clientId: number; leadId: number; from: MessageFrom; text: string; ticketId?: number; by?: 'owner' | 'hq' }): number {
   ensureCabinetTables(db);
-  db.prepare('INSERT INTO cab_messages (client_id, lead_id, "from", text, at, ticket_id) VALUES (?, ?, ?, ?, ?, ?)').run(
-    m.clientId, m.leadId, m.from, m.text.trim().slice(0, MESSAGE_CAP), now, m.ticketId ?? null,
-  );
+  return Number(db.prepare('INSERT INTO cab_messages (client_id, lead_id, "from", text, at, ticket_id, author) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    m.clientId, m.leadId, m.from, m.text.trim().slice(0, MESSAGE_CAP), now, m.ticketId ?? null, m.by ?? 'hq',
+  ).lastInsertRowid);
 }
 
 /** The manager's reply on a lead, kept in the cabinet thread when the lead belongs to a cabinet client (otherwise nothing: no cabinet, no thread). */
-export function recordManagerReply(db: Db, now: number, leadId: number, text: string): void {
+export function recordManagerReply(db: Db, now: number, leadId: number, text: string, by: 'owner' | 'hq' = 'hq'): void {
   try {
     if (!text.trim() || !hasTable(db, 'li_leads') || !hasColumn(db, 'li_leads', 'client_id')) return;
     const r = db.prepare('SELECT client_id FROM li_leads WHERE id = ?').get(leadId) as { client_id: number | null } | undefined;
     if (r?.client_id == null) return;
-    addCabMessage(db, now, { clientId: r.client_id, leadId, from: 'manager', text });
+    addCabMessage(db, now, { clientId: r.client_id, leadId, from: 'manager', text, by });
   } catch {
     /* the thread is a convenience for the client: a failure here never breaks the reply itself */
   }

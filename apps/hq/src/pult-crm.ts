@@ -118,7 +118,7 @@ export function createPultCrm(d: PultCrmDeps) {
     if (hq.task(row.task_id)) hq.comment(row.task_id, 'owner', `Ответ владельца (${via}${sent ? '' : ', не доставлен'}): ${text.slice(0, 2000)}`);
     hq.log('owner', 'lead_reply', 'lead', String(id), `${via}:${sent ? 'sent' : 'not_sent'}`);
     // a cabinet client reads the reply in the lead's thread: the cabinet itself is a channel, so it is kept even when no chat took it
-    recordManagerReply(db, now(), id, text);
+    recordManagerReply(db, now(), id, text, 'owner');
     return ok({ sent, via });
   }
 

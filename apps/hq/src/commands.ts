@@ -62,6 +62,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'playbook', route: 'backoffice', group: 'backoffice', args: '<роль>', help: 'правила роли из плейбука (контент-мейкер, публикатор, трендвотчер, seo, аналитик, продажи, строитель рендера)' },
   { name: 'profile', route: 'marketing', group: 'marketing', args: '[youtube|tiktok|instagram]', help: 'старт-кит профилей Instagram, YouTube, TikTok (один раз; без аргумента все три)', menu: 'Маркетинг: старт-кит профилей' },
   { name: 'article', route: 'marketing', group: 'marketing', args: '[ниша]', help: 'статья в блог сайта' },
+  { name: 'trend', route: 'marketing', group: 'marketing', args: '<ссылка> [заметка]', help: 'ваша ссылка на рилс или пост (Instagram, TikTok, YouTube): разбор и свой аналог в ревью-центр' },
   { name: 'render', route: 'marketing', group: 'marketing', args: '<id>', help: 'собрать видео рилса заново' },
   { name: 'builders', route: 'director', group: 'system', help: 'задачи строителям (Claude Code)', menu: 'Задачи строителям (Claude Code)' },
   { name: 'builder', route: 'director', group: 'system', args: '<id>', help: 'передать задачу строителю' },

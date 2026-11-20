@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { GoogleAuth, errMsg, escapeHtml, log, parseClientJson, tryJson, zonedParts, type ApprovalQueue, type Button, type LlmClient, type Messenger } from '@fir/core';
+import { GoogleAuth, errMsg, escapeHtml, log, macEnqueue, parseClientJson, tryJson, zonedParts, type ApprovalQueue, type Button, type LlmClient, type Messenger } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import {
   ARTICLE_KIND, KIND, ContentMakerWorker, TYPE_RU, approveArticle, articleLineOn, dayLabel, editableParts, isAiAsk, partLabel, replacePart,
@@ -10,7 +10,7 @@ import {
 import { AnalystWorker } from '@fir/worker-analyst';
 import { IgApi, InstagramDaily, InstagramPoster, PublishStore, PublisherWorker, YouTubePoster, instagramWeekLine, parsePrivacy, dayHeader, imagesOf, publishedButtons, renderItemMessage, publishDay, videoCaption, videoOf } from '@fir/worker-publisher';
 import { AUDIT_KIND, KIND as SEO_KIND, SeoWorker, type AuditPayload, type SeoProposalPayload } from '@fir/worker-seo';
-import { TrendScoutWorker, latestTrendHints } from '@fir/worker-trend-scout';
+import { LinkStore, TrendScoutWorker, latestTrendHints, parseLink } from '@fir/worker-trend-scout';
 import { z } from 'zod';
 import { AuditStore, type AuditInput } from '../audit-shared.js';
 import { ClientBlockedError, type ClientChannel } from '../client/channel.js';
@@ -118,9 +118,9 @@ const auditHostOf = (url: string): string => {
   }
 };
 
-type Action = 'pack' | 'topic' | 'daily' | 'trends' | 'trends_weekly' | 'seo' | 'report' | 'profile' | 'article' | 'audit' | 'none';
+type Action = 'pack' | 'topic' | 'daily' | 'trends' | 'trends_weekly' | 'seo' | 'report' | 'profile' | 'article' | 'audit' | 'revise_item' | 'owner_link' | 'none';
 const DIRECT: Action[] = ['trends', 'trends_weekly', 'seo', 'report'];
-const ACTIONS: Action[] = ['pack', 'topic', 'daily', 'profile', 'article', 'audit', ...DIRECT];
+const ACTIONS: Action[] = ['pack', 'topic', 'daily', 'profile', 'article', 'audit', 'revise_item', 'owner_link', ...DIRECT];
 
 /** Heuristics for the case without an LLM: only the obvious wordings. */
 function guessAction(task: Task): { action: Action; topic?: string } {
@@ -480,6 +480,13 @@ export class MarketingHead implements ApprovalEditor {
       const worker = { trends: this.trendScout, trends_weekly: this.trendScout, seo: this.seo, report: this.analyst }[action as 'trends']!;
       return this.runDirect(task.id, worker);
     }
+    if (action === 'owner_link') return this.ownerLink(task);
+    if (action === 'revise_item') {
+      // the owner's «Правки» from the review center: the content-maker writes a NEW item from the old one and his note (`runWorkerTask` asks the owner again)
+      this.hq.setMeta(task.id, { action: 'revise_item' });
+      await this.runWorkerTask(task.id, HEAD_ID);
+      return;
+    }
     if (action === 'topic') {
       this.hq.setMeta(task.id, { action: 'topic', topic: topic ?? (task.body.trim() || task.title), ...(type ? { type } : {}) });
       await this.runWorkerTask(task.id, HEAD_ID);
@@ -819,6 +826,127 @@ export class MarketingHead implements ApprovalEditor {
     return r.text;
   }
 
+  // ---- review center (docs/admin-crm-api.md, «Ревью-центр») ----
+  /** The owner's own links for the Trendwatcher (`ts_links`). */
+  links(): LinkStore {
+    return new LinkStore(this.hq.db, this.hq.now);
+  }
+
+  /**
+   * A link the owner dropped (`/trend <url> [note]`, `POST /admin/trends`): a row in `ts_links` and a Marketing task `action: owner_link`. The same link
+   * again within a day answers with the existing row (nothing queued twice). `ok: false` carries the reason in Russian (not a public post, not a supported host).
+   */
+  addOwnerLink(rawUrl: string, note = ''): { ok: true; id: number; taskId: number; already: boolean } | { ok: false; reason: string } {
+    const parsed = parseLink(rawUrl);
+    if (!parsed.ok) return { ok: false, reason: parsed.reason };
+    const links = this.links();
+    const dup = links.recent(parsed.url, this.hq.now() - 86_400_000);
+    if (dup) return { ok: true, id: dup.id, taskId: dup.taskId ?? 0, already: true };
+    const id = links.add(parsed.url, parsed.host, note.trim().slice(0, 500));
+    const t = this.hq.createTask({
+      title: `Ссылка владельца: ${parsed.host}`.slice(0, 200), body: note.trim().slice(0, 500), dept: MARKETING, creator: 'owner', meta: { action: 'owner_link', linkId: id, url: parsed.url },
+    });
+    links.setTask(id, t.id);
+    this.hq.log('owner', 'owner_link', 'link', String(id), parsed.host);
+    this.hq.wake(HEAD_ID, 'task');
+    return { ok: true, id, taskId: t.id, already: false };
+  }
+
+  /**
+   * The Trendwatcher read the link (its task is done): the Fir Tech analogue becomes a content item through the usual content-maker run (review of the
+   * checklist, approval request), so the review center shows it with `source: owner_link` and the analysis as the first version's note.
+   */
+  private async ownerLink(task: Task): Promise<void> {
+    this.hq.setMeta(task.id, { action: 'owner_link' });
+    await this.runDirect(task.id, this.trendScout);
+    const links = this.links();
+    const linkId = Number(task.meta.linkId);
+    const row = links.get(linkId);
+    if (!row) return;
+    if (!row.analysis) {
+      if (row.status !== 'failed') links.setState(linkId, 'failed', 'Разбор не получился');
+      return;
+    }
+    const a = row.analysis;
+    const child = this.hq.createTask({
+      title: `Аналог по ссылке владельца: ${a.analogue.topic}`.slice(0, 200), body: a.analogue.angle, dept: MARKETING, assigneeId: WORKER_ID, creator: 'head', parentId: task.id,
+      meta: { action: 'topic', topic: a.analogue.topic, type: a.analogue.type, source: 'owner_link', linkId, hint: { hook: a.hook, format: a.format, why: a.whyItWorks } },
+    });
+    links.setItem(linkId, child.id, null);
+    await this.runChild(child).catch((e) => this.crash(child, e));
+    const made = this.hq.db.prepare('SELECT payload FROM task_approvals WHERE task_id = ? AND kind = ? ORDER BY id DESC LIMIT 1').get(child.id, KIND) as { payload: string } | undefined;
+    if (!made) {
+      const why = this.hq.events(child.id).at(-1)?.body ?? 'материал не получился';
+      links.setState(linkId, 'failed', `Аналог не получился: ${why}`.slice(0, 300));
+      return;
+    }
+    links.setItem(linkId, child.id, Number((JSON.parse(made.payload) as { itemId?: unknown }).itemId));
+    await this.d.messenger.send(this.d.ownerId, `Разбор ссылки готов: ${row.host}. Аналог для Fir Tech ждёт в ревью-центре (firtech.pro/admin/review) и в одобрениях.`).catch((e: unknown) => log('warn', 'owner link notice not sent', { err: errMsg(e) }));
+  }
+
+  /**
+   * «Правки» in the review center: a task for the content-maker with the owner's note and the original text. The original item stays with the owner
+   * until he decides; the new item comes back as its own approval (`task.meta.reviseOf` is the review id of the original). null: not a revisable item.
+   */
+  requestRevision(itemId: number, note: string, reviewId: string): { taskId: number } | null {
+    const item = this.store().item(itemId);
+    if (!item || item.type === 'profile') return null;
+    const t = this.hq.createTask({
+      title: `Правки к материалу #${itemId}`, body: note.slice(0, 1000), dept: MARKETING, creator: 'owner',
+      meta: { action: 'revise_item', fromItemId: itemId, feedback: note.slice(0, 2000), previous: item.text, reviseOf: reviewId, reviseNote: note.slice(0, 2000) },
+    });
+    this.hq.log('owner', 'revision_requested', 'content_item', String(itemId));
+    this.hq.wake(HEAD_ID, 'task');
+    return { taskId: t.id };
+  }
+
+  /**
+   * «Выложить сейчас» for one platform of an approved item. Shorts: the YouTube poster of the morning run (quota checked there), one try, the reason stays in
+   * `pb_posts.error` on failure and the morning routine tries again as before. Instagram and TikTok: the Mac helper's queue (`mac_queue`, it reads `queued=1`).
+   * `manual`: nothing was tried because the platform has no poster here (the morning card stays the way), `not_ready`: no file yet.
+   */
+  async publishNow(itemId: number, platform: 'instagram' | 'tiktok' | 'shorts'): Promise<
+    | { state: 'published'; url: string }
+    | { state: 'queued' }
+    | { state: 'failed'; error: string; quota: boolean }
+    | { state: 'manual' | 'not_ready' | 'skipped'; reason: string }
+  > {
+    const store = this.store();
+    const row = store.rowsOfItem(itemId).find((r) => r.platform === platform);
+    if (!row) return { state: 'not_ready', reason: 'для этой площадки нет одобренного текста' };
+    if (row.status === 'published') return { state: 'skipped', reason: 'уже опубликовано' };
+    const tctx = { db: this.hq.db, now: this.hq.now, tz: this.hq.tz };
+    if (platform === 'shorts') {
+      const r = await this.publisher.publishNow(tctx, itemId, 'shorts');
+      if ('reason' in r) {
+        return r.reason === 'no_poster'
+          ? { state: 'manual', reason: 'автозагрузка YouTube не настроена (нужны YT_OAUTH_CLIENT_JSON и YT_REFRESH_TOKEN): утренняя карточка остаётся ручной' }
+          : { state: 'not_ready', reason: r.reason === 'no_file' ? 'видео ещё не собрано' : 'материал не готов к публикации' };
+      }
+      this.hq.log('owner', 'publish_now', 'content_item', String(itemId), `shorts:${r.result.url ? 'published' : r.result.pending ? 'pending' : 'failed'}`);
+      if (r.result.url) return { state: 'published', url: r.result.url };
+      if (r.result.pending) return { state: 'queued' };
+      return { state: 'failed', error: r.result.error ?? 'не получилось', quota: r.result.quota === true };
+    }
+    const item = store.item(itemId);
+    if (item?.type === 'clip' && !this.reelPath(itemId) && !this.renderedClip(itemId)) return { state: 'not_ready', reason: 'видео ещё не собрано' };
+    if (item && item.type !== 'clip' && row.files.length === 0) return { state: 'not_ready', reason: 'картинки не нарисованы' };
+    const q = macEnqueue(this.hq.db, itemId, platform, 'owner', this.hq.now());
+    if (!q) return { state: 'not_ready', reason: 'материал не найден' };
+    this.hq.log('owner', 'publish_now', 'content_item', String(itemId), `${platform}:queued`);
+    return { state: 'queued' };
+  }
+
+  /** The planned day of an item that is not published yet (`YYYY-MM-DD`); false when nothing changed. */
+  reschedule(itemId: number, date: string): boolean {
+    const item = this.store().item(itemId);
+    if (!item) return false;
+    this.hq.db.prepare('UPDATE cm_items SET planned_date = ? WHERE id = ?').run(date, itemId);
+    this.hq.db.prepare("UPDATE cm_ready SET planned_date = ? WHERE item_id = ? AND status = 'ready'").run(date, itemId);
+    this.hq.log('owner', 'rescheduled', 'content_item', String(itemId), date);
+    return true;
+  }
+
   // ---- part-by-part editing of items (ApprovalEditor) ----
   private store() {
     return storeFor({ db: this.hq.db, now: this.hq.now });
@@ -940,6 +1068,14 @@ export class MarketingHead implements ApprovalEditor {
       return `Взял (задача #${t.id}): Контент-мейкер соберёт старт-кит (${kitLabel(scope)}), он придёт в одобрения одной карточкой. ${kitRendersNote(scope).trim()}`;
     }
     if (name === 'render') return this.renderCommand(arg);
+    if (name === 'trend') {
+      const [url = '', ...rest] = arg.trim().split(/\s+/);
+      if (!url) return 'Пришлите ссылку: /trend https://www.instagram.com/reel/... [заметка]. Беру публичные ссылки Instagram, TikTok и YouTube.';
+      const r = this.addOwnerLink(url, rest.join(' '));
+      if (!r.ok) return `Не взял ссылку: ${r.reason}.`;
+      if (r.already) return `Эту ссылку я уже разбираю (ссылка #${r.id}). Смотрите ревью-центр или /tasks marketing.`;
+      return `Взял (ссылка #${r.id}, задача #${r.taskId}): Трендвотчер прочитает страницу, разберёт формат и хук и предложит аналог для Fir Tech. Он придёт в ревью-центр с вашей ссылкой как источником.`;
+    }
     const niche = arg.trim();
     const ai = isAiAsk(niche);
     if (niche && !ai && !findNiche(niche)) return `Не нашёл нишу «${niche.slice(0, 60)}». Напишите как в конструкторе, например: /article барбершоп. /article ии: статья «ИИ для бизнеса». /article без названия: линия сегодняшнего дня.`;
