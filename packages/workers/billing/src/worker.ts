@@ -62,8 +62,8 @@ export interface BillingDelivery {
 }
 
 const usd = (n: number): string => `$${Number.isInteger(n) ? n : n.toFixed(2)}`;
-/** The studio's payment rule (owner decision 2026-11-19), printed in every invoice. */
-export const PAYMENT_TERMS = 'Условия: предоплата 50% до старта работы, остальные 50% после приёмки. Комиссии сети и платёжных сервисов оплачивает плательщик. Деньги пришли на счёт студии: оплата засчитана.';
+/** The studio's payment rule (owner decision 2026-11-21), printed in every invoice: by stages, each before its start, the last before handover. */
+export const PAYMENT_TERMS = 'Условия: оплата по этапам, каждый этап до его начала, последний до передачи доступов. Комиссии сети и платёжных сервисов оплачивает плательщик. Деньги пришли на счёт студии: оплата засчитана.';
 export const hasPlaceholder = (text: string): boolean => /\[[^\]]*\]/.test(text);
 
 const stores = new WeakMap<object, BillingStore>();
@@ -82,7 +82,10 @@ export interface InvoiceLink {
   packId?: number | null;
   projectId?: number | null;
   totalUsd?: number | null;
-  /** «КП #12 → договор → счёт 50%»: printed in the owner's card so the three cards point at each other. */
+  /** The stage this invoice pays and how many stages the project has (payment by stages). */
+  stageNo?: number | null;
+  stageCount?: number | null;
+  /** «КП #12 → договор → счёт этапа 1»: printed in the owner's card so the three cards point at each other. */
   chain?: string;
 }
 
@@ -257,7 +260,7 @@ export class BillingWorker {
     const inv = store.addInvoice(
       {
         client: a.client, amountUsd: a.amountUsd, what: a.what.trim() || 'Услуги Fir Tech', method: a.method ?? null, dueDate: due, subscriptionId: a.subscriptionId ?? null, newProject: a.newProject ?? false,
-        leadId: a.link?.leadId ?? null, packId: a.link?.packId ?? null, projectId: a.link?.projectId ?? null, totalUsd: a.link?.totalUsd ?? null,
+        leadId: a.link?.leadId ?? null, packId: a.link?.packId ?? null, projectId: a.link?.projectId ?? null, totalUsd: a.link?.totalUsd ?? null, stageNo: a.link?.stageNo ?? null,
         locale: a.locale ?? store.leadLocale(a.link?.leadId),
       },
       year,
@@ -265,7 +268,7 @@ export class BillingWorker {
     await ctx.requestApproval(
       KIND_INVOICE,
       { text: this.invoiceText(inv, a.infra), invoiceId: inv.id, name: inv.client },
-      `${a.link?.chain ? `${a.link.chain}\n` : ''}Счёт ${inv.number} для ${inv.client}: ${usd(inv.amountUsd)}, до ${ruDate(inv.dueDate)}. Одобрение = «счёт утверждён», отправьте его клиенту сами. Метка в скобках означает, что реквизитов нет в PAYMENT_DETAILS_JSON: нажмите «Править».${a.link?.totalUsd ? ` Сумма: предоплата от точной цены пакета из КП (всего ${usd(a.link.totalUsd)}), проверьте и поправьте текст.` : ''}${this.payLinkLines(inv)}`,
+      `${a.link?.chain ? `${a.link.chain}\n` : ''}Счёт ${inv.number} для ${inv.client}: ${usd(inv.amountUsd)}, до ${ruDate(inv.dueDate)}. Одобрение = «счёт утверждён», отправьте его клиенту сами. Метка в скобках означает, что реквизитов нет в PAYMENT_DETAILS_JSON: нажмите «Править».${a.link?.totalUsd ? ` Сумма: ${a.link.stageNo ? `этап ${a.link.stageNo}${a.link.stageCount ? ` из ${a.link.stageCount}` : ''}` : 'часть'} точной цены пакета из КП (всего ${usd(a.link.totalUsd)}), проверьте и поправьте текст.` : ''}${this.payLinkLines(inv)}`,
     );
     ctx.log('invoice', inv.number);
     return inv;

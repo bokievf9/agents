@@ -72,7 +72,8 @@ describe('invoice numbering and text', () => {
     expect(text).toContain('Онлайн-кошелёк из сметы: Payeer P1234567');
     expect(r.staged[0]!.summary).toMatch(/Ссылка на оплату: https:\/\/firtech\.pro\/ru\/pay\/FT-2026-001\?k=/);
     expect(r.staged[0]!.summary).toContain('Сумма к переводу: 120.00 USDT');
-    expect(text).toContain('предоплата 50% до старта работы, остальные 50% после приёмки');
+    expect(text).toContain('оплата по этапам, каждый этап до его начала, последний до передачи доступов');
+    expect(text).not.toMatch(/50%|предоплат/);
     expect(text).not.toMatch(/Kaspi|Payme|Click|карт/i);
     const only = String(r.staged[1]!.payload.text);
     expect(only).toContain('USDT (TON)');
@@ -173,16 +174,32 @@ describe('paid and revenue', () => {
 });
 
 describe('the conditions line in the invoice', () => {
-  it('a project invoice says what is not in the sum and keeps the 50/50 rule; the client\'s own domain and hosting change the line; a subscription invoice has none', async () => {
+  it('a project invoice says what is not in the sum and keeps the stage payment rule; the client\'s own domain and hosting change the line; a subscription invoice has none', async () => {
     const r = setup();
-    const inv = await r.worker.createInvoice(r.ctx, { client: 'Dilnoza', amountUsd: 145, what: 'Предоплата 50% по КП', newProject: true });
+    const inv = await r.worker.createInvoice(r.ctx, { client: 'Dilnoza', amountUsd: 145, what: 'Этап 1 из 2 по КП', newProject: true });
     const text = String(r.staged[0]!.payload.text);
     expect(text).toContain('Что не входит в сумму: Домен, хостинг, сервер и платные сторонние сервисы (SMS, API, платежи) в сумму не входят: заказчик оплачивает их напрямую, цена у всех разная. Для ориентира: домен $10-15 в год, хостинг от $5 в месяц.');
-    expect(text).toContain('предоплата 50% до старта работы, остальные 50% после приёмки');
+    expect(text).toContain('оплата по этапам, каждый этап до его начала, последний до передачи доступов');
+    expect(text).not.toMatch(/50%|предоплат/);
     const own = r.worker.invoiceText(inv, { hasDomain: true, hasHosting: true });
     expect(own).toContain('Что не входит в сумму: Домен и хостинг у заказчика есть, используем их; платные сторонние сервисы (SMS, API, платежи) оплачиваются отдельно.');
     const sub = r.store.addSubscription({ client: 'Roza', plan: 'поддержка', amountUsd: 20, period: 'month', method: null, nextDue: '2026-12-01' });
     const subInv = await r.worker.createInvoice(r.ctx, { client: 'Roza', amountUsd: 20, what: 'Подписка', subscriptionId: sub.id });
     expect(r.worker.invoiceText(subInv)).not.toContain('Что не входит в сумму');
+  });
+});
+
+describe('payment by stages: an invoice pays one stage of a project', () => {
+  it('stageNo is stored with the invoice, the card names the stage, forStage finds the live invoice (a void one is skipped)', async () => {
+    const r = setup();
+    const inv = await r.worker.createInvoice(r.ctx, { client: 'Dilnoza', amountUsd: 300, what: 'Этап 1 из 3', newProject: true, link: { projectId: 7, totalUsd: 1000, stageNo: 1, stageCount: 3 } });
+    expect(inv.stageNo).toBe(1);
+    expect(r.staged[0]!.summary).toContain('этап 1 из 3 точной цены пакета из КП (всего $1000)');
+    expect(r.store.forStage(7, 1)!.id).toBe(inv.id);
+    expect(r.store.forStage(7, 2)).toBeUndefined();
+    r.store.setStatus(inv.id, 'void');
+    expect(r.store.forStage(7, 1)).toBeUndefined();
+    const plain = await r.worker.createInvoice(r.ctx, { client: 'Roza', amountUsd: 20, what: 'x' });
+    expect(plain.stageNo).toBeNull();
   });
 });

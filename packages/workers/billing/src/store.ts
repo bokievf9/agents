@@ -63,11 +63,13 @@ export interface Invoice {
   overdueAlerted: boolean;
   createdAt: number;
   paidAt: number | null;
-  /** The sales chain this invoice belongs to (КП → договор → счёт 50% → проект): the lead, the presales pack, the reserved project, the estimate total in USD. */
+  /** The sales chain this invoice belongs to (КП → договор → счёт этапа 1 → проект): the lead, the presales pack, the reserved project, the estimate total in USD. */
   leadId: number | null;
   packId: number | null;
   projectId: number | null;
   totalUsd: number | null;
+  /** Payment by stages (2026-11-21): the stage this invoice pays (1-based), null for an invoice outside the stage plan (a subscription, a manual one). */
+  stageNo: number | null;
   /** The pay page key (`/pay/<number>?k=<key>`), made with the invoice; null only for void rows made before 2026-11-19. */
   payKey: string | null;
   /** What the client transfers: `amountUsd` plus unique cents while another open invoice has the same sum (the КП sum stays `amountUsd`). */
@@ -143,7 +145,7 @@ interface SubRow { id: number; client: string; plan: string; amount_usd: number;
 interface InvRow {
   id: number; number: string; client: string; amount_usd: number; what: string; method: string | null; due_date: string; status: string;
   subscription_id: number | null; new_project: number; remind3: number; remind0: number; overdue_alerted: number; created_at: number; paid_at: number | null;
-  lead_id: number | null; pack_id: number | null; project_id: number | null; total_usd: number | null;
+  lead_id: number | null; pack_id: number | null; project_id: number | null; total_usd: number | null; stage_no: number | null;
   pay_key: string | null; pay_amount_usd: number | null; issued_at: number | null; paid_via: string | null; tx_id: string | null; locale: string | null;
   reminded_at: number | null;
 }
@@ -156,7 +158,7 @@ const toInv = (r: InvRow): Invoice => ({
   id: r.id, number: r.number, client: r.client, amountUsd: r.amount_usd, what: r.what, method: storedMethod(r.method), dueDate: r.due_date,
   status: r.status as InvoiceStatus, subscriptionId: r.subscription_id, newProject: r.new_project === 1, remind3: r.remind3 === 1, remind0: r.remind0 === 1,
   overdueAlerted: r.overdue_alerted === 1, createdAt: r.created_at, paidAt: r.paid_at,
-  leadId: r.lead_id, packId: r.pack_id, projectId: r.project_id, totalUsd: r.total_usd,
+  leadId: r.lead_id, packId: r.pack_id, projectId: r.project_id, totalUsd: r.total_usd, stageNo: r.stage_no ?? null,
   payKey: r.pay_key, payAmountUsd: r.pay_amount_usd ?? r.amount_usd, issuedAt: r.issued_at,
   paidVia: r.paid_via === 'usdt_trc20' || r.paid_via === 'usdt_ton' || r.paid_via === 'manual' ? r.paid_via : null, txId: r.tx_id, locale: r.locale === 'en' ? 'en' : 'ru', remindedAt: r.reminded_at ?? null,
 });
@@ -175,6 +177,8 @@ export interface NewInvoice {
   packId?: number | null;
   projectId?: number | null;
   totalUsd?: number | null;
+  /** The stage this invoice pays (see `Invoice.stageNo`). */
+  stageNo?: number | null;
   locale?: Locale;
 }
 
@@ -193,6 +197,8 @@ export class BillingStore {
       if (!cols.some((x) => x.name === c)) db.exec(`ALTER TABLE bl_invoices ADD COLUMN ${c} ${t}`);
     }
     if (!cols.some((x) => x.name === 'reminded_at')) db.exec('ALTER TABLE bl_invoices ADD COLUMN reminded_at INTEGER');
+    // added 2026-11-21: payment by stages
+    if (!cols.some((x) => x.name === 'stage_no')) db.exec('ALTER TABLE bl_invoices ADD COLUMN stage_no INTEGER');
     db.exec('CREATE UNIQUE INDEX IF NOT EXISTS bl_invoices_pay_key ON bl_invoices (pay_key) WHERE pay_key IS NOT NULL');
     this.backfill();
   }
@@ -251,10 +257,10 @@ export class BillingStore {
       if (pay === null) throw new Error(`no free cents for $${i.amountUsd}: ${MAX_UNIQUE_CENTS + 1} open invoices ask for this sum`);
       const r = this.db
         .prepare(
-          `INSERT INTO bl_invoices (number, year, seq, client, amount_usd, what, method, due_date, subscription_id, new_project, created_at, lead_id, pack_id, project_id, total_usd, pay_key, pay_amount_usd, locale)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO bl_invoices (number, year, seq, client, amount_usd, what, method, due_date, subscription_id, new_project, created_at, lead_id, pack_id, project_id, total_usd, pay_key, pay_amount_usd, locale, stage_no)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(number, year, seq, i.client, i.amountUsd, i.what, i.method, i.dueDate, i.subscriptionId ?? null, i.newProject ? 1 : 0, this.now(), i.leadId ?? null, i.packId ?? null, i.projectId ?? null, i.totalUsd ?? null, newPayKey(), pay, i.locale ?? 'ru');
+        .run(number, year, seq, i.client, i.amountUsd, i.what, i.method, i.dueDate, i.subscriptionId ?? null, i.newProject ? 1 : 0, this.now(), i.leadId ?? null, i.packId ?? null, i.projectId ?? null, i.totalUsd ?? null, newPayKey(), pay, i.locale ?? 'ru', i.stageNo ?? null);
       return Number(r.lastInsertRowid);
     })();
     return this.invoice(id)!;
@@ -344,6 +350,12 @@ export class BillingStore {
   invoices(status?: InvoiceStatus[], limit = 30): Invoice[] {
     const where = status?.length ? `WHERE status IN (${status.map(() => '?').join(',')})` : '';
     return (this.db.prepare(`SELECT * FROM bl_invoices ${where} ORDER BY id DESC LIMIT ?`).all(...(status ?? []), limit) as InvRow[]).map(toInv);
+  }
+
+  /** The live (not void) invoice of a project's stage; null when none was made yet. */
+  forStage(projectId: number, stageNo: number): Invoice | undefined {
+    const r = this.db.prepare("SELECT * FROM bl_invoices WHERE project_id = ? AND stage_no = ? AND status != 'void' ORDER BY id DESC LIMIT 1").get(projectId, stageNo) as InvRow | undefined;
+    return r ? toInv(r) : undefined;
   }
 
   /** How many invoices of this lead are paid (the first one starts the project and the referral payout). */

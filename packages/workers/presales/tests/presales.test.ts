@@ -1,4 +1,4 @@
-import { allowedAmounts as sitePrices, costsLine, FALLBACK_PRICES, MockLlm, openDb, setPrices, type Payload } from '@fir/core';
+import { allowedAmounts as sitePrices, costsLine, FALLBACK_PRICES, MockLlm, openDb, setPrices, stagesFor, type Payload } from '@fir/core';
 import type { Task, WorkerCtx } from '@fir/hq';
 import { leadStoreFor } from '@fir/worker-lead-intake';
 import { describe, expect, it } from 'vitest';
@@ -46,12 +46,9 @@ function allowedAmounts(): Set<number> {
   const s = new Set<number>([supportMonthlyUsd(), ...sitePrices(), 5, 10, 15]);
   for (const o of Object.values(OFFERS)) {
     s.add(o.fromUsd);
-    s.add(Math.round(o.fromUsd / 2));
-    s.add(o.fromUsd - Math.round(o.fromUsd / 2));
     const q = quotePackage(o.id, o.title, '');
     s.add(q.totalUsd);
-    s.add(Math.round(q.totalUsd / 2));
-    s.add(q.totalUsd - Math.round(q.totalUsd / 2));
+    for (const st of stagesFor(q.totalUsd, [o.id])) s.add(st.amountUsd);
     if (q.monthlyUsd) s.add(q.monthlyUsd);
   }
   return s;
@@ -122,21 +119,25 @@ describe('prices come from the price list only', () => {
     }
   });
 
-  it('KP has the required parts: payment terms, support, validity; prepayment percent and validity are configurable', async () => {
-    const r = rig(undefined, { prepaymentPercent: 30, validDays: 7 });
+  it('KP has the required parts: stage table, payment rule, support, validity; validity is configurable', async () => {
+    const r = rig(undefined, { validDays: 7 });
     r.lead();
     await r.run({ leadId: 1 });
     const kp = r.staged[0]!.payload.kp as string;
-    expect(kp).toContain('Предоплата 30% до старта, оставшиеся 70% после приёмки результата. Способы оплаты: USDT (сеть TRC20 или TON) или онлайн-кошелёк, который назван в смете.');
+    expect(kp).toContain('| Этап | Что входит | Сумма |');
+    expect(kp).toContain('| Этап 1 | Старт | $145 (50%) |');
+    expect(kp).toContain('| Этап 2 | Запуск | $145 (50%) |');
+    expect(kp).toContain('Небольшой проект оплачивается двумя этапами: 50% до начала работ ($145) и 50% до запуска и передачи доступов ($145).');
+    expect(kp).toContain('Способы оплаты: USDT (сеть TRC20 или TON) или онлайн-кошелёк, который назван в смете.');
+    expect(kp).toContain('Гарантия: если первый результат не понравился, мы возвращаем оплату первого этапа');
     expect(kp).not.toMatch(/Kaspi|Payme|Click|карт/i);
+    expect(kp).not.toMatch(/Предоплата|после приёмки результата/);
     expect(kp).toContain('$20 в месяц');
     expect(kp).toContain('Предложение действует 7 дней, до 27.11.2026');
-    expect(kp).toContain('| Предоплата 30% | $87 |');
     const dflt = rig();
     dflt.lead();
     await dflt.run({ leadId: 1 });
     expect(dflt.staged[0]!.payload.kp).toContain('до 04.12.2026');
-    expect(dflt.staged[0]!.payload.kp).toContain('| Предоплата 50% | $145 |');
   });
 });
 
@@ -236,13 +237,15 @@ describe('the pack and its approval', () => {
     expect((await r.run({ leadId: 99 })).error).toContain('не найден');
   });
 
-  it('the contract stub keeps blanks and the prepayment terms', async () => {
+  it('the contract stub keeps blanks and the stage payment terms', async () => {
     const r = rig();
     r.lead();
     await r.run({ leadId: 1 });
     const c = r.staged[0]!.payload.contract as string;
     expect(c).toContain('Договор оказания услуг');
-    expect(c).toContain('Предоплата 50% ($145)');
+    expect(c).toContain('Оплата по этапам. Каждый этап оплачивается до его начала, последний этап до передачи доступов');
+    expect(c).toContain('| Этап 1 | Старт | $145 (50%) |');
+    expect(c).toContain('оплата первого этапа возвращается полностью');
     expect(c).toContain('USDT (сеть TRC20 или TON)');
     expect(c).toContain('30 дней');
     expect(c).toContain('Республика Таджикистан');
@@ -259,11 +262,12 @@ describe('exact figures (owner decision 2026-11-19): one price for the chosen pa
     const p = r.staged[0]!.payload;
     for (const doc of [p.kp, p.estimate, p.contract] as string[]) expect(doc.replace(costsLine(), '')).not.toMatch(/(^|[^\p{L}])от \$/u);
     expect(p).toMatchObject({ totalUsd: 290, prepayUsd: 145, prepayPercent: 50 });
+    expect(p.stages).toEqual(stagesFor(290, ['admin']));
     expect(p.kp).toContain('| Telegram-бот-администратор | $290 |');
-    expect(p.kp).toContain('| Оплата после приёмки 50% | $145 |');
+    expect(p.kp).toContain('| Этап 2 | Запуск | $145 (50%) |');
     expect(p.estimate).toContain('| Итого | $290 |');
     expect(p.contract).toContain('Стоимость Услуги в долларах США: $290 (цена точная');
-    expect(p.contract).toContain('Предоплата 50% ($145)');
+    expect(p.contract).toContain('| Этап 1 | Старт | $145 (50%) |');
     expect(r.staged[0]!.summary).toContain('цена $290');
     expect(r.staged[0]!.summary).not.toContain('от $');
   });
@@ -281,9 +285,41 @@ describe('exact figures (owner decision 2026-11-19): one price for the chosen pa
     expect(p.kp).toContain('| Второй язык | $40 |');
     expect(p.kp).toContain('| Онлайн-оплата | $60 |');
     expect(p.kp).toContain('| Итого | $800 |');
-    expect(p.prepayUsd).toBe(400);
+    expect(p.stages).toEqual(stagesFor(800, ['site']));
+    expect(p.prepayUsd).toBe(240);
+    expect(p.kp).toContain('| Этап 2 | Все страницы и наполнение | $320 (40%) |');
+    expect(p.kp).toContain('Оплата по этапам, каждый этап оплачивается до его начала, последний до передачи доступов: этап 1 «Структура и первый экран»: $240 (30%)');
     expect(quotePackage('site', 'Сайт', 'лендинг для салона').totalUsd).toBe(150);
     expect(quotePackage('site', 'Сайт', 'сайт компании с панелью для правок').totalUsd).toBe(350 + 100);
+  });
+
+  it('КП, смета and договор list the same stages with the same amounts (template project), the pack carries them, nothing says 50% outside a small project', async () => {
+    const r = rig();
+    const lead2 = leadStoreFor(r.ctx).upsert(2, {
+      name: 'Ali', contact: '@ali', service: 'websites', niche: 'магазин', task: 'интернет-магазин', deadline: '', budget: '', origin: 'site', temperature: 'warm', lang: 'ru', slots: [], chosenSlot: null, priceAsked: false,
+    });
+    await r.run({ leadId: lead2.id });
+    const p = r.staged[0]!.payload;
+    expect(p.totalUsd).toBe(700);
+    expect((p.stages as { amountUsd: number }[]).map((x) => x.amountUsd)).toEqual([210, 280, 210]);
+    for (const doc of [p.kp, p.estimate, p.contract] as string[]) {
+      expect(doc).toContain('| Этап 1 | Структура и первый экран | $210 (30%) |');
+      expect(doc).toContain('| Этап 2 | Все страницы и наполнение | $280 (40%) |');
+      expect(doc).toContain('| Этап 3 | Запуск, SEO, передача | $210 (30%) |');
+      expect(doc).not.toContain('50%');
+      expect(doc).not.toMatch(/Предоплата|предоплат/);
+    }
+    expect(p.contract).toContain('следующий счёт выставляется после приёмки предыдущего этапа');
+    expect(r.staged[0]!.summary).toContain('Оплата по этапам (1: $210, 2: $280, 3: $210)');
+  });
+
+  it('a subscription has one setup stage and the monthly fee stays «вперёд»', async () => {
+    const r = rig();
+    r.lead({ origin: 'content' });
+    await r.run({ leadId: 1 });
+    const p = r.staged[0]!.payload;
+    expect(p.stages).toEqual(stagesFor(90, ['content']));
+    expect(p.kp).toContain('Настройка ($90) оплачивается до начала работ; ежемесячная плата, если она есть, вносится вперёд за месяц.');
   });
 
   it('subscriptions give an exact setup and an exact monthly fee; Polly by its words, Dono otherwise', () => {
@@ -327,7 +363,7 @@ describe('exact figures (owner decision 2026-11-19): one price for the chosen pa
 });
 
 describe('the conditions line: domain, hosting, server and paid third-party services are not in the price', () => {
-  it('КП, смета and договор carry the default line; the guarantee and the 50/50 rule stay', async () => {
+  it('КП, смета and договор carry the default line; the guarantee and the stage rule stay', async () => {
     const r = rig();
     r.lead();
     await r.run({ leadId: 1 });
@@ -335,8 +371,8 @@ describe('the conditions line: domain, hosting, server and paid third-party serv
     for (const doc of [p.kp, p.estimate, p.contract] as string[]) expect(doc).toContain(costsLine());
     expect(p.kp).toContain('## Что не входит в стоимость');
     expect(p.contract).toContain('Гарантия первого результата');
-    expect(p.contract).toContain('Предоплата 50%');
-    expect(p.kp).toContain('Предоплата 50% до старта, оставшиеся 50% после приёмки');
+    expect(p.contract).toContain('Оплата по этапам.');
+    expect(p.kp).toContain('Этап 1');
   });
 
   it('a client who has a domain and hosting gets the short line instead', async () => {
