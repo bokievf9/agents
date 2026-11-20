@@ -188,7 +188,7 @@ describe('GET /admin/metrics/week', () => {
 
     const r = await p.call('GET', '/admin/metrics/week?week=2026-W47');
     expect(r.status).toBe(200);
-    expect(r.json.site).toEqual({ chat_open: 6, builder_done: 0, estimate_pdf: 0, lead_sent: 3, audit_sent: 0, ref_click: 0, cabinet_signup: 0, pay_view: 1, blog_view: 7 });
+    expect(r.json.site).toEqual({ chat_open: 6, builder_done: 0, estimate_pdf: 0, lead_sent: 3, audit_sent: 0, ref_click: 0, cabinet_signup: 0, cabinet_offer_click: 0, pay_view: 1, blog_view: 7 });
     expect(r.json.blog).toEqual({ hits: 8, published: 1 });
     // the daily series: seven days Mon..Sun, the same keys as the totals, summing up to them
     expect(r.json.days).toHaveLength(7);

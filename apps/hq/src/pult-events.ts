@@ -10,7 +10,7 @@ import { isoWeekOf, shiftWeek, todayIn, weekRange, weekWindow } from './pult-wee
  * Site events (`POST /events`, public with the site token) and the weekly numbers (`GET /admin/metrics/week`).
  * The table keeps counters per day, name, page, referral slug and language: no visitor id, no IP, no text. Contract: `docs/admin-crm-api.md` («Пульт v3»).
  */
-export const EVENT_NAMES = ['chat_open', 'builder_done', 'estimate_pdf', 'lead_sent', 'audit_sent', 'ref_click', 'cabinet_signup', 'pay_view', 'blog_view'] as const;
+export const EVENT_NAMES = ['chat_open', 'builder_done', 'estimate_pdf', 'lead_sent', 'audit_sent', 'ref_click', 'cabinet_signup', 'cabinet_offer_click', 'pay_view', 'blog_view'] as const;
 export type EventName = (typeof EVENT_NAMES)[number];
 
 export const eventSchema = z.object({

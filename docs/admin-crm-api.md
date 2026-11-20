@@ -297,7 +297,7 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 ## POST /events (публичный, токен сайта)
 Счётчики действий посетителей для цифр маркетинга. Не `/admin/*`: заголовок `x-site-token` = `SITE_EVENTS_TOKEN` (если не задан, то `WEB_CHAT_TOKEN`; нет ни того, ни другого: маршрут 404, один раз предупреждение при старте).
 Сайт зовёт с сервера и передаёт IP посетителя в `x-visitor-ip` (верим только с loopback или шлюза docker при верном токене, как у `/chat`).
-- Тело `{ "name": "chat_open|builder_done|estimate_pdf|lead_sent|audit_sent|ref_click|cabinet_signup|pay_view|blog_view", "path"?, "ref"?, "locale"? }`. Ответ `{ "ok": true }`.
+- Тело `{ "name": "chat_open|builder_done|estimate_pdf|lead_sent|audit_sent|ref_click|cabinet_signup|cabinet_offer_click|pay_view|blog_view", "path"?, "ref"?, "locale"? }`. Ответ `{ "ok": true }`.
 - Не из списка, плохое тело или не JSON: 400 `invalid` + `allowed` (имена). Без токена 401. Больше 120 событий в минуту с одного IP: 429 `rate_limited` (событие не считается). Тело до 16 КБ.
 - Таблица `site_events(day, name, path, ref, locale, count)`: счётчик на день (часы компании), имя, страницу, слаг реферала и язык. Персональных данных нет: IP в таблицу не попадает, `path` очищается до пути страницы (без query, хеша и хоста, `/pay/<номер>` и `/cabinet/<что угодно>` становятся `:id`, длинные и нестандартные сегменты тоже), `ref` только `[a-z0-9_-]{1,32}`, `locale` только `ru` или `en`, остальное пустая строка. Строки старше 400 дней удаляются.
 
@@ -305,7 +305,7 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 `?week=YYYY-Www` (по умолчанию текущая неделя компании, плохая 400 `invalid`).
 ```json
 { "ok": true, "week": "2026-W47",
-  "site": { "chat_open": 0, "builder_done": 0, "estimate_pdf": 0, "lead_sent": 0, "audit_sent": 0, "ref_click": 0, "cabinet_signup": 0, "pay_view": 0, "blog_view": 0 },
+  "site": { "chat_open": 0, "builder_done": 0, "estimate_pdf": 0, "lead_sent": 0, "audit_sent": 0, "ref_click": 0, "cabinet_signup": 0, "cabinet_offer_click": 0, "pay_view": 0, "blog_view": 0 },
   "blog": { "hits": 0, "published": 0 },
   "youtube": { "shorts": 0, "views": 0, "subscribers": 0, "delta": 0 },
   "funnel": { "leads": 0, "qualified": 0, "proposals": 0, "contracts": 0, "paid": 0, "projects": 0 },
