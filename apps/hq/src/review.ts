@@ -606,7 +606,10 @@ export function createReview(d: ReviewDeps) {
     if (core === null) return fail(409, 'not_pending', { status: baseStatus(l) });
     // a template left in the text (`[цена]`): the card stays open, the owner fills it (edit) and approves again
     const hold = action === 'approve' ? queue.notReady(core) : null;
-    if (hold) return fail(409, 'placeholder', { reason: hold, placeholders: [...new Set((typeof queue.get(core)?.payload.text === 'string' ? (queue.get(core)!.payload.text as string) : '').match(/\[[^\]\n]{2,60}\]/g) ?? [])].slice(0, 5) });
+    if (hold) {
+      const open = [...new Set((typeof queue.get(core)?.payload.text === 'string' ? (queue.get(core)!.payload.text as string) : '').match(/\[[^\]\n]{2,60}\]/g) ?? [])].slice(0, 5);
+      return fail(409, /Править/.test(hold) ? 'placeholder' : 'not_ready', { reason: hold, ...(open.length ? { placeholders: open } : {}) });
+    }
     await d.decide(core, action);
     if (action === 'reject' && note && l.kind === 'content_item') cstore().setStatus(Number(payloadOf(l).itemId), 'rejected', note);
     if (queue.get(core)?.status === 'failed') return { status: 200, body: { ok: false, error: 'failed', status: 'failed', item: view(l) } };

@@ -194,6 +194,12 @@ export class BillingWorker {
   }
 
   kindSpecs(ctx: Pick<WorkerCtx, 'db' | 'now'>, deliver: (d: BillingDelivery) => Promise<void>): Record<string, KindSpec> {
+    /** The invoice behind the card was voided on the site or paid meanwhile: sending its payment text would be wrong, the owner rejects the card. */
+    const ready = (p: Payload): string | null => {
+      const inv = Number.isInteger(p.invoiceId) ? this.store(ctx).invoice(Number(p.invoiceId)) : undefined;
+      if (inv && (inv.status === 'void' || inv.status === 'paid')) return `Счёт ${inv.number} уже ${inv.status === 'void' ? 'аннулирован' : 'оплачен'}: карточка устарела, отклоните её`;
+      return holdOf(p.text);
+    };
     const run = (kind: string) => async (p: Payload): Promise<void> => {
       if (typeof p.text !== 'string' || !p.text.trim()) throw new Error('nothing to deliver');
       if (hasPlaceholder(p.text)) throw new Error('text still has a placeholder (payment details?)');
@@ -205,8 +211,8 @@ export class BillingWorker {
       }
     };
     return {
-      [KIND_INVOICE]: { initialLevel: 0, locked: true, ready: (p) => holdOf(p.text), execute: run(KIND_INVOICE) },
-      [KIND_REMINDER]: { initialLevel: 0, locked: true, ready: (p) => holdOf(p.text), execute: run(KIND_REMINDER) },
+      [KIND_INVOICE]: { initialLevel: 0, locked: true, ready, execute: run(KIND_INVOICE) },
+      [KIND_REMINDER]: { initialLevel: 0, locked: true, ready, execute: run(KIND_REMINDER) },
     };
   }
 

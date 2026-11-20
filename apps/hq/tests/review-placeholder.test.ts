@@ -27,4 +27,17 @@ describe('POST /admin/review/:id and /admin/approvals/:id: a template left in th
     expect(p.executed).toHaveLength(1);
     void OWNER;
   });
+
+  it('a card of an invoice voided on the site is 409 not_ready (not placeholder), stays pending and can be rejected', async () => {
+    const p = reviewWorld();
+    const inv = p.seed.invoice(null);
+    const { id } = await p.propose('support', 'billing_invoice', { text: 'Счёт: оплата по ссылке', invoiceId: inv.id, name: 'Анна' }, 'invoice', { release: true });
+    expect((await p.call('POST', `/admin/crm/invoices/${inv.id}`, { action: 'void' })).status).toBe(200);
+    const r = await p.act(id, { action: 'approve' });
+    expect(r.status).toBe(409);
+    expect(r.json).toMatchObject({ ok: false, error: 'not_ready' });
+    expect(r.json.reason).toContain('аннулирован');
+    expect((await p.item(id)).status).toBe('pending');
+    expect((await p.act(id, { action: 'reject' })).status).toBe(200);
+  });
 });

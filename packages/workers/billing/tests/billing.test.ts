@@ -203,3 +203,19 @@ describe('payment by stages: an invoice pays one stage of a project', () => {
     expect(plain.stageNo).toBeNull();
   });
 });
+
+describe('a stale card (drill 2026-11-21): the invoice was voided or paid before the owner decided', () => {
+  it('«ready» holds the approval with the reason, and a clean invoice is ready', async () => {
+    const { worker, ctx, specs, store, delivered } = setup();
+    const inv = await worker.createInvoice(ctx, { client: 'Анна', amountUsd: 100, what: 'бот', dueDate: '2026-11-25', method: 'usdt_trc20', subscriptionId: null });
+    const payload = { text: 'Счёт: оплата по ссылке', invoiceId: inv.id, name: 'Анна' };
+    expect(specs[KIND_INVOICE]!.ready!(payload)).toBeNull();
+    store.setStatus(inv.id, 'void');
+    expect(specs[KIND_INVOICE]!.ready!(payload)).toContain('аннулирован');
+    expect(specs[KIND_REMINDER]!.ready!(payload)).toContain('аннулирован');
+    store.setStatus(inv.id, 'paid');
+    expect(specs[KIND_REMINDER]!.ready!(payload)).toContain('оплачен');
+    expect(specs[KIND_INVOICE]!.ready!({ ...payload, invoiceId: 9999 })).toBeNull(); // an unknown invoice is not this check's business
+    expect(delivered).toHaveLength(0);
+  });
+});
