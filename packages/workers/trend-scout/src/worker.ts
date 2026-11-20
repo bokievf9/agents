@@ -1,6 +1,7 @@
 import { errMsg, log, tryJson, withPlaybook, zonedParts } from '@fir/core';
 import { toolsOf, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import { z } from 'zod';
+import { LinkStore, analyseLink, analysisText, fetchLinkMeta, parseLink } from './link.js';
 import { fetchGoogleTrends, fetchYoutube, type Candidate } from './sources.js';
 import { TrendStore, type NewTrendItem, type TrendItem } from './store.js';
 
@@ -80,6 +81,7 @@ export class TrendScoutWorker implements Worker {
     try {
       if (task.meta.action === 'trends_weekly') return await this.weekly(ctx);
       if (task.meta.action === 'trends') return await this.daily(task, ctx);
+      if (task.meta.action === 'owner_link') return await this.ownerLink(task, ctx);
       return { ok: false, result: '', error: `Неизвестное действие: ${String(task.meta.action)}` };
     } catch (e) {
       log('error', 'trend scout failed', { err: errMsg(e) });
@@ -143,6 +145,32 @@ export class TrendScoutWorker implements Worker {
     store.saveDay(day, picked);
     ctx.log('trends_saved', `${picked.length} items, ${cands.length} signals`);
     return { ok: true, result: `Хуки и форматы на ${day} (сигналов: ${cands.length}):\n${formatItems(picked)}\n\nЗаметки: ${notes.join(' ')}` };
+  }
+
+  /**
+   * `owner_link` (`meta.linkId`): a public post the owner dropped. Reads what an anonymous visitor sees (oEmbed, og tags through `ctx.tools.web`, hosts
+   * `SOCIAL_HOSTS`, never a login), analyses it (format, hook, structure, why it works) and stores the analysis with the Fir Tech analogue in `ts_links`.
+   * The head makes the content item from the analogue. Nothing leaves the studio.
+   */
+  private async ownerLink(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
+    const links = new LinkStore(ctx.db, ctx.now);
+    const row = links.get(Number(task.meta.linkId));
+    if (!row) return { ok: false, result: '', error: 'Ссылка владельца не найдена' };
+    const fail = (error: string): WorkerResult => {
+      links.setState(row.id, 'failed', error);
+      return { ok: false, result: '', error };
+    };
+    const parsed = parseLink(row.url);
+    if (!parsed.ok) return fail(`Ссылка не подходит: ${parsed.reason}`);
+    if (!ctx.llm.enabled) return fail('LLM off: нет LLM_API_KEY, разбор невозможен');
+    links.setState(row.id, 'analysing');
+    const meta = await fetchLinkMeta(toolsOf(ctx, 'marketing', this.id), parsed);
+    if (!meta) return fail('Страница не отдала название и описание без входа в аккаунт (закрытая или недоступная ссылка)');
+    const analysis = await analyseLink(ctx.llm, meta, row.note);
+    if (!analysis) return fail('Модель не дала валидный разбор');
+    links.setAnalysis(row.id, analysis);
+    ctx.log('owner_link_analysed', `link ${row.id}, ${parsed.platform}`);
+    return { ok: true, result: analysisText(analysis, row.url) };
   }
 
   private async weekly(ctx: WorkerCtx): Promise<WorkerResult> {

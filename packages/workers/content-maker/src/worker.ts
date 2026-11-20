@@ -247,6 +247,14 @@ export class ContentMakerWorker implements Worker {
     if (!itemId && task.meta.action === 'profile') {
       const scope = parseKitArg(String(task.meta.platform ?? '')) ?? [...KIT_SECTIONS];
       itemId = store.insertItem({ packId: null, seq: 1, total: 1, type: 'profile', topicKey: kitScopeKey(scope), topicText: `Старт-кит профилей: ${kitLabel(scope)}`, plannedDate: addDays(ymd(ctx.now()), 1) });
+    } else if (!itemId && task.meta.action === 'revise_item') {
+      // the owner's «Правки» in the review center: a NEW item next to the original (which stays with the owner until he decides), same type, topic and day
+      const from = store.item(Number(task.meta.fromItemId));
+      if (!from) return { ok: false, result: '', error: `Материал ${String(task.meta.fromItemId)} для правок не найден` };
+      itemId = store.insertItem({
+        packId: null, seq: 1, total: 1, type: from.type, topicKey: from.topicKey, topicText: from.topicText, plannedDate: from.plannedDate,
+        ...(from.sourceSlug ? { sourceSlug: from.sourceSlug } : {}),
+      });
     } else if (!itemId) {
       if (task.meta.action !== 'topic') return { ok: false, result: '', error: `Неизвестное действие: ${String(task.meta.action)}` };
       const m = PREFIX_RE.exec(String(task.meta.topic ?? ''));
@@ -263,14 +271,17 @@ export class ContentMakerWorker implements Worker {
     const feedback = typeof task.meta.feedback === 'string' ? task.meta.feedback : '';
     const source = item.sourceSlug ? store.articleBySlug(item.sourceSlug) : undefined;
     let trends: TrendHint[] = [];
+    const hint = task.meta.hint as { hook?: unknown; format?: unknown; why?: unknown } | undefined;
     try {
-      trends = source ? [] : item.type === 'clip' || item.type === 'carousel' ? pickTrends(this.trends({ db: ctx.db, now: ctx.now }), topic.directionId) : [];
+      // a link the owner dropped for the Trendwatcher: its analysis is the only inspiration of this item
+      if (hint && typeof hint.hook === 'string' && typeof hint.format === 'string' && typeof hint.why === 'string') trends = [{ hook: hint.hook, format: hint.format, why: hint.why }];
+      else trends = source ? [] : item.type === 'clip' || item.type === 'carousel' ? pickTrends(this.trends({ db: ctx.db, now: ctx.now }), topic.directionId) : [];
     } catch (e) {
       log('warn', 'trends provider failed, continuing without trends', { err: errMsg(e) });
     }
     try {
       const gen = await generateItem(ctx.llm, this.prompts, {
-        type: item.type, topic, ...(item.type === 'profile' ? { sections: kitScopeOf(item.topicKey) } : {}), week: item.packId ? `с ${ddmm(item.plannedDate)}` : '', ...(feedback ? { comment: feedback, previous: item.text } : {}), ...(trends.length ? { trends } : {}),
+        type: item.type, topic, ...(item.type === 'profile' ? { sections: kitScopeOf(item.topicKey) } : {}), week: item.packId ? `с ${ddmm(item.plannedDate)}` : '', ...(feedback ? { comment: feedback, previous: typeof task.meta.previous === 'string' && task.meta.previous ? task.meta.previous : item.text } : {}), ...(trends.length ? { trends } : {}),
         ...(source ? { source: articleSource(articleSchema.parse(JSON.parse(source.json))) } : {}),
       });
       if (!gen) {

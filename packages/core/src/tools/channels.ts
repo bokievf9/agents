@@ -126,6 +126,19 @@ export function createEmail(k: Kit): Email {
   };
 }
 
+/**
+ * Puts an item into the queue the Mac helper reads (one open row per item and platform). The tool `mac.poster.enqueue` and the owner's
+ * «Выложить сейчас» of the review center (`apps/hq/src/review.ts`) both come here. Returns null when the item does not exist.
+ */
+export function macEnqueue(db: Db, itemId: number, platform: 'instagram' | 'tiktok', agentId: string, at: number): { id: number; already: boolean } | null {
+  db.exec(MAC_QUEUE_SCHEMA);
+  if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cm_items'").get() && !db.prepare('SELECT 1 FROM cm_items WHERE id = ?').get(itemId)) return null;
+  const open = db.prepare("SELECT id FROM mac_queue WHERE item_id = ? AND platform = ? AND status = 'queued'").get(itemId, platform) as { id: number } | undefined;
+  if (open) return { id: open.id, already: true };
+  const r = db.prepare('INSERT INTO mac_queue (item_id, platform, agent_id, created_at) VALUES (?, ?, ?, ?)').run(itemId, platform, agentId, at);
+  return { id: Number(r.lastInsertRowid), already: false };
+}
+
 export function createMacPoster(k: Kit): MacPoster {
   const db = k.deps.db;
   return {
@@ -133,12 +146,8 @@ export function createMacPoster(k: Kit): MacPoster {
       k.call<{ id: number; already: boolean }>('mac.poster.enqueue', async () => {
         if (!Number.isSafeInteger(itemId) || itemId <= 0) return fail('invalid', 'itemId: a positive integer');
         if (platform !== 'instagram' && platform !== 'tiktok') return fail('invalid', 'platform: instagram or tiktok');
-        db!.exec(MAC_QUEUE_SCHEMA);
-        if (db!.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cm_items'").get() && !db!.prepare('SELECT 1 FROM cm_items WHERE id = ?').get(itemId)) return fail('not_found', `no content item ${itemId}`);
-        const open = db!.prepare("SELECT id FROM mac_queue WHERE item_id = ? AND platform = ? AND status = 'queued'").get(itemId, platform) as { id: number } | undefined;
-        if (open) return okv({ id: open.id, already: true });
-        const r = db!.prepare('INSERT INTO mac_queue (item_id, platform, agent_id, created_at) VALUES (?, ?, ?, ?)').run(itemId, platform, k.cx.agentId, k.now());
-        return okv({ id: Number(r.lastInsertRowid), already: false });
+        const r = macEnqueue(db!, itemId, platform, k.cx.agentId, k.now());
+        return r ? okv(r) : fail('not_found', `no content item ${itemId}`);
       }),
   };
 }
