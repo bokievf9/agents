@@ -1,6 +1,6 @@
 import { Api } from 'grammy';
 import {
-  ApprovalQueue, GatewayWatch, OutboxMessenger, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, safeGetJson, setupBotMenu, startPolling, startPricesRefresh,
+  ApprovalQueue, GatewayWatch, OutboxMessenger, createBot, createLlm, errMsg, grammyMessenger, installApprovals, log, openDb, safeGetJson, setupBotMenu, startPolling, startPricesRefresh, loadPrices,
 } from '@fir/core';
 import { HeartbeatWorker, Hq, meterLlm, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
@@ -53,7 +53,8 @@ const hq = new Hq(db);
 const lost = new LostLeads(hq);
 // Prices come from one place: the site's price list (fetched now and every 6 hours, the last good copy is kept in the
 // database, a bundled snapshot is the last resort). Workers and the client bot read `getPrices()` when they need a number.
-const pricesRefresh = startPricesRefresh({ url: cfg.pricesUrl, store: { get: (k) => hq.setting(k) || undefined, set: (k, v) => hq.setSetting(k, v) } });
+const pricesOpts = { url: cfg.pricesUrl, store: { get: (k: string) => hq.setting(k) || undefined, set: (k: string, v: string) => hq.setSetting(k, v) } };
+const pricesRefresh = startPricesRefresh(pricesOpts);
 const pricesLoaded = await pricesRefresh.ready;
 log('info', 'prices loaded', { source: pricesLoaded.source, updatedAt: pricesLoaded.prices.updatedAt });
 // A restart or a deploy cuts off the tasks that were running: they go back to the head's queue.
@@ -372,6 +373,7 @@ webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePre
 
 const admin = cfg.adminToken
   ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: botCommands, drill: (arg) => drill.command(arg), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),
+      reloadPrices: async () => { const r = await loadPrices(pricesOpts); return { source: r.source, updatedAt: r.prices.updatedAt }; },
       acceptStage: (projectId, stageNo) => Promise.resolve(production.acceptStage(projectId, stageNo, 'client')),
       billing, marketing, tools, rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
     })

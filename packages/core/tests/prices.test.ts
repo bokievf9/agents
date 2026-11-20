@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import fallbackJson from '../src/prices.fallback.json' with { type: 'json' };
 import {
-  allowedAmounts, FALLBACK_PRICES, getPrices, loadPrices, parsePrices, planOf, PRICES_SETTING, PRODUCT_KEYS, setPrices, startPricesRefresh, supportMonthly, type PriceStore,
+  allowedAmounts, pricesReloadMs, PRICES_REFRESH_MS, FALLBACK_PRICES, getPrices, loadPrices, parsePrices, planOf, PRICES_SETTING, PRODUCT_KEYS, setPrices, startPricesRefresh, supportMonthly, type PriceStore,
 } from '../src/index.js';
 
 const memStore = (): PriceStore & { data: Map<string, string> } => {
@@ -163,5 +163,15 @@ describe('no hardcoded product price in the agents', () => {
       expect(text, f).toContain('getPrices');
       expect(text, f).not.toMatch(/fromUsd:\s*\d|from:\s*\d{2}|SUPPORT_MONTHLY_USD\s*=\s*\d/);
     }
+  });
+});
+
+describe('reload interval', () => {
+  it('15 minutes by default, PRICES_RELOAD_MS overrides, garbage falls back', () => {
+    expect(PRICES_REFRESH_MS).toBe(900_000);
+    expect(pricesReloadMs({})).toBe(900_000);
+    expect(pricesReloadMs({ PRICES_RELOAD_MS: '60000' })).toBe(60_000);
+    expect(pricesReloadMs({ PRICES_RELOAD_MS: 'x' })).toBe(900_000);
+    expect(pricesReloadMs({ PRICES_RELOAD_MS: '5' })).toBe(900_000);
   });
 });

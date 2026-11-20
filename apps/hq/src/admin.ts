@@ -26,6 +26,8 @@ export interface AdminDeps {
   now?: () => number;
   /** The Support head drafts the answer to a cabinet ticket (the row is already stored). Fire and forget. */
   cabinetTicket?: (t: { id: number; name: string; text: string; telegram: string; leadId?: number }) => Promise<unknown>;
+  /** Reloads the site's price list now (`POST /admin/prices/reload`). */
+  reloadPrices?: () => Promise<{ source: 'fetched' | 'cached' | 'fallback'; updatedAt: string }>;
   /** The client accepts a stage of their project in the cabinet (Production `acceptStage`). */
   acceptStage?: (projectId: number, stageNo: number) => Promise<{ status: 'accepted' | 'already' | 'not_paid' | 'not_ready' | 'unknown'; text: string }>;
   /** «Пульт v3»: Billing (reminder text, pay links), the client bot (replies to Telegram leads), the website chat (replies to web leads). */
@@ -187,6 +189,13 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
     if (v3) return v3;
     if (a === 'crm') return crm.handle(method, seg.slice(1), query, req.body);
     if (a === 'clients') return crm.clients(method, seg.slice(1), query, req.body);
+
+    if (key === 'POST prices/reload') {
+      if (!d.reloadPrices) return fail(503, 'unavailable');
+      const r = await d.reloadPrices();
+      log('info', 'prices reload', { source: r.source, updatedAt: r.updatedAt });
+      return ok({ updatedAt: r.updatedAt, source: r.source });
+    }
 
     switch (key) {
       case 'GET state':

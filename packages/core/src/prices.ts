@@ -116,7 +116,12 @@ export interface PriceStore {
 }
 export const PRICES_SETTING = 'prices_json';
 export const DEFAULT_PRICES_URL = 'https://firtech.pro/api/prices';
-export const PRICES_REFRESH_MS = 6 * 3_600_000;
+/** Reload interval: 15 minutes (the site's Пульт edits prices without a deploy); env `PRICES_RELOAD_MS` overrides it. */
+export const PRICES_REFRESH_MS = 15 * 60_000;
+export function pricesReloadMs(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.PRICES_RELOAD_MS);
+  return Number.isFinite(n) && n >= 1000 ? Math.floor(n) : PRICES_REFRESH_MS;
+}
 
 export interface LoadPricesOptions {
   url?: string;
@@ -168,8 +173,8 @@ export async function loadPrices(opts: LoadPricesOptions = {}): Promise<LoadPric
   return { source: 'fallback', prices: current };
 }
 
-/** Loads now and then every 6 hours. Returns a stop function. */
-export function startPricesRefresh(opts: LoadPricesOptions = {}, everyMs = PRICES_REFRESH_MS): { ready: Promise<LoadPricesResult>; stop: () => void } {
+/** Loads now and then every `PRICES_RELOAD_MS` (default 15 minutes). Returns a stop function. */
+export function startPricesRefresh(opts: LoadPricesOptions = {}, everyMs = pricesReloadMs()): { ready: Promise<LoadPricesResult>; stop: () => void } {
   const ready = loadPrices(opts);
   const timer = setInterval(() => void loadPrices(opts), everyMs);
   timer.unref();
