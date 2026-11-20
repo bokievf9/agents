@@ -168,3 +168,55 @@ describe('Task shape stays as before', () => {
     expect((await t.worker.run(task, t.ctx)).ok).toBe(true);
   });
 });
+
+describe('PublisherWorker.publishNow (the review center: «Выложить сейчас»)', () => {
+  it('posts one platform of an approved item that is not due yet, marks it published like the morning run, books the quota', async () => {
+    const t = setup();
+    const id = t.approved('Запись', '2026-11-30'); // planned a week ahead: the morning run would not touch it
+    t.files.add(String(id));
+    expect(await t.worker.autoPublish(t.ctx)).toEqual([]);
+    const r = await t.worker.publishNow(t.ctx, id, 'shorts');
+    expect(r).toEqual({ result: expect.objectContaining({ itemId: id, platform: 'shorts', url: 'https://youtube.com/shorts/vid123' }) });
+    expect(t.store.quotaUsed('2026-11-23')).toBe(UPLOAD_COST);
+    const rid = (r as { result: { readyId: number } }).result.readyId;
+    expect(t.store.get(rid)?.publishedAt).toBe(NOW);
+    expect(t.content.readyRow(rid)?.status).toBe('published');
+    expect(t.content.readyRows().map((x) => x.platform)).toEqual(['instagram', 'tiktok']);
+  });
+
+  it('a failure is reported with the reason and stays retryable at once (the once-a-day guard is for the morning run)', async () => {
+    const t = setup(google({ putStatus: 500 }));
+    const id = t.approved('Запись');
+    t.files.add(String(id));
+    const first = await t.worker.publishNow(t.ctx, id, 'shorts');
+    expect(first).toEqual({ result: expect.objectContaining({ error: expect.stringContaining('загрузка не удалась') }) });
+    const rid = (first as { result: { readyId: number } }).result.readyId;
+    expect(t.store.get(rid)?.publishedAt).toBeNull();
+    expect(t.store.auto(rid).error).toContain('HTTP 500');
+    const second = await t.worker.publishNow(t.ctx, id, 'shorts');
+    expect('result' in second && second.result.error).toContain('загрузка не удалась');
+    expect(t.g.calls).toHaveLength(4); // two tries, two HTTP calls each
+  });
+
+  it('a spent quota is a reported failure with quota: true and no request', async () => {
+    const t = setup();
+    const id = t.approved('Запись');
+    t.files.add(String(id));
+    t.store.addQuota('2026-11-23', QUOTA_LIMIT - UPLOAD_COST + 1);
+    const r = await t.worker.publishNow(t.ctx, id, 'shorts');
+    expect(r).toEqual({ result: expect.objectContaining({ quota: true, error: expect.stringContaining('квота YouTube') }) });
+    expect(t.g.calls).toHaveLength(0);
+  });
+
+  it('says why nothing was tried: no poster for the platform, no approved row, no video file, already published', async () => {
+    const t = setup();
+    const id = t.approved('Запись');
+    expect(await t.worker.publishNow(t.ctx, id, 'instagram')).toEqual({ reason: 'no_poster' });
+    expect(await t.worker.publishNow(t.ctx, 999, 'shorts')).toEqual({ reason: 'not_ready' });
+    expect(await t.worker.publishNow(t.ctx, id, 'shorts')).toEqual({ reason: 'no_file' });
+    t.files.add(String(id));
+    await t.worker.publishNow(t.ctx, id, 'shorts');
+    expect(await t.worker.publishNow(t.ctx, id, 'shorts')).toEqual({ reason: 'not_ready' }); // the row is published: it left the ready queue
+    expect(t.g.calls).toHaveLength(2);
+  });
+});
