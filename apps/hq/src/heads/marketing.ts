@@ -57,6 +57,8 @@ export interface MarketingDeps {
    * task) and the morning message sends `DATA_DIR/renders/<item>/reel.mp4`. Default off (tests, local runs without it).
    */
   renderReels?: boolean;
+  /** Openverse pictures under carousel slides and posts (`CONTENT_BACKGROUNDS=on`). Default off. */
+  backgrounds?: boolean;
   rng?: () => number;
   /** An audit request that cannot be prepared is written down as a lost request (kind `lost_lead`) and summed up in the hourly alert. */
   lost?: LostLeads;
@@ -193,6 +195,7 @@ export class MarketingHead implements ApprovalEditor {
         ...(d.postsPerWeek !== undefined ? { postsPerWeek: d.postsPerWeek } : {}),
         ...(d.storiesPerWeek !== undefined ? { storiesPerWeek: d.storiesPerWeek } : {}),
         ...(d.rendersDir ? { rendersDir: d.rendersDir } : {}),
+        ...(d.backgrounds ? { backgrounds: true } : {}),
         ...(d.rng ? { rng: d.rng } : {}),
       });
     if (this.worker instanceof ContentMakerWorker) {

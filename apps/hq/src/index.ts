@@ -132,7 +132,7 @@ const clientBot = cfg.clientBotToken
   : null;
 const marketing = new MarketingHead({
   hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter, clipsPerWeek: cfg.clipsPerWeek, carouselsPerWeek: cfg.carouselsPerWeek,
-  postsPerWeek: cfg.postsPerWeek, storiesPerWeek: cfg.storiesPerWeek, rendersDir: cfg.rendersDir, renderReels: cfg.renderReels,
+  postsPerWeek: cfg.postsPerWeek, storiesPerWeek: cfg.storiesPerWeek, rendersDir: cfg.rendersDir, renderReels: cfg.renderReels, backgrounds: cfg.contentBackgrounds,
   ...(clientBot ? { audit: clientBot.engine } : {}), lost,
   integrations: {
     youtubeApiKey: cfg.youtubeApiKey, youtubeChannelId: cfg.youtubeChannelId, ytOauthClientJson: cfg.ytOauthClientJson, ytRefreshToken: cfg.ytRefreshToken, ytPrivacy: cfg.ytPrivacy, igUserId: cfg.igUserId, igAccessToken: cfg.igAccessToken, igApiHost: cfg.igApiHost, igPublicBase: cfg.igPublicBase, igTokenIssuedAt: cfg.igTokenIssuedAt, mediaSecret: cfg.mediaSecret, trendsRegions: cfg.trendsRegions,

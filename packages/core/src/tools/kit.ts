@@ -29,6 +29,9 @@ export interface ToolsConfig {
   ytRefreshToken?: string | undefined;
   trongridApiKey?: string | undefined;
   toncenterApiKey?: string | undefined;
+  /** Optional Openverse OAuth client (higher limits and a bearer token); without them the anonymous API is used. */
+  openverseClientId?: string | undefined;
+  openverseClientSecret?: string | undefined;
 }
 
 /** Read-only CRM views of HQ (the app wires `createCrm(...).handle('GET', [panel], query)`); the body is `{ items: [...] }`. */

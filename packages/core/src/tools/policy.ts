@@ -12,6 +12,8 @@ export interface ToolLimits {
   cacheTtlMs?: number;
   /** Calls a day for the whole company (counted in settings). */
   perDay?: number;
+  /** Calls in any 60 seconds for the whole company (counted in settings). */
+  perMinute?: number;
   /** Results per call. */
   maxResults?: number;
 }
@@ -85,6 +87,8 @@ export const TOOL_POLICY: readonly ToolPolicy[] = [
   { name: 'text.humanize', departments: TEXT_DEPTS, limits: { maxBytes: 20_000 }, env: [], quiet: true, summary: 'strip invisible characters, dashes and AI stock words (RU and EN)' },
   { name: 'text.detect', departments: TEXT_DEPTS, limits: { maxBytes: 20_000 }, env: [], quiet: true, summary: 'five-check score of how machine-written a text looks' },
   { name: 'text.swipeRank', departments: TEXT_DEPTS, limits: { maxResults: 500 }, env: [], quiet: true, summary: 'rank reels by the outlier multiple, name the hook formula' },
+  { name: 'media.openverse.search', departments: ['marketing', 'director'], limits: { ...NET, perDay: 150, perMinute: 15, retries: 0, maxResults: 20, cacheTtlMs: 6 * 3_600_000 }, env: ['OPENVERSE_CLIENT_ID', 'OPENVERSE_CLIENT_SECRET'], summary: 'search openly licensed images and audio (Openverse), 15 a minute and 150 a day' },
+  { name: 'web.getBytes', departments: ['marketing', 'director'], limits: { ...NET, maxBytes: 3_000_000, retries: 1 }, env: [], summary: 'GET a picture (bytes, up to 3 MB) from listed https hosts' },
 ];
 
 const BY_NAME = new Map(TOOL_POLICY.map((p) => [p.name, p]));

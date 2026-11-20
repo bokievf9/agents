@@ -1,8 +1,10 @@
 import type { Kit } from './kit.js';
+import { createOpenverse, type OpenverseTools } from './openverse.js';
 import { pdfDocSchema, renderPdf, type PdfDoc } from './pdf.js';
 import { policyOf } from './policy.js';
 import { qrMatrix, qrSvg, type Ecc } from './qr.js';
 import { fail, okv, type ToolResult } from './result.js';
+import type { Web } from './web.js';
 
 export interface Media {
   /** PNG of a frame through the renderer the app registered (content-maker: satori + resvg). */
@@ -11,10 +13,13 @@ export interface Media {
   qr(text: string, o?: { ecc?: Ecc; margin?: number; scale?: number }): Promise<ToolResult<{ svg: string; modules: number }>>;
   /** A4 PDF of a structured document; bytes start with `%PDF-`. */
   pdf(doc: PdfDoc): Promise<ToolResult<{ bytes: Buffer; pages: number }>>;
+  /** Openly licensed images and audio (Openverse), with a credit line ready for a caption. */
+  openverse: OpenverseTools;
 }
 
-export function createMedia(k: Kit): Media {
+export function createMedia(k: Kit, web: Web): Media {
   return {
+    openverse: createOpenverse(k, web),
     png: (frame) =>
       k.call('media.png', async () => {
         if (!frame || typeof frame !== 'object') return fail('invalid', 'frame must be an object');

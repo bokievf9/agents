@@ -16,6 +16,8 @@ export interface GetOptions {
    * caps, no public-address check and no pinned address. Anyone else gets `not_allowed`.
    */
   internal?: boolean;
+  /** No repeat after a retryable failure, whatever the policy says (APIs with a call budget). */
+  noRetry?: boolean;
 }
 
 export interface TextPage {
@@ -45,6 +47,8 @@ export interface PostAnswer {
 export interface Web {
   getJson<T = unknown>(url: string, o: GetOptions): Promise<ToolResult<T>>;
   getText(url: string, o: GetOptions): Promise<ToolResult<TextPage>>;
+  /** GET a picture or another small binary file (up to 3 MB) from listed https hosts: the bytes as they are. */
+  getBytes(url: string, o: { hosts: readonly string[]; timeoutMs?: number }): Promise<ToolResult<{ bytes: Buffer; contentType: string; url: string }>>;
   /** Article of a page. Hosts: the listed ones, or any public host a `search` of this toolbox returned, or `'public'` explicitly. */
   readable(url: string, o?: { hosts?: HostList; maxChars?: number }): Promise<ToolResult<Readable & { url: string }>>;
   search(q: string, o?: { limit?: number; lang?: string }): Promise<ToolResult<SearchHit[]>>;
@@ -152,13 +156,22 @@ export function createWeb(k: Kit): Web {
 
   return {
     // an internal call is a monitoring probe: no `activity` line on success and no retries (the monitor's own hysteresis decides)
-    getJson: <T>(url: string, o: GetOptions) => k.call('web.getJson', () => json<T>('web.getJson', url, o), o?.internal ? { quiet: true, retries: 0 } : undefined),
+    getJson: <T>(url: string, o: GetOptions) => k.call('web.getJson', () => json<T>('web.getJson', url, o), o?.internal ? { quiet: true, retries: 0 } : o?.noRetry ? { retries: 0 } : undefined),
     getText: (url, o) =>
       k.call('web.getText', () => {
         if (!hostsOk(o?.hosts)) return Promise.resolve(fail('invalid', 'hosts: a non-empty list of host names is required'));
         const denied = internalDenied('web.getText', o);
         return denied ? Promise.resolve(denied) : text('web.getText', url, o.hosts, o);
       }, o?.internal ? { quiet: true, retries: 0 } : undefined),
+    getBytes: (url, o) =>
+      k.call('web.getBytes', async () => {
+        if (!hostsOk(o?.hosts)) return fail('invalid', 'hosts: a non-empty list of host names is required');
+        const l = lim('web.getBytes');
+        const r = await rawRequest(url, { hosts: o.hosts, headers: { accept: 'image/*,*/*;q=0.5' }, timeoutMs: o.timeoutMs ?? l.timeoutMs!, maxBytes: l.maxBytes!, redirects: 3, perHost: l.perHost!, minGapMs: l.minGapMs! }, k.net);
+        if (!r.ok) return r;
+        if (r.value.status < 200 || r.value.status >= 300) return failStatus(r.value.status, new URL(r.value.url).hostname);
+        return okv({ bytes: r.value.bytes, contentType: r.value.headers['content-type'] ?? '', url: r.value.url });
+      }),
     readable: (url, o = {}) =>
       k.call('web.readable', async () => {
         let hosts: HostList;

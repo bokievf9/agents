@@ -40,7 +40,7 @@ export async function renderPngFrame(frame: unknown): Promise<Uint8Array> {
 }
 
 /** The process-wide adapters and keys, from the HQ config. */
-export function appTools(hq: Hq, llm: LlmClient, cfg: Pick<Config, 'dataDir' | 'rendersDir' | 'knowledgeDir' | 'mediaSecret' | 'igPublicBase' | 'braveSearchKey' | 'resendApiKey' | 'emailFrom' | 'gscServiceAccountJson' | 'gscSiteUrl' | 'youtubeApiKey' | 'youtubeChannelId' | 'ytOauthClientJson' | 'ytRefreshToken' | 'trongridApiKey' | 'toncenterApiKey'>): AppTools {
+export function appTools(hq: Hq, llm: LlmClient, cfg: Pick<Config, 'dataDir' | 'rendersDir' | 'knowledgeDir' | 'mediaSecret' | 'igPublicBase' | 'braveSearchKey' | 'resendApiKey' | 'emailFrom' | 'gscServiceAccountJson' | 'gscSiteUrl' | 'youtubeApiKey' | 'youtubeChannelId' | 'ytOauthClientJson' | 'ytRefreshToken' | 'trongridApiKey' | 'toncenterApiKey'> & Partial<Pick<Config, 'openverseClientId' | 'openverseClientSecret'>>): AppTools {
   // read-only views of the Пульт CRM: no hooks, so nothing a tool does can write through it
   const crm = createCrm(hq.db, hq.now);
   const quota = new PublishStore(hq.db);
@@ -49,7 +49,7 @@ export function appTools(hq: Hq, llm: LlmClient, cfg: Pick<Config, 'dataDir' | '
       dataDir: cfg.dataDir, rendersDir: cfg.rendersDir, knowledgeDir: cfg.knowledgeDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase,
       braveSearchKey: cfg.braveSearchKey, resendApiKey: cfg.resendApiKey, emailFrom: cfg.emailFrom, gscServiceAccountJson: cfg.gscServiceAccountJson, gscSiteUrl: cfg.gscSiteUrl,
       youtubeApiKey: cfg.youtubeApiKey, youtubeChannelId: cfg.youtubeChannelId, ytOauthClientJson: cfg.ytOauthClientJson, ytRefreshToken: cfg.ytRefreshToken,
-      trongridApiKey: cfg.trongridApiKey, toncenterApiKey: cfg.toncenterApiKey,
+      trongridApiKey: cfg.trongridApiKey, toncenterApiKey: cfg.toncenterApiKey, openverseClientId: cfg.openverseClientId, openverseClientSecret: cfg.openverseClientSecret,
     },
     renderPng: renderPngFrame,
     crm: (panel, query) => crm.handle('GET', [panel], new URLSearchParams(query), null).body,

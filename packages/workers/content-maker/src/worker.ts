@@ -5,6 +5,7 @@ import { KIT_SECTIONS, PLATFORM_LABEL, kitLabel, kitRendersNote, kitScopeKey, ki
 import { ContentStore } from './store.js';
 import { AI_TOPICS, ALL_TOPICS, ARTICLE_WINDOW_DAYS, freeTopic, freshWindowMs, pickAiTopic, pickFormatTopics, pickTopics, type Topic } from './topics.js';
 import { renderItem } from './render.js';
+import { BACKGROUND_TYPES, backgroundQuery, findBackground, withCredit } from './background.js';
 import { articleLineOn, articlePreview, articleSchema, articleSource, articleSummary, contentIssues, contentSchema, isAiAsk, ruPartSchema, slugFromTitle, uniqueSlug, type ArticleJson } from './article.js';
 import { findNiche, TOPIC_NICHES, nicheById } from './niches.js';
 import type { ArticleRow } from './store.js';
@@ -101,7 +102,9 @@ export function onApproved(store: ContentStore, payload: Payload, edited: boolea
   const itemId = Number(payload.itemId);
   const item = store.item(itemId);
   if (!item) throw new Error(`item ${itemId} not found`);
-  const text = typeof payload.text === 'string' ? payload.text : item.text;
+  const approved = typeof payload.text === 'string' ? payload.text : item.text;
+  // an Openverse picture is never used without its credit: an edit that dropped the line gets it back
+  const text = typeof payload.credit === 'string' ? withCredit(approved, payload.credit) : approved;
   const { body, sections } = splitPlatforms(text);
   const rows = PLATFORMS[item.type].map((platform) => {
     const own = sections[platform];
@@ -122,6 +125,11 @@ export interface ContentWorkerOptions {
   rng?: () => number;
   /** Fresh niche trends for the prompt (the Trend scout's latest items). Default: none. */
   trends?: TrendsProvider;
+  /**
+   * Openverse pictures under carousel slides and posts (credit line into the caption). Off by default: it calls the network through `ctx.tools`.
+   * Needs `rendersDir` and a toolbox with `media.openverse.search`, `web.getBytes` and `files.put`.
+   */
+  backgrounds?: boolean;
 }
 
 /** Up to two trends for a topic: the ones suggested for its direction first, then the top of the list. */
@@ -143,6 +151,7 @@ export class ContentMakerWorker implements Worker {
   private readonly rng: () => number;
   private readonly trends: TrendsProvider;
   private readonly rendersDir: string | undefined;
+  private readonly backgrounds: boolean;
 
   constructor(opts: ContentWorkerOptions = {}) {
     this.prompts = loadPrompts(opts.promptsDir ?? new URL('../prompts', import.meta.url).pathname);
@@ -151,6 +160,7 @@ export class ContentMakerWorker implements Worker {
       postsPerWeek: opts.postsPerWeek ?? DEFAULT_CADENCE.postsPerWeek, storiesPerWeek: opts.storiesPerWeek ?? DEFAULT_CADENCE.storiesPerWeek,
     };
     this.rendersDir = opts.rendersDir;
+    this.backgrounds = opts.backgrounds === true;
     this.rng = opts.rng ?? Math.random;
     this.trends = opts.trends ?? noTrends;
   }
@@ -279,10 +289,21 @@ export class ContentMakerWorker implements Worker {
       }
       const head = `${item.packId ? `Пакет, материал ${item.seq} из ${item.total}` : 'Отдельный материал'}${feedback ? ' (вторая версия)' : ''}. ${TYPE_RU[item.type]}, ${item.type === 'profile' ? kitLabel(kitScopeOf(item.topicKey)) : PLATFORMS[item.type].map((p) => PLATFORM_LABEL[p]).join(' + ')}. ${item.type === 'profile' ? kitRendersNote(kitScopeOf(item.topicKey)) : ''}Выход: ${dayLabel(item.plannedDate)}. Тема: ${topic.text}${item.sourceSlug ? `. Из статьи: ${item.sourceSlug}` : ''}`;
       const warn = gen.issues.length ? `\nПроверка тона нашла: ${gen.issues.join('; ')}.` : '';
-      store.setProposed(itemId, gen.text, gen.title);
-      await ctx.requestApproval(KIND, { text: gen.text, itemId }, head + warn);
+      // a background from Openverse when the item has no render of its own; its credit line is part of the caption from here on
+      let text = gen.text;
+      let credit: string | undefined;
+      if (this.backgrounds && this.rendersDir && BACKGROUND_TYPES.includes(item.type)) {
+        const bg = await findBackground(ctx.tools, itemId, backgroundQuery(topic.directionId, topic.text));
+        if (bg) {
+          credit = bg.credit;
+          text = withCredit(gen.text, bg.credit);
+        }
+      }
+      const bgNote = credit ? `\nФон: Openverse. ${credit}` : '';
+      store.setProposed(itemId, text, gen.title);
+      await ctx.requestApproval(KIND, { text, itemId, ...(credit ? { credit } : {}) }, head + warn + bgNote);
       ctx.log('item_drafted', `item ${itemId}`);
-      return { ok: true, result: `${head}${warn}\n\n${gen.text}` };
+      return { ok: true, result: `${head}${warn}${bgNote}\n\n${text}` };
     } catch (e) {
       store.setStatus(itemId, 'failed');
       log('error', 'item failed', { itemId, err: errMsg(e) });

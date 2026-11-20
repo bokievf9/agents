@@ -61,7 +61,7 @@ export function createTools(deps: ToolDeps): Tools {
   const now = deps.now ?? Date.now;
   const tz = deps.tz ?? 'Asia/Dushanbe';
   const cfg: ToolsConfig = deps.config ?? {};
-  const secrets = [cfg.braveSearchKey, cfg.resendApiKey, cfg.youtubeApiKey, cfg.ytRefreshToken, cfg.trongridApiKey, cfg.toncenterApiKey, cfg.mediaSecret].filter((s): s is string => Boolean(s));
+  const secrets = [cfg.openverseClientId, cfg.openverseClientSecret, cfg.braveSearchKey, cfg.resendApiKey, cfg.youtubeApiKey, cfg.ytRefreshToken, cfg.trongridApiKey, cfg.toncenterApiKey, cfg.mediaSecret].filter((s): s is string => Boolean(s));
   const cx: CallContext = { agentId: deps.agentId, dept: deps.dept, taskId: deps.taskId, journal: deps.journal, now, tz, secrets, ...(deps.sleep ? { sleep: deps.sleep } : {}) };
   const cache = deps.cache ?? new ToolCache(deps.db, now);
   let files: Files | undefined;
@@ -95,13 +95,14 @@ export function createTools(deps: ToolDeps): Tools {
         return okv(true as const);
       }),
   };
+  const web = createWeb(k);
   const tools: Tools = {
     agentId: deps.agentId,
     dept: deps.dept,
-    web: createWeb(k),
+    web,
     cache: cacheTools,
     files: k.files(),
-    media: createMedia(k),
+    media: createMedia(k, web),
     llm: createLlmTools(k),
     prices: data.prices,
     playbook: data.playbook,

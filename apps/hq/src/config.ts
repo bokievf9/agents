@@ -38,6 +38,11 @@ export interface Config extends BaseConfig {
   /** Optional API keys of the two indexers the payment watcher reads (higher rate limits); without them the free tier is used. */
   trongridApiKey: string | undefined;
   toncenterApiKey: string | undefined;
+  /** Optional Openverse OAuth client (`OPENVERSE_CLIENT_ID`/`OPENVERSE_CLIENT_SECRET`): a bearer token and higher limits; anonymous use works without it. */
+  openverseClientId: string | undefined;
+  openverseClientSecret: string | undefined;
+  /** `CONTENT_BACKGROUNDS=on`: carousel slides and posts get an Openverse picture under the brand frame (credit in the caption). Default off. */
+  contentBackgrounds: boolean;
   /** `PAY_TOLERANCE`: under-payment the watcher accepts, percent 0..0.5; default 0 (exact). */
   payTolerancePct: number;
   /** Sales bot token (@firtech_leads_bot). Without it the Sales head is silent (no group posts). */
@@ -169,6 +174,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     paymentDetails: parsePaymentDetails(optional(env, 'PAYMENT_DETAILS_JSON')),
     trongridApiKey: optional(env, 'TRONGRID_API_KEY'),
     toncenterApiKey: optional(env, 'TONCENTER_API_KEY'),
+    openverseClientId: optional(env, 'OPENVERSE_CLIENT_ID'),
+    openverseClientSecret: optional(env, 'OPENVERSE_CLIENT_SECRET'),
+    contentBackgrounds: (env.CONTENT_BACKGROUNDS ?? 'off').toLowerCase() === 'on',
     payTolerancePct: parseTolerance(optional(env, 'PAY_TOLERANCE')),
     salesBotToken: optional(env, 'SALES_BOT_TOKEN'),
     leadWebhookToken: optional(env, 'LEAD_WEBHOOK_TOKEN'),

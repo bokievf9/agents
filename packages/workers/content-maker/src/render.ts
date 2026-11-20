@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Resvg } from '@resvg/resvg-js';
 import satori from 'satori';
@@ -19,6 +19,8 @@ export interface Frame {
   lines: string[];
   index?: number;
   total?: number;
+  /** A picture under the frame as a data URI (JPEG or PNG), darkened so the text stays readable. Slides and posts only. */
+  bg?: string;
 }
 
 export const SIZES: Record<FrameKind, { width: number; height: number }> = {
@@ -49,7 +51,7 @@ export function loadFonts(dir = FONT_DIR): Font[] {
   return fonts;
 }
 
-type Node = { type: string; props: { style?: Record<string, unknown>; children?: unknown } };
+type Node = { type: string; props: { style?: Record<string, unknown>; children?: unknown; [k: string]: unknown } };
 const h = (type: string, style: Record<string, unknown>, children?: unknown): Node => ({ type, props: { style: { display: 'flex', ...style }, ...(children !== undefined ? { children } : {}) } });
 
 /** YouTube banner: the headline, one line and the mark sit in the safe area; the rest is background shapes. */
@@ -75,7 +77,14 @@ function tree(fr: Frame): Node {
   const pad = 88;
   const titleSize = fr.title.length > 40 ? 64 : fr.title.length > 24 ? 76 : 92;
   const mark = fr.index && fr.total ? `${fr.index}/${fr.total}` : '';
-  return h('div', { width, height, backgroundColor: BRAND.bg, flexDirection: 'column', justifyContent: 'space-between', padding: story ? `${pad + 120}px ${pad}px ${pad + 160}px` : `${pad}px`, fontFamily: 'Onest, OnestLatin', color: BRAND.fg }, [
+  const under: Node[] = fr.bg
+    ? [
+        { type: 'img', props: { src: fr.bg, width, height, style: { position: 'absolute', left: 0, top: 0, width, height, objectFit: 'cover' } } },
+        h('div', { position: 'absolute', left: 0, top: 0, width, height, backgroundColor: 'rgba(10,13,11,0.82)' }),
+      ]
+    : [];
+  return h('div', { width, height, backgroundColor: BRAND.bg, position: 'relative', flexDirection: 'column', justifyContent: 'space-between', padding: story ? `${pad + 120}px ${pad}px ${pad + 160}px` : `${pad}px`, fontFamily: 'Onest, OnestLatin', color: BRAND.fg }, [
+    ...under,
     h('div', { flexDirection: 'column' }, [
       h('div', { width: 120, height: 10, backgroundColor: BRAND.accent, marginBottom: 56 }),
       h('div', { fontFamily: 'Unbounded, Onest, OnestLatin', fontWeight: 700, fontSize: titleSize, lineHeight: 1.12, color: BRAND.fg }, fr.title),
@@ -144,9 +153,19 @@ export function framesOf(type: ItemType, text: string): Frame[] {
   return [];
 }
 
-/** Renders an item's images into `<dir>/<itemId>/<n>.png`; returns the file paths in order. */
+/** The stored background of an item (`<dir>/<itemId>/bg.jpg` or `.png`, put there when it was drafted) as a data URI; undefined when there is none. */
+export function backgroundOf(dir: string, itemId: number): string | undefined {
+  for (const [ext, mime] of [['jpg', 'image/jpeg'], ['png', 'image/png']] as const) {
+    const file = join(dir, String(itemId), `bg.${ext}`);
+    if (existsSync(file)) return `data:${mime};base64,${readFileSync(file).toString('base64')}`;
+  }
+  return undefined;
+}
+
+/** Renders an item's images into `<dir>/<itemId>/<n>.png`; returns the file paths in order. Slides and posts get the item's stored background under the frame. */
 export async function renderItem(dir: string, itemId: number, type: ItemType, text: string): Promise<string[]> {
-  const frames = framesOf(type, text);
+  const bg = type === 'carousel' || type === 'post' ? backgroundOf(dir, itemId) : undefined;
+  const frames = framesOf(type, text).map((f) => (bg && (f.kind === 'slide' || f.kind === 'post') ? { ...f, bg } : f));
   if (frames.length === 0) return [];
   const fonts = loadFonts();
   const files: string[] = [];
