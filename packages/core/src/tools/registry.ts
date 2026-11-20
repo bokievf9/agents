@@ -10,6 +10,7 @@ import { makeCall, type Kit, type ToolDeps, type ToolsConfig } from './kit.js';
 import { createMedia, type Media } from './media.js';
 import { TOOL_POLICY, isAllowed, policyOf, type ToolLimits } from './policy.js';
 import { dayIn, fail, okv, readToolStats, withTool, type CallContext, type Dept, type ToolJournal, type ToolResult } from './result.js';
+import { createText, type TextTools } from './text.js';
 import { createWeb, type Web } from './web.js';
 
 export interface CacheTools {
@@ -40,6 +41,7 @@ export interface Tools {
   email: Email;
   mac: { poster: MacPoster };
   clock: Clock;
+  text: TextTools;
   /** Is the tool set up (keys, adapters) and allowed for this department. */
   can(name: string): boolean;
   configured(name: string): boolean;
@@ -112,6 +114,7 @@ export function createTools(deps: ToolDeps): Tools {
     email: createEmail(k),
     mac: { poster: createMacPoster(k) },
     clock: createClock(now, tz),
+    text: createText(k),
     configured: (name) => Boolean(policyOf(name)) && isConfigured(name, deps),
     can: (name) => isAllowed(name, deps.dept) && isConfigured(name, deps),
     list: () => TOOL_POLICY.filter((p) => isAllowed(p.name, deps.dept)).map((p) => p.name),

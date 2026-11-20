@@ -1,0 +1,652 @@
+{
+ "version": "1.0",
+ "source": "instagram-agent-skill (MIT, 2026, Jake Schincariol), skills/ig-reel/hooks.json. English text and patterns are from there, the Russian text and patterns are ours.",
+ "note_ru": "Двадцать шесть формул хука для рилсов. У рилса два хука, и они срабатывают одновременно: то, что вы говорите первым, и то, что написано на экране первым. На произносимый примерно две секунды, на экранный примерно одна. В примерах числа показывают форму, не факты: брать числа только из прайса (prices.get) или оставлять [число]. Регулярка match названа в `ru` и `en`: флаги `iu`, классифицировать по порядку classify_order, от частного к общему.",
+ "note_en": "Twenty-six hook formulas for reels. A reel has two hooks that fire together: the first thing said and the first thing on screen. The numbers in the examples show the shape, not facts: take numbers only from the price list (prices.get) or leave [number]. `match` is a regex per language (flags `iu`); walk them in classify_order, most specific first.",
+ "rules": {
+  "ru": [
+   "Пишите произносимую строку и строку на экране отдельно. Экранная короче и грубее: не больше шести слов и без лишней пунктуации.",
+   "Без разгона. Видео начинается с предложения, до которого вы обычно добираетесь на шестой секунде.",
+   "Называйте число. «Много» не число, и «так много времени» тоже.",
+   "Первый кадр тоже хук. Неподвижная говорящая голова на 0:00 без движения и текста: три хука впустую.",
+   "Если хук подошёл бы любому в вашей нише, это не ваш хук. Положите в него то, что можете сказать только вы.",
+   "Хук что-то обещает. Выдайте обещанное до середины, иначе купленное удержание вернётся обратно."
+  ],
+  "en": [
+   "Write the spoken line and the on-screen line separately. On screen is the shorter, blunter one, six words or fewer, no punctuation it does not need.",
+   "No setup. The video starts at the sentence you would normally reach at second six.",
+   "Say the number. 'A lot' is not a number and neither is 'so much time'.",
+   "The first frame is a hook too. A static talking head at 0:00 with no motion and no text is three hooks wasted.",
+   "If the hook would work for anyone else in your niche, it is not your hook. Put the thing only you can say in it.",
+   "A hook promises something. Deliver it before the halfway mark or the retention you bought gets handed back."
+  ]
+ },
+ "classify_order": [
+  1,
+  23,
+  5,
+  4,
+  3,
+  15,
+  20,
+  7,
+  9,
+  26,
+  25,
+  24,
+  18,
+  17,
+  8,
+  6,
+  16,
+  12,
+  10,
+  2,
+  13,
+  19,
+  21,
+  22,
+  11,
+  14
+ ],
+ "hooks": [
+  {
+   "id": 1,
+   "en": {
+    "name": "Cost Confession",
+    "template": "{Specific amount} is what {one mistake} cost me.",
+    "example": "$18,000 is what one missing clause cost me.",
+    "on_screen": "$18,000 MISTAKE",
+    "best_for": "Trust, fast. People finish the videos where you are the one who looks bad.",
+    "trap": "A fake cost. 'It cost me my peace of mind' is not a number and everybody can hear that."
+   },
+   "ru": {
+    "name": "Признание в цене",
+    "template": "{Точная сумма} - вот сколько мне стоила {одна ошибка}.",
+    "example": "18 000 $ мне стоила одна пропущенная строка в договоре.",
+    "on_screen": "ОШИБКА НА 18 000 $",
+    "best_for": "Быстрое доверие. Ролики, где автор выглядит плохо, досматривают до конца.",
+    "trap": "Ненастоящая цена. «Это стоило мне нервов» не число, и все это слышат."
+   },
+   "match": {
+    "en": "\\$\\s?\\d[\\d,]*\\s+(?:is|was) what\\b|\\bcost (?:me|us|him|her|them)\\b|\\blost\\b[^.!?]{0,20}\\$\\s?\\d",
+    "ru": "стоил[аио]?\\s+(?:мне|нам|ему|ей|им)(?!\\p{L})|(?<!\\p{L})(?:мне|нам|ему|ей|им)\\s+стоил[аио]?(?!\\p{L})|(?<!\\p{L})обошл[аись]+\\s+(?:мне|нам)|(?<!\\p{L})потерял[аи]?\\s[^.!?]{0,25}\\d"
+   }
+  },
+  {
+   "id": 2,
+   "en": {
+    "name": "Negative Command",
+    "template": "Stop {common action}. Do {alternative} instead.",
+    "example": "Stop posting three times a day. Post twice and reply to every comment for an hour.",
+    "on_screen": "STOP POSTING DAILY",
+    "best_for": "Saves and arguments. The imperative gets attention that a statement does not.",
+    "trap": "Telling people to stop doing something nobody does. The habit has to be one the viewer recognises in themselves."
+   },
+   "ru": {
+    "name": "Запрет",
+    "template": "Хватит {привычное действие}. Делайте {альтернатива}.",
+    "example": "Хватит постить три раза в день. Выкладывайте дважды и час отвечайте на каждый комментарий.",
+    "on_screen": "ХВАТИТ ПОСТИТЬ КАЖДЫЙ ДЕНЬ",
+    "best_for": "Сохранения и споры. Приказ цепляет сильнее, чем утверждение.",
+    "trap": "Запрещать то, чего никто не делает. Привычка должна узнаваться зрителем в себе."
+   },
+   "match": {
+    "en": "^\\s*(?:stop|quit|never|don'?t|dont|please)\\b[^.!?]{0,30}\\b(?:do|be|make|buy|use|start|say|post|send|take|charge)?\\b|\\b(?:do not|don'?t|dont|never) (?:do|be|make|buy|use|start|say|post|take)\\b|\\bquit your\\b",
+    "ru": "^\\s*(?:хватит|перестань(?:те)?|прекрати(?:те)?|бросай(?:те)?|никогда\\s+не|не\\s+(?:делай|делайте|покупай|покупайте|публикуй|публикуйте|пиши|пишите|трать|тратьте|плати|платите))(?!\\p{L})"
+   }
+  },
+  {
+   "id": 3,
+   "en": {
+    "name": "Nobody Tells You",
+    "template": "Nobody tells you that {uncomfortable truth about the thing they want}.",
+    "example": "Nobody tells you that your first 30 reels are supposed to flop.",
+    "on_screen": "YOUR FIRST 30 WILL FLOP",
+    "best_for": "New audiences. It positions you as the person who says the quiet part.",
+    "trap": "Picking a truth everybody already says. If the comments are agreeing before you finish, it was not a secret."
+   },
+   "ru": {
+    "name": "Никто не говорит",
+    "template": "Никто не говорит, что {неудобная правда о том, чего они хотят}.",
+    "example": "Никто не говорит, что первые тридцать рилсов должны провалиться.",
+    "on_screen": "ПЕРВЫЕ 30 ПРОВАЛЯТСЯ",
+    "best_for": "Новая аудитория. Вы тот, кто говорит вслух то, о чём молчат.",
+    "trap": "Выбрать правду, которую повторяют все. Если комментарии кивают раньше, чем вы договорили, это не секрет."
+   },
+   "match": {
+    "en": "\\b(?:nobody|no one|nobody ever)\\s+(?:ever\\s+)?(?:tells|told|talks|talked|says|said|mentions|teaches)\\b|\\bwhat (?:nobody|no one) (?:tells|says)\\b",
+    "ru": "(?<!\\p{L})(?:никто\\s+(?:не\\s+)?(?:говорит|скажет|рассказывает|расскажет|объясняет|предупреждает|учит)|об\\s+этом\\s+молчат)(?!\\p{L})"
+   }
+  },
+  {
+   "id": 4,
+   "en": {
+    "name": "The Replacement",
+    "template": "{This thing} replaced {expensive thing} for {price}.",
+    "example": "This $12 tool replaced the editor I was paying $2,000 a month.",
+    "on_screen": "$2,000 -> $12",
+    "best_for": "Demos and tool videos. The price gap does the work.",
+    "trap": "Overstating the replacement. If it replaced 60% of the job, say 60%, or the comments will say it for you."
+   },
+   "ru": {
+    "name": "Замена",
+    "template": "{Эта вещь} заменила {дорогую вещь} за {цена}.",
+    "example": "Бот за $100 заменил администратора, которому платили зарплату.",
+    "on_screen": "АДМИНИСТРАТОР -> БОТ",
+    "best_for": "Демо и обзоры инструментов. Разница в цене делает всю работу.",
+    "trap": "Преувеличить замену. Если заменено 60% работы, так и скажите, иначе скажут комментаторы."
+   },
+   "match": {
+    "en": "\\breplaced?\\b[^.!?]*\\$\\s?\\d|\\$\\s?\\d[^.!?]*\\breplaced?\\b|\\binstead of (?:paying|hiring)\\b",
+    "ru": "заменил[аио]?\\s[^.!?]*\\d|\\d[^.!?]*заменил|(?<!\\p{L})вместо\\s+(?:оплаты|найма|того,?\\s+чтобы\\s+платить)"
+   }
+  },
+  {
+   "id": 5,
+   "en": {
+    "name": "Time Collapse",
+    "template": "This used to take me {long time}. It now takes {short time}.",
+    "example": "Proposals used to take me five hours. They take twenty minutes now.",
+    "on_screen": "5 HOURS -> 20 MIN",
+    "best_for": "Process videos where the payoff is speed. Reads instantly on screen.",
+    "trap": "A ratio nobody believes. 40 hours to 4 seconds gets treated as a lie even when it is true."
+   },
+   "ru": {
+    "name": "Сжатие времени",
+    "template": "Раньше это занимало {долго}. Теперь {коротко}.",
+    "example": "Раньше запись клиентов отнимала час в день. Теперь это делает бот.",
+    "on_screen": "1 ЧАС -> 0 МИН",
+    "best_for": "Ролики-процессы, где выигрыш в скорости. Читается с экрана мгновенно.",
+    "trap": "Соотношение, в которое никто не верит. «40 часов вместо 4 секунд» принимают за ложь, даже если это правда."
+   },
+   "match": {
+    "en": "\\bused to take\\b|\\bnow (?:it )?(?:only )?takes?\\b|\\btakes? (?:me )?\\d+\\s*(?:sec|second|min|minute|hour|hr)",
+    "ru": "раньше\\s+[^.!?]{0,40}(?:занимал[аои]?|уходил[аои]?|отнимал[аои]?)|теперь\\s+(?:это\\s+)?(?:занимает|уходит)|(?:занимает|уходит)\\s+(?:у\\s+меня\\s+)?\\d+\\s*(?:сек|мин|час)"
+   }
+  },
+  {
+   "id": 6,
+   "en": {
+    "name": "The Receipt",
+    "template": "I {did thing} for {N days}. Here are the actual numbers.",
+    "example": "I posted one reel a day for 60 days. Here is what it did to my DMs.",
+    "on_screen": "60 DAYS. REAL NUMBERS.",
+    "best_for": "Experiments. Pairs with a screen recording of the real dashboard, which is the whole value.",
+    "trap": "Not showing the screen. A numbers video with no screen recording is a numbers claim."
+   },
+   "ru": {
+    "name": "Чек",
+    "template": "Я {сделал это} {N дней}. Вот реальные цифры.",
+    "example": "Я публиковал по рилсу в день 60 дней. Вот что стало с заявками.",
+    "on_screen": "60 ДНЕЙ. НАСТОЯЩИЕ ЦИФРЫ.",
+    "best_for": "Эксперименты. Работает в паре с записью экрана с настоящей статистикой: в ней вся ценность.",
+    "trap": "Не показать экран. Ролик с цифрами без записи экрана остаётся словами про цифры."
+   },
+   "match": {
+    "en": "\\bi\\s+\\w+(?:ed)?\\s+[^.!?]{0,30}\\bfor\\s+\\d+\\s+(?:days?|weeks?|months?|years?)\\b|\\bhere (?:are|is) (?:the|my)\\b[^.!?]*\\bnumbers\\b|\\bwe(?:'ll| will)? do \\$\\s?\\d",
+    "ru": "(?<!\\p{L})я\\s+\\p{L}+\\s[^.!?]{0,30}\\d+\\s+(?:дн|недел|месяц|год|лет)|вот\\s+(?:реальные|настоящие|мои)\\s+(?:цифры|числа)|настоящие\\s+цифры"
+   }
+  },
+  {
+   "id": 7,
+   "en": {
+    "name": "Wrong Way, Right Way",
+    "template": "You are doing {thing} wrong, and it is not your fault. {The fix}.",
+    "example": "You are writing captions wrong, and it is not your fault. Instagram hides everything after line one.",
+    "on_screen": "YOUR CAPTIONS ARE CUT",
+    "best_for": "Teaching. The 'not your fault' half stops it reading as an insult, which is what kills this one.",
+    "trap": "Skipping the absolution. 'You are doing it wrong' on its own makes people leave rather than learn."
+   },
+   "ru": {
+    "name": "Не так и как надо",
+    "template": "Вы делаете {это} не так, и это не ваша вина. {Исправление}.",
+    "example": "Вы пишете подписи не так, и это не ваша вина. Instagram прячет всё после первой строки.",
+    "on_screen": "ПОДПИСЬ ОБРЕЗАНА",
+    "best_for": "Обучение. Фраза «не ваша вина» не даёт ролику звучать как оскорбление, а это то, что его убивает.",
+    "trap": "Пропустить снятие вины. «Вы делаете неправильно» само по себе заставляет уйти, а не учиться."
+   },
+   "match": {
+    "en": "\\b(?:big(?:gest)?|common|the) mistake\\b|\\bmistake (?:that|people|i)\\b|\\byou'?(?:re| are) doing\\b[^.!?]*\\bwrong\\b|\\bdoing (?:it|this) wrong\\b",
+    "ru": "(?<!\\p{L})(?:главная|частая|самая\\s+\\p{L}+)\\s+ошибка|ошибка,?\\s+(?:которую|из-за)|вы\\s+делаете\\s+[^.!?]*не\\s+так|делаете\\s+(?:это\\s+)?неправильно|не\\s+ваша\\s+вина"
+   }
+  },
+  {
+   "id": 8,
+   "en": {
+    "name": "Insider Leak",
+    "template": "I spent {N years} {inside the thing}. Here is what we never said out loud.",
+    "example": "I spent six years selling agency retainers. Here is what we never put in the proposal.",
+    "on_screen": "6 YEARS INSIDE",
+    "best_for": "Authority without a credential slide. Works only if the years are real.",
+    "trap": "Promising a secret and delivering the brochure. The comments are merciless about this one."
+   },
+   "ru": {
+    "name": "Слив изнутри",
+    "template": "Я {N лет} {внутри этого}. Вот что мы никогда не говорили вслух.",
+    "example": "Шесть лет я продавал сайты студии. Вот что мы никогда не писали в коммерческом предложении.",
+    "on_screen": "6 ЛЕТ ИЗНУТРИ",
+    "best_for": "Авторитет без слайда с дипломами. Работает, только если годы настоящие.",
+    "trap": "Пообещать секрет и выдать буклет. Комментарии беспощадны к этому."
+   },
+   "match": {
+    "en": "\\bi (?:spent|worked|ran|was|have been)\\b[^.!?]*\\b\\d+\\s*\\+?\\s*years?\\b|\\bwe never (?:told|said|showed)\\b|\\bnobody (?:puts|tells you about)\\b|\\bi (?:sell|sold|run)\\b[^.!?]*\\$\\s?\\d",
+    "ru": "(?<!\\p{L})я\\s+(?:\\p{L}+\\s+){0,3}\\d+\\s+(?:лет|года|год)(?!\\p{L})|(?<!\\p{L})(?:лет|года|год)\\s+я\\s+\\p{L}+|мы\\s+никогда\\s+не\\s+(?:говорили|рассказывали|показывали)|(?<!\\p{L})изнутри(?!\\p{L})"
+   }
+  },
+  {
+   "id": 9,
+   "en": {
+    "name": "The Steal",
+    "template": "Steal this {artifact}. It took me {time} to get right.",
+    "example": "Steal this four-line follow-up. It took me two years and a lot of dead leads.",
+    "on_screen": "STEAL THIS",
+    "best_for": "Saves and sends, which are the two metrics that move reach the most.",
+    "trap": "The artifact not being on screen. If they cannot screenshot it, there is nothing to steal."
+   },
+   "ru": {
+    "name": "Своруйте",
+    "template": "Своруйте {этот артефакт}. Я доводил его до ума {время}.",
+    "example": "Своруйте этот шаблон ответа клиенту. Я доводил его до ума два года.",
+    "on_screen": "СВОРУЙТЕ",
+    "best_for": "Сохранения и пересылки: две метрики, которые сильнее всего двигают охват.",
+    "trap": "Артефакта нет на экране. Если его нельзя заскриншотить, своровать нечего."
+   },
+   "match": {
+    "en": "^\\s*steal\\b|\\bsteal (?:this|these|my)\\b|^\\s*(?:here'?s|this is) (?:the|my) (?:exact|literal)\\b",
+    "ru": "^\\s*(?:украдите|своруйте|забирайте|заберите)|(?:украдите|своруйте|забирайте)\\s+(?:это|мой|мою|этот|эту)|вот\\s+(?:мой|точный)\\s+(?:шаблон|скрипт)"
+   }
+  },
+  {
+   "id": 10,
+   "en": {
+    "name": "If This, Then Watch",
+    "template": "If you {specific situation}, this {short time} fixes it.",
+    "example": "If your reels get views and no followers, the next 40 seconds fix it.",
+    "on_screen": "VIEWS BUT NO FOLLOWERS?",
+    "best_for": "Qualifying hard. Fewer people stay, and the ones who do are the ones who buy.",
+    "trap": "A situation so broad it qualifies nobody. 'If you want to grow' is not a situation."
+   },
+   "ru": {
+    "name": "Если это про вас",
+    "template": "Если {конкретная ситуация}, это {короткое время} всё исправит.",
+    "example": "Если у ваших рилсов есть просмотры, но нет подписчиков, следующие 40 секунд всё исправят.",
+    "on_screen": "ПРОСМОТРЫ ЕСТЬ, ПОДПИСЧИКОВ НЕТ?",
+    "best_for": "Жёсткая квалификация. Остаётся меньше людей, и это те, кто покупает.",
+    "trap": "Ситуация настолько широкая, что никого не отсеивает. «Если хотите расти» не ситуация."
+   },
+   "match": {
+    "en": "^\\s*if (?:you|i|we|your|my|they)\\b",
+    "ru": "^\\s*если\\s+(?:ты|вы|я|мы|вам|тебе|у\\s+\\p{L}+|ваш\\p{L}*|твои?\\p{L}*|мо[йеи]\\p{L}*)(?!\\p{L})"
+   }
+  },
+  {
+   "id": 11,
+   "en": {
+    "name": "Numbered With A Favourite",
+    "template": "{N} {things} that {outcome}. Number {k} is the one nobody uses.",
+    "example": "Five caption edits that double saves. Number four is the one nobody does.",
+    "on_screen": "5 EDITS. #4 IS THE ONE.",
+    "best_for": "Retention through the middle: naming a favourite gives people a reason to stay past three.",
+    "trap": "N above seven. Nobody believes you have nine good ones, and you do not."
+   },
+   "ru": {
+    "name": "Список с любимчиком",
+    "template": "{N} {штук}, которые {результат}. Номер {k} не использует никто.",
+    "example": "Пять правок подписи, которые удваивают сохранения. Четвёртую не делает никто.",
+    "on_screen": "5 ПРАВОК. №4 САМАЯ ВАЖНАЯ.",
+    "best_for": "Удержание в середине: названный любимчик даёт причину досмотреть дальше третьего пункта.",
+    "trap": "N больше семи. Никто не верит, что у вас девять хороших пунктов, и их нет."
+   },
+   "match": {
+    "en": "^\\s*(?:here are\\s+)?\\d+\\s+\\w+|\\bnumber \\d+\\b|\\b(?:three|four|five|seven|ten)\\s+\\w+\\s+(?:every|that|you)\\b",
+    "ru": "^\\s*(?:вот\\s+)?\\d+\\s+\\p{L}+|^\\s*(?:три|четыре|пять|шесть|семь|восемь|девять|десять)\\s+\\p{L}+|(?<!\\p{L})номер\\s+\\d+|(?<!\\p{L})(?:три|четыре|пять|семь|десять)\\s+\\p{L}+\\s+(?:которые|что|для)"
+   }
+  },
+  {
+   "id": 12,
+   "en": {
+    "name": "The Objection",
+    "template": "\"{Objection they actually say}.\" Fine. Here is the version that works anyway.",
+    "example": "\"I don't want to be on camera.\" Fine. Here is the faceless version that still sells.",
+    "on_screen": "\"I HATE BEING ON CAMERA\"",
+    "best_for": "Selling to the people who already said no once.",
+    "trap": "Inventing the objection. Pull it verbatim from a DM or a comment, including the bad grammar."
+   },
+   "ru": {
+    "name": "Возражение",
+    "template": "«{Возражение, которое они правда говорят}». Ладно. Вот вариант, который работает всё равно.",
+    "example": "«Я не хочу сниматься на камеру». Ладно. Вот версия без лица, которая всё равно продаёт.",
+    "on_screen": "«НЕ ХОЧУ НА КАМЕРУ»",
+    "best_for": "Продажа тем, кто уже один раз сказал нет.",
+    "trap": "Выдумать возражение. Берите дословно из сообщения или комментария, с ошибками."
+   },
+   "match": {
+    "en": "^\\s*[\"“'][^\"”']{5,120}[\"”'][,.]?\\s*(?:fine|ok|okay|sure|right|here)",
+    "ru": "^\\s*[«\"“][^»\"”]{5,120}[»\"”][,.]?\\s*(?:ладно|хорошо|окей|да|вот)(?!\\p{L})"
+   }
+  },
+  {
+   "id": 13,
+   "en": {
+    "name": "Before And After, On Screen",
+    "template": "{Show the old thing}. {Show the new thing}. {One sentence on the lever}.",
+    "example": "This was my profile in March. This is it now. I changed the name field, nothing else.",
+    "on_screen": "MARCH  /  NOW",
+    "best_for": "Anything visual. The cut between the two frames is the hook, the words are secondary.",
+    "trap": "Three levers. Name one thing that changed or the transformation stops being believable."
+   },
+   "ru": {
+    "name": "До и после, на экране",
+    "template": "{Показать старое}. {Показать новое}. {Одно предложение про рычаг}.",
+    "example": "Так выглядел мой профиль в марте. Так сейчас. Я поменял только поле имени.",
+    "on_screen": "МАРТ  /  СЕЙЧАС",
+    "best_for": "Всё визуальное. Склейка двух кадров и есть хук, слова вторичны.",
+    "trap": "Три рычага. Назовите одно, что изменилось, иначе преображению не поверят."
+   },
+   "match": {
+    "en": "\\b(?:this|that) was\\b[^.!?]*[.!?]\\s*(?:this|that) is\\b|\\bbefore\\b[^.!?]*\\bafter\\b|\\bi (?:look|looked) back at\\b",
+    "ru": "так\\s+выглядел\\p{L}*[^.!?]*[.!?]\\s*так\\s+(?:сейчас|теперь)|(?<!\\p{L})(?:это|так)\\s+было(?!\\p{L})[^.!?]*[.!?]\\s*(?:это|так)\\s+(?:стало|сейчас)|(?<!\\p{L})до\\s+и\\s+после(?!\\p{L})|как\\s+(?:это\\s+)?было[^.!?]*сейчас"
+   }
+  },
+  {
+   "id": 14,
+   "en": {
+    "name": "The Callout",
+    "template": "{Specific group}, this is the one you have been ignoring.",
+    "example": "Photographers charging under $2,000: this is the pricing page you have been avoiding.",
+    "on_screen": "PHOTOGRAPHERS UNDER $2K",
+    "best_for": "Cutting a broad audience down to the one that converts. Send rate goes up because people tag each other.",
+    "trap": "A group so large it is not a callout. 'Entrepreneurs' is not a group."
+   },
+   "ru": {
+    "name": "Обращение",
+    "template": "{Конкретная группа}, вот то, что вы упорно игнорируете.",
+    "example": "Фотографы с чеком до $200: вот страница с ценами, которую вы обходите стороной.",
+    "on_screen": "ФОТОГРАФЫ ДО $200",
+    "best_for": "Сузить широкую аудиторию до той, что покупает. Растёт число пересылок: люди отмечают друг друга.",
+    "trap": "Группа настолько большая, что это не обращение. «Предприниматели» не группа."
+   },
+   "match": {
+    "en": "^\\s*(?:every|all|any)\\s+\\w+|^\\s*[a-z][\\w ]{2,28}(?:ers|ists|ors|ants)\\b\\s*[,:]|^\\s*for (?:viewers|people|anyone|those|everyone)\\b|^\\s*(?:attention|listen up)\\b",
+    "ru": "^\\s*(?:каждый|все|любой|любая|для\\s+(?:тех|всех|владельцев|мастеров))\\s|^\\s*(?:внимание|слушайте)(?!\\p{L})|^\\s*(?:владельцы|мастера|предприниматели|фотографы|барберы|тренеры|врачи|юристы)(?!\\p{L})"
+   }
+  },
+  {
+   "id": 15,
+   "en": {
+    "name": "The Flop Record",
+    "template": "My first {N} {attempts} did nothing. Here is what changed on {N+1}.",
+    "example": "My first 47 reels averaged 300 views. Number 48 did 400,000. One thing was different.",
+    "on_screen": "47 FLOPS, THEN THIS",
+    "best_for": "People at the start, which is most of the audience. High comment rate.",
+    "trap": "Making the change sound like luck. If the answer is 'I got lucky', there is no video."
+   },
+   "ru": {
+    "name": "Рекорд провалов",
+    "template": "Мои первые {N} {попыток} ничего не дали. Вот что поменялось на {N+1}.",
+    "example": "Мои первые 47 рилсов набирали по 300 просмотров. Сорок восьмой набрал 400 000. Отличалась одна вещь.",
+    "on_screen": "47 ПРОВАЛОВ, ПОТОМ ЭТО",
+    "best_for": "Новички, а это большая часть аудитории. Много комментариев.",
+    "trap": "Сделать перемену похожей на везение. Если ответ «мне повезло», видео нет."
+   },
+   "match": {
+    "en": "\\bmy first\\s+\\d+\\b|\\bfirst\\s+\\d+\\s+(?:reels?|videos?|posts?|clients?|months?)\\b",
+    "ru": "(?<!\\p{L})мои\\s+первые\\s+\\d+|первые\\s+\\d+\\s+(?:рилсов|роликов|видео|постов|клиентов|месяцев)"
+   }
+  },
+  {
+   "id": 16,
+   "en": {
+    "name": "The Verbatim Question",
+    "template": "\"{Question exactly as it was asked}\" - I get this every week.",
+    "example": "\"How do I post consistently without hating it?\" I get this one every week.",
+    "on_screen": "ASKED EVERY WEEK",
+    "best_for": "Search. A question typed the way people type it is what Instagram search is matching against.",
+    "trap": "Tidying the question up. The value is that it is in their words, typos and all."
+   },
+   "ru": {
+    "name": "Вопрос дословно",
+    "template": "«{Вопрос ровно так, как его задали}» - мне пишут это каждую неделю.",
+    "example": "«Как публиковать регулярно и не возненавидеть это?» Мне пишут это каждую неделю.",
+    "on_screen": "СПРАШИВАЮТ КАЖДУЮ НЕДЕЛЮ",
+    "best_for": "Поиск. Вопрос, набранный как печатают люди, и ищет поиск Instagram.",
+    "trap": "Причесать вопрос. Ценность в чужих словах, с опечатками."
+   },
+   "match": {
+    "en": "^\\s*[\"“']?(?:how|what|what'?s|why|when|where|who|which|can|should|do|does|did|is|are|have you|would you)\\b[^?]{3,110}\\?",
+    "ru": "^\\s*[«\"“]?(?:как|что|почему|зачем|когда|где|кто|какой|какая|какие|можно|стоит|нужно|правда\\s+ли|есть\\s+ли)(?!\\p{L})[^?]{3,110}\\?"
+   }
+  },
+  {
+   "id": 17,
+   "en": {
+    "name": "Head To Head",
+    "template": "{A} versus {B}. I ran both for {time} and one of them was not close.",
+    "example": "Carousels versus reels. I ran both for 90 days and it was not close.",
+    "on_screen": "CAROUSELS vs REELS",
+    "best_for": "Comments. People arrive already holding an opinion, which is the point.",
+    "trap": "Refusing to pick. A comparison with a diplomatic ending is a video with no ending."
+   },
+   "ru": {
+    "name": "Лоб в лоб",
+    "template": "{A} против {B}. Я гонял оба {время}, и один оказался не в одной лиге.",
+    "example": "Карусели против рилсов. Я гонял оба 90 дней, и разница была огромной.",
+    "on_screen": "КАРУСЕЛИ vs РИЛСЫ",
+    "best_for": "Комментарии. Люди приходят с готовым мнением, в этом и смысл.",
+    "trap": "Отказ выбирать. Сравнение с дипломатичным концом это ролик без конца."
+   },
+   "match": {
+    "en": "\\b(?:vs\\.?|versus)\\b|\\bdifferences? between\\b|\\b(?:a|the) or (?:b|the)\\b",
+    "ru": "(?<!\\p{L})(?:против|vs\\.?)(?!\\p{L})|разница\\s+между|(?<!\\p{L})сравнил[аи]?(?!\\p{L})"
+   }
+  },
+  {
+   "id": 18,
+   "en": {
+    "name": "Cold Open Demo",
+    "template": "{Start mid-action, already doing the thing.} Watch what this does.",
+    "example": "Watch what happens when I paste a competitor's caption into this.",
+    "on_screen": "WATCH THIS",
+    "best_for": "Screen recordings and anything with a visible result. No setup at all, the hand is already moving.",
+    "trap": "A result that takes twelve seconds to arrive. If the payoff is slow, cut to it and show the wait afterwards."
+   },
+   "ru": {
+    "name": "Демо с первой секунды",
+    "template": "{Начать посреди действия, уже делая это.} Смотрите, что это делает.",
+    "example": "Смотрите, что будет, если вставить сюда подпись конкурента.",
+    "on_screen": "СМОТРИТЕ",
+    "best_for": "Записи экрана и всё с видимым результатом. Вообще без разгона: рука уже двигается.",
+    "trap": "Результат, который появляется через двенадцать секунд. Если отдача медленная, режьте к ней, а ожидание покажите после."
+   },
+   "match": {
+    "en": "^\\s*watch (?:what|this|me)\\b|^\\s*(?:let me|lemme) show you\\b|^\\s*repeat after me\\b",
+    "ru": "^\\s*(?:смотрите|смотри|глядите)(?!\\p{L})|^\\s*(?:сейчас\\s+)?покажу(?!\\p{L})|^\\s*повторяйте\\s+за\\s+мной"
+   }
+  },
+  {
+   "id": 19,
+   "en": {
+    "name": "The Deadline",
+    "template": "{Thing} changes on {date}. Do {action} before then.",
+    "example": "Your top nine grid crops change the second you post a reel. Fix the covers first.",
+    "on_screen": "BEFORE YOU POST AGAIN",
+    "best_for": "Urgency that is real. Platform changes, seasonal windows, policy updates.",
+    "trap": "Manufactured urgency. One fake deadline and every future one is discounted."
+   },
+   "ru": {
+    "name": "Срок",
+    "template": "{Это} меняется {дата}. Сделайте {действие} до этого.",
+    "example": "Правила рекламы меняются с 1 января. Поправьте тексты до этой даты.",
+    "on_screen": "ДО 1 ЯНВАРЯ",
+    "best_for": "Настоящая срочность: изменения платформы, сезонные окна, новые правила.",
+    "trap": "Выдуманная срочность. Один фальшивый срок, и все следующие обесцениваются."
+   },
+   "match": {
+    "en": "\\bbefore (?:you|it|they|the)\\b[^.!?]*\\b(?:change|changes|end|ends|close|closes|expires|goes)\\b|\\bchanges on\\b|\\bby 20\\d\\d\\b",
+    "ru": "до\\s+того,?\\s+как[^.!?]*(?:изменится|закроется|закончится)|(?<!\\p{L})(?:меняется|меняются|изменится|изменятся|закрывается|закрываются|заканчивается|заканчиваются)\\s+(?:с|до|в|\\d)|до\\s+\\d{1,2}\\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)|(?<!\\p{L})к\\s+20\\d\\d"
+   }
+  },
+  {
+   "id": 20,
+   "en": {
+    "name": "Permission",
+    "template": "You do not need {the thing everyone says you need}.",
+    "example": "You do not need a niche. You need one person you can name.",
+    "on_screen": "YOU DON'T NEED A NICHE",
+    "best_for": "Relief. Very high save rate, because it removes a blocker rather than adding a task.",
+    "trap": "Removing the blocker and putting nothing in its place. The second half is the whole video."
+   },
+   "ru": {
+    "name": "Разрешение",
+    "template": "Вам не нужно {то, что все считают нужным}.",
+    "example": "Вам не нужна ниша. Вам нужен один человек, которого вы можете назвать по имени.",
+    "on_screen": "НИША НЕ НУЖНА",
+    "best_for": "Облегчение. Очень много сохранений: убирается препятствие, а не добавляется задача.",
+    "trap": "Убрать препятствие и ничего не поставить на его место. Вторая половина и есть ролик."
+   },
+   "match": {
+    "en": "\\byou (?:do not|don'?t|dont) need\\b|\\bstop (?:trying to|worrying about)\\b",
+    "ru": "(?<!\\p{L})(?:вам|тебе)\\s+не\\s+нужн[аоы]?(?!\\p{L})|не\\s+нужн[аоы]?\\s+[^.!?]{0,30}(?:чтобы|для)|хватит\\s+(?:пытаться|переживать)"
+   }
+  },
+  {
+   "id": 21,
+   "en": {
+    "name": "Mid-Sentence Start",
+    "template": "{...and that is when {the turn}.}",
+    "example": "...and that is when the client asked for the money back. Three days after approving it.",
+    "on_screen": "HE ASKED FOR A REFUND",
+    "best_for": "Stories. Starting mid-scene makes the viewer feel they arrived late, which is a reason to stay.",
+    "trap": "Never going back to fill in the gap. Deliver the setup by second eight or it reads as a mistake."
+   },
+   "ru": {
+    "name": "С полуслова",
+    "template": "{...и вот тогда {поворот}.}",
+    "example": "...и вот тогда клиент попросил вернуть деньги. Через три дня после согласования.",
+    "on_screen": "ОН ПОПРОСИЛ ВЕРНУТЬ ДЕНЬГИ",
+    "best_for": "Истории. Начало с середины сцены создаёт ощущение, что вы опоздали, и это причина остаться.",
+    "trap": "Никогда не вернуться и не закрыть пробел. К восьмой секунде дайте предысторию, иначе это ошибка монтажа."
+   },
+   "match": {
+    "en": "^\\s*(?:\\.\\.\\.|…)|^\\s*(?:and (?:that'?s|that is|then) when|so (?:he|she|they) (?:said|asked))\\b|^\\s*(?:uh|um)\\b",
+    "ru": "^\\s*(?:\\.\\.\\.|…)|^\\s*(?:и\\s+тут(?!\\p{L})|и\\s+вот\\s+тогда|а\\s+потом\\s+(?:он|она|они)|и\\s+тогда\\s+(?:он|она|они)\\s+(?:сказал|спросил))"
+   }
+  },
+  {
+   "id": 22,
+   "en": {
+    "name": "Contrarian Flip",
+    "template": "{Well-known saying, inverted.}",
+    "example": "Nice guys finish first.",
+    "on_screen": "NICE GUYS FINISH FIRST",
+    "best_for": "Comments. The viewer has to stop and check whether they misheard you.",
+    "trap": "Flipping a saying nobody says. The original has to be a reflex, or the inversion is just a sentence."
+   },
+   "ru": {
+    "name": "Переворот",
+    "template": "{Известная поговорка наоборот.}",
+    "example": "Добрые парни финишируют первыми.",
+    "on_screen": "ДОБРЫЕ ФИНИШИРУЮТ ПЕРВЫМИ",
+    "best_for": "Комментарии. Зритель останавливается проверить, не послышалось ли.",
+    "trap": "Перевернуть то, что никто не говорит. Оригинал должен быть рефлексом, иначе это просто предложение."
+   },
+   "match": {
+    "en": "^\\s*[A-Za-z][\\w' ]{2,34}\\b(?:finish|finishes|win|wins|lose|loses|beats?|is|are)\\s+(?:first|last|dead|wrong|right|better|overrated|underrated)\\b",
+    "ru": "^\\s*\\p{L}[\\p{L} ]{2,34}\\s+(?:побеждают|проигрывают|финишируют)\\s+(?:первыми|последними)|^\\s*\\p{L}[\\p{L} ]{2,34}\\s+(?:мертв|мёртв|переоценен|недооценен)\\p{L}*"
+   }
+  },
+  {
+   "id": 23,
+   "en": {
+    "name": "The Statistic",
+    "template": "{N}% of {group} {surprising fact}.",
+    "example": "33% of high school graduates never read another book.",
+    "on_screen": "33% NEVER READ AGAIN",
+    "best_for": "Sends. A number a person can repeat at dinner gets sent to somebody.",
+    "trap": "A statistic you cannot source. Say where it came from in the video or do not use it."
+   },
+   "ru": {
+    "name": "Статистика",
+    "template": "{N}% {группа} {неожиданный факт}.",
+    "example": "33% выпускников школ больше не прочитают ни одной книги.",
+    "on_screen": "33% НЕ ЧИТАЮТ СНОВА",
+    "best_for": "Пересылки. Число, которое можно повторить за ужином, уходит кому-то в личку.",
+    "trap": "Статистика без источника. Назовите, откуда она, прямо в ролике, или не берите её."
+   },
+   "match": {
+    "en": "^\\s*\\d[\\d,.]*\\s?%|\\b\\d[\\d,.]*\\s?%\\s+of\\b",
+    "ru": "^\\s*\\d[\\d.,]*\\s?%|\\d[\\d.,]*\\s?%\\s+(?:\\p{L}+\\s+)?(?:людей|компаний|клиентов|предпринимателей|владельцев|салонов|сайтов)"
+   }
+  },
+  {
+   "id": 24,
+   "en": {
+    "name": "The Reveal",
+    "template": "This is the new {thing}.",
+    "example": "This is the new Sony point and shoot, and it fixes the one thing I hated.",
+    "on_screen": "THE NEW ONE",
+    "best_for": "Anything physical or visual. The object is the hook and the words are captions on it.",
+    "trap": "Holding the thing up without saying what it changes. A reveal with no stake is an advert."
+   },
+   "ru": {
+    "name": "Показ нового",
+    "template": "Это новый {предмет}.",
+    "example": "Это новый компактный фотоаппарат, и он исправляет единственное, что меня бесило.",
+    "on_screen": "НОВИНКА",
+    "best_for": "Всё физическое и визуальное. Предмет и есть хук, слова только подписи к нему.",
+    "trap": "Поднять предмет и не сказать, что он меняет. Показ без ставки это реклама."
+   },
+   "match": {
+    "en": "^\\s*(?:so,?\\s+)?(?:this|these|here) (?:is|are)\\s+(?:the\\s+)?(?:new|my new)\\b|^\\s*(?:so,?\\s+)?this (?:new|tiny|little)\\b|^\\s*this \\w+ has (?:the|a)\\b",
+    "ru": "^\\s*(?:это|вот)\\s+(?:новый|новая|новое|новые|мой\\s+новый)(?!\\p{L})|^\\s*(?:знакомьтесь|встречайте)(?!\\p{L})"
+   }
+  },
+  {
+   "id": 25,
+   "en": {
+    "name": "Someone Else's Result",
+    "template": "There was one {person} who {outcome} in {time}.",
+    "example": "There was one creator who grew a million subscribers in a single month.",
+    "on_screen": "1M SUBS IN ONE MONTH",
+    "best_for": "Proof when the user does not have their own number yet. Third-person is allowed if it is true.",
+    "trap": "No name and no link. An anonymous miracle is a rumour."
+   },
+   "ru": {
+    "name": "Чужой результат",
+    "template": "Есть один {человек}, который {результат} за {время}.",
+    "example": "Есть один мастер, который за месяц набрал миллион просмотров.",
+    "on_screen": "1 МЛН ЗА МЕСЯЦ",
+    "best_for": "Доказательство, когда у автора ещё нет своего числа. От третьего лица можно, если это правда.",
+    "trap": "Ни имени, ни ссылки. Анонимное чудо это слух."
+   },
+   "match": {
+    "en": "\\bthere (?:was|is) (?:one|a|this)\\b|\\b(?:one|a) (?:guy|girl|creator|student|founder|kid|client|friend) (?:i know |who |that )(?:\\w+ed|grew|made|built|went|took|got|hit)\\b|\\bwe had a new\\b",
+    "ru": "(?<!\\p{L})(?:один|одна)\\s+(?:парень|девушка|мастер|клиент|клиентка|владелец|знакомый|друг|креатор|блогер)\\s+(?:\\p{L}+\\s+)?(?:вырос|сделал|сделала|собрал|получил|получила|поднял)|(?<!\\p{L})жил-был|(?<!\\p{L})есть\\s+(?:один|одна)(?!\\p{L})"
+   }
+  },
+  {
+   "id": 26,
+   "en": {
+    "name": "The Superlative",
+    "template": "The {fastest / biggest / only} {thing} is {the answer}.",
+    "example": "The fastest way to get confident is to build evidence you cannot argue with.",
+    "on_screen": "THE FASTEST WAY",
+    "best_for": "One-claim videos with no story attached. It is the most common shape in the wild and the easiest to write badly.",
+    "trap": "A superlative with a soft answer. If the second half is 'consistency', you have said nothing and the comments will tell you."
+   },
+   "ru": {
+    "name": "Превосходная степень",
+    "template": "{Самый быстрый / главный / единственный} {способ} это {ответ}.",
+    "example": "Самый быстрый способ стать уверенным: собрать доказательства, с которыми не поспоришь.",
+    "on_screen": "САМЫЙ БЫСТРЫЙ СПОСОБ",
+    "best_for": "Ролики с одним утверждением без истории. Самая частая форма в природе и самая легко портимая.",
+    "trap": "Превосходная степень с мягким ответом. Если вторая половина «постоянство», вы не сказали ничего."
+   },
+   "match": {
+    "en": "^\\s*(?:the\\s+)?(?:fastest|quickest|best|worst|biggest|greatest|easiest|hardest|only|number one|#1|most important)\\s+\\w+|\\bthe (?:fastest|best|worst|biggest|greatest|only) way to\\b",
+    "ru": "^\\s*(?:самый|самая|самое|самые|лучший|лучшая|худший|единственный|единственная)\\s+\\p{L}+|(?<!\\p{L})(?:самый|самая)\\s+(?:быстрый|быстрая|простой|простая|лёгкий|легкий)\\s+(?:способ|путь)|единственный\\s+способ"
+   }
+  }
+ ]
+}

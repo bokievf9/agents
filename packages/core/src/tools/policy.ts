@@ -30,6 +30,7 @@ export interface ToolPolicy {
 }
 
 const ALL = DEPARTMENTS;
+const TEXT_DEPTS: readonly Dept[] = ['marketing', 'sales', 'support'];
 const NET = { timeoutMs: 8000, maxBytes: 1_000_000, perHost: 2, minGapMs: 250, retries: 2 } as const;
 
 /**
@@ -78,6 +79,12 @@ export const TOOL_POLICY: readonly ToolPolicy[] = [
   { name: 'clock.now', departments: ALL, limits: {}, env: [], quiet: true, summary: 'company time' },
   { name: 'clock.zoned', departments: ALL, limits: {}, env: [], quiet: true, summary: 'wall clock in a zone' },
   { name: 'clock.week', departments: ALL, limits: {}, env: [], quiet: true, summary: 'ISO week of a day' },
+  { name: 'text.hookScore', departments: TEXT_DEPTS, limits: { maxResults: 50 }, env: [], quiet: true, summary: 'rank reel hooks on five properties, RU and EN' },
+  { name: 'text.beats', departments: TEXT_DEPTS, limits: { maxBytes: 20_000 }, env: [], quiet: true, summary: 'time a reel script into beats, flag hook, long beats, loop' },
+  { name: 'text.captionLint', departments: TEXT_DEPTS, limits: { maxBytes: 20_000 }, env: [], quiet: true, summary: 'lint a caption: 125-character window, 2200, hashtags, one ask' },
+  { name: 'text.humanize', departments: TEXT_DEPTS, limits: { maxBytes: 20_000 }, env: [], quiet: true, summary: 'strip invisible characters, dashes and AI stock words (RU and EN)' },
+  { name: 'text.detect', departments: TEXT_DEPTS, limits: { maxBytes: 20_000 }, env: [], quiet: true, summary: 'five-check score of how machine-written a text looks' },
+  { name: 'text.swipeRank', departments: TEXT_DEPTS, limits: { maxResults: 500 }, env: [], quiet: true, summary: 'rank reels by the outlier multiple, name the hook formula' },
 ];
 
 const BY_NAME = new Map(TOOL_POLICY.map((p) => [p.name, p]));

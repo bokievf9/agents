@@ -17,3 +17,4 @@ export * from './registry.js';
 export * from './result.js';
 export * from './search.js';
 export * from './web.js';
+export * from './text.js';
