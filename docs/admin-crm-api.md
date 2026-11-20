@@ -141,8 +141,8 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 { "ok": true, "client": { "id": 1, "name": "Алиса", "email": "alice@example.com", "telegram": "@alice", "createdAt": "..." },
   "projects": [], "invoices": [], "documents": [], "tickets": [], "referrals": [], "referralSlug": "c1a1b2c3" }
 ```
-- `projects`: строки как у `GET /admin/crm/projects`.
-- `invoices`: строки как у `GET /admin/crm/documents` с `source: "billing"`, только выставленные и оплаченные (`issued`, `paid`), без черновиков и аннулированных.
+- `projects`: строки как у `GET /admin/crm/projects`; `milestones[]` этапов оплаты: `{ id, stageNo, title, amountUsd, invoiceNumber, payUrl, paidAt, acceptedAt, state, dueAt }` (`title` на языке клиента, `payUrl` только пока счёт этапа выставлен и не оплачен, `state` `awaiting_payment|in_progress|awaiting_acceptance|accepted`).
+- `invoices`: строки как у `GET /admin/crm/documents` с `source: "billing"` (плюс `stageNo`), только выставленные и оплаченные (`issued`, `paid`), без черновиков и аннулированных.
 - `documents`: остальные строки документов, только виды `contract`, `kp`, `estimate`, `act`, `offer` со статусом `approved` (privacy, черновики и отклонённые не отдаются).
 - `tickets`: как у `GET /admin/crm/tickets`, но без `note`; поле `answer` (текст утверждённого ответа или `null`).
 - `referrals`: как у `GET /admin/crm/referrals`, где клиент рекомендатель (по имени из его лидов или по слагу).
@@ -158,6 +158,12 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 { "ok": true, "item": { "id": 7, "text": "Как оплатить?", "status": "open", "createdAt": "...", "answeredAt": null, "answer": null } }
 ```
 
+### POST /admin/clients/:id/projects/:pid/milestones/:no/accept
+Клиент принимает готовый этап своего проекта в кабинете («Принять этап»). Проект ищется через лид клиента: чужой проект, неизвестный проект или этап, неизвестный клиент 404 `not_found`.
+Этап ещё в работе: 409 `not_ready`; не оплачен: 409 `not_paid`. Успех: `{ ok, already, milestone }` (`milestone` как в `projects[].milestones`, `state: "accepted"`), повтор безопасен (`already: true`, второй счёт не создаётся).
+Приёмка один раз: пишется `pm_milestones.accepted_at` (в ленте лида «Этап N принят»), HQ предлагает счёт следующего этапа (карточка на одобрение, ссылка оплаты появится в `milestones[].payUrl` после одобрения),
+счёт последнего этапа выставляется при приёмке предпоследнего (передача доступов ждёт его оплаты), владельцу приходит строка во входящие.
+
 ### Лиды клиента в `by-email` (`leads`)
 Лиды, привязанные к клиенту (`li_leads.client_id`), новые сверху, не больше 20. Внутренних текстов, промптов и заметок владельца нет.
 ```json
@@ -167,11 +173,11 @@ Upsert по email в `cab_clients` (повторный вызов обновля
   "replies": [{ "at": "...", "text": "Здравствуйте, Алиса!", "from": "manager" }] }]
 ```
 - `stage`: этап Пульта (`new|qualified|proposal|contract|paid|project|lost`, с учётом ручного переноса владельца). `nextStep`: одно предложение на этап, на языке лида (`ru` по умолчанию):
-  new «Менеджер уточнит детали в течение рабочего дня», qualified «Готовим коммерческое предложение», proposal «КП отправлено, ждём вашего решения», contract «Договор и счёт на 50% готовы»,
-  paid «Оплата получена, запускаем проект», project «Проект в работе, этапы ниже», lost «Заявка закрыта».
+  new «Менеджер уточнит детали в течение рабочего дня», qualified «Готовим коммерческое предложение», proposal «КП отправлено, ждём вашего решения», contract «Договор и счёт первого этапа готовы»,
+  paid «Оплата получена, запускаем проект», project «Проект в работе, этапы ниже», lost «Заявка закрыта». Если у проекта лида есть этапы оплаты, `nextStep` важнее: «Оплатите этап N «название»: $сумма» (счёт этапа выставлен) или «Примите этап N «название»» (этап готов).
 - `estimateUsd`: сумма выставленного счёта, иначе «Итого» из сметы сайта, иначе `null`. `summary`: до 200 знаков из слов самого клиента.
 - `timeline` по возрастанию времени, из того, что уже есть: заявка (`lead`), первый ответ менеджера (`reply`), утверждённое КП (`kp`, `ps_documents`), договор (`contract`, `ps_documents` или `bo_documents`),
-  счёт (`invoice`) и оплата (`paid`, `bl_invoices`), старт проекта (`project`, `pm_projects`), переносы владельца по этапам (`stage`, журнал `lead_stage`).
+  счёт (`invoice`) и оплата (`paid`, `bl_invoices`; у счёта этапа название кончается «: этап N»), приёмка этапа клиентом (`stage_accepted`, «Этап N принят»), старт проекта (`project`, `pm_projects`), переносы владельца по этапам (`stage`, журнал `lead_stage`).
 - `replies`: переписка по лиду из `cab_messages` (`id, client_id, lead_id, from, text <= 2000, at`, плюс `ticket_id` для связи с тикетом): ответы владельца через `POST /admin/crm/leads/:id/reply`
   (пишутся для лида с кабинетом даже если чат не принял), одобренные ответы головы продаж, сообщения клиента и одобренные ответы Поддержки на них. Для лида без кабинета строк нет.
 
@@ -240,10 +246,11 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 Строки как в панелях (`leads`, `projects`, `invoices` как в `GET /admin/crm/invoices`, `documents` без счетов, `tickets`, `referrals`), до 50 штук. Клиента определяют лиды с его `client_id`, имя, email и Telegram-ник; `touches` не больше 30, новые первыми.
 
 ## Проекты
-`GET /admin/crm/projects/:id` → `{ ok, item, milestones: [ { id, kind, title, dueAt, doneAt } ], tasks: [ { id, title, status, assignee } ], issues: [ { number, title, state, url } ] }`.
+`GET /admin/crm/projects/:id` → `{ ok, item, milestones: [ { id, kind, title, dueAt, doneAt, stageNo, amountUsd, invoiceNumber, payUrl, paidAt, acceptedAt, state } ], tasks: [ { id, title, status, assignee } ], issues: [ { number, title, state, url } ] }`.
+Оплата по этапам (2026-11-21): у проекта по КП этапы оплаты и есть этапы (`kind: "stage"`), поля этапа `stageNo`, `amountUsd`, `invoiceNumber`, `payUrl` (только пока счёт `issued`), `paidAt`, `acceptedAt` и `state` (`awaiting_payment|in_progress|awaiting_acceptance|accepted`) у этапов старого плана `null`. Строка проекта (в списке и в `item`) несёт `milestones` только из этапов оплаты (`{ id, stageNo, title, amountUsd, invoiceNumber, payUrl, paidAt, acceptedAt, state, dueAt }`).
 `item` как в списке плюс `note`; `tasks` = задача проекта, задачи этапов и их подзадачи; `issues` = задачи строителям с GitHub-ссылкой (`state` `open|closed`).
 `POST /admin/crm/projects/:id` тело одно из:
-- `{ "action": "complete_milestone", "milestoneId" }`: команда `/mdone` Производства (этап «Сдача» заводит деплой, последний этап закрывает проект), повтор безопасен;
+- `{ "action": "complete_milestone", "milestoneId" }`: команда `/mdone` Производства (этап «Сдача» заводит деплой, последний этап закрывает проект), повтор безопасен; для этапа оплаты это ПРИЁМКА этапа (`/mdone <проект> <номер>`): приходит счёт следующего этапа, оплаченный этап обязателен;
 - `{ "action": "set_deadline", "milestoneId", "dueAt": "<ISO>" }`;
 - `{ "action": "set_status", "status": "draft|active|done|paused" }`. `paused` записывается в `pm_projects.status` как есть (раньше такого статуса не было). Другое значение: 400 `invalid` + `allowed`;
 - `{ "action": "note", "text" }` (1..2000, заметка владельца, ещё комментарий в задаче проекта).
@@ -251,7 +258,7 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 
 ## Счета
 `GET /admin/crm/invoices` (`?status=draft|issued|paid|void`, `?limit=`) → `{ ok, available, statuses, items, nextCursor: null }`, строка
-`{ id, number, client, title, amountUsd, payAmountUsd, status, dueDate, issuedAt, paidAt, paidVia, txId, payUrl, remindedAt, leadId, projectId }` (`title` = «за что», `payUrl` = ссылка страницы оплаты или `null`). Неизвестный статус: 400 `invalid_status` + `allowed`.
+`{ id, number, client, title, amountUsd, payAmountUsd, status, dueDate, issuedAt, paidAt, paidVia, txId, payUrl, remindedAt, leadId, projectId, stageNo, stage }` (`stageNo` и `stage: { no, of, title }` у счёта этапа, иначе `null`; колонка `bl_invoices.stage_no`) (`title` = «за что», `payUrl` = ссылка страницы оплаты или `null`). Неизвестный статус: 400 `invalid_status` + `allowed`.
 `POST /admin/crm/invoices/:id` тело `{ "action": "remind" | "mark_paid" | "void" }` → `{ ok, item }`:
 - `mark_paid` = `/paid <номер>` (голова Сопровождения отмечает оплату, запускает проект и выплату рекомендателю), повтор безопасен; аннулированный счёт 409 `illegal_transition`;
 - `remind` = текст напоминания Billing (`reminderText`) клиенту через канал его лида (Telegram-бот), иначе текст кладётся владельцу во входящие. В `item` поле `remindedVia: "telegram"|"owner"`, `remindedAt` обновлён (колонка `bl_invoices.reminded_at`). Только для `issued`, иначе 409;
@@ -398,7 +405,8 @@ Upsert по email в `cab_clients` (повторный вызов обновля
   - `content_pack`: `pack: { count, itemIds: ["ap_..."] }`, `source: "routine"`.
   - `article`: `platform: "blog"`, `article: { id, niche, line: "ai"|"niche", slug }`, `url` (`/blog/<slug>`, пока не опубликована `null`), `source`, `revision` как выше.
   - Лиды и клиенты: `lead` (`{ id, name, contact, service, budget, stage, source, temperature, taskId, callAt, cabinet }` или `null`; `stage`: `new|qualified|proposal|contract|paid|project|lost`) и `client` (`{ id, email, cabinet }`, `id` и `email` `null` без кабинета) у `lead_reply`, `lead_price`, `presales_pack`, `support_*`, `billing_*`; `delivery` (`telegram`: бот @firtech_bot отправит сам; `owner`: текст уйдёт владельцу, пересылает он; у `audit` `contact`) у `lead_reply`, `lead_price`, `support_*`, `audit`.
-  - `presales_pack`: `pack` (`{ id, direction, totalUsd, prepayUsd, prepayPercent, timeline }`). `support_*`: `ticket` (`{ id, clientName, contact, status, money, question, createdAt, answeredAt }` или `null`). `billing_*`: `invoice` (`{ id, number, client, amountUsd, dueDate, status, what, leadId, projectId }`). `bo_document`: `document` (`{ id, type, client, version, projectId }`). `referral_*`: `referral` (`{ id, referrer, referred, status, reward }`). `pm_*`: `project` (`{ id, client, status }`). `onboarding_guide`: `client` (`{ id: null, email: null, cabinet: false, name }`), `onboarding: { id }`. `prospect_*`: `prospect` (`{ id, name, niche, city, telegram, instagram }`), `draftKind` (`first|followup|reply`). `seo_proposal`: `seo: { key, page, needsBuilder }`. `audit`: `audit: { id, host, locale }`. Если строки в базе уже нет, в объекте остаётся только `{ id }`.
+  - `billing_invoice`: `meta.stage` `{ no, of, title, amountUsd }` у счёта этапа оплаты (у остальных поля нет).
+  - `presales_pack`: `pack` (`{ id, direction, totalUsd, prepayUsd, prepayPercent, stages, timeline }`). `support_*`: `ticket` (`{ id, clientName, contact, status, money, question, createdAt, answeredAt }` или `null`). `billing_*`: `invoice` (`{ id, number, client, amountUsd, dueDate, status, what, leadId, projectId }`). `bo_document`: `document` (`{ id, type, client, version, projectId }`). `referral_*`: `referral` (`{ id, referrer, referred, status, reward }`). `pm_*`: `project` (`{ id, client, status }`). `onboarding_guide`: `client` (`{ id: null, email: null, cabinet: false, name }`), `onboarding: { id }`. `prospect_*`: `prospect` (`{ id, name, niche, city, telegram, instagram }`), `draftKind` (`first|followup|reply`). `seo_proposal`: `seo: { key, page, needsBuilder }`. `audit`: `audit: { id, host, locale }`. Если строки в базе уже нет, в объекте остаётся только `{ id }`.
 - Пакет недели: карточка `content_pack` это отдельный элемент (действия `approve`, `reject`), а каждый её материал отдельный элемент `content_item` с `meta.heldByPack`. `approve` материала решает только его (у него появляется своя строка одобрения без Telegram-карточки), карточка пакета остаётся и дальше одобряет остальные. `approve` или `reject` пакета решает оставшиеся.
 
 ## POST /admin/review/:id

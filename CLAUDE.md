@@ -137,7 +137,7 @@ Instagram с Мака (2026-11-20): Meta не пускает приложени�
 - Цены в одном месте: прайс-лист сайта `GET https://firtech.pro/api/prices`. `packages/core/src/prices.ts` (`getPrices()`, `loadPrices()`, снимок `prices.fallback.json`):
   HQ грузит его при старте и каждые 6 часов (`PRICES_URL`), последняя хорошая копия лежит в `settings.prices_json`. Исполнители и клиентский бот читают `getPrices()`,
   суммы в коде не пишем (тест `packages/core/tests/prices.test.ts` это проверяет). Оплата: USDT TRC20/TON или онлайн-кошелёк из сметы (`PAYMENT_DETAILS_JSON`: `usdt_trc20`,
-  `usdt_ton`, `wallet`), 50% до старта и 50% после приёмки.
+  `usdt_ton`, `wallet`), оплата по этапам (см. «Оплата по этапам»). Прайс-лист перечитывается каждые 15 минут (`PRICES_RELOAD_MS`) и сразу по `POST /admin/prices/reload`.
 - `ADMIN_TOKEN` и `WEB_CHAT_TOKEN` обязательны для своих маршрутов (`/admin/*`, `/chat`), без них 404, фолбэков на `OFFICE_TOKEN` и `LEAD_WEBHOOK_TOKEN` нет. IP посетителя: `x-visitor-ip`
   (верим только с loopback и шлюза docker при верном токене).
 - Аудит: карточка `audit` уходит сразу (`urgent`), алерт через 20 часов, при старте `running` возвращается в `assigned`. Образ OmniRoute закреплён по digest: `docs/omniroute-image.md`.
@@ -145,7 +145,7 @@ Instagram с Мака (2026-11-20): Meta не пускает приложени�
 ## Точные цифры и условия (2026-11-19)
 КП, смета, договор и счёт называют одну точную цену выбранного пакета из прайс-листа сайта (`packages/workers/presales/src/package.ts`, сумма вариантов и допов; подписки: настройка и точная месячная плата), «от» остаётся только в сообщениях,
 где состав ещё неизвестен (Разведчик, клиентский бот). Во всех четырёх документах одна фиксированная строка про домен, хостинг, сервер и платные сторонние сервисы (`costsLine` в `packages/core/src/conditions.ts`);
-если у лида `has_domain` и `has_hosting` (шаг 4 клиентского бота, `li_leads`), строка короче. Оплата 50/50 и гарантия первого результата не менялись.
+если у лида `has_domain` и `has_hosting` (шаг 4 клиентского бота, `li_leads`), строка короче. Оплата по этапам (см. «Оплата по этапам (2026-11-21)»), гарантия первого результата возвращает оплату первого этапа.
 
 ## Оплата USDT по ссылке (2026-11-19)
 Каждый счёт получает `pay_key` и ссылку `${SITE_URL}/<ru|en>/pay/<номер>?k=<ключ>` (в тексте счёта и карточке, адреса кошельков в чат не пишем), уникальную сумму к переводу (`pay_amount_usd`, центы
@@ -166,9 +166,9 @@ Instagram с Мака (2026-11-20): Meta не пускает приложени�
   и `TZ` (Душанбе, рынок: клиентский бот, слоты, публикации, сроки). Настройки `tz` и `owner_tz` в БД, `Hq.ownerTz`, `Hq.routineTz`, `seedTiming`.
 - Пакет недели: одна карточка `content_pack` (`task_approvals.held`, `Hq.holdApprovals/openHeld/rejectHeld`, `ApprovalQueue.open/isBulk`). `content_item` не `locked`, но `keepManual`
   (счётчик не повышает до уровня 1). `locked` только деньги, выплаты, документы и ответы клиентам, цены, КП, ТЗ, SEO-правки.
-- Цепочка продаж: лид с услугой и бюджетом или сметой, КП само (`isQualified`) -> одобренное КП резервирует проект `draft` (`PmStore.reserve`) и ставит договор (`bo_document`) и счёт 50%
-  (`billing_invoice`, ссылка на лид, пакет, проект в `bl_invoices`) -> `/paid` (`SupportHead.onPaid`) запускает проект (`ProductionHead.onInvoicePaid`) и выплату рекомендателю
-  (`referral_payout`, 10% сметы, `locked`). Виды одобрений остались прежними (`presales_pack`, `bo_document`, `billing_invoice`).
+- Цепочка продаж: лид с услугой и бюджетом или сметой, КП само (`isQualified`) -> одобренное КП резервирует проект `draft` (`PmStore.reserve`) и ставит договор (`bo_document`) и счёт первого этапа
+  (`billing_invoice`, ссылка на лид, пакет, проект, этап в `bl_invoices`) -> `/paid` (`SupportHead.onPaid`) запускает этап (`ProductionHead.onInvoicePaid`) и выплату рекомендателю
+  (`referral_payout`, 10% оплаченного этапа, `locked`); дальше см. «Оплата по этапам». Виды одобрений остались прежними (`presales_pack`, `bo_document`, `billing_invoice`).
 - Команды: один список `apps/hq/src/commands.ts` (справка, меню до 20, обработчики, маршруты), `/workers` из `apps/hq/src/workers.ts`.
 - Потерянные заявки: `apps/hq/src/lost-leads.ts` (`activity` вида `lost_lead`, таблица `lost_leads`, один алерт в час). Недоступный шлюз: посетитель получает «Принял, менеджер ответит в рабочее время»
   (`freeAnswer`, `gatewayGate`), заявка всё равно создаётся. Публичный `/office` прячет клиентские данные в названиях задач, `/admin/office` отдаёт настоящие.
@@ -185,6 +185,14 @@ Instagram с Мака (2026-11-20): Meta не пускает приложени�
 Решения идут тем же кодом, что кнопки Telegram (`decide` админки: `queue.handle`, затем `settleCard`), второго пути нет. «Выложить сейчас»: YouTube через `PublisherWorker.publishNow` (`YouTubePoster`, квота как утром, сбой остаётся `failed` с причиной), Instagram и TikTok через очередь Мака (`macEnqueue`, `mac_queue`), статья публикуется одобрением.
 Чаты клиентов (`apps/hq/src/chats.ts`): один тред на клиента из кабинета, лидов, тикетов, веб-чата и бота (склейка по клиенту кабинета, контакту, сессии); ответ владельца уходит на последний канал клиента без одобрения, пишется в `cab_messages` (`author = owner`) или `ch_messages` и в журнал лида; тексты анонимных диалогов не хранятся (правило проекта).
 Ссылки владельца (`POST /admin/trends`, `/trend <ссылка> [заметка]`): Трендвотчер (`packages/workers/trend-scout/src/link.ts`, таблица `ts_links`) читает публичную страницу через `ctx.tools.web` (хосты `SOCIAL_HOSTS`, oEmbed и `og`, без входа), делает разбор и аналог, Контент-мейкер пишет материал обычным конвейером (`meta.source = owner_link`, разбор в `versions[0].note`). Контракт для сайта: `docs/admin-crm-api.md`, раздел «Ревью-центр (2026-11-21)».
+
+## Оплата по этапам (2026-11-21)
+Решение владельца: вместо 50/50 оплата по этапам, каждый этап ДО его начала, последний до передачи доступов; гарантия возвращает оплату первого этапа; выплата рекомендателю 10% каждого оплаченного этапа. Подписки (контент, агенты) остаются «настройка + ежемесячно вперёд» (один этап «Настройка»).
+- Шаблоны даёт сайт в `GET /api/prices`: `stages` (объект `{site, bot, automation, app, small}` из списков `{id, title:{ru,en}, share}`) и `smallProjectMaxUsd` (300); какой продукт к какому шаблону, решает HQ (`packages/core/src/stage-templates.ts`). Парсер терпимый: неизвестный шаблон игнорируется, доли не в сумме 100 дают встроенный шаблон и warn; снимок `prices.fallback.json` в той же форме.
+- `stagesFor(totalUsd, productIds)` (`packages/core/src/stages.ts`, чистая): шаблон по самой дорогой части, до порога 300 USD два этапа 50/50, целые доллары, последний этап добирает остаток. `paymentLine(stages, lang)` и `guaranteeLine` в `conditions.ts` заменяют любую строку 50/50 в КП, смете, договоре и счёте; «50%» остаётся только в формулировке малого проекта.
+- Цепочка: пакет Пресейла несёт `stages`; одобренное КП резервирует проект, этапы `pm_milestones` (`kind = stage`, `stage_no`, `amount_usd`, `invoice_number`, `paid_at`, `accepted_at`) это этапы оплаты, счёт делается только на этап 1 (`bl_invoices.stage_no`). Оплата этапа 1 запускает проект (ТЗ, builder-задача), оплата этапа N > 1 запускает builder-задачу этапа N (`ProductionHead.onInvoicePaid`).
+  Приёмка (`ProductionHead.acceptStage`: `/mdone <проект> <номер>` или «Принять этап» клиента в кабинете, `POST /admin/clients/:id/projects/:pid/milestones/:no/accept`) один раз предлагает счёт следующего этапа (задача Сопровождения `kp_invoice` с `stageNo`, одна карточка `locked`, по одному живому счёту на этап); счёт последнего этапа предлагается при приёмке предпоследнего, задача «Передача доступов» (`action: handover`) заблокирована до его оплаты; приёмка последнего закрывает проект. Состояние этапа: `stageState` (`awaiting_payment|in_progress|awaiting_acceptance|accepted`).
+- Выплата рекомендателю: одна карточка `referral_payout` на оплаченный этап (этап 1 в строке рекомендации, следующие в `rf_stage_payouts`, повтор ничего не просит). Переменная `PREPAYMENT_PERCENT` убрана. Кабинет: `projects[].milestones[]`, `nextStep` «оплатить/принять этап N»; контракт `docs/admin-crm-api.md`.
 
 ## Данные и секреты
 `.env*` и `data/` не коммитятся (в `data/` контакты клиентов). Секреты: `.env.local` (dev), `/opt/fir-agents/.env`

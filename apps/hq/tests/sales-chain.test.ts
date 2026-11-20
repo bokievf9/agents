@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { COMMAND_NAMES } from '../src/commands.js';
 import { isQualified } from '../src/heads/sales.js';
 import { approvedKp, chainWorld, DAY, QUALIFIED, type W } from './chain-helpers.js';
-import { NOW, OWNER } from './helpers.js';
+import { OWNER } from './helpers.js';
 
 /**
  * The sales chain (owner decisions 2026-11-19): a qualified lead gets its КП by itself; an approved КП drafts the contract and the invoice for the

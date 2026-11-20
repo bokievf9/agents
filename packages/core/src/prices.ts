@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import fallbackJson from './prices.fallback.json' with { type: 'json' };
 import { errMsg, log } from './log.js';
-import { stageTemplateSchema } from './stage-templates.js';
+import { normalizeStages } from './stage-templates.js';
 
 /**
  * The single source of prices for every agent: the site serves them at `GET <PRICES_URL>` (default
@@ -29,7 +29,7 @@ export const pricesSchema = z
     contentPlans: z.array(plan),
     referralPercent: z.number().min(0).max(100),
     // Payment by stages (2026-11-21): templates and the small-project threshold; the built-in copy (`stage-templates.ts`) is used when the site has not published them yet.
-    stages: z.array(stageTemplateSchema).optional(),
+    stages: z.unknown().optional(),
     smallProjectMaxUsd: amount.optional(),
     // The site's shape: `{kind:'from', from}`, `{kind:'plans', plans}` or `{kind:'quote'}`. A bare number or `{from}` is read too
     // (our own normalised copy, older shapes). Normalised below to the HQ keys.
@@ -53,7 +53,7 @@ export const pricesSchema = z
     for (const k of PRODUCT_KEYS) if (!(k in products)) ctx.addIssue({ code: 'custom', message: `products.${k} is missing` });
     for (const id of ['dono', 'polly']) if (!p.agentPlans.some((x) => x.id === id)) ctx.addIssue({ code: 'custom', message: `agentPlans.${id} is missing` });
     if (!p.contentPlans.some((x) => x.id === 'content')) ctx.addIssue({ code: 'custom', message: 'contentPlans.content is missing' });
-    return { ...p, products };
+    return { ...p, products, stages: normalizeStages(p.stages, (m, x) => log('warn', m, x)) };
   });
 export type Prices = z.infer<typeof pricesSchema>;
 

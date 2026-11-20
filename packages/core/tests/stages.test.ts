@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import fallbackJson from '../src/prices.fallback.json' with { type: 'json' };
 import { FALLBACK_PRICES, isSmallPlan, parsePrices, parseStages, setPrices, smallProjectMaxUsd, stagesFor, templateFor } from '../src/index.js';
 
 const sum = (s: { amountUsd: number }[]) => s.reduce((a, x) => a + x.amountUsd, 0);
@@ -81,13 +82,42 @@ describe('the templates come from the price list', () => {
   });
 
   it('a price list without stages (the site not deployed yet) uses the built-in copy', () => {
-    const { stages: _s, smallProjectMaxUsd: _m, ...rest } = FALLBACK_PRICES;
+    const rest: Record<string, unknown> = { ...FALLBACK_PRICES };
+    delete rest.stages;
+    delete rest.smallProjectMaxUsd;
     setPrices(parsePrices(rest)!);
     expect(shares(stagesFor(1000, ['miniapp']))).toEqual([25, 25, 25, 25]);
     expect(smallProjectMaxUsd()).toBe(300);
   });
 
-  it('the bundled snapshot carries the templates of the contract', () => {
+  it('the live shape: stages is an object keyed by template id; unknown ids are ignored; the product mapping stays in HQ', () => {
+    const live = {
+      ...fallbackJson, smallProjectMaxUsd: 300,
+      stages: {
+        site: [{ id: 'a', title: { ru: 'А', en: 'A' }, share: 50 }, { id: 'b', title: { ru: 'Б', en: 'B' }, share: 50 }],
+        weird: [{ id: 'x', title: { ru: 'X', en: 'X' }, share: 100 }],
+      },
+    };
+    const p = parsePrices(live)!;
+    setPrices(p);
+    expect(p.stages.map((t) => t.id)).toEqual(['site', 'bot', 'automation', 'app', 'small']);
+    expect(shares(stagesFor(1000, ['site']))).toEqual([50, 50]);
+    expect(shares(stagesFor(1000, ['admin']))).toEqual([30, 40, 30]); // not published: the built-in template
+  });
+
+  it('a template whose shares do not sum to 100 (or are broken) is skipped and the built-in one is used', () => {
+    const bad = parsePrices({
+      ...fallbackJson,
+      stages: { site: [{ id: 'a', title: { ru: 'А', en: 'A' }, share: 60 }, { id: 'b', title: { ru: 'Б', en: 'B' }, share: 30 }], bot: 'nope' },
+    })!;
+    setPrices(bad);
+    expect(shares(stagesFor(1000, ['site']))).toEqual([30, 40, 30]);
+    expect(shares(stagesFor(1000, ['admin']))).toEqual([30, 40, 30]);
+  });
+
+  it('the bundled snapshot is in the site\'s published shape and carries the templates of the contract', () => {
+    expect(Object.keys(fallbackJson.stages)).toEqual(['site', 'bot', 'automation', 'app', 'small']);
+    expect(Array.isArray(fallbackJson.stages)).toBe(false);
     expect(FALLBACK_PRICES.stages?.map((t) => t.id)).toEqual(['site', 'bot', 'automation', 'app', 'small']);
     expect(FALLBACK_PRICES.smallProjectMaxUsd).toBe(300);
   });

@@ -113,206 +113,138 @@
   ],
   "referralPercent": 10,
   "smallProjectMaxUsd": 300,
-  "stages": [
-    {
-      "id": "site",
-      "title": {
-        "ru": "Сайт",
-        "en": "Website"
+  "stages": {
+    "site": [
+      {
+        "id": "structure",
+        "title": {
+          "ru": "Структура и первый экран",
+          "en": "Structure and first screen"
+        },
+        "share": 30
       },
-      "products": [
-        "site",
-        "websites",
-        "landing",
-        "company",
-        "shop"
-      ],
-      "shares": [
-        {
-          "id": "structure",
-          "title": {
-            "ru": "Структура и первый экран",
-            "en": "Structure and first screen"
-          },
-          "share": 30
+      {
+        "id": "pages",
+        "title": {
+          "ru": "Все страницы и наполнение",
+          "en": "All pages and content"
         },
-        {
-          "id": "pages",
-          "title": {
-            "ru": "Все страницы и наполнение",
-            "en": "All pages and content"
-          },
-          "share": 40
-        },
-        {
-          "id": "launch",
-          "title": {
-            "ru": "Запуск, SEO, передача",
-            "en": "Launch, SEO, handover"
-          },
-          "share": 30
-        }
-      ]
-    },
-    {
-      "id": "bot",
-      "title": {
-        "ru": "Telegram-бот",
-        "en": "Telegram bot"
+        "share": 40
       },
-      "products": [
-        "bot",
-        "bots",
-        "admin",
-        "receptionist",
-        "intake",
-        "faq",
-        "booking"
-      ],
-      "shares": [
-        {
-          "id": "scenario",
-          "title": {
-            "ru": "Сценарий и структура",
-            "en": "Scenario and structure"
-          },
-          "share": 30
+      {
+        "id": "launch",
+        "title": {
+          "ru": "Запуск, SEO, передача",
+          "en": "Launch, SEO, handover"
         },
-        {
-          "id": "build",
-          "title": {
-            "ru": "Рабочий бот на тесте",
-            "en": "Working bot on a test account"
-          },
-          "share": 40
+        "share": 30
+      }
+    ],
+    "bot": [
+      {
+        "id": "scenario",
+        "title": {
+          "ru": "Сценарий и структура",
+          "en": "Scenario and structure"
         },
-        {
-          "id": "launch",
-          "title": {
-            "ru": "Запуск и обучение",
-            "en": "Launch and training"
-          },
-          "share": 30
-        }
-      ]
-    },
-    {
-      "id": "automation",
-      "title": {
-        "ru": "Автоматизация",
-        "en": "Automation"
+        "share": 30
       },
-      "products": [
-        "automation",
-        "implementation",
-        "aiteam",
-        "integration",
-        "crm",
-        "assistant"
-      ],
-      "shares": [
-        {
-          "id": "map",
-          "title": {
-            "ru": "Карта процессов",
-            "en": "Process map"
-          },
-          "share": 20
+      {
+        "id": "build",
+        "title": {
+          "ru": "Рабочий бот на тесте",
+          "en": "Working bot on a test account"
         },
-        {
-          "id": "integrate",
-          "title": {
-            "ru": "Интеграции",
-            "en": "Integrations"
-          },
-          "share": 50
-        },
-        {
-          "id": "launch",
-          "title": {
-            "ru": "Запуск и обучение",
-            "en": "Launch and training"
-          },
-          "share": 30
-        }
-      ]
-    },
-    {
-      "id": "app",
-      "title": {
-        "ru": "Приложение",
-        "en": "App"
+        "share": 40
       },
-      "products": [
-        "app",
-        "apps",
-        "miniapp",
-        "pwa",
-        "mobile",
-        "internal"
-      ],
-      "shares": [
-        {
-          "id": "design",
-          "title": {
-            "ru": "Дизайн и прототип",
-            "en": "Design and prototype"
-          },
-          "share": 25
+      {
+        "id": "launch",
+        "title": {
+          "ru": "Запуск и обучение",
+          "en": "Launch and training"
         },
-        {
-          "id": "core",
-          "title": {
-            "ru": "Основной функционал",
-            "en": "Core features"
-          },
-          "share": 25
+        "share": 30
+      }
+    ],
+    "automation": [
+      {
+        "id": "map",
+        "title": {
+          "ru": "Карта процессов",
+          "en": "Process map"
         },
-        {
-          "id": "full",
-          "title": {
-            "ru": "Все экраны и тесты",
-            "en": "All screens and tests"
-          },
-          "share": 25
-        },
-        {
-          "id": "launch",
-          "title": {
-            "ru": "Публикация и передача",
-            "en": "Publishing and handover"
-          },
-          "share": 25
-        }
-      ]
-    },
-    {
-      "id": "small",
-      "title": {
-        "ru": "Малый проект",
-        "en": "Small project"
+        "share": 20
       },
-      "products": [],
-      "shares": [
-        {
-          "id": "start",
-          "title": {
-            "ru": "Старт",
-            "en": "Start"
-          },
-          "share": 50
+      {
+        "id": "integrate",
+        "title": {
+          "ru": "Интеграции",
+          "en": "Integrations"
         },
-        {
-          "id": "launch",
-          "title": {
-            "ru": "Запуск",
-            "en": "Launch"
-          },
-          "share": 50
-        }
-      ]
-    }
-  ],
+        "share": 50
+      },
+      {
+        "id": "launch",
+        "title": {
+          "ru": "Запуск и обучение",
+          "en": "Launch and training"
+        },
+        "share": 30
+      }
+    ],
+    "app": [
+      {
+        "id": "design",
+        "title": {
+          "ru": "Дизайн и прототип",
+          "en": "Design and prototype"
+        },
+        "share": 25
+      },
+      {
+        "id": "core",
+        "title": {
+          "ru": "Основной функционал",
+          "en": "Core features"
+        },
+        "share": 25
+      },
+      {
+        "id": "full",
+        "title": {
+          "ru": "Все экраны и тесты",
+          "en": "All screens and tests"
+        },
+        "share": 25
+      },
+      {
+        "id": "launch",
+        "title": {
+          "ru": "Публикация и передача",
+          "en": "Publishing and handover"
+        },
+        "share": 25
+      }
+    ],
+    "small": [
+      {
+        "id": "start",
+        "title": {
+          "ru": "Старт",
+          "en": "Start"
+        },
+        "share": 50
+      },
+      {
+        "id": "launch",
+        "title": {
+          "ru": "Запуск",
+          "en": "Launch"
+        },
+        "share": 50
+      }
+    ]
+  },
   "products": {
     "admin": {
       "kind": "from",

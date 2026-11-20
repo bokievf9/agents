@@ -162,7 +162,7 @@ describe('payout per paid stage (payment by stages, 2026-11-21)', () => {
     expect(payoutSummary(store.get(referral.id)!, 'FT-2026-001', { no: 1, usd: 30 })).toContain('клиент оплатил этап 1');
     // the owner paid stage 2: it is settled; the first stage's payout is untouched
     const spec = payoutKindSpecs(ctx)[KIND_PAYOUT]!;
-    await spec.execute({ referralId: referral.id, stageNo: 2, amountUsd: 40 });
+    await spec.execute({ referralId: referral.id, stageNo: 2, amountUsd: 40 }, 0);
     expect(store.stagePayouts(referral.id).map((x) => [x.stageNo, x.paidAt !== null])).toEqual([[2, true], [3, false]]);
     expect(store.get(referral.id)!.status).toBe('paid');
     // the owner rejected stage 3: it is released and can be asked again; a settled one stays
@@ -171,7 +171,7 @@ describe('payout per paid stage (payment by stages, 2026-11-21)', () => {
     expect(store.stagePayouts(referral.id).map((x) => x.stageNo)).toEqual([2]);
     expect(worker.requestStagePayout(ctx, { referralId: referral.id, stageNo: 3, stageUsd: 300, contact: '@cam', invoiceNumber: 'FT-2026-003' })).toEqual({ usd: 30 });
     // the first stage's approval still moves the referral to rewarded
-    await spec.execute({ referralId: referral.id });
+    await spec.execute({ referralId: referral.id }, 0);
     expect(store.get(referral.id)!.status).toBe('rewarded');
   });
 });
