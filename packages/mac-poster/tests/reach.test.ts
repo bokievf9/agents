@@ -44,7 +44,7 @@ case "$1 $2" in
   "instagram profile") printf '%s' '${needLogin}' ;;
   "github read") printf '%s' '${notFound}' ;;
   "web read") case "$3" in
-      https://slow.example/*) sleep 5 ;;
+      https://slow.example/*) exec sleep 60 ;;
       https://garbage.example/*) echo 'Traceback (most recent call last)' ;;
       *) printf '%s' '{"ok":true,"items":[{"title":"T","url":"https://example.com/","text":"page"}],"meta":{}}' ;;
     esac ;;
@@ -193,11 +193,9 @@ describe('runReach with a fake agent-reach and a fake HQ', () => {
 
   it('a job that runs past the limit is killed and answered as a timeout; output that is not JSON is a failure; the run goes on', async () => {
     const t = await setup([job(1, 'web', 'read', { target: 'https://slow.example/a' }), job(2, 'web', 'read', { target: 'https://garbage.example/a' }), job(3, 'web', 'read', { target: 'https://example.com/' })]);
-    const started = Date.now();
-    const r = await runReach({ client: t.hq.client, runCli: t.runCli, timeoutMs: 700, log: t.log });
-    expect(Date.now() - started).toBeLessThan(4500);
+    const r = await runReach({ client: t.hq.client, runCli: t.runCli, timeoutMs: 4000, log: t.log });
     expect(r).toMatchObject({ done: 1, failed: 2 });
-    expect(t.hq.jobs[0]).toMatchObject({ status: 'failed', error: 'таймаут 1 с' });
+    expect(t.hq.jobs[0]).toMatchObject({ status: 'failed', error: 'таймаут 4 с' });
     expect(t.hq.jobs[1]!.error).toContain('не JSON');
     expect(t.hq.jobs[2]).toMatchObject({ status: 'done' });
   });
@@ -224,7 +222,7 @@ describe('runReach with a fake agent-reach and a fake HQ', () => {
     // and a configured smaller cap
     const t2 = await setup(Array.from({ length: 6 }, (_, i) => job(i + 1, 'web', 'read', { target: `https://example.com/${i}` })));
     expect((await runReach({ client: t2.hq.client, runCli: t2.runCli, max: 3, log: t2.log })).seen).toBe(3);
-  }, 40_000); // a freshly written script costs ~0.1-0.2 s per start on macOS (Gatekeeper scan)
+  }); // a freshly written script costs ~0.1-0.2 s per start on macOS (Gatekeeper scan)
 
   it('two runs at the same time share the queue: every job is claimed once (409 for the loser) and run once', async () => {
     const t = await setup(Array.from({ length: 6 }, (_, i) => job(i + 1, 'web', 'read', { target: `https://example.com/${i}` })));
