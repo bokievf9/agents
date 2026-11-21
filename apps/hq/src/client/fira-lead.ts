@@ -110,6 +110,15 @@ export function oneQuestion(text: string): string {
   return q >= 0 && q < parts.length - 1 ? parts.slice(0, q + 1).join(' ') : text;
 }
 
+/** Sentences that offer the builder or a call (the code adds the offers with the right link and windows). */
+const OFFER = /соберите проект|собрать проект|сборк\p{L}*\s+проект|созвон|голосом|put the project together|project builder|book a call|a call is easier/iu;
+export function withoutOffers(text: string): string {
+  const kept = text.split(/(?<=[.!?:])\s+/).filter((x) => !OFFER.test(x));
+  return kept.join(' ').trim();
+}
+/** The words already tell the person his question went to a person. */
+const TOLD = /основател|передал|передам|уточню у команды|founder|passed (it|your question)|ask the team/iu;
+
 const squash = (s: string): string => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 
 /** The words of the code (a `before` answer) for the memory of the conversation. */
@@ -305,6 +314,8 @@ export function createFiraLead(o: FiraLeadOptions): FiraLead {
       let reply = stripLinks(words);
       const noted = Boolean(note) && reply.endsWith(note);
       if (noted) reply = reply.slice(0, -note.length).trim();
+      // the offers are the code's: a sentence of the model that offers the builder or a call itself goes when the code adds them
+      if (ready) reply = withoutOffers(reply);
       reply = ready ? withoutTrailingQuestion(reply) : oneQuestion(reply);
       if (noted) reply = `${reply} ${note}`.trim();
       // text.detect on our own words: flagged text is rewritten once (Haiku), through the same guards again
@@ -322,12 +333,13 @@ export function createFiraLead(o: FiraLeadOptions): FiraLead {
       // the whole list only on «что вы делаете»; an earlier reply word for word is replaced by the code's answer to the need
       if (reply && !asksCatalogue(text) && productsNamed(reply, lang) >= 4) reply = needReply(st.q, lang, ready);
       if (reply && earlier.has(squash(reply))) reply = needReply(st.q, lang, ready);
-      if (!reply) reply = lang === 'ru' ? 'Понял вас. Расскажите, чем занимается ваш бизнес?' : 'Got it. What does your business do?';
+      if (!reply) reply = ready ? needReply(st.q, lang, true) : lang === 'ru' ? 'Понял вас. Расскажите, чем занимается ваш бизнес?' : 'Got it. What does your business do?';
       // the escalation policy: money, legal, no knowledge, a VIP go to the owner in one line; the visitor hears that once
       // «не знал» counts only when the agent said so (a qualification turn often finds nothing in the company pack, and that is fine)
       const unsure = outcome.unknown && /уточн|передам|не знаю|ask the team|not sure|will check/iu.test(words);
       escalated = escalationOf({ text, lang, mode: o.mode?.() ?? DEFAULT_ESCALATION_MODE, outcome: { unknown: unsure, ...(outcome.owner ? { owner: outcome.owner } : {}) }, vip: i.client?.vip === true }, { channel: channelRu });
-      if (escalated?.tell) reply = `${reply} ${escalated.tell}`;
+      // the person hears it once: when the words already say it went to the founder or the team, no second sentence
+      if (escalated?.tell && !TOLD.test(reply)) reply = `${reply} ${escalated.tell}`;
       if (flags.demo) reply = `${reply}\n\n${lang === 'ru' ? 'Демо' : 'Demo'}: ${flags.demo}`;
       if (ready) {
         result = await compose(reply, { builder: true, call: st.q.offered.call === 0 || flags.call, telegram: st.wantsTg });
