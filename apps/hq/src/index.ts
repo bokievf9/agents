@@ -41,6 +41,7 @@ import { BuilderBridge, RestGithubClient } from './bridge.js';
 import { ClientBot } from './client/bot.js';
 import { RateLimiter } from './client/sanitize.js';
 import { WebChatEngine } from './client/web.js';
+import { startFiraLeadManager } from './fira-wiring.js';
 import { siteBooker, siteSlots } from './client/site-slots.js';
 import { Calls } from './calls.js';
 import { FALLBACK_INSTRUCTIONS } from './client/prompt.js';
@@ -353,6 +354,8 @@ for (const dept of hq.departments()) {
 // POST /lead from firtech.pro (same host): a Sales task per lead. No token, no server.
 // POST /chat (website chat): the same conversation engine as the client bot, its LLM daily cap shared with the Telegram counter.
 const chatGate = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
+// ИИ-менеджер заявок on Fira (FIRA_LEAD_MANAGER=on): registered before the web chat and the client bot take their first turn
+if (cfg.firaLeadManager) startFiraLeadManager({ hq, db });
 const webChat = cfg.webChatToken
   ? new WebChatEngine({
       db, now: hq.now, tz: () => hq.tz, llm: clientLlm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate,

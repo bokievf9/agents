@@ -132,10 +132,13 @@ export class InMemoryLessons implements Lessons {
 /** Keeps entries in memory; drops texts of anything that is not `live`, whatever the caller passed (defence in depth). */
 export class InMemoryJournal implements Journal {
   readonly entries: JournalEntry[] = [];
+  /** `cap`: entries kept (a long-running process keeps the newest; absent: all, for tests and evals). */
+  constructor(private readonly cap?: number) {}
   record(e: JournalEntry): Promise<void> {
     const copy: JournalEntry = { ...e, tools: [...e.tools] };
     if (copy.mode !== 'live') delete copy.texts;
     this.entries.push(copy);
+    if (this.cap !== undefined && this.entries.length > this.cap) this.entries.splice(0, this.entries.length - this.cap);
     return Promise.resolve();
   }
 }

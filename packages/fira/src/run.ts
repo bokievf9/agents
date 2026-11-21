@@ -42,15 +42,20 @@ export interface RunDeps {
   leak?: LeakContext;
   /** USD spent this month by this agent (absent: no budget check). */
   spentUsd?: () => Promise<number>;
-  /** Turns of history sent to the model. */
+  /** Turns of history sent to the model (default: every turn of the conversation that has not expired). */
   historyTurns?: number;
+  /** Upper bound of the history's characters: the oldest turns go first when a long conversation passes it (default 24 000). */
+  historyChars?: number;
   /**
    * Deterministic rules of the app that run before the model (the receptionist's code paths: a person asked for, a price question answered from
    * the price list). A non-null answer is the reply of the turn: no model call, still guards, memory and journal.
    */
   before?: (conv: Conversation, ctx: ToolCtx) => Promise<{ reply: string; handoff?: string } | null>;
-  /** Code the app adds after the words (the offers in their order, a link); runs after the guards, so its own prices and links are not cut. */
-  after?: (reply: string, outcome: Outcome, conv: Conversation) => Promise<string>;
+  /**
+   * Code the app adds after the words (the offers in their order, a link); runs after the guards, so its own prices and links are not cut. `info`: the
+   * model gave nothing (`noModel`: off, down, refused, looping; the reply is the fallback) or the guards cut every sentence (`cutAll`).
+   */
+  after?: (reply: string, outcome: Outcome, conv: Conversation, info: { fallback: boolean; noModel: boolean; cutAll: boolean }) => Promise<string>;
 }
 
 export interface RunOut {
@@ -66,7 +71,19 @@ export interface RunOut {
   fingerprint: string;
 }
 
-const HISTORY = 12;
+/** The whole conversation (owner 2026-11-23: «держит весь контекст диалога»): the TTL of the mode bounds it, the character budget trims the oldest. */
+const HISTORY = 10_000;
+const HISTORY_CHARS = 24_000;
+
+/** The newest turns that fit `max` characters, starting with the person (the Messages API wants a user turn first). */
+export function fitHistory<T extends { role: string; text: string }>(turns: T[], max: number): T[] {
+  let total = 0;
+  let from = turns.length;
+  while (from > 0 && total + turns[from - 1]!.text.length <= max) total += turns[--from]!.text.length;
+  const out = turns.slice(from);
+  while (out.length && out[0]!.role !== 'user') out.shift();
+  return out;
+}
 const TOOL_RESULT_MAX = 2000;
 
 const FALLBACK = {
@@ -110,7 +127,7 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
   ]);
   const extra = turnBlock({ profile, lessons, hits, note: conv.note });
   const system: LlmSystemBlock[] = [...c.system, ...(extra ? [{ text: extra }] : [])];
-  const messages: LlmChatMessage[] = [...history.map((t) => ({ role: t.role, content: t.text })), { role: 'user', content: conv.text }];
+  const messages: LlmChatMessage[] = [...fitHistory(history, deps.historyChars ?? HISTORY_CHARS).map((t) => ({ role: t.role, content: t.text })), { role: 'user', content: conv.text }];
 
   let reply = '';
   let rounds = 0;
@@ -149,7 +166,8 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
     }
   } else tier = null;
 
-  if (!reply.trim()) {
+  const noModel = !reply.trim();
+  if (noModel) {
     fallback = true;
     const best = hits[0];
     if (best && best.score >= 0.5) reply = best.text;
@@ -167,7 +185,7 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
   // the leak guard on everything that did not come from code: paths, env names, keys, IPs, /admin, other clients' names
   const lk = secret && !ruled && g.text ? leakGuard(g.text, conv.lang, deps.leak) : { text: g.text, cut: 0, kinds: [] as string[] };
   const guarded = lk.text || fb(conv.lang).handoff;
-  const text = deps.after ? (await deps.after(guarded, outcome, conv)).trim() || guarded : guarded;
+  const text = deps.after ? (await deps.after(guarded, outcome, conv, { fallback, noModel, cutAll: !noModel && !g.text })).trim() || guarded : guarded;
 
   // memory: live keeps texts liveDays, anon anonHours (a captured contact promotes it), demo nothing
   try {
