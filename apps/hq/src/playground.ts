@@ -707,12 +707,12 @@ export class Playground {
   }
 
   /** The public route: `demo-<niche>` is the builder preview, anything else a client's live agent. */
-  handlePublic(publicId: string, o: { token: string; origin: string; body: unknown }): Promise<PgReply & { allowOrigin?: string }> {
-    return publicId.startsWith('demo-') ? this.chatDemo(publicId.slice(5), o.body) : this.chatPublic(publicId, o);
+  handlePublic(publicId: string, o: { token: string; origin: string; body: unknown; trusted?: boolean }): Promise<PgReply & { allowOrigin?: string }> {
+    return publicId.startsWith('demo-') ? this.chatDemo(publicId.slice(5), o.body, o.trusted === true) : this.chatPublic(publicId, o);
   }
 
   /** `POST /agent/:publicId/chat` for the client's own site: the per-agent token, a live agent, the origin the client set. */
-  async chatPublic(publicId: string, o: { token: string; origin: string; body: unknown }): Promise<PgReply & { allowOrigin?: string }> {
+  async chatPublic(publicId: string, o: { token: string; origin: string; body: unknown; trusted?: boolean }): Promise<PgReply & { allowOrigin?: string }> {
     const a = this.db.prepare('SELECT * FROM pg_agents WHERE public_id = ?').get(publicId) as AgentRow | undefined;
     // an unknown agent and a wrong token look the same, after the same work
     const good = a ? sha(o.token).length === a.token_hash.length && timingSafeEqual(Buffer.from(sha(o.token)), Buffer.from(a.token_hash)) : false;
@@ -723,7 +723,7 @@ export class Playground {
     if (demo) {
       const parsed = chatBody.safeParse(o.body ?? {});
       if (!parsed.success) return failR(400, 'invalid');
-      const who = this.demoClient(parsed.data);
+      const who = this.demoClient(parsed.data, o.trusted === true);
       if (who === 'login_required') return { ...failR(401, 'login_required'), allowOrigin: '*' };
       const run = () => this.chat(a, { conversationId: parsed.data.conversationId ?? `d-${randomBytes(9).toString('base64url')}`, text: parsed.data.text, channel: 'demo' });
       const m = who === null ? { ok: true as const, value: await run() } : await this.d.demoUsage!.metered(who, `agent:${a.public_id}`, run);
@@ -747,10 +747,11 @@ export class Playground {
   }
 
   /** The client a demo request names: his id, null (anonymous demo, allowed unless `demoRequireClient`) or `login_required`. */
-  private demoClient(b: { clientEmail?: string | undefined; cabinetId?: string | undefined; clientId?: string | undefined; clientName?: string | undefined }): number | 'login_required' | null {
+  private demoClient(b: { clientEmail?: string | undefined; cabinetId?: string | undefined; clientId?: string | undefined; clientName?: string | undefined }, trusted: boolean): number | 'login_required' | null {
     const du = this.d.demoUsage;
     if (!du) return null;
-    const id = du.resolveClient({ email: b.clientEmail, cabinetId: b.cabinetId ?? b.clientId, name: b.clientName });
+    // M1: the browser reaches this route directly, so an identity in the body is believed only with the site's token; and the demo never creates a cabinet account
+    const id = !trusted ? null : du.resolveClient({ email: b.clientEmail, cabinetId: b.cabinetId ?? b.clientId, name: b.clientName }, { create: false });
     return id ?? (this.d.demoRequireClient ? 'login_required' : null);
   }
 
@@ -758,7 +759,7 @@ export class Playground {
     const limit = json<{ msgsPerDay?: number }>(a.limits, {}).msgsPerDay ?? defaultLimit(this.db, a.state === 'live' ? 'live' : 'draft');
     if (this.usedToday(a.id) >= limit) {
       // P-25: the owner hears about it once per agent per day (counts and the agent's name only)
-      if (this.hitsToday(a.id) === 0) this.d.notifyOwner?.(`Агент «${a.name}» клиента исчерпал лимит ${limit} сообщений в сутки: следующие ответы получают отказ до завтра. Лимит меняется в Пульте.`);
+      if (this.hitsToday(a.id) === 0) this.d.notifyOwner?.(`Агент #${a.id} клиента исчерпал лимит ${limit} сообщений в сутки: следующие ответы получают отказ до завтра. Лимит меняется в Пульте.`);
       this.count(a.id, 'limit_hit');
       return { error: 'limit_reached' };
     }
@@ -888,11 +889,11 @@ export class Playground {
    * `POST /agent/demo-<niche>/chat`: the DEMO persona of a niche for the website's builder preview. No token, nothing stored: the turns of a browser session live in
    * memory for 20 minutes (at most 12), no memory across sessions; tools work on the demo's own notes and a fixed slot list, nothing is booked or captured.
    */
-  async chatDemo(niche: string, body: unknown): Promise<PgReply> {
+  async chatDemo(niche: string, body: unknown, trusted = false): Promise<PgReply> {
     if (!(NICHES as readonly string[]).includes(niche)) return failR(404, 'not_found');
     const parsed = z.object({ sessionId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/), text: z.string().trim().min(1).max(500), ...identity }).safeParse(body ?? {});
     if (!parsed.success) return failR(400, 'invalid');
-    const who = this.demoClient(parsed.data);
+    const who = this.demoClient(parsed.data, trusted);
     if (who === 'login_required') return failR(401, 'login_required');
     if (who === null) return this.chatDemoRun(niche, parsed.data);
     const m = await this.d.demoUsage!.metered(who, `agent:demo-${niche}`, () => this.chatDemoRun(niche, parsed.data));

@@ -98,12 +98,12 @@ export class DemoUsage {
    * The client a request names: by email (the cabinet account, created at once when HQ has not met it yet: the site signs the visitor in before the demo),
    * else by `supabase_id` or the numeric HQ id. null: nobody identified (or an unknown id).
    */
-  resolveClient(who: { email?: string | undefined; cabinetId?: string | undefined; name?: string | undefined; locale?: string | undefined }): number | null {
+  resolveClient(who: { email?: string | undefined; cabinetId?: string | undefined; name?: string | undefined; locale?: string | undefined }, opts: { create?: boolean } = {}): number | null {
     const db = this.d.db;
     const email = who.email?.trim().toLowerCase();
     if (email) {
       const t = this.d.now();
-      db.prepare('INSERT OR IGNORE INTO cab_clients (email, name, locale, supabase_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+      if (opts.create !== false) db.prepare('INSERT OR IGNORE INTO cab_clients (email, name, locale, supabase_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
         .run(email, (who.name ?? '').trim().slice(0, 120), who.locale === 'en' ? 'en' : 'ru', who.cabinetId?.slice(0, 64) ?? '', t, t);
       return (db.prepare('SELECT id FROM cab_clients WHERE email = ?').get(email) as { id: number } | undefined)?.id ?? null;
     }

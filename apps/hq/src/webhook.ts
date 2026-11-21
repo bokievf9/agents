@@ -178,7 +178,7 @@ export function createWebhook(
      * Public `POST|OPTIONS /agent/:publicId/chat` (the playground, `playground.ts`): the site widget of a client's live agent (header `x-agent-token`, the origin the
      * client set) and the builder preview (`demo-<niche>`, no token). Per-IP limits here, the daily limits of the agent inside `handle`. Without it: 404.
      */
-    agent?: { handle: (publicId: string, req: { token: string; origin: string; body: unknown }) => Promise<{ status: number; body: Record<string, unknown>; allowOrigin?: string }> };
+    agent?: { handle: (publicId: string, req: { token: string; origin: string; body: unknown; trusted: boolean }) => Promise<{ status: number; body: Record<string, unknown>; allowOrigin?: string }> };
   } = {},
 ): Server {
   const hits: number[] = [];
@@ -313,7 +313,9 @@ export function createWebhook(
             /* falls through to invalid */
           }
           const token = typeof req.headers['x-agent-token'] === 'string' ? req.headers['x-agent-token'] : '';
-          const out = await extra.agent.handle(publicId, { token, origin, body: data });
+          // the signed-in identity of a demo request counts only from the site's server (its `x-chat-token`); a browser's body alone names nobody (M1)
+          const trusted = Boolean(chat) && tokenOk(req.headers['x-chat-token'] as string | undefined, chat!.token);
+          const out = await extra.agent.handle(publicId, { token, origin, body: data, trusted });
           res.writeHead(out.status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...cors(publicId.startsWith('demo-') ? '*' : out.allowOrigin ?? '') });
           return void res.end(JSON.stringify(out.body));
         }

@@ -209,3 +209,6 @@ GET /pay/FT-2026-001?k=Qm9vb2tpbmctYm90LWZvci15b3VyLWJ1c2lu
 (ISO, окно, которое сайт уже забронировал в своей форме) становится бронью созвона в HQ (`call_bookings`, `site_state = site`): подтверждение, перенос и напоминания дальше ведёт HQ
 (Пульт `POST /admin/crm/leads/:id/call`, `docs/admin-crm-api.md`, «Созвоны живут в HQ»). Брони, которые HQ ставит сам (чат, бот, Пульт), приходят на сайт `POST <SITE_URL>/api/slots`
 с `x-hq-token` (контракт там же).
+
+### Личность демо на публичном маршруте (M1, 2026-11-23)
+`POST /agent/:publicId/chat` (демо-персона `demo-<ниша>` и демо лида по `demoKey`) принимает `clientEmail`/`cabinetId`/`clientId` из тела ТОЛЬКО вместе с заголовком `x-chat-token` сайта (тот же секрет, что у `POST /chat`; его шлёт серверный прокси сайта `/api/demo-agent/<id>`, не браузер). Без него тело никого не называет: запрос анонимный (при `DEMO_REQUIRE_CLIENT=on` это 401 `login_required`). Демо не создаёт `cab_clients`: клиента ищут по email или `supabase_id`, неизвестный считается анонимом (кабинет создаёт клиента при входе).

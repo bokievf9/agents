@@ -77,7 +77,8 @@ describe('the site demo tab (/chat with persona) is booked to the signed-in clie
 describe('the agent routes', () => {
   it('POST /agent/demo-<niche>/chat books the client, answers the usage, and stops at the cap (429 limit_reached with the fields)', async () => {
     const { pg, db } = world({ limit: 2 });
-    const ask = (n: number, extra: Record<string, unknown> = ME) => pg.handlePublic('demo-salon', { token: '', origin: '', body: { sessionId: `session-${n}-abcdef`, text: 'Здравствуйте', ...extra } });
+    db.prepare("INSERT INTO cab_clients (email, name, supabase_id, created_at, updated_at) VALUES ('liza@example.com', 'Лиза', 'sb-liza-1', 1, 1)").run();
+    const ask = (n: number, extra: Record<string, unknown> = ME) => pg.handlePublic('demo-salon', { token: '', origin: '', trusted: true, body: { sessionId: `session-${n}-abcdef`, text: 'Здравствуйте', ...extra } });
     const r1 = await ask(1);
     expect(r1.status).toBe(200);
     expect(r1.body).toMatchObject({ ok: true, limit: 2, remaining: 1, usage: { used: 1 } });
@@ -105,12 +106,12 @@ describe('the agent routes', () => {
     const made = (pg as any).insertAgent(0, 7, null, { company: 'Салон', niche: 'салон красоты', goals: [], tone: '', languages: ['ru'] });
     const publicId = (db.prepare('SELECT public_id FROM pg_agents WHERE id = ?').get(made.id) as any).public_id as string;
     const key = pg.demoKey(publicId)!;
-    const ask = (extra: Record<string, unknown>) => pg.handlePublic(publicId, { token: '', origin: '', body: { demoKey: key, text: 'Здравствуйте', conversationId: 'conv-0000001', ...extra } });
+    const ask = (extra: Record<string, unknown>) => pg.handlePublic(publicId, { token: '', origin: '', trusted: true, body: { demoKey: key, text: 'Здравствуйте', conversationId: 'conv-0000001', ...extra } });
     const r1 = await ask({ clientId: '5', demo: true });
     expect(r1.status).toBe(200);
     expect(r1.body).toMatchObject({ mode: 'demo', usage: { limit: 2, used: 1, remaining: 1 } });
     // the preview spends the same cap
-    await pg.handlePublic('demo-clinic', { token: '', origin: '', body: { sessionId: 'session-1-abcdef', text: 'Привет', clientId: '5' } });
+    await pg.handlePublic('demo-clinic', { token: '', origin: '', trusted: true, body: { sessionId: 'session-1-abcdef', text: 'Привет', clientId: '5' } });
     const over = await ask({ clientId: '5' });
     expect(over.status).toBe(429);
     expect(over.body).toMatchObject({ error: 'limit_reached', remaining: 0 });
@@ -143,5 +144,28 @@ describe('reading the usage: the 30 days of a client and the morning line', () =
     expect(demoUsage.summaryLine()).toMatch(/^Демо на сайте за сутки: 2 клиента, 3 сообщения, \$0\.\d\d\.$/);
     clock.t += 3 * DAY;
     expect(demoUsage.summaryLine()).toBeNull();
+  });
+});
+
+describe('M1: the identity of a public demo request counts only with the site token', () => {
+  it('without it the body names nobody: no usage fields, no cab_clients row, nothing counted; with it the client is metered but still never created', async () => {
+    const { pg, db } = world({ limit: 2, require: true });
+    const body = { sessionId: 'session-9-abcdef', text: 'Здравствуйте', clientEmail: 'victim@example.com', cabinetId: 'sb-fake-1', demo: true };
+    const anon = await pg.handlePublic('demo-salon', { token: '', origin: '', body });
+    expect(anon.status).toBe(401);
+    expect(anon.body).toMatchObject({ error: 'login_required' });
+    expect((db.prepare('SELECT COUNT(*) n FROM cab_clients').get() as any).n).toBe(0);
+    // the site's server: an email HQ has not met is not created by the demo, so nobody is identified
+    const unknown = await pg.handlePublic('demo-salon', { token: '', origin: '', trusted: true, body });
+    expect(unknown.status).toBe(401);
+    expect((db.prepare('SELECT COUNT(*) n FROM cab_clients').get() as any).n).toBe(0);
+    // a client the cabinet already created is metered when the site names him
+    db.prepare("INSERT INTO cab_clients (id, email, name, created_at, updated_at) VALUES (7, 'victim@example.com', 'V', 1, 1)").run();
+    const ok = await pg.handlePublic('demo-salon', { token: '', origin: '', trusted: true, body });
+    expect(ok.status).toBe(200);
+    expect(ok.body).toMatchObject({ usage: { used: 1 } });
+    // an untrusted browser cannot burn his limit
+    const burn = await pg.handlePublic('demo-salon', { token: '', origin: '', body });
+    expect(burn.status).toBe(401);
   });
 });
