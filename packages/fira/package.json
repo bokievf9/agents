@@ -12,7 +12,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "eval": "tsx --conditions=source src/eval/cli.ts"
+    "eval": "tsx --conditions=source src/eval/cli.ts",
+    "build-company-pack": "tsx --conditions=source scripts/build-company-pack.ts"
   },
   "files": [
     "dist",

@@ -1,3 +1,5 @@
+import type { Audience } from './stores.js';
+
 /**
  * Fira: the agent specification. An agent is **role × niche × company** (`docs/fira-architecture.md`, §1): the role pack says what the job is,
  * the niche pack what the field knows, the company pack whose agent it is (facts, style, rights). The model policy and the eval set complete it.
@@ -34,12 +36,19 @@ export interface RolePack {
   tools: string[];
   /** Default tier of the dialogue. */
   tier: ModelTier;
+  /** Selling roles (`lead-manager`): who buys and what hurts them, the offer, objections with answers, how a good manager sells. Empty elsewhere. */
+  segments: string[];
+  offer: string[];
+  objections: QA[];
+  selling: string[];
 }
 
 /** The field: words, services, typical questions, objections, limits of the field (medicine, law, money), tone. */
 export interface NichePack {
   id: string;
   title: string;
+  /** Business kinds of the builder (`k.` chunk) this niche covers, e.g. `salon, barber, nails` (front matter `kinds`). */
+  kinds: string[];
   terms: string[];
   services: string[];
   faq: QA[];
@@ -119,6 +128,8 @@ export interface GuardPolicy {
 export interface AgentSpec {
   /** `<company>/<role>` by convention, e.g. `firtech/lead-manager`. */
   id: string;
+  /** Who the agent talks to by default (a turn may say otherwise): what knowledge it reads and how strict the secrecy rules are. */
+  audience: Audience;
   /** Bumped on every change of the spec; journaled with each turn, so an eval can be tied to a version. */
   version: number;
   role: RolePack;
@@ -145,9 +156,10 @@ export function defaultModelPolicy(role: RolePack): ModelPolicy {
 }
 
 /** A spec from its three packs with the defaults filled in. */
-export function makeSpec(o: { role: RolePack; niche: NichePack; company: CompanyPack; version?: number; model?: Partial<ModelPolicy>; guards?: Partial<GuardPolicy>; evals?: string[] }): AgentSpec {
+export function makeSpec(o: { role: RolePack; niche: NichePack; company: CompanyPack; version?: number; model?: Partial<ModelPolicy>; guards?: Partial<GuardPolicy>; evals?: string[]; audience?: Audience }): AgentSpec {
   return {
     id: `${o.company.id}/${o.role.id}`,
+    audience: o.audience ?? 'visitor',
     version: o.version ?? 1,
     role: o.role,
     niche: o.niche,

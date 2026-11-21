@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { LlmSystemBlock, LlmToolDef } from '@fir/core';
 import type { AgentSpec, ModelPolicy, ModelTier, TaskKind } from './spec.js';
+import { secrecyLines } from './secrecy.js';
 import type { ToolRegistry } from './tools.js';
 
 /**
@@ -57,9 +58,12 @@ export function systemText(spec: AgentSpec, toolNames: readonly string[]): strin
     '',
     '## Обязанности',
     ...bullets(role.duties),
-    '',
-    `## Сфера: ${niche.title}`,
   ];
+  if (role.selling.length) out.push('', '## Как продаёт менеджер', ...bullets(role.selling));
+  if (role.segments.length) out.push('', '## Кому продаём и что у них болит', ...bullets(role.segments));
+  if (role.offer.length) out.push('', '## Оффер', ...bullets(role.offer));
+  if (role.objections.length) out.push('', '## Возражения и ответы', ...role.objections.map((x) => `- ${x.q} Ответ: ${x.a}`));
+  out.push('', `## Сфера: ${niche.title}`);
   if (niche.services.length) out.push('Услуги и продукты:', ...bullets(niche.services));
   if (niche.terms.length) out.push('Понятия сферы:', ...bullets(niche.terms));
   if (niche.faq.length) out.push('Частые вопросы:', ...niche.faq.map((x) => `- ${x.q} Ответ: ${x.a}`));
@@ -87,6 +91,7 @@ export function systemText(spec: AgentSpec, toolNames: readonly string[]): strin
     '- Не проси паспорта, пароли и номера карт. Не обсуждай чужих клиентов и их данные.',
   );
   if (company.rights.locked.length) out.push(`- Это решает человек, ты только передаёшь: ${company.rights.locked.join(', ')}.`);
+  out.push('', '## Неразглашение', ...secrecyLines(spec.audience));
   return out.join('\n');
 }
 

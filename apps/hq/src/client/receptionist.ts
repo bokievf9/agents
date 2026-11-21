@@ -1,4 +1,4 @@
-import { detectText, errMsg, formatSlot, log, productList, productName, tryComplete, zonedParts, type LlmClient } from '@fir/core';
+import { detectText, errMsg, formatSlot, log, productList, productName, tryComplete, zonedParts, type LlmClient, type LlmRequest } from '@fir/core';
 import { isPriceQuestion } from '@fir/worker-lead-intake';
 import { z } from 'zod';
 import {
@@ -10,6 +10,7 @@ import { sanitizeAnswer } from './sanitize.js';
 import type { Turn } from './shared.js';
 import { TEAM_MARK } from './prompt.js';
 import { T, type Lang } from './texts.js';
+import { registeredFiraLead, type FiraLeadTurn } from './fira-registry.js';
 
 /**
  * ИИ-менеджер заявок 2.0 (2026-11-22): the brain of the receptionist for the website chat and the client bot. It asks at most three questions (what business,
@@ -96,7 +97,14 @@ const ModelSchema = z.object({
     budget: z.string().optional().catch(undefined),
   }).partial().optional().catch(undefined),
 });
-type Model = z.output<typeof ModelSchema>;
+export type Model = z.output<typeof ModelSchema>;
+
+/** What `record_brief` reported (its input), read with the same schema as the old JSON `extract`: unknown values are dropped, never thrown. */
+export function briefOf(input: Record<string, unknown>): Model {
+  const { intent, ready, ...extract } = input;
+  const parsed = ModelSchema.safeParse({ reply: '', intent: typeof intent === 'string' ? intent : undefined, ready: typeof ready === 'boolean' ? ready : undefined, extract });
+  return parsed.success ? parsed.data : { reply: '' };
+}
 
 /** The first JSON object in a model answer. A plain-text answer is its own reply with nothing extracted. */
 export function parseModel(raw: string): Model {
@@ -145,12 +153,12 @@ export function findContact(text: string): string | null {
   return null;
 }
 
-const wantsCall = (t: string): boolean => /созвон|созвониться|позвони(те|ть)|звонок|book a call|schedule a call|a call\b|call me|phone call/i.test(t);
+export const wantsCall = (t: string): boolean => /созвон|созвониться|позвони(те|ть)|звонок|book a call|schedule a call|a call\b|call me|phone call/i.test(t);
 /** The visitor wants to go on in Telegram instead of the builder (the only case where Telegram is offered). */
 export function insistsOnTelegram(t: string): boolean {
   return /(давайте|можно|удобнее|лучше|предпочитаю|хочу|продолжим|напишите|пишите|свяжитесь|связаться)[^.?!\n]{0,40}(в\s+)?(телеграм|телеге|тг(?![\p{L}])|telegram|whatsapp|ватсап)|(телеграм|telegram)\s*(удобнее|лучше|please|пожалуйста)|(не хочу|неудобно|не буду|лень)\s+(собирать|заполнять|конструктор)|(don'?t|do not) want to (build|fill|use the builder)|(prefer|rather|let'?s)[^.?!\n]{0,30}(telegram|whatsapp)/iu.test(t);
 }
-const wantsBuilder = (t: string): boolean => /собрать|сборк|конструктор|builder|build (it|a project|my)/i.test(t);
+export const wantsBuilder = (t: string): boolean => /собрать|сборк|конструктор|builder|build (it|a project|my)/i.test(t);
 const SUPPORT_WORDS = /мой проект|наш проект|договор|счёт|счет|оплат|этап|статус|акт(?![\p{L}])|my project|invoice|contract|stage|payment|status of/iu;
 
 const ORDINAL: [RegExp, number][] = [
@@ -451,7 +459,7 @@ export const LEAD_DONE = {
 } as const;
 
 // ---- the prompt ----
-const SLOT_ASK: Record<NonNullable<ReturnType<typeof nextSlot>>, string> = {
+export const SLOT_ASK: Record<NonNullable<ReturnType<typeof nextSlot>>, string> = {
   niche: 'какой у собеседника бизнес и чем он занимается',
   pain: 'что сейчас мешает или теряется (заявки, запись, ответы ночью, рутина, повторяющиеся вопросы)',
   get product() {
@@ -462,7 +470,7 @@ const SLOT_ASK: Record<NonNullable<ReturnType<typeof nextSlot>>, string> = {
   budget: 'на какой бюджет он ориентируется (можно мягко, он вправе не отвечать)',
 };
 
-const slotsKnown = (q: QState): string =>
+export const slotsKnown = (q: QState): string =>
   [
     q.kind || q.niche ? `бизнес: ${q.niche || q.kind}` : '', q.pain ? `боль: ${q.pain}` : '', q.goals?.length ? `цели: ${q.goals.join(', ')}` : '', q.products?.length ? `подходящие продукты: ${productNamesOf(q)}` : '',
     q.channels?.length ? `каналы: ${q.channels.join(', ')}` : '', q.timeline ? `срок: ${q.timeline}` : '', q.budget ? `бюджет: ${q.budget}` : '',
@@ -512,6 +520,11 @@ export interface ReceptionistDeps {
   slots?: (() => Promise<number[]>) | undefined;
   /** Origin of the builder link (default https://firtech.pro). */
   siteOrigin?: string | undefined;
+  /**
+   * The model step on Fira (`FIRA_LEAD_MANAGER=on`, `fira-lead.ts`). Absent: the one HQ registered at start (`registerFiraLead`), if any; `null`: the old
+   * runtime whatever is registered (tests of the old path).
+   */
+  fira?: FiraLeadTurn | null | undefined;
 }
 
 export interface ReceptionistIn {
@@ -519,8 +532,10 @@ export interface ReceptionistIn {
   text: string;
   q: QState;
   turns: Turn[];
-  /** A signed-in cabinet client (web): never sold to, routed to the thread on a project question. */
-  client?: { email: string; name: string } | undefined;
+  /** A signed-in cabinet client (web): never sold to, routed to the thread on a project question. `vip`: a client with a project (the owner hears his questions). */
+  client?: { email: string; name: string; vip?: boolean } | undefined;
+  /** The conversation (web: the session, Telegram: the chat), so the Fira runtime keeps every turn of it; absent: only `turns`. */
+  conversationId?: string | undefined;
   /** Telegram: the person is already in Telegram (no Telegram offer) and reachable (the call offer asks for a time only). Default web. */
   channel?: 'web' | 'telegram';
 }
@@ -535,7 +550,7 @@ export type ReceptionistOut =
   /** The model is off, over its cap or down: the engine falls back to the scripted intake. */
   | { kind: 'fallback'; q: QState; down?: boolean };
 
-async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+export async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), ms);
@@ -585,17 +600,36 @@ export function needReply(q: QState, lang: Lang, proposing: boolean): string {
 }
 
 /** The sentence with the question dropped when the turn is a proposal (the model asked one anyway). */
-function withoutTrailingQuestion(text: string): string {
+export function withoutTrailingQuestion(text: string): string {
   const parts = text.split(/(?<=[.!?])\s+/);
   while (parts.length > 1 && /\?\s*$/.test(parts[parts.length - 1]!)) parts.pop();
   return parts.join(' ');
 }
 
+export type ReplyOut = Extract<ReceptionistOut, { kind: 'reply' }>;
+
+/** What the code learned from the visitor's words before any model: the state (in a holder, the model step updates it) and the offers asked for. */
+export interface TurnState {
+  q: QState;
+  text: string;
+  wasLink?: string | undefined;
+  wantsTg: boolean;
+  callAsked: boolean;
+  contact?: string | undefined;
+}
+
+export interface Prepared {
+  st: TurnState;
+  /** The words, then the offers in their order (the builder link, the call, Telegram when asked for); updates `st.q`. */
+  compose(head: string, cta: Cta): Promise<ReplyOut>;
+}
+
 /**
- * One turn of the receptionist. Order: person asked for or upset, a signed-in client's project question, a price question (the list and the stage rule, no model),
- * then the model's qualification turn with the offers added by the code. The visitor's words are never logged.
+ * The code paths of a turn (the same for the old runtime and for Fira, where they are the `before` rule): a person asked for or upset, a signed-in client's
+ * project question, a call window picked, a price question (the list and the stage rule), the builder, a call or Telegram asked for, a link the visitor's words
+ * changed. `done`: the answer of the turn, no model. `go`: the model has to talk; the state and `compose` come along.
  */
-export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): Promise<ReceptionistOut> {
+export async function prepareTurn(d: ReceptionistDeps, i: ReceptionistIn): Promise<{ done: ReceptionistOut } | { go: Prepared }> {
   const text = i.text.trim();
   let q: QState = normalizeQ({ ...i.q, offered: { ...i.q.offered } });
   const repeats = q.lastText === text ? (q.repeats ?? 0) + 1 : 0;
@@ -605,15 +639,15 @@ export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): 
   const person = wantsPerson(text) ?? (repeats >= 2 ? 'upset' : null);
   if (person) {
     q.handoff = true;
-    return { kind: 'handoff', q, why: person };
+    return { done: { kind: 'handoff', q, why: person } };
   }
-  if (i.client && SUPPORT_WORDS.test(text)) return { kind: 'client', q };
+  if (i.client && SUPPORT_WORDS.test(text)) return { done: { kind: 'client', q } };
   // P-03: the visitor picks one of the call windows offered last: kept in the state (and the lead); the words come from the code
   const picked = q.offeredSlots?.length ? pickSlot(text, q.offeredSlots, d.tz()) : null;
   if (picked !== null && picked > d.now()) {
     q.slot = picked;
     const textOut = slotPickedText(i.lang, picked, d.tz(), { signedIn: i.client !== undefined, loginUrl: loginUrlOf(d.siteOrigin ?? SITE_ORIGIN, i.lang), channel: i.channel ?? 'web' });
-    return { kind: 'reply', text: textOut, q, cta: { builder: false, call: false, telegram: false }, picked, removed: 0 };
+    return { done: { kind: 'reply', text: textOut, q, cta: { builder: false, call: false, telegram: false }, picked, removed: 0 } };
   }
 
   // what the visitor's words already settle (the need table, «не хочу сайт»): the state is updated before anything is answered, so every link carries it
@@ -621,9 +655,7 @@ export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): 
   q = merge(q, { reply: '' }, text);
   const origin = d.siteOrigin ?? SITE_ORIGIN;
   const tgChannel = i.channel === 'telegram';
-  const wantsTg = !tgChannel && insistsOnTelegram(text);
-  const callAsked = wantsCall(text);
-  const contact = findContact(text) ?? undefined;
+  const st: TurnState = { q, text, wasLink, wantsTg: !tgChannel && insistsOnTelegram(text), callAsked: wantsCall(text), contact: findContact(text) ?? undefined };
   const slots = async (): Promise<number[]> => {
     try {
       return (await d.slots?.()) ?? [];
@@ -632,50 +664,69 @@ export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): 
       return [];
     }
   };
-  const compose = async (head: string, cta: Cta): Promise<ReceptionistOut> => {
-    const link = `${origin}${builderPath(i.lang, buildOf(q))}`;
-    const path = builderPath(i.lang, buildOf(q));
-    const linkState: LinkState = q.link === undefined ? 'first' : q.link !== path ? 'changed' : 'same';
+  const compose = async (head: string, cta: Cta): Promise<ReplyOut> => {
+    const cur = st.q;
+    const link = `${origin}${builderPath(i.lang, buildOf(cur))}`;
+    const path = builderPath(i.lang, buildOf(cur));
+    const linkState: LinkState = cur.link === undefined ? 'first' : cur.link !== path ? 'changed' : 'same';
     if (cta.builder) {
-      q.offered.builder += 1;
-      q.link = path;
+      cur.offered.builder += 1;
+      cur.link = path;
     }
-    if (cta.call) q.offered.call += 1;
-    if (cta.telegram) q.offered.telegram += 1;
+    if (cta.call) cur.offered.call += 1;
+    if (cta.telegram) cur.offered.telegram += 1;
     const free = cta.call ? await slots() : [];
-    if (free.length) q.offeredSlots = free.slice(0, 2);
+    if (free.length) cur.offeredSlots = free.slice(0, 2);
     const tail = ctaText(i.lang, { linkState, link, slots: free, tz: d.tz(), cta, channel: i.channel ?? 'web', signedIn: i.client !== undefined, loginUrl: loginUrlOf(origin, i.lang) });
-    return { kind: 'reply', text: [head, tail].filter(Boolean).join('\n\n'), q, cta, ...(cta.builder ? { link } : {}), ...(contact ? { contact } : {}), ...(callAsked ? { callAsked: true } : {}), removed: 0 };
+    return { kind: 'reply', text: [head, tail].filter(Boolean).join('\n\n'), q: cur, cta, ...(cta.builder ? { link } : {}), ...(st.contact ? { contact: st.contact } : {}), ...(st.callAsked ? { callAsked: true } : {}), removed: 0 };
   };
 
   // a price question: the prices of the products that fit and the stage rule from the code, then the builder
   if (isPriceQuestion(text)) {
     q.askedPrice = true;
-    return compose(priceAnswer(i.lang, q), { builder: true, call: q.offered.call === 0, telegram: wantsTg });
+    return { done: await compose(priceAnswer(i.lang, q), { builder: true, call: q.offered.call === 0, telegram: st.wantsTg }) };
   }
   // the visitor asks for the builder, a call, or says Telegram is easier: the offers go out in their order, no model needed
-  if (wantsBuilder(text) || callAsked || wantsTg) {
-    const head = i.lang === 'ru' ? (wantsTg ? 'Хорошо, в Telegram тоже можно.' : 'Хорошо.') : wantsTg ? 'Sure, Telegram works too.' : 'Sure.';
+  if (wantsBuilder(text) || st.callAsked || st.wantsTg) {
+    const head = i.lang === 'ru' ? (st.wantsTg ? 'Хорошо, в Telegram тоже можно.' : 'Хорошо.') : st.wantsTg ? 'Sure, Telegram works too.' : 'Sure.';
     // the builder link always goes out (after Telegram it is the pull back: the price is visible in the builder at once)
-    return compose(head, { builder: true, call: callAsked || q.offered.call === 0, telegram: wantsTg });
+    return { done: await compose(head, { builder: true, call: st.callAsked || q.offered.call === 0, telegram: st.wantsTg }) };
   }
   // the builder was proposed and the visitor's words changed it («не хочу сайт, только агент»): the link is regenerated and sent again, always as the builder offer
   if (wasLink !== undefined && q.offered.builder > 0 && builderPath(i.lang, buildOf(q)) !== wasLink) {
-    return compose('', { builder: true, call: false, telegram: false });
+    return { done: await compose('', { builder: true, call: false, telegram: false }) };
   }
+  return { go: { st, compose } };
+}
 
-  if (!d.llm.enabled || !d.gate.llmAllowed()) return { kind: 'fallback', q };
-  if (d.gatewayDown?.()) return { kind: 'fallback', q, down: true };
+/**
+ * One turn of the receptionist. Order: the code paths of `prepareTurn` (person, client, window, price, offers asked for, a changed link), then the model's
+ * qualification turn with the offers added by the code. With `FIRA_LEAD_MANAGER=on` the model step is Fira's `run()` (`fira-lead.ts`); off, the JSON
+ * runtime below. The visitor's words are never logged.
+ */
+export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): Promise<ReceptionistOut> {
+  const fira = d.fira === undefined ? registeredFiraLead() : d.fira;
+  if (fira) return fira.turn(d, i);
+  const p = await prepareTurn(d, i);
+  if ('done' in p) return p.done;
+  const { st, compose } = p.go;
+  const text = st.text;
+  const wantsTg = st.wantsTg;
+  const contact = st.contact;
 
-  const offeredAlready = q.offered.builder > 0;
-  const propose = isEnough(q) || q.turns >= MAX_QUALIFY_TURNS;
-  const system = receptionistPrompt(d.instructions, i.lang, q, offeredAlready ? 'answer' : propose ? 'propose' : 'ask', { client: i.client ? { name: i.client.name } : undefined });
+  if (!d.llm.enabled || !d.gate.llmAllowed()) return { kind: 'fallback', q: st.q };
+  if (d.gatewayDown?.()) return { kind: 'fallback', q: st.q, down: true };
+
+  const offeredAlready = st.q.offered.builder > 0;
+  const propose = isEnough(st.q) || st.q.turns >= MAX_QUALIFY_TURNS;
+  const system = receptionistPrompt(d.instructions, i.lang, st.q, offeredAlready ? 'answer' : propose ? 'propose' : 'ask', { client: i.client ? { name: i.client.name } : undefined });
   d.gate.llmUsed();
   const raw = await withTimeout(tryComplete(d.llm, { tier: 'sonnet', maxTokens: 500, system, messages: [...i.turns, { role: 'user', content: text }] }), d.timeoutMs ?? 20_000);
-  if (!raw?.trim()) return { kind: 'fallback', q, down: true };
+  if (!raw?.trim()) return { kind: 'fallback', q: st.q, down: true };
   const team = raw.includes(TEAM_MARK);
   const m = parseModel(raw.split(TEAM_MARK).join(' '));
-  q = merge(q, m, text);
+  st.q = merge(st.q, m, text);
+  const q = st.q;
   q.turns += 1;
   if (m.intent === 'handoff') {
     q.handoff = true;
@@ -697,14 +748,7 @@ export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): 
   if (reply) {
     const lint = lintReply(reply, i.lang);
     if (lint.flagged) {
-      const fixed = await withTimeout(
-        tryComplete(d.llm, {
-          tier: 'haiku', maxTokens: 300,
-          system: `Перепиши реплику ИИ-менеджера заявок так, чтобы она звучала как живая речь внимательного менеджера. Убери штампы и обороты: ${lint.find.join(', ') || 'шаблонные фразы'}. Смысл, язык (${i.lang === 'ru' ? 'русский' : 'English'}) и вопрос, если он был, сохрани. Без markdown, эмодзи и длинных тире, не длиннее исходной. Ответ: только текст реплики.`,
-          messages: [{ role: 'user', content: reply }],
-        }),
-        d.timeoutMs ?? 20_000,
-      );
+      const fixed = await withTimeout(tryComplete(d.llm, rewriteRequest(reply, lint.find, i.lang)), d.timeoutMs ?? 20_000);
       const again = fixed ? sanitizeAnswer(fixed.trim(), T[i.lang].priceNote) : null;
       // a rewrite that came back as a stub or a fragment is not taken
       if (again && again.text.length >= 20 && again.text.length >= reply.length * 0.4) {
@@ -719,7 +763,16 @@ export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): 
 
   if (ready) {
     const out = await compose(reply, { builder: true, call: q.offered.call === 0, telegram: wantsTg });
-    return out.kind === 'reply' ? { ...out, rewritten, removed, ...(team ? { team: true } : {}) } : out;
+    return { ...out, rewritten, removed, ...(team ? { team: true } : {}) };
   }
   return { kind: 'reply', text: reply, q, cta: { builder: false, call: false, telegram: false }, ...(contact ? { contact } : {}), ...(team ? { team: true } : {}), rewritten, removed };
+}
+
+/** The one rewrite of a flagged reply (Haiku): the same request for both runtimes. */
+export function rewriteRequest(reply: string, find: string[], lang: Lang): LlmRequest {
+  return {
+    tier: 'haiku', maxTokens: 300,
+    system: `Перепиши реплику ИИ-менеджера заявок так, чтобы она звучала как живая речь внимательного менеджера. Убери штампы и обороты: ${find.join(', ') || 'шаблонные фразы'}. Смысл, язык (${lang === 'ru' ? 'русский' : 'English'}) и вопрос, если он был, сохрани. Без markdown, эмодзи и длинных тире, не длиннее исходной. Ответ: только текст реплики.`,
+    messages: [{ role: 'user', content: reply }],
+  };
 }

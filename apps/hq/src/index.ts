@@ -42,6 +42,7 @@ import { BuilderBridge, RestGithubClient } from './bridge.js';
 import { ClientBot } from './client/bot.js';
 import { RateLimiter } from './client/sanitize.js';
 import { WebChatEngine } from './client/web.js';
+import { startFiraLeadManager } from './fira-wiring.js';
 import { siteBooker, siteSlots } from './client/site-slots.js';
 import { Calls } from './calls.js';
 import { FALLBACK_INSTRUCTIONS } from './client/prompt.js';
@@ -371,6 +372,8 @@ const capNotice = (level: 80 | 100, used: number, cap: number) => void hq.alert(
   ? `Дневной лимит вызовов модели для клиентских чатов исчерпан (${used} из ${cap}): до завтра чаты отвечают сценариями. Лимит меняется в Пульте, настройки.`
   : `Клиентские чаты израсходовали ${used} из ${cap} вызовов модели за сегодня (80%). Лимит меняется в Пульте, настройки.`, { kind: 'budget' });
 for (const l of new Set([clientBot?.engine.limiter, chatGateForAgents, chatGate])) if (l) l.onCap ??= capNotice;
+// ИИ-менеджер заявок on Fira (FIRA_LEAD_MANAGER=on): registered before the web chat and the client bot take their first turn
+if (cfg.firaLeadManager) startFiraLeadManager({ hq, db });
 const webChat = cfg.webChatToken
   ? new WebChatEngine({
       db, now: hq.now, tz: () => hq.tz, llm: clientLlm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate, demoUsage, demoRequireClient: cfg.demoRequireClient,

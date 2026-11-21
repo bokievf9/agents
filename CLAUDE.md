@@ -249,6 +249,20 @@ Handoff агента площадки идёт владельцу агента �
 `stores.ts` + `adapters/memory.ts` (Knowledge, Memory, Lessons, Journal), `lessons.ts` (правка → урок), `eval/*` (формат `*.eval.json`, раннер, судья). Наборы: `pnpm --filter fira eval evals/lead-manager.eval.json [--live]`;
 в режиме скриптов они же идут в `pnpm -r test`. В `@fir/core` `llm.ts` добавлены `chat`, `tryChat`, `MockChatLlm`, тир `opus` (только для `chat`); `complete`/`tryJson` не менялись. Пакеты правятся коммитом, после прогона набора; снимок промпта в `tests/__snapshots__`.
 
+## ИИ-менеджер заявок на Fira (2026-11-23, шаг 1 миграции)
+Флаг `FIRA_LEAD_MANAGER=on` (по умолчанию `off`): веб-чат и клиентский бот отвечают через `run()` Fira (`client/fira-lead.ts`, запуск `fira-wiring.ts`,
+регистрация `client/fira-registry.ts`). Кодовые пути `prepareTurn` в `receptionist.ts` общие для обоих рантаймов; шаг модели: пакет должности
+`role-packs/lead-manager.md` (сегменты, оффер, возражения из playbook сайта), каталог без цен в кэшируемом блоке, заметка хода с нишей посетителя
+(`niche-packs/` salon, clinic, cafe, courses, carservice, shop), весь разговор из памяти, инструменты `price_list`, `builder_link`, `call_slots`,
+`record_brief`, `demo_link`, `knowledge_search` (пакет компании), `capture_contact`, `handoff_owner`. Эскалация `escalation.ts` Fira (деньги, юридическое,
+злость, человек, нет знаний, VIP), режим из настройки `autopilot.leadManager` (`ask_me | policy | autopilot`, по умолчанию `policy`), строка владельцу
+`hq.alert(kind: 'human')`. Уроки: таблица `fira_lessons` (правки владельца в ревью-центре и ответы в тредах, раз в час).
+Знания компании: `pnpm --filter fira build-company-pack --workspace ~/fir-tech` собирает `company-packs/firtech/` (публичное с сайта, внутреннее из
+документов, уровни `public | internal`, `secret` не попадает: файлы `.env*`, `server-env`, `data/` отказ, строки с ключами, токенами, IP режутся); HQ
+загружает пакет при старте и в 03:30. Неразглашение: блок в `compile()`, `isProbe` отвечает кодом без модели, охранник режет пути, env, ключи, IP,
+`/admin` и имена клиентов кабинета. Наборы: `evals/lead-manager.eval.json` (30), `evals/red-team.eval.json` (15, обязателен в `pnpm -r test`);
+сравнение старого и нового: `pnpm --filter hq fira-compare [--live]`. План и таблица тестов: `docs/fira-migration-lead-manager.md`.
+
 ## Один бот HQ (2026-11-22, пункт 13 ревью)
 Слова владельца: «Всё на админке. В ТГ оставим только одного бота, сам HQ, он будет напоминалкой: новый клиент, новая заявка, документ на одобрение. Только
 напоминания, мало инфы, никаких функций. Но умный HQ: если я задам любой вопрос, он должен ответить». Подробно: `apps/hq/docs/telegram-ux.md`, переписи `docs/process-census.md` раздел 11.

@@ -1,6 +1,7 @@
 import { cosine, hybrid, MIN_SCORE, wordScore, HashEmbedder } from '../knowledge.js';
+import { tiersFor } from '../stores.js';
 import type {
-  Embedder, Journal, JournalEntry, Knowledge, KnowledgeChunk, KnowledgeHit, KnowledgeMiss, Lesson, Lessons, MemTurn, Memory, PersonProfile,
+  Audience, Embedder, Journal, JournalEntry, Knowledge, KnowledgeChunk, KnowledgeHit, KnowledgeMiss, Lesson, Lessons, MemTurn, Memory, PersonProfile,
 } from '../stores.js';
 
 /** In-memory adapters: tests, evals and local runs. Same contracts as Supabase (company isolation, TTL, no texts outside `live`). */
@@ -11,16 +12,18 @@ export class InMemoryKnowledge implements Knowledge {
   constructor(private readonly embedder: Embedder = new HashEmbedder()) {}
 
   async add(chunks: KnowledgeChunk[]): Promise<number> {
-    const vs = await this.embedder.embed(chunks.map((c) => `${c.title}\n${c.text}`));
-    chunks.forEach((c, i) => this.rows.set(`${c.companyId}\u0000${c.id}`, { c, v: vs[i]! }));
-    return chunks.length;
+    const keep = chunks.filter((c) => c.tier !== 'secret');
+    const vs = await this.embedder.embed(keep.map((c) => `${c.title}\n${c.text}`));
+    keep.forEach((c, i) => this.rows.set(`${c.companyId}\u0000${c.id}`, { c, v: vs[i]! }));
+    return keep.length;
   }
 
-  async search(companyId: string, query: string, k: number): Promise<KnowledgeHit[]> {
+  async search(companyId: string, query: string, k: number, o: { audience?: Audience } = {}): Promise<KnowledgeHit[]> {
     const [q] = await this.embedder.embed([query]);
+    const tiers = tiersFor(o.audience ?? 'visitor');
     const hits: KnowledgeHit[] = [];
     for (const { c, v } of this.rows.values()) {
-      if (c.companyId !== companyId) continue;
+      if (c.companyId !== companyId || !tiers.includes(c.tier ?? 'public')) continue;
       const h = hybrid(wordScore(query, `${c.title} ${c.text}`), cosine(q!, v));
       if (h.score >= MIN_SCORE) hits.push({ ...c, score: h.score, via: h.via });
     }
@@ -129,10 +132,13 @@ export class InMemoryLessons implements Lessons {
 /** Keeps entries in memory; drops texts of anything that is not `live`, whatever the caller passed (defence in depth). */
 export class InMemoryJournal implements Journal {
   readonly entries: JournalEntry[] = [];
+  /** `cap`: entries kept (a long-running process keeps the newest; absent: all, for tests and evals). */
+  constructor(private readonly cap?: number) {}
   record(e: JournalEntry): Promise<void> {
     const copy: JournalEntry = { ...e, tools: [...e.tools] };
     if (copy.mode !== 'live') delete copy.texts;
     this.entries.push(copy);
+    if (this.cap !== undefined && this.entries.length > this.cap) this.entries.splice(0, this.entries.length - this.cap);
     return Promise.resolve();
   }
 }

@@ -96,7 +96,8 @@ export type { PriceTable } from '@fir/core';
 export const DEFAULT_PRICES: PriceTable = MODEL_PRICES;
 
 /** What kind of alert it is: the reminders the owner's Telegram gets (`docs/process-census.md`, «Один бот HQ»), or `other` (Пульт only). */
-export type AlertKind = 'lost_lead' | 'email_failed' | 'llm' | 'budget' | 'service' | 'other';
+/** `human`: the lead manager's escalation (Fira, `escalation.ts`): a question the owner answers himself. */
+export type AlertKind = 'lost_lead' | 'email_failed' | 'llm' | 'budget' | 'service' | 'human' | 'other';
 export interface AlertOpts {
   kind?: AlertKind;
   /** One or two lines for Telegram, without contacts and client texts; absent: the first line of the text. */

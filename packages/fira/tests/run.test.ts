@@ -17,7 +17,7 @@ describe('run(): native tool use', () => {
     expect(out.fallback).toBe(false);
     const first = llm.chats[0]!;
     expect(first.tier).toBe('sonnet');
-    expect(first.tools!.map((t) => t.name)).toEqual(['builder_link', 'call_slots', 'capture_contact', 'handoff_human', 'knowledge_search', 'price_list']);
+    expect(first.tools!.map((t) => t.name)).toEqual(['builder_link', 'call_slots', 'capture_contact', 'demo_link', 'handoff_owner', 'knowledge_search', 'price_list', 'record_brief']);
     expect(first.toolChoice).toEqual({ type: 'auto' });
     expect(Array.isArray(first.system) && first.system[0]!.cache).toBe(true);
     const second = llm.chats[1]!;
@@ -40,11 +40,12 @@ describe('run(): native tool use', () => {
 
   it('hand-off and contact are outcomes the app acts on; an invalid contact is refused to the model', async () => {
     const llm = new MockChatLlm([
-      { tools: [{ name: 'capture_contact', input: { contact: 'завтра' } }, { name: 'capture_contact', input: { contact: '@salon_liza', note: 'салон' } }, { name: 'handoff_human', input: { reason: 'просит человека' } }] },
+      { tools: [{ name: 'capture_contact', input: { contact: 'завтра' } }, { name: 'capture_contact', input: { contact: '@salon_liza', note: 'салон' } }, { name: 'handoff_owner', input: { reason: 'person', line: 'Просит человека' } }] },
       { text: 'Передаю разговор человеку из команды.' },
     ]);
     const out = await run(spec, conv({ text: 'Позовите человека, мой ник @salon_liza' }), deps(llm));
-    expect(out.outcome.handoff).toBe('просит человека');
+    expect(out.outcome.handoff).toBe('person');
+    expect(out.outcome.owner).toEqual({ line: 'Просит человека', reason: 'person' });
     expect(out.outcome.contact).toEqual({ contact: '@salon_liza', name: '', note: 'салон' });
     const results = llm.chats[1]!.messages.at(-1)!.content as Extract<LlmBlock, { type: 'tool_result' }>[];
     expect(results.map((r) => Boolean(r.is_error))).toEqual([true, false, false]);
@@ -56,6 +57,24 @@ describe('run(): native tool use', () => {
     expect(llm.chats).toHaveLength(spec.model.maxRounds);
     expect(out.fallback).toBe(true);
     expect(out.outcome.handoff).toBeDefined();
+  });
+});
+
+describe('run(): knowledge by audience', () => {
+  it('a visitor\'s turn never sees internal knowledge; the owner\'s does; the spec says the default audience', async () => {
+    for (const [audience, sees] of [[undefined, false], ['client', false], ['owner', true]] as const) {
+      const llm = new MockChatLlm([{ text: 'Ок.' }]);
+      const d = deps(llm);
+      await d.knowledge.add([
+        { id: 'p', companyId: 'firtech', source: 'manual', title: 'Этапы оплаты', text: 'Оплата по этапам, каждый до начала.', updatedAt: NOW, tier: 'public' },
+        { id: 'i', companyId: 'firtech', source: 'manual', title: 'Этапы оплаты внутри', text: 'Этапы оплаты: внутренний порядок сверки в Пульте.', updatedAt: NOW, tier: 'internal' },
+      ]);
+      await run(spec, conv({ text: 'Как идут этапы оплаты?', ...(audience ? { audience } : {}) }), d);
+      const turn = JSON.stringify(llm.chats[0]!.system);
+      expect(turn, String(audience)).toContain('Оплата по этапам, каждый до начала.');
+      expect(turn.includes('внутренний порядок сверки'), String(audience)).toBe(sees);
+    }
+    expect(spec.audience).toBe('visitor');
   });
 });
 

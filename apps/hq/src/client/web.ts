@@ -7,6 +7,7 @@ import { asksCatalogue } from './needs.js';
 import { clip, GREETING, intakeRecord, TurnHistory } from './shared.js';
 import { DemoChat, isPersona, PERSONAS } from './persona.js';
 import { isPriceQuestion } from '@fir/worker-lead-intake';
+import type { FiraLeadTurn } from './fira-registry.js';
 import { enrichmentOf, findContact, HANDOFF, LEAD_DONE, loginUrlOf, merge, newQ, productNamesOf, receptionistTurn, SITE_ORIGIN, slotPickedText, wantsPerson, type Cta, type QState } from './receptionist.js';
 import { parseRefSlug, RefStore, type Draft } from './store.js';
 import { BUDGETS, DEADLINES, NEEDS, SERVICE, T, type Budget, type Deadline, type Lang, type Need } from './texts.js';
@@ -104,6 +105,8 @@ export interface WebChatDeps {
   siteOrigin?: string;
   /** Free call slots (UTC ms) for the call offer, e.g. the site's `/api/slots`; without it the receptionist says «предложу время». */
   slots?: () => Promise<number[]>;
+  /** The model step on Fira (`client/fira-lead.ts`); absent: the one HQ registered (`FIRA_LEAD_MANAGER=on`), null: the old runtime. */
+  fira?: FiraLeadTurn | null;
 }
 
 /** Telegram @username, phone or email, validated loosely. Returns the contact as stored, or null. */
@@ -449,7 +452,7 @@ export class WebChatEngine {
     if (s.draft.identity && q0.slot !== undefined && q0.slot > this.d.now() && !q0.leadMade && AFFIRM.test(text)) return this.leadFromQ(s, lang, q0, s.draft.identity.email, false);
     const out = await receptionistTurn(
       {
-        llm: this.d.llm, instructions: this.d.instructions, now: this.d.now, tz: this.d.tz, slots: this.d.slots, siteOrigin: this.d.siteOrigin,
+        llm: this.d.llm, instructions: this.d.instructions, now: this.d.now, tz: this.d.tz, slots: this.d.slots, siteOrigin: this.d.siteOrigin, ...(this.d.fira !== undefined ? { fira: this.d.fira } : {}),
         gate: {
           llmAllowed: () => s.llmAnswers < cap && this.d.gate.llmAllowed(),
           llmUsed: () => {
@@ -459,7 +462,7 @@ export class WebChatEngine {
         },
         ...(this.d.gatewayDown ? { gatewayDown: this.d.gatewayDown } : {}), ...(this.d.llmTimeoutMs !== undefined ? { timeoutMs: this.d.llmTimeoutMs } : {}),
       },
-      { lang, text, q: q0, turns: this.history.turns(s.id), ...(s.draft.identity ? { client: { email: s.draft.identity.email, name: s.draft.identity.name ?? s.draft.identity.email } } : {}) },
+      { lang, text, q: q0, turns: this.history.turns(s.id), conversationId: `web-${s.id}`, ...(s.draft.identity ? { client: { email: s.draft.identity.email, name: s.draft.identity.name ?? s.draft.identity.email } } : {}) },
     );
     if (used) this.store.update(s.id, { llmAnswers: s.llmAnswers + used });
     switch (out.kind) {
