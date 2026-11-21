@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies of the API under test */
 import { afterEach, describe, expect, it } from 'vitest';
 import { EmailFailures } from '../../src/email-failures.js';
+import { dataUrl, makePng } from '../png.js';
 import { TOKENS, drillWorld, type DrillWorld } from './world.js';
 import { useGuard } from './guard.js';
 
@@ -41,6 +42,20 @@ async function leadWithQuote(o: { emailFail?: boolean } = {}): Promise<{ cid: nu
   const cid = (await w.adm('GET', `/admin/clients/by-email?email=${encodeURIComponent(EMAIL)}`)).json.client.id as number;
   return { cid, leadId };
 }
+
+/** The client accepts the quote, the owner fills the term and approves the contract: it waits for the signature. Returns the contract row. */
+async function toContract(cid: number): Promise<any> {
+  const quote = (await docs(cid)).find((d) => d.kind === 'quote');
+  expect((await w.adm('POST', `/admin/clients/${cid}/documents/${quote.id}/accept`)).status).toBe(200);
+  await w.beat();
+  await w.director.sendApprovalBatch(false);
+  const row = w.queue.pending().find((r) => r.kind === 'bo_document')!;
+  await w.queue.applyEdit(row.id, String(row.payload.text).replace('[срок]', '20 рабочих дней'));
+  await w.director.sendApprovalBatch(false);
+  await w.decide('approve', w.queue.pending().find((r) => r.kind === 'bo_document')!.id);
+  return (await docs(cid)).find((d) => d.kind === 'contract');
+}
+const SIGN = { signaturePng: dataUrl(makePng({ stroke: true })), name: 'Gaps Money', consent: true };
 
 describe('P-07: an email to the client that did not go', () => {
   it('marks the document, alerts the owner once an hour, and «Отправить снова» sends it', async () => {
@@ -121,5 +136,28 @@ describe('P-09: PDFs and notices made in the background survive a restart', () =
     // one line in the client's thread for the quote, not one per retry
     const lines = (w.db.prepare("SELECT COUNT(*) n FROM cab_messages WHERE text LIKE 'Коммерческое предложение готово%'").get() as any).n;
     expect(lines).toBe(2); // the first sending and the recovered one after the simulated cut (the thread line is what the cut lost)
+  }, 60_000);
+});
+
+describe('P-12: the signed PDF that did not build', () => {
+  it('the owner hears at once; the next read of the documents builds it from the stored signature', async () => {
+    const { cid } = await leadWithQuote();
+    const contract = await toContract(cid);
+    expect(contract).toMatchObject({ state: 'awaiting_signature' });
+    const docsApi = w.cabinet!.docs as any;
+    const real = docsApi.render.bind(docsApi);
+    docsApi.render = (row: any, sign?: unknown) => (sign ? Promise.resolve(null) : real(row, sign));
+    const signed = await w.adm('POST', `/admin/clients/${cid}/documents/${contract.id}/sign`, SIGN);
+    expect(signed.status, signed.text).toBe(200);
+    expect(signed.json.pdfUrl).toBeNull();
+    expect(w.alerts.some((a) => a.includes(`Договор ${contract.number} подписан клиентом, но подписанный PDF не собрался`))).toBe(true);
+    expect(((await w.adm('GET', '/admin/crm/cabinet-docs?problem=1')).json.items as any[]).find((x) => x.id === contract.id)?.problems).toContain('no_signed_pdf');
+    // fonts are back; a read within 10 minutes does not render again, a later one does
+    docsApi.render = real;
+    expect((await docs(cid)).find((d) => d.id === contract.id).pdfUrl).not.toMatch(/-signed\.pdf/);
+    w.clock.t += 11 * 60_000;
+    const after = (await docs(cid)).find((d) => d.id === contract.id);
+    expect(after.pdfUrl).toMatch(/contract-\d+-signed\.pdf/);
+    expect(w.db.prepare("SELECT 1 FROM activity WHERE action = 'signed_pdf_rebuilt'").get()).toBeTruthy();
   }, 60_000);
 });

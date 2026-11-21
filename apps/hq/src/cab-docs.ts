@@ -406,6 +406,7 @@ export class CabDocs {
    * row as it is now. Never throws: the list must answer even when the PDF still cannot be made.
    */
   private async ensurePdf(r: DocRow): Promise<DocRow> {
+    if (r.state === 'signed' && !r.signed_pdf_rel) return this.ensureSignedPdf(r);
     if (r.pdf_rel || r.signed_pdf_rel) return r;
     const last = this.pdfTriedAt.get(r.id);
     if (last !== undefined && this.d.now() - last < 10 * 60_000) return r;
@@ -419,6 +420,31 @@ export class CabDocs {
       log('warn', 'cabinet pdf rebuild failed', { doc: r.id, err: errMsg(e) });
       return r;
     }
+  }
+
+  /** The signed copy of a contract, rendered from the stored signature (`bo_signatures`); null when it could not be made. */
+  private async renderSigned(r: DocRow): Promise<{ rel: string; sha256: string } | null> {
+    const sig = this.db.prepare('SELECT signature_png, name, at FROM bo_signatures WHERE doc_id = ? ORDER BY id DESC LIMIT 1').get(r.id) as { signature_png: Buffer; name: string; at: number } | undefined;
+    if (!sig) return null;
+    try {
+      return await this.render(r, { png: Buffer.from(sig.signature_png), name: sig.name, at: sig.at });
+    } catch (e) {
+      log('warn', 'signed pdf failed', { doc: r.id, err: errMsg(e) });
+      return null;
+    }
+  }
+
+  /** P-12: a signed contract without its signed PDF (the render failed at signing) gets it on the next read, at most every 10 minutes. */
+  private async ensureSignedPdf(r: DocRow): Promise<DocRow> {
+    const last = this.pdfTriedAt.get(r.id);
+    if (last !== undefined && this.d.now() - last < 10 * 60_000) return r;
+    this.pdfTriedAt.set(r.id, this.d.now());
+    const rendered = await this.renderSigned(r);
+    if (!rendered) return r;
+    this.db.prepare('UPDATE cab_documents SET signed_pdf_rel = ? WHERE id = ?').run(rendered.rel, r.id);
+    this.d.hq.log('documents', 'signed_pdf_rebuilt', 'document', String(r.id));
+    this.d.notifyOwner(`Подписанный PDF договора ${r.number} собран со второй попытки, он у клиента в «Документах».`);
+    return this.row(r.id) ?? r;
   }
 
   /**
@@ -890,15 +916,13 @@ export class CabDocs {
     if (this.db.prepare("UPDATE cab_documents SET state = 'signed', signed_at = ? WHERE id = ? AND state = 'awaiting_signature'").run(t, r.id).changes !== 1) return failR(409, 'not_awaiting');
     const unsignedSha = r.pdf_sha256 ?? sha(r.body);
     this.db.prepare('INSERT INTO bo_signatures (doc_id, signature_png, name, at, ip, ua, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)').run(r.id, sig.png, parsed.data.name, t, parsed.data.ip, parsed.data.userAgent, unsignedSha);
-    let rendered: { rel: string; sha256: string } | null = null;
-    try {
-      rendered = await this.render(this.row(r.id)!, { png: sig.png, name: parsed.data.name, at: t });
-    } catch (e) {
-      log('warn', 'signed pdf failed', { doc: r.id, err: errMsg(e) });
-    }
+    const rendered = await this.renderSigned(this.row(r.id)!);
     if (rendered) this.db.prepare('UPDATE cab_documents SET signed_pdf_rel = ? WHERE id = ?').run(rendered.rel, r.id);
+    else this.pdfTriedAt.set(r.id, t);
     const hq = this.d.hq;
     hq.log('client', 'contract_signed', 'document', String(r.id), rendered ? 'pdf' : 'no_pdf');
+    // P-12: the signature is stored, the signed copy is not: the owner hears it now, the next read of the documents tries again
+    if (!rendered) void hq.alert(`Договор ${r.number} подписан клиентом, но подписанный PDF не собрался (подпись сохранена). Повторю при следующем открытии документов; если не выйдет, проверьте шрифты и папку файлов HQ.`);
     // the owner's next card: the invoice of stage 1 (what the old chain made together with the contract)
     const quote = this.db.prepare("SELECT meta FROM cab_documents WHERE kind = 'quote' AND pack_id IS ? AND client_id = ? ORDER BY id DESC LIMIT 1").get(r.pack_id, clientId) as { meta: string } | undefined;
     const invoice = (JSON.parse(quote?.meta || '{}') as { invoice?: Record<string, unknown>; client?: string });
