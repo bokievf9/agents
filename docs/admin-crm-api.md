@@ -843,3 +843,17 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 
 ## Finance (HQ, 2026-11-23)
 Раздел Finance сайта (`/admin/finance`) читает уже существующие маршруты, новых нет: счета `GET /admin/crm/invoices` (вкладки Invoices и Payments), расход LLM по отделам и агентам `GET /admin/agents` (`departments[].budgetUsd`, `monthUsd`, `agents[].monthUsd`) и `GET /admin/company` (`costs.byDept[].todayUsd`, `costs.byDay`). Лимиты отделов лежат в `GET /admin/settings` (`limits.deptBudgetUsd`, `usage.deptMonthUsd`), но сайт берёт их из `agents`, где они уже совпадают. Тексты клиентов ни в одном из этих ответов не передаются.
+
+## Calendar (2026-11-23, ветка `hq-tasks`)
+Раздел HQ «Calendar»: одна сетка недели и месяца из созвонов, этапов проектов, рутин и запланированного контента. Только чтение, под `x-admin-token`, код `apps/hq/src/pult-calendar.ts`.
+
+`GET /admin/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD` (оба конца включительно, дни по часовому поясу компании `TZ`, не больше 62 дней: 400 `invalid` для неверных дат, 400 `range_too_long` со `maxDays`) → `{ ok, from, to, tz, today, counts: {call, milestone, routine, content}, events }`, события по времени:
+```json
+{ "id": "call:12", "kind": "call|milestone|routine|content", "at": "2026-11-24T09:00:00.000Z", "allDay": false,
+  "title": "Анна", "detail": "bot", "dept": "sales", "status": "confirmed", "link": "calls:7" }
+```
+- `call`: `call_bookings` (кроме отменённых) с именем лида; `status` `pending|confirmed`; `link` `calls:<leadId>`.
+- `milestone`: `pm_milestones` со сроком в диапазоне (проекты-черновики не считаются); `detail` клиент проекта; `status` этапа (`open`, `ready`, `done`...); `link` `projects:<projectId>`.
+- `routine`: включённые рутины, каждое срабатывание cron по часовому поясу рутины (до 300 на ответ); `detail` cron; `link` `routines:<name>`.
+- `content`: `cm_items` с `planned_date` в диапазоне (кроме отклонённых), `allDay: true`, `at` начало дня; `status` материала; `link` `content:item:<id>`.
+Источник, которого ещё нет в базе, даёт пустой список. Текстов клиентов нет, только имя лида и услуга.
