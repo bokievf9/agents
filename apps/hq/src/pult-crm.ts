@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import type { CabDocs } from './cab-docs.js';
 import type { Calls } from './calls.js';
+import { demoUsageOf } from './demo-usage.js';
 import type { createCrm } from './admin-crm.js';
 import { recordManagerReply } from './cabinet.js';
 import type { ClientChannel } from './client/channel.js';
@@ -389,6 +390,8 @@ export function createPultCrm(d: PultCrmDeps) {
       leads: leadsOut, projects: projectsOut.slice(0, 50), invoices: invoiceRows.slice(0, 50).map(invoiceView),
       documents: docs.filter((x) => x.source !== 'billing').slice(0, 50).map(views.docView), tickets: ticketsOut.slice(0, 50), referrals: referralsOut.slice(0, 50),
       touches: touches.slice(0, 30),
+      // «Демо только для вошедших»: the client's demo use of 30 days (counts and money only); zeros for a name-only client
+      demoUsage: cabId !== null ? demoUsageOf(hq.db, cabId, now(), hq.tz) : demoUsageOf(hq.db, -1, now(), hq.tz),
     });
   }
 

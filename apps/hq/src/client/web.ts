@@ -1,5 +1,6 @@
 import { errMsg, log, type Db, type LlmClient } from '@fir/core';
 import { z } from 'zod';
+import type { DemoUsage } from '../demo-usage.js';
 import type { ClientSinks } from './engine.js';
 import { inWindow, linksOnly, RateLimiter } from './sanitize.js';
 import { asksCatalogue } from './needs.js';
@@ -32,6 +33,9 @@ export const chatSchema = z.object({
   clientEmail: z.string().trim().toLowerCase().max(254).email().optional().catch(undefined),
   cabinetId: z.string().trim().min(1).max(64).optional().catch(undefined),
   clientName: z.string().trim().max(120).optional().catch(undefined),
+  /** «Демо только для вошедших» (2026-11-23): the site marks a demo request and names the signed-in client (`clientId` is the same as `cabinetId`, or the HQ id). */
+  demo: z.boolean().optional().catch(undefined),
+  clientId: z.string().trim().min(1).max(64).optional().catch(undefined),
 }).transform((d, ctx) => {
   const message = d.message ?? d.text;
   if (!message) ctx.addIssue({ code: 'custom', path: ['message'], message: 'message or text is required' });
@@ -53,10 +57,21 @@ export interface ChatReply {
   handoff?: boolean;
   /** The reply of a demo session (`persona`): nothing was stored. */
   demo?: true;
+  /** The signed-in client's demo cap of the day (`DEMO_DAILY_PER_CLIENT`), present when the request named a client: flat fields and the `usage` object. */
+  limit?: number;
+  remaining?: number;
+  usage?: { limit: number; used: number; remaining: number };
   /** Texts the owner wrote himself from the workplace to this visitor (a lead answered by hand): shown after the bot's answer, once. */
   ownerReplies?: string[];
 }
-export type ChatOutcome = { kind: 'ok'; body: ChatReply } | { kind: 'rate_limited' } | { kind: 'unavailable' };
+export type ChatOutcome =
+  | { kind: 'ok'; body: ChatReply }
+  | { kind: 'rate_limited' }
+  | { kind: 'unavailable' }
+  /** The client's demo cap of the day is spent (429 `limit_reached` with the usage fields). */
+  | { kind: 'limit'; body: Record<string, unknown> }
+  /** `DEMO_REQUIRE_CLIENT=on` and the demo request names no known client (401 `login_required`). */
+  | { kind: 'login_required' };
 
 export interface WebChatDeps {
   db: Db;
@@ -79,6 +94,10 @@ export interface WebChatDeps {
   llmTimeoutMs?: number;
   /** Menu buttons («Обсудить проект», a product card) start the conversation with the receptionist (default true). false: they start the scripted 3-step intake, as when the model is off. */
   conversation?: boolean;
+  /** Booking and cap of the demo per signed-in client (`demo-usage.ts`); absent: the demo is anonymous as before. */
+  demoUsage?: DemoUsage;
+  /** True: a demo request without a known client is refused (`login_required`). Default false until the site sends the identity everywhere. */
+  demoRequireClient?: boolean;
   /** Demo sessions (`persona`) per visitor IP and hour (default 40). */
   perIpDemoHour?: number;
   /** Origin of the builder links the receptionist proposes (default https://firtech.pro). */
@@ -178,13 +197,26 @@ export class WebChatEngine {
   private async handleDemo(req: ChatRequest, persona: string, ip: string): Promise<ChatOutcome> {
     if (!isPersona(persona)) return { kind: 'rate_limited' };
     if (this.demoLimiter.hit(ip) !== 'ok') return { kind: 'rate_limited' };
-    const r = await this.demo.reply(persona, req.sessionId, req.locale, req.message.trim()).catch((e) => {
+    const du = this.d.demoUsage;
+    const clientId = du ? du.resolveClient({ email: req.clientEmail, cabinetId: req.cabinetId ?? req.clientId, name: req.clientName, locale: req.locale }) : null;
+    if (du && clientId === null && this.d.demoRequireClient) return { kind: 'login_required' };
+    const run = () => this.demo.reply(persona, req.sessionId, req.locale, req.message.trim()).catch((e) => {
       log('error', 'web chat demo failed', { err: errMsg(e) });
       return null;
     });
-    log('info', 'web chat demo', { persona, sessions: this.demo.size() });
-    if (!r) return { kind: 'ok', body: { ok: true, reply: W[req.locale].down, state: 'chat', demo: true } };
-    return { kind: 'ok', body: { ok: true, reply: r.reply, state: 'chat', demo: true } };
+    let r: Awaited<ReturnType<typeof run>>;
+    if (du && clientId !== null) {
+      const m = await du.metered(clientId, `persona:${persona}`, run);
+      if (!m.ok) {
+        log('info', 'web chat demo limit', { persona, clientId });
+        return { kind: 'limit', body: { ok: false, error: 'limit_reached', ...du.fields(clientId) } };
+      }
+      r = m.value;
+    } else r = await run();
+    log('info', 'web chat demo', { persona, sessions: this.demo.size(), ...(clientId !== null ? { clientId } : {}) });
+    const usage = du && clientId !== null ? du.fields(clientId) : {};
+    if (!r) return { kind: 'ok', body: { ok: true, reply: W[req.locale].down, state: 'chat', demo: true, ...usage } };
+    return { kind: 'ok', body: { ok: true, reply: r.reply, state: 'chat', demo: true, ...usage } };
   }
 
   private async process(req: ChatRequest): Promise<ChatReply> {

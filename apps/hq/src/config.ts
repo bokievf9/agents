@@ -125,6 +125,10 @@ export interface Config extends BaseConfig {
   /** Client messages per chat per hour, and LLM answers per day for all chats. */
   clientRatePerHour: number;
   clientLlmDailyCap: number;
+  /** Demo messages per signed-in client and day (all demo sources together). */
+  demoDailyPerClient: number;
+  /** `DEMO_REQUIRE_CLIENT=on`: a demo request that names no known client gets 401 `login_required`. */
+  demoRequireClient: boolean;
   /** age public key (`age1...`) for the nightly backup sent to the owner; unset: sent unencrypted (the message says so). */
   backupAgeRecipient: string | undefined;
 }
@@ -233,6 +237,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     clientQuietHours: quietWindow(optional(env, 'CLIENT_QUIET_HOURS') ?? '22:00-08:00'),
     clientRatePerHour: Math.round(num(env, 'CLIENT_RATE_PER_HOUR', 20, 1, 1000)),
     clientLlmDailyCap: Math.round(num(env, 'CLIENT_LLM_DAILY_CAP', 300, 0, 100_000)),
+    demoDailyPerClient: Math.round(num(env, 'DEMO_DAILY_PER_CLIENT', 30, 1, 10_000)),
+    demoRequireClient: /^(on|1|true|yes)$/i.test(optional(env, 'DEMO_REQUIRE_CLIENT') ?? ''),
     backupAgeRecipient: backupRecipient(optional(env, 'BACKUP_AGE_RECIPIENT')),
     pricesUrl: optional(env, 'PRICES_URL') ?? DEFAULT_PRICES_URL,
     siteUrl: (optional(env, 'SITE_URL') ?? 'https://firtech.pro').replace(/\/$/, ''),

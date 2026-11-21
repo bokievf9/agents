@@ -791,3 +791,6 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 - `GET /admin/director/history` items carry `source`: `site` (say and command from the Пульт) or `telegram` (the owner's lines in the HQ bot: questions, `/start`, `/pult`, old commands, and HQ's answers).
 - P-25: the daily cap of client model calls counts every call (a playground turn is several); the owner gets an alert at 80% and 100% of `CLIENT_LLM_DAILY_CAP`, and an inbox line once a day per agent that hits its `msgsPerDay`; the client's agent thread gets a line that the limit is reached.
 - P-26: at start HQ fires once every enabled routine that ran before but missed its latest scheduled time within 72 h (`catchUpRoutines`).
+
+## Демо по клиенту (2026-11-23)
+`GET /admin/crm/clients/:id` теперь несёт `demoUsage` (30 дней: `days`, `messages`, `tokensIn`, `tokensOut`, `usd`, `today`, `bySource[{source, messages, usd}]`; нули, если демо не было). Учёт, лимит и поля ответа демо: `public-api.md`, «Демо только для вошедших и учёт по клиенту».
