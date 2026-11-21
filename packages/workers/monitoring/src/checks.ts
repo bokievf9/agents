@@ -49,6 +49,8 @@ export interface MonitorConfig {
   urls: string[];
   omnirouteUrl: string;
   llmApiKey?: string | undefined;
+  /** Direct Anthropic mode: the OmniRoute check is skipped (the gateway is not in the path of any call). */
+  llmDirect?: boolean;
   dataDir: string;
   /** Read-only Docker socket check. Off by default: see the README for the security trade-off. */
   docker: boolean;
@@ -301,7 +303,7 @@ export function buildChecks(cfg: MonitorConfig, deps: CheckDeps, bot?: BotProbe)
   const checks: Check[] = cfg.urls.map((u) => ({ id: `http:${u}`, run: () => checkHttp(deps, cfg, u) }));
   const hosts = [...new Set(cfg.urls.filter((u) => u.startsWith('https:')).map(hostOf))];
   for (const h of hosts) checks.push({ id: `tls:${h}`, run: () => checkTls(deps, cfg, h) });
-  checks.push({ id: 'omniroute', run: () => checkOmniroute(deps, cfg) });
+  if (!cfg.llmDirect) checks.push({ id: 'omniroute', run: () => checkOmniroute(deps, cfg) });
   checks.push({ id: 'disk', run: () => checkDisk(deps, cfg) });
   if (cfg.docker) checks.push({ id: 'docker', run: () => checkDocker(deps) });
   checks.push({ id: 'services', run: async () => (await checkServices(deps, cfg))[0]!, runMany: () => checkServices(deps, cfg) });

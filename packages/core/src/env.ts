@@ -33,8 +33,9 @@ export interface BaseConfig {
 }
 
 /**
- * LLM settings. Gateway mode (OmniRoute, Anthropic-compatible POST /v1/messages): LLM_BASE_URL + LLM_API_KEY,
- * models default to "auto". Direct mode: ANTHROPIC_API_KEY (Claude model ids). Neither key: "LLM off".
+ * LLM settings. Priority (2026-11-22): `ANTHROPIC_API_KEY` set means direct Anthropic (Claude model ids) and `LLM_BASE_URL`
+ * is ignored, unless `LLM_PROVIDER=gateway` (explicit way back to the gateway). Gateway mode (OmniRoute, Anthropic-compatible
+ * POST /v1/messages): LLM_BASE_URL + LLM_API_KEY (the gateway's key, never Anthropic's), models default to "auto". Neither: "LLM off".
  */
 export interface LlmEnv {
   baseUrl: string | undefined;
@@ -43,6 +44,29 @@ export interface LlmEnv {
   modelSmart: string | undefined;
   timeoutMs: number;
   maxRetries: number;
+  /** The resolved mode (absent in hand-made configs: then it follows `baseUrl` and `apiKey`). */
+  mode?: 'direct' | 'gateway' | 'off';
+  /** Direct mode took priority over a `LLM_BASE_URL` that is also set (logged once at start). */
+  gatewayIgnored?: boolean;
+}
+
+/** Picks the LLM mode from the environment: direct Anthropic beats the gateway unless `LLM_PROVIDER=gateway`. */
+export function loadLlmEnv(env: NodeJS.ProcessEnv): LlmEnv {
+  const common = {
+    modelFast: optional(env, 'LLM_MODEL_FAST'),
+    modelSmart: optional(env, 'LLM_MODEL_SMART'),
+    timeoutMs: intEnv(env, 'LLM_TIMEOUT_MS', 30_000),
+    maxRetries: intEnv(env, 'LLM_MAX_RETRIES', 2),
+  };
+  const anthropicKey = optional(env, 'ANTHROPIC_API_KEY');
+  const gatewayUrl = optional(env, 'LLM_BASE_URL');
+  const forceGateway = optional(env, 'LLM_PROVIDER')?.toLowerCase() === 'gateway';
+  if (anthropicKey && !forceGateway) {
+    return { ...common, baseUrl: undefined, apiKey: anthropicKey, mode: 'direct', gatewayIgnored: Boolean(gatewayUrl) };
+  }
+  // Gateway (or off): LLM_API_KEY is the gateway's key, never Anthropic's.
+  const apiKey = optional(env, 'LLM_API_KEY');
+  return { ...common, baseUrl: gatewayUrl, apiKey, mode: apiKey ? (gatewayUrl ? 'gateway' : 'direct') : 'off' };
 }
 
 export function loadBaseConfig(env: NodeJS.ProcessEnv = process.env): BaseConfig {
@@ -59,13 +83,6 @@ export function loadBaseConfig(env: NodeJS.ProcessEnv = process.env): BaseConfig
     ownerTz,
     dataDir: resolve(optional(env, 'DATA_DIR') ?? './data'),
     trustThreshold: intEnv(env, 'TRUST_THRESHOLD', 20),
-    llm: {
-      baseUrl: optional(env, 'LLM_BASE_URL'),
-      apiKey: optional(env, 'LLM_API_KEY') ?? optional(env, 'ANTHROPIC_API_KEY'),
-      modelFast: optional(env, 'LLM_MODEL_FAST'),
-      modelSmart: optional(env, 'LLM_MODEL_SMART'),
-      timeoutMs: intEnv(env, 'LLM_TIMEOUT_MS', 30_000),
-      maxRetries: intEnv(env, 'LLM_MAX_RETRIES', 2),
-    },
+    llm: loadLlmEnv(env),
   };
 }

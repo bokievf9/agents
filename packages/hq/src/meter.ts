@@ -28,6 +28,7 @@ export function meterLlm(llm: LlmClient, hq: Hq, ctx: { agentId: string; taskId?
       model: u?.model || req.tier,
       inputTokens: u ? u.inputTokens : estimateTokens(req.system + req.messages.map((m) => m.content).join('')),
       outputTokens: u ? u.outputTokens : estimateTokens(res.text),
+      ...(u?.cacheReadTokens ? { cacheReadTokens: u.cacheReadTokens } : {}),
       ...(ctx.urgent ? { urgent: true } : {}),
     });
     return res;

@@ -57,7 +57,7 @@ describe('client bot and web chat calls are metered', () => {
     expect(await llm.complete({ tier: 'haiku', system: 's', messages: [{ role: 'user', content: 'привет' }] })).toBe('ответ');
     expect(await llm.complete({ tier: 'haiku', system: 's', messages: [{ role: 'user', content: 'ещё' }] })).toBe('ответ'); // over the limit, still answers
     const row = w.hq.costSummary(0).find((c) => c.dept === 'sales')!;
-    expect(row.usd).toBeCloseTo(2);
+    expect(row.usd).toBeCloseTo(0.2); // 2 calls x 1M input at $0.10
     expect(w.db.prepare("SELECT COUNT(*) c FROM costs WHERE agent_id = 'client-bot'").get()).toEqual({ c: 2 });
   });
 });

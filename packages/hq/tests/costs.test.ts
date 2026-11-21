@@ -14,6 +14,29 @@ describe('costs and budget', () => {
     expect(hq.costSummary(0)[0]).toMatchObject({ dept: 'marketing', inputTokens: 1_000_500, outputTokens: 100_500 });
   });
 
+  it('prices Claude 5.5 by the owner list (also over old generic rows), cache reads at 10%, limits 80% and 100% by those prices', async () => {
+    const { hq } = setup();
+    // an old database has the generic rows only; the seeded 5.5 rows are longer prefixes and win
+    expect(hq.prices['claude-sonnet-5-5']).toEqual({ in: 2, out: 10 });
+    expect(hq.recordCost({ agentId: 'content-maker', model: 'claude-haiku-5-5', inputTokens: 1_000_000, outputTokens: 1_000_000 }).usd).toBeCloseTo(0.6);
+    expect(hq.recordCost({ agentId: 'content-maker', model: 'claude-sonnet-5-5', inputTokens: 1_000_000, outputTokens: 100_000 }).usd).toBeCloseTo(3);
+    expect(hq.recordCost({ agentId: 'content-maker', model: 'claude-opus-5-5', inputTokens: 1_000_000, outputTokens: 100_000 }).usd).toBeCloseTo(6);
+    expect(hq.recordCost({ agentId: 'content-maker', model: 'claude-sonnet-5-5', inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 1_000_000 }).usd).toBeCloseTo(0.2);
+    expect(hq.llmUsage(0).calls).toBe(4);
+    expect(hq.llmUsage(0).usd).toBeCloseTo(0.6 + 3 + 6 + 0.2);
+    const alerts: string[] = [];
+    hq.onAlert((t) => void alerts.push(t));
+    hq.upsertAgent({ ...hq.agent('marketing-head')!, budgetUsdMonth: 20 });
+    // spent so far 9.8; one more Sonnet call of 6M input costs 12: over 100%; at 80% (16) a warning comes first
+    hq.recordCost({ agentId: 'content-maker', model: 'claude-sonnet-5-5', inputTokens: 3_000_000, outputTokens: 0 }); // +6 = 15.8 (79%)
+    expect(hq.overBudget('marketing')).toBe(false);
+    hq.recordCost({ agentId: 'content-maker', model: 'claude-sonnet-5-5', inputTokens: 200_000, outputTokens: 0 }); // +0.4 = 16.2 (81%)
+    await Promise.resolve();
+    expect(alerts.some((a) => a.includes('81%'))).toBe(true);
+    hq.recordCost({ agentId: 'content-maker', model: 'claude-sonnet-5-5', inputTokens: 2_000_000, outputTokens: 0 }); // +4 = 20.2
+    expect(hq.overBudget('marketing')).toBe(true);
+  });
+
   it('over the department limit: the task is blocked, one alert per month, calls refused', async () => {
     const { hq, clock } = setup();
     hq.upsertAgent({ ...hq.agent('marketing-head')!, budgetUsdMonth: 1 });
@@ -55,7 +78,7 @@ describe('real usage and prices', () => {
     await llm.complete({ tier: 'sonnet', system: 's', messages: [{ role: 'user', content: 'u' }] });
     const row = hq.db.prepare('SELECT model, input_tokens i, output_tokens o, usd FROM costs').get() as { model: string; i: number; o: number; usd: number };
     expect(row).toMatchObject({ model: 'claude-sonnet-5-5', i: 2_000_000, o: 100_000 });
-    expect(row.usd).toBeCloseTo(7.5); // 2 * 3 + 0.1 * 15
+    expect(row.usd).toBeCloseTo(5); // 2M * $2 + 0.1M * $10
     expect(llm.completeDetailed).toBeDefined();
   });
 
@@ -70,10 +93,10 @@ describe('real usage and prices', () => {
     expect(hq.activity().filter((a) => a.action === 'cost_unknown_model')).toHaveLength(2);
     hq.setPrice('glm', 0, 0);
     expect(rec('glm-4.6')).toBe(0);
-    expect(rec('claude-haiku-5-5')).toBeCloseTo(1);
-    hq.setPrice('claude-haiku-5', 0.5, 2.5);
+    expect(rec('claude-haiku-5-5')).toBeCloseTo(0.1);
+    hq.setPrice('claude-haiku-5-5', 0.5, 2.5);
     expect(rec('claude-haiku-5-5')).toBeCloseTo(0.5);
-    expect(new Hq(db).prices['claude-haiku-5']).toEqual({ in: 0.5, out: 2.5 });
+    expect(new Hq(db).prices['claude-haiku-5-5']).toEqual({ in: 0.5, out: 2.5 });
     expect(() => hq.setPrice('x', -1, 0)).toThrow();
   });
 });

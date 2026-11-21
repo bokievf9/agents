@@ -297,6 +297,8 @@ export class Director {
     }
     const spend = hq.costSummary(since);
     out.push(spend.length ? `Расходы за сутки: ${spend.map((s) => `${s.dept} ${money(s.usd)}`).join(', ')}.` : 'Расходов за сутки нет.');
+    const usage = hq.llmUsage(since);
+    if (usage.calls > 0) out.push(`LLM за вчера: ${usage.calls} вызовов, ${money(usage.usd)}.`);
     const held = this.held();
     if (held.length) out.push(`Инциденты за ночь:\n${held.map((h) => `- ${h}`).join('\n')}`);
     return out.join('\n\n');

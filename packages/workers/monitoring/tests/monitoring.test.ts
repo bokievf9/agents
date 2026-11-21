@@ -280,3 +280,15 @@ describe('hq and renderer as services', () => {
     expect(store.state('hq')).toBeUndefined();
   });
 });
+
+describe('direct Anthropic mode', () => {
+  it('has no OmniRoute check (the gateway is not in the path), and the config follows the environment', async () => {
+    const { buildChecks, loadMonitorConfig } = await import('../src/index.js');
+    const direct = loadMonitorConfig({ ANTHROPIC_API_KEY: 'k', LLM_BASE_URL: 'http://omniroute:20128' }, '/data');
+    expect(direct.llmDirect).toBe(true);
+    expect(buildChecks(direct, {} as never).map((c) => c.id)).not.toContain('omniroute');
+    const gw = loadMonitorConfig({ LLM_BASE_URL: 'http://omniroute:20128', LLM_API_KEY: 'k' }, '/data');
+    expect(gw.llmDirect).toBe(false);
+    expect(buildChecks(gw, {} as never).map((c) => c.id)).toContain('omniroute');
+  });
+});

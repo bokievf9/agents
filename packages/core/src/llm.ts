@@ -22,9 +22,12 @@ export interface LlmRequest {
 
 /** Tokens the provider reported for one call, and the model that really answered (a gateway alias resolves to a real one). */
 export interface LlmUsage {
+  /** Input tokens including cache reads and writes. */
   inputTokens: number;
   outputTokens: number;
   model: string;
+  /** Part of `inputTokens` that was read from the prompt cache (billed at about 10% of the input price); absent when none. */
+  cacheReadTokens?: number;
 }
 
 /** A reply with the provider's own usage. `usage` is absent when the provider did not report it. */
@@ -109,7 +112,8 @@ export function parseUsage(res: unknown, fallbackModel = ''): LlmUsage | null {
   const input = n(u.input_tokens ?? u.prompt_tokens) + n(u.cache_creation_input_tokens) + n(u.cache_read_input_tokens);
   const output = n(u.output_tokens ?? u.completion_tokens);
   if (input === 0 && output === 0) return null;
-  return { inputTokens: input, outputTokens: output, model: typeof r.model === 'string' && r.model ? r.model : fallbackModel };
+  const cacheRead = n(u.cache_read_input_tokens);
+  return { inputTokens: input, outputTokens: output, model: typeof r.model === 'string' && r.model ? r.model : fallbackModel, ...(cacheRead ? { cacheReadTokens: cacheRead } : {}) };
 }
 
 /** Honest "LLM off" mode: no key, no calls. `complete` throws so nobody mistakes it for an answer. */
@@ -163,7 +167,15 @@ export class AnthropicLlm implements LlmClient {
       maxRetries: env.maxRetries,
     });
     const dflt = this.gateway ? { haiku: 'auto', sonnet: 'auto' } : CLAUDE_MODELS;
-    this.models = { haiku: env.modelFast ?? dflt.haiku, sonnet: env.modelSmart ?? dflt.sonnet };
+    // Direct: a leftover gateway alias ("auto", a free-provider id) from the same .env is not a Claude model, so the default wins.
+    const pick = (v: string | undefined, d: string, name: string): string => {
+      if (v && !this.gateway && !v.startsWith('claude-')) {
+        log('warn', `${name}=${v} is not a Claude model id, using ${d} in direct mode`);
+        return d;
+      }
+      return v ?? d;
+    };
+    this.models = { haiku: pick(env.modelFast, dflt.haiku, 'LLM_MODEL_FAST'), sonnet: pick(env.modelSmart, dflt.sonnet, 'LLM_MODEL_SMART') };
   }
 
   async complete(req: LlmRequest): Promise<string> {
@@ -231,6 +243,7 @@ export function createLlm(env: LlmEnv): LlmClient {
     return new OffLlm();
   }
   const llm = new AnthropicLlm({ ...env, apiKey: env.apiKey });
+  if (env.gatewayIgnored) log('info', 'LLM: direct Anthropic, gateway ignored');
   log('info', 'LLM on', { mode: env.baseUrl ? 'gateway' : 'anthropic' });
   return llm;
 }

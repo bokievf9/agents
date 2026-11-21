@@ -79,6 +79,8 @@ export interface CostInput {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  /** Part of `inputTokens` read from the prompt cache (about 10% of the input price). */
+  cacheReadTokens?: number;
   /** Explicit price; otherwise from the price table (`priceFor`). */
   usd?: number;
   /** A client is waiting on this call: the department's money limit alerts but does not block it. */
@@ -875,7 +877,7 @@ export class Hq {
         this.log('hq', 'cost_unknown_model', 'model', c.model.slice(0, 80), 'priced at the unknown-model estimate; setPrice to fix');
       }
     }
-    const usd = c.usd ?? usdFor(priced.price, c.inputTokens, c.outputTokens);
+    const usd = c.usd ?? usdFor(priced.price, c.inputTokens, c.outputTokens, c.cacheReadTokens);
     this.db
       .prepare('INSERT INTO costs (task_id, agent_id, dept, model, input_tokens, output_tokens, usd, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run(c.taskId ?? null, c.agentId, agent.dept, c.model, c.inputTokens, c.outputTokens, usd, this.now());
@@ -912,6 +914,12 @@ export class Hq {
     return (this.db
       .prepare('SELECT dept, SUM(usd) usd, SUM(input_tokens) i, SUM(output_tokens) o FROM costs WHERE at >= ? GROUP BY dept ORDER BY dept')
       .all(sinceMs) as { dept: string; usd: number; i: number; o: number }[]).map((r) => ({ dept: r.dept, usd: r.usd, inputTokens: r.i, outputTokens: r.o }));
+  }
+
+  /** Model calls and their cost since a time (counts and money only, never texts). */
+  llmUsage(sinceMs: number): { calls: number; usd: number } {
+    const r = this.db.prepare('SELECT COUNT(*) n, COALESCE(SUM(usd), 0) usd FROM costs WHERE at >= ?').get(sinceMs) as { n: number; usd: number };
+    return { calls: r.n, usd: r.usd };
   }
 
   /** Head reports (task events of kind "report") since a time, oldest first. */

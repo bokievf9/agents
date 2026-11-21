@@ -41,7 +41,7 @@ describe('usage', () => {
 
   it('parses Anthropic-format usage and the model that answered', () => {
     expect(parseUsage({ model: 'glm-4.6', usage: { input_tokens: 120, output_tokens: 30 } }, 'auto')).toEqual({ inputTokens: 120, outputTokens: 30, model: 'glm-4.6' });
-    expect(parseUsage({ usage: { input_tokens: 5, output_tokens: 1, cache_read_input_tokens: 95 } }, 'auto')).toEqual({ inputTokens: 100, outputTokens: 1, model: 'auto' });
+    expect(parseUsage({ usage: { input_tokens: 5, output_tokens: 1, cache_read_input_tokens: 95 } }, 'auto')).toEqual({ inputTokens: 100, outputTokens: 1, model: 'auto', cacheReadTokens: 95 });
   });
 
   it('gives null when the provider reports nothing usable', () => {

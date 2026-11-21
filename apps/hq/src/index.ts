@@ -87,10 +87,16 @@ hq.attachQueue(queue);
 const cutOff = queue.recoverInterrupted();
 if (cutOff.length) log('warn', 'approvals interrupted by a restart marked failed', { ids: cutOff });
 // The model gateway is watched through the company's own calls: down for a minute, the owner hears once; back, once more.
+// In direct mode (ANTHROPIC_API_KEY) the same watch reports Anthropic being unreachable, and the OmniRoute health check is off.
+const directLlm = cfg.llm.mode === 'direct';
+const modelsName = directLlm ? 'Claude (Anthropic)' : 'Шлюз моделей';
 const llm = new GatewayWatch(createLlm(cfg.llm), {
-  onDown: () => hq.alert('Шлюз моделей не отвечает больше минуты, задачи подождут (задачи с ошибкой модели можно повторить: /retry). Скажу, когда вернётся.'),
-  onUp: () => hq.alert('Шлюз моделей снова отвечает, работа идёт.'),
+  onDown: () => hq.alert(`${modelsName} не отвечает больше минуты, задачи подождут (задачи с ошибкой модели можно повторить: /retry). Скажу, когда вернётся.`),
+  onUp: () => hq.alert(`${modelsName} снова отвечает, работа идёт.`),
 });
+if (directLlm) {
+  try { db.prepare("DELETE FROM mon_state WHERE check_id = 'omniroute'").run(); } catch { /* no monitoring table yet */ }
+}
 // The public client bot and the website chat are the biggest spend and had no meter: every call now lands in `costs` (agent
 // `client-bot`, department sales; a customer is waiting, so the money limit alerts but never silences it). The daily call cap
 // lives in HQ settings, so a deploy does not reset it.
