@@ -1,7 +1,19 @@
 # Перенос ИИ-менеджера заявок на Fira (шаг 1 миграции, 2026-11-22)
 
-Статус: **план на утверждение**. Архитектура: `docs/fira-architecture.md` (§9, шаг 1). Ничего из этого ещё не подключено:
-`apps/hq/src/client/receptionist.ts` и `playground.ts` в ветке `brain-core` не менялись.
+Статус (2026-11-23): **сделано за флагом** `FIRA_LEAD_MANAGER=on` (по умолчанию `off`), ветка `fira-lead-manager`. Архитектура:
+`docs/fira-architecture.md` (§9, шаг 1). Код: `apps/hq/src/client/fira-lead.ts` (адаптер), `client/fira-registry.ts`, `fira-wiring.ts`
+(запуск в HQ), `fira-lessons.ts` (уроки), `client/fira-compare.ts` + `scripts/fira-compare.ts` (сравнение). Тесты: `tests/receptionist-fira.test.ts`
+(строки «мок» таблицы ниже, строка 6 переписана, кодовые пути одинаковы на обоих рантаймах), `tests/fira-lessons.test.ts`, `tests/fira-compare.test.ts`.
+
+Что вышло иначе, чем в плане:
+- Кодовые пути вынесены в `prepareTurn` (общий для старого и нового рантайма). В режиме Fira они и есть правило `before`, но ответ кода не
+  проходит охранники `run()` (они резали бы окна созвона и длину), поэтому адаптер сам кладёт такой ход в память разговора и журнал.
+- Попытка выудить внутреннее (`isProbe`) проверяется раньше всех кодовых путей.
+- Весь разговор в контексте: память Fira по `conversationId` (веб: `web-<сессия>`), бюджет 24 000 знаков; Telegram-движок пока не передаёт
+  `conversationId` и получает последние ходы движка.
+- Если Sonnet не вызвал `record_brief`, Haiku один раз читает слова посетителя тем же инструментом.
+- Сравнение в режиме скриптов (CI): старый 24/30, Fira 30/30, красная серия старый 0/15, Fira 15/15; критерии выпуска 1-3 выполнены.
+  Живое сравнение: `pnpm --filter hq fira-compare --live` (ключ из `apps/hq/.env.local`).
 
 Цель: веб-чат (`POST /chat`, `client/web.ts`) и клиентский Telegram (`client/engine.ts`) отвечают через `run()` Fira, а
 поведение, которое держат 42 теста `apps/hq/tests/receptionist.test.ts`, остаётся прежним. Демо-вкладка (`persona`) в этот

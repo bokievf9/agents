@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { decodeBuild } from '../src/client/builder-link.js';
 import { createFiraLead, oneQuestion, turnNote, type FiraLead } from '../src/client/fira-lead.js';
 import { registerFiraLead, registeredFiraLead } from '../src/client/fira-registry.js';
-import { MAX_QUALIFY_TURNS, newQ } from '../src/client/receptionist.js';
+import { MAX_QUALIFY_TURNS, newQ, receptionistTurn } from '../src/client/receptionist.js';
 import { PRODUCT_IDS, PRODUCTS } from '../src/client/products.js';
 import { RateLimiter } from '../src/client/sanitize.js';
 import type { ClientSinks } from '../src/client/engine.js';
@@ -275,5 +275,30 @@ describe('Fira lead manager: the whole conversation, non-disclosure, escalation'
     expect(n).toMatch(/Ниша собеседника: Клиника/);
     expect(n).toMatch(/Никаких медицинских советов/);
     expect(n).not.toMatch(/JSON/);
+  });
+});
+
+describe('the code paths are the same on both runtimes (the 24 «код» rows: flag on or off, one answer)', () => {
+  const base = { instructions: '', gate: { llmAllowed: () => true, llmUsed: () => undefined }, now: () => NOW, tz: () => 'Asia/Dushanbe', slots: () => Promise.resolve([Date.UTC(2026, 10, 24, 5, 0), Date.UTC(2026, 10, 25, 9, 0)]) };
+  const linked = { ...newQ(), kind: 'salon' as const, niche: 'салон', pain: 'заявки', products: ['admin' as const], link: '/ru/builder?b=k.salon~p.adminbot', offered: { builder: 1, call: 1, telegram: 0 } };
+  const rows: [string, string, Partial<Parameters<typeof receptionistTurn>[1]>][] = [
+    ['a price question', 'Сколько стоит ИИ-администратор?', {}],
+    ['a person asked for', 'Позовите живого менеджера', {}],
+    ['upset', 'Это бред, вы меня не понимаете', {}],
+    ['a call asked for', 'Давайте созвонимся', {}],
+    ['Telegram insisted on', 'Давайте лучше в Telegram', {}],
+    ['the builder asked for', 'Хочу собрать проект сам', {}],
+    ['«не хочу сайт» after the link', 'не хочу сайт, только агент', { q: linked }],
+    ['a client\'s project question', 'Когда будет готов мой проект и этап оплаты?', { client: { email: 'a@example.com', name: 'Анвар' } }],
+    ['a window picked', '1', { q: { ...linked, offeredSlots: [Date.UTC(2026, 10, 24, 5, 0)] } }],
+    ['English price', 'How much does it cost?', { lang: 'en' }],
+  ];
+  it.each(rows)('%s', async (_name, text, extra) => {
+    const input = { lang: 'ru' as const, text, q: newQ(), turns: [], ...extra };
+    const llm = new MockChatLlm([{ text: 'модель не должна звучать' }]);
+    const old = await receptionistTurn({ ...base, llm, fira: null }, input);
+    const fira = await receptionistTurn({ ...base, llm, fira: createFiraLead({ now: () => NOW, knowledge: new InMemoryKnowledge() }) }, { ...input, conversationId: 'same' });
+    expect(fira).toEqual(old);
+    expect(llm.chats).toHaveLength(0);
   });
 });
