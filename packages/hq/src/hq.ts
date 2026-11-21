@@ -95,6 +95,14 @@ export type { PriceTable } from '@fir/core';
  */
 export const DEFAULT_PRICES: PriceTable = MODEL_PRICES;
 
+/** What kind of alert it is: the reminders the owner's Telegram gets (`docs/process-census.md`, «Один бот HQ»), or `other` (Пульт only). */
+export type AlertKind = 'lost_lead' | 'email_failed' | 'llm' | 'budget' | 'service' | 'other';
+export interface AlertOpts {
+  kind?: AlertKind;
+  /** One or two lines for Telegram, without contacts and client texts; absent: the first line of the text. */
+  short?: string;
+}
+
 export interface TaskFilter {
   dept?: string;
   status?: TaskStatus | TaskStatus[];
@@ -113,7 +121,7 @@ export interface TaskFilter {
 export class Hq {
   private queue: ApprovalQueue | null = null;
   private readonly decisionSinks: ((link: TaskApproval, state: ApprovalState) => void)[] = [];
-  private readonly alertSinks: ((text: string) => Promise<void> | void)[] = [];
+  private readonly alertSinks: ((text: string, o: AlertOpts) => Promise<void> | void)[] = [];
   readonly now: () => number;
   prices: PriceTable;
 
@@ -891,7 +899,7 @@ export class Hq {
         const warn = `budget_warn:${agent.dept}:${p.y}-${p.mo}`;
         if (!this.db.prepare('SELECT 1 FROM settings WHERE key = ?').get(warn)) {
           this.setSetting(warn, '1');
-          void this.alert(`Отдел ${agent.dept}: потрачено ${Math.round((spent / limit) * 100)}% лимита на месяц ($${spent.toFixed(2)} из $${limit}). На 100% обычные задачи отдела остановятся, срочные пойдут.`);
+          void this.alert(`Отдел ${agent.dept}: потрачено ${Math.round((spent / limit) * 100)}% лимита на месяц ($${spent.toFixed(2)} из $${limit}). На 100% обычные задачи отдела остановятся, срочные пойдут.`, { kind: 'budget', short: `Расходы отдела ${agent.dept}: ${Math.round((spent / limit) * 100)}% лимита ($${spent.toFixed(2)} из $${limit}).` });
         }
       }
       return { usd, blocked: false };
@@ -905,7 +913,7 @@ export class Hq {
     const key = `budget_alert:${agent.dept}:${p.y}-${p.mo}`;
     if (!this.db.prepare('SELECT 1 FROM settings WHERE key = ?').get(key)) {
       this.setSetting(key, '1');
-      void this.alert(`Отдел ${agent.dept}: лимит расходов на месяц ($${limit}) исчерпан, обычные задачи отдела останавливаются, срочные (клиент ждёт, приоритет 2) продолжаются.`);
+      void this.alert(`Отдел ${agent.dept}: лимит расходов на месяц ($${limit}) исчерпан, обычные задачи отдела останавливаются, срочные (клиент ждёт, приоритет 2) продолжаются.`, { kind: 'budget', short: `Расходы отдела ${agent.dept}: лимит $${limit} исчерпан (100%), обычные задачи стоят.` });
     }
     return { usd, blocked };
   }
@@ -944,12 +952,16 @@ export class Hq {
   }
 
   /** Alerts go to the owner at once (through the Director). */
-  onAlert(sink: (text: string) => Promise<void> | void): void {
+  onAlert(sink: (text: string, o: AlertOpts) => Promise<void> | void): void {
     this.alertSinks.push(sink);
   }
 
-  async alert(text: string): Promise<void> {
-    this.log('hq', 'alert');
-    for (const s of this.alertSinks) await Promise.resolve(s(text)).catch(() => undefined);
+  /**
+   * An alert for the owner. `kind` tells the one Telegram bot whether it is a reminder worth a ping (lost lead, failed email, the models down, the money
+   * limit, a service down) or a detail that stays in the Пульт («other», the default); `short` is the one line Telegram gets (no contacts, no client texts).
+   */
+  async alert(text: string, o: AlertOpts = {}): Promise<void> {
+    this.log('hq', 'alert', undefined, undefined, o.kind ?? 'other');
+    for (const s of this.alertSinks) await Promise.resolve(s(text, o)).catch(() => undefined);
   }
 }

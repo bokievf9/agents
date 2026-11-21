@@ -8,6 +8,7 @@ export * from './tools.js';
 export * from './lessons.js';
 export * from './run.js';
 export * from './firtech-tools.js';
+export * from './exec-assistant.js';
 export * from './adapters/memory.js';
 export * from './adapters/supabase.js';
 export * from './eval/format.js';

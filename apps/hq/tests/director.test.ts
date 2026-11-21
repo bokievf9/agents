@@ -202,8 +202,11 @@ describe('org and config', () => {
 
   it('config: required vars, group and topics, bad values', () => {
     const base = { HQ_BOT_TOKEN: 't', OWNER_TELEGRAM_ID: '1' };
-    const c = loadConfig({ ...base, HQ_GROUP_ID: '-100123', HQ_TOPICS: '{"general":2,"marketing":3}', MARKETING_BOT_TOKEN: 'm' });
-    expect(c).toMatchObject({ botToken: 't', ownerId: 1, groupId: -100123, topics: { general: 2, marketing: 3 }, marketingBotToken: 'm', clipsPerWeek: 7, carouselsPerWeek: 2, postsPerWeek: 3, storiesPerWeek: 5 });
+    const c = loadConfig({ ...base, HQ_GROUP_ID: '-100123', HQ_TOPICS: '{"general":2,"marketing":3}', MARKETING_BOT_TOKEN: 'm', SALES_BOT_TOKEN: 's', CONTENT_BOT_TOKEN: 'c' });
+    // the department bots are retired (2026-11-22): their tokens are only named in one log line, never used; cards and group reports are off
+    expect(c).toMatchObject({ botToken: 't', ownerId: 1, groupId: -100123, topics: { general: 2, marketing: 3 }, retiredBots: ['MARKETING_BOT_TOKEN', 'SALES_BOT_TOKEN', 'CONTENT_BOT_TOKEN'], tgApprovalCards: false, tgGroupReports: false, clipsPerWeek: 7, carouselsPerWeek: 2, postsPerWeek: 3, storiesPerWeek: 5 });
+    expect(JSON.stringify(c)).not.toMatch(/"m"|"s"|"c"/);
+    expect(loadConfig({ ...base, TG_APPROVAL_CARDS: 'on', TG_GROUP_REPORTS: 'ON' })).toMatchObject({ retiredBots: [], tgApprovalCards: true, tgGroupReports: true });
     expect(loadConfig(base).groupId).toBeUndefined();
     expect(loadConfig(base)).toMatchObject({ trendsRegions: ['KZ', 'UZ', 'RU'], siteUrl: 'https://firtech.pro', youtubeApiKey: undefined, gscSiteUrl: undefined });
     expect(loadConfig({ ...base, TRENDS_REGIONS: 'kz, uz ,bad', SITE_URL: 'https://example.com/' })).toMatchObject({ trendsRegions: ['KZ', 'UZ'], siteUrl: 'https://example.com' });

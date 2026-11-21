@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { MODES } from '../stores.js';
+import { TASK_KINDS } from '../spec.js';
 
 /**
  * The eval set format (`evals/*.eval.json`). One file = one agent spec (by its packs) and its cases. A case is a dialogue (history and the new
@@ -19,10 +20,14 @@ export const EvalCaseSchema = z.object({
   from: z.string().optional(),
   lang: z.enum(['ru', 'en']).default('ru'),
   mode: z.enum(MODES).default('anon'),
+  /** The kind of turn (`faq` takes the cheap tier under the model policy). */
+  task: z.enum(TASK_KINDS).optional(),
   history: z.array(turn).default([]),
   user: z.string().min(1),
   /** Knowledge chunks the company has for this case (title and text), on top of the set's `knowledge`. */
   knowledge: z.array(z.object({ title: z.string(), text: z.string() })).default([]),
+  /** Tool results of this case (tool name → data), over the set's `mocks`: the app's data as the agent's tools would return it. */
+  mocks: z.record(z.string(), z.unknown()).default({}),
   script: z.array(scripted).optional(),
   expect: z.object({
     contains: z.array(z.string()).default([]),
@@ -46,6 +51,8 @@ export const EvalSetSchema = z.object({
   /** The judge's pass mark (0..1). */
   threshold: z.number().min(0).max(1).default(0.7),
   knowledge: z.array(z.object({ title: z.string(), text: z.string() })).default([]),
+  /** Mock data of the app's tools for every case (tool name → result; `mockTools` in `exec-assistant.ts`). */
+  mocks: z.record(z.string(), z.unknown()).default({}),
   /** Words no reply of this set may contain (banned names). */
   banned: z.array(z.string()).default([]),
   cases: z.array(EvalCaseSchema).min(1),

@@ -9,14 +9,14 @@ afterEach(async () => { await w?.close(); });
 
 const ARGS = ['', 'abc', '99999', '-1', '<b>x</b> & y', 'x'.repeat(3000), '12 3 4'];
 
-describe('every Telegram command answers something, with and without arguments', () => {
+describe('every command of the Пульт (POST /admin/command) answers something, with and without arguments', () => {
   for (const c of COMMANDS) {
     it(`/${c.name}`, async () => {
       w = await drillWorld({ withServer: false });
       for (const a of ARGS) {
-        const before = w.tg.sent.length + w.tg.edits.length + w.channel.list({ limit: 500 }).length;
+        const before = w.tg.sent.length + w.tg.edits.length + w.channel.list({ limit: 500 }).length + w.pult.length;
         await w.cmd(c.name, a);
-        const after = w.tg.sent.length + w.tg.edits.length + w.channel.list({ limit: 500 }).length;
+        const after = w.tg.sent.length + w.tg.edits.length + w.channel.list({ limit: 500 }).length + w.pult.length;
         expect(after, `/${c.name} ${a.slice(0, 20)} answered nothing`).toBeGreaterThan(before);
       }
       expect(g.rejections).toEqual([]);
@@ -71,9 +71,7 @@ describe('commands with an effect: the state really changes, repeats are safe', 
     await w.cmd('lesson', '1: бриф лучше собирать голосом');
     await w.cmd('kb', 'бриф');
     for (const role of ['content-maker', 'publisher', 'trend-scout', 'seo', 'analyst', 'sales', 'контент-мейкер']) {
-      const n = w.tg.sent.length;
-      await w.cmd('playbook', role);
-      expect(w.tg.sent.length, role).toBeGreaterThan(n);
+      expect((await w.cmd('playbook', role)).length, role).toBeGreaterThan(0);
     }
     for (let i = 0; i < 3; i++) await w.beat();
     expect(g.errors().map((l) => `${l.msg}: ${String(l.err)}`)).toEqual([]);
@@ -95,10 +93,10 @@ describe('commands with an effect: the state really changes, repeats are safe', 
     expect(w.ownerSaw()).toContain('у строителей');
     expect(g.errors()).toEqual([]);
   });
-  it('/tasks pages and /approve with and without cards', async () => {
-    w = await drillWorld({ withServer: false });
+  it('/tasks pages and /approve with and without cards (the page buttons are the legacy Telegram cards)', async () => {
+    w = await drillWorld({ withServer: false, tgCards: true });
     for (let i = 0; i < 25; i++) w.hq.createTask({ title: `Задача ${i}`, dept: 'support', creator: 'owner' });
-    await w.cmd('tasks', 'support');
+    await w.channel.asReply(() => w.director.onCommand('tasks', 'support'));
     const first = w.tg.sent.at(-1)!;
     expect(first.buttons?.flat().some((b) => b.data?.startsWith('pg:support:1'))).toBe(true);
     for (const d of ['pg:support:1', 'pg:support:2', 'pg:support:3', 'pg:all:2']) expect((await w.press(d)).some((c) => c.method === 'answerCallbackQuery')).toBe(true);

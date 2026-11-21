@@ -9,7 +9,7 @@ export const CHAOS = ['tests/drill/chaos.test.ts', '**/node_modules/**'];
 export const shared = {
   resolve: { conditions: ['source'] },
   ssr: { resolve: { conditions: ['source'] } },
-  inline: [/@fir\/core/, /@fir\/hq/, /@fir\/worker-content-maker/, /@fir\/worker-(finance|lead-intake|monitoring|presales|prospector|referral|trend-scout|publisher|seo|analyst|billing|customer-support|onboarding|project-manager|reviewer|deployer|documents|knowledge)/],
+  inline: [/@fir\/core/, /@fir\/hq/, /@fir\/fira/, /@fir\/worker-content-maker/, /@fir\/worker-(finance|lead-intake|monitoring|presales|prospector|referral|trend-scout|publisher|seo|analyst|billing|customer-support|onboarding|project-manager|reviewer|deployer|documents|knowledge)/],
 };
 
 export default defineConfig({

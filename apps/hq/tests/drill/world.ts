@@ -2,11 +2,14 @@
 import { once } from 'node:events';
 import { Bot } from 'grammy';
 import { installOwnerGlue } from '../../src/glue.js';
+import { OwnerAssistant } from '../../src/assistant.js';
+import { pultLinks } from '../../src/links.js';
+import { OwnerNotices } from '../../src/notices.js';
 import { TopicManager } from '../../src/topics.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
-import { ApprovalQueue, MemoryMessenger, MockLlm, OutboxMessenger, openDb, type LlmRequest } from '@fir/core';
+import { ApprovalQueue, MemoryMessenger, MockLlm, OutboxMessenger, openDb, type LlmChatRequest, type LlmRequest, type ScriptedTurn } from '@fir/core';
 import { HeartbeatWorker, Hq, startRoutines } from '@fir/hq';
 import { BillingWorker, PaymentWatcher } from '@fir/worker-billing';
 import { CustomerSupportWorker } from '@fir/worker-customer-support';
@@ -64,7 +67,11 @@ export const MEDIA_BASE = 'https://hq.test/media';
  * `flow: true` wires Cabinet v3 like `index.ts` does (documents to the client's cabinet, accept and sign, threads, uploads, the playground, the public agent route);
  * without it the world is the older one (a cabinet lead's КП makes the contract and the invoice at once), which the older drill tests still describe.
  */
-export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolean; flow?: boolean } = {}) {
+/**
+ * `tgCards: true` is the legacy flag `TG_APPROVAL_CARDS=on` (approval cards and the Director's buttons in Telegram); the default is the contract of
+ * 2026-11-22: one HQ bot, only reminders and answers in Telegram, every decision through the review API.
+ */
+export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolean; flow?: boolean; tgCards?: boolean } = {}) {
   const clock = { t: NOW };
   const t = () => clock.t;
   const db = openDb(':memory:');
@@ -73,7 +80,12 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const outbox = new OutboxMessenger(tg, { minGapMs: 0, backoffMs: 1, sleep: (ms) => { sleeps.push(ms); return Promise.resolve(); }, now: t });
   const hq = new Hq(db, { now: t });
   const lost = new LostLeads(hq);
-  const channel: OwnerChannel = new OwnerChannel({ hq, inner: outbox, ownerId: OWNER, approvalPending: (id) => queue.get(id)?.status === 'pending', onCardSent: (id, m) => queue.noteCard(id, OWNER, m) });
+  const links = pultLinks('https://firtech.pro');
+  const channel: OwnerChannel = new OwnerChannel({
+    hq, inner: outbox, ownerId: OWNER, approvalPending: (id) => queue.get(id)?.status === 'pending', onCardSent: (id, m) => queue.noteCard(id, OWNER, m),
+    telegram: 'notices', cards: o.tgCards ?? false, pultUrl: links.base,
+  });
+  const notices = new OwnerNotices({ hq, links, deliver: (html) => channel.notice(html) });
   const queue: ApprovalQueue = new ApprovalQueue(db, channel, OWNER, 20, t);
   hq.attachQueue(queue);
   const cfg = { instructionsDir, marketingBudgetUsd: 0, salesBudgetUsd: 0, supportBudgetUsd: 0, productionBudgetUsd: 0, backofficeBudgetUsd: 0 };
@@ -88,6 +100,8 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const calls: LlmRequest[] = [];
   const heads = routedLlm();
   const state: { down: boolean; garbage: boolean; delayMs: number; intent: ((text: string) => string) | null } = { down: o.gatewayDown ?? false, garbage: false, delayMs: 0, intent: null };
+  /** The owner's assistant (native tool use): each question plays `assistantScript` (default: one hq_overview call, then a short answer). */
+  const assistantScript: { next: ((req: LlmChatRequest, n: number) => ScriptedTurn) | null } = { next: null };
   const llm = new MockLlm(async (req: LlmRequest) => {
     calls.push(req);
     if (state.delayMs) await new Promise((r) => setTimeout(r, Math.floor(Math.random() * state.delayMs)));
@@ -106,7 +120,20 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const posted: { dept: string; text: string }[] = [];
   const mk = (dept: string): TopicSender => (_c, _th, text) => Promise.resolve(void posted.push({ dept, text }));
   const reporter = new Reporter(-1001, { marketing: 1, sales: 2, support: 3, production: 4, backoffice: 5, general: 6 }, new Map(['marketing', 'sales', 'support', 'production', 'backoffice', 'general'].map((d) => [d, mk(d)])));
-  const director = new Director({ hq, llm: llm as any, messenger: channel, queue, ownerId: OWNER, reporter });
+  // the chat of the assistant: tool rounds by the script, a dead gateway throws like the real client
+  const chatCalls: LlmChatRequest[] = [];
+  (llm as any).chat = async (req: LlmChatRequest) => {
+    chatCalls.push(req);
+    if (state.down) throw new Error('gateway down 502');
+    const n = req.messages.filter((m) => m.role === 'assistant').length;
+    const s: ScriptedTurn = assistantScript.next ? assistantScript.next(req, n) : n === 0 ? { tools: [{ name: 'hq_overview' }] } : { text: `По данным HQ всё спокойно. ${links.to('home')}` };
+    const content: any[] = [];
+    if (s.text) content.push({ type: 'text', text: s.text });
+    (s.tools ?? []).forEach((t, i) => content.push({ type: 'tool_use', id: `tu_${chatCalls.length}_${i}`, name: t.name, input: t.input ?? {} }));
+    return { content, stopReason: s.tools?.length ? 'tool_use' : 'end_turn', usage: { inputTokens: 900, outputTokens: 40, model: 'claude-sonnet-5-5' } };
+  };
+  const director = new Director({ hq, llm: llm as any, messenger: channel, queue, ownerId: OWNER, reporter, notices, links });
+  const assistant = new OwnerAssistant({ hq, llm: llm as any, links, pendingApprovals: () => queue.pending().length });
   const fetched: string[] = [];
   // Resend, as the heads see it: every email goes into `emails` (the cabinet documents and the clarifying questions of the Sales head)
   const emails: { to: string; subject: string; text: string }[] = [];
@@ -203,7 +230,7 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const bot = new Bot('123456:TEST', { botInfo: { id: 123456, is_bot: true, first_name: 'hq', username: 'hq_bot', can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false, can_connect_to_business: false, has_main_web_app: false, has_topics_enabled: false, allows_users_to_create_topics: false } as any });
   bot.api.config.use((_prev, method, payload) => { api.push({ method, payload }); return Promise.resolve({ ok: true, result: true } as any); });
   const topicManager = new TopicManager(hq, undefined, {}, bot.api);
-  installOwnerGlue(bot, { ownerId: OWNER, channel, queue, director, marketing, sales, topicManager });
+  installOwnerGlue(bot, { ownerId: OWNER, channel, queue, director, marketing, sales, topicManager, assistant, links, cards: o.tgCards ?? false });
   let upd = 1;
   const user = (id: number) => ({ id, is_bot: false, first_name: 'u' });
   const msgOf = (from: number, chat: number, type: 'private' | 'supergroup') => ({ message_id: ++upd, date: 0, chat: { id: chat, type, first_name: 'u' }, from: user(from) });
@@ -308,12 +335,20 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
     await marketing.onHeartbeat();
   };
   const decide = async (action: 'approve' | 'reject', id: number) => { const r = await queue.handle(action, id, OWNER); director.afterDecision(); return r; };
-  const cmd = (name: string, arg = '') => director.onCommand(name, arg);
-  const ownerSaw = () => tg.to(OWNER).join('\n');
+  /** A command as the Пульт runs it (`POST /admin/command`): inside the website scope, the replies come back (`pult`), nothing goes to Telegram. */
+  const pult: string[] = [];
+  const cmd = async (name: string, arg = '') => {
+    const { replies } = await channel.capture(() => director.onCommand(name, arg));
+    pult.push(...replies);
+    return replies;
+  };
+  /** Everything the owner can see: Telegram, the inbox of the Пульт and the replies of the Пульт's commands. */
+  const ownerSaw = () => [...tg.to(OWNER), ...channel.list({ limit: 200 }).map((m) => m.text), ...pult].join('\n');
   const close = () => new Promise<void>((res) => (url ? webhook.close(() => res()) : res()));
   return {
     bot, api, press, say, settle, clock, db, tg, hq, queue, channel, llm, calls, state, director, marketing, support, sales, production, backoffice, drill, billing, payWatch, chain, chainGets, admin, webhook, url, http, adm,
-    cabinet, callBook, emails, emailFail, site, heartbeat, beat, decide, cmd, alerts, posted, lost, webChat, reloads, toWeb, toClient, tools, fetched, rendersDir, dataDir, sleeps, outbox, ownerSaw, close, startRoutines: () => startRoutines(hq),
+    cabinet, callBook, emails, emailFail, site, heartbeat, beat, decide, cmd, pult, alerts, posted, lost, webChat, reloads, toWeb, toClient, tools, fetched, rendersDir, dataDir, sleeps, outbox, ownerSaw, close, startRoutines: () => startRoutines(hq),
+    links, notices, assistant, assistantScript, chatCalls,
   };
 }
 export type DrillWorld = Awaited<ReturnType<typeof drillWorld>>;

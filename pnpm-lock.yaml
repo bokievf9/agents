@@ -207,6 +207,9 @@ importers:
       '@fir/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@fir/fira':
+        specifier: workspace:*
+        version: link:../../packages/fira
       '@fir/hq':
         specifier: workspace:*
         version: link:../../packages/hq

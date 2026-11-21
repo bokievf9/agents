@@ -10,8 +10,9 @@ let w: DrillWorld;
 afterEach(async () => { await w?.close(); });
 const DAY = 86_400_000;
 
+/** With the legacy flag TG_APPROVAL_CARDS=on, so the same card can be decided from Telegram and from the review API. */
 async function fresh(): Promise<DrillWorld> {
-  const x = await drillWorld();
+  const x = await drillWorld({ tgCards: true });
   for (const k of x.queue.trustTable()) x.queue.setLevel(k.kind, 0);
   return x;
 }
@@ -69,7 +70,7 @@ describe('the kinds that need a longer story: every one is decided through Teleg
   for (const [kind, produce] of Object.entries(PRODUCERS)) {
     describe(kind, () => {
       const prepared = async () => { w = await fresh(); await produce(w); const r = waiting(w, kind)[0]; expect(r, `no pending ${kind} card after its flow`).toBeDefined(); return r!; };
-      it('Telegram approve (a template is filled first), then a second press answers "already"', async () => {
+      it('Telegram approve with TG_APPROVAL_CARDS=on (a template is filled first), then a second press answers "already"', async () => {
         const r = await prepared();
         let calls = await w.press(`ap:${r.id}:a`);
         if (w.queue.get(r.id)!.status === 'pending') { // held: a template in the text
@@ -85,7 +86,7 @@ describe('the kinds that need a longer story: every one is decided through Teleg
         expect(g.rejections).toEqual([]);
         expect(g.errors().map((l) => `${l.msg}: ${String(l.err)}`)).toEqual([]);
       });
-      it('Telegram reject', async () => {
+      it('Telegram reject with TG_APPROVAL_CARDS=on', async () => {
         const r = await prepared();
         await w.press(`ap:${r.id}:r`);
         expect(w.queue.get(r.id)!.status).toBe('rejected');

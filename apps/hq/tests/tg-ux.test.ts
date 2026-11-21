@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { OffLlm, setupBotMenu, stripHtml, type Button } from '@fir/core';
 import type { Api } from 'grammy';
-import { DIRECTOR_COMMANDS, KEYBOARD, deptBotMenu, menuCommand, parseNav } from '../src/tg.js';
+import { HQ_PROFILE, KEYBOARD, menuCommand, parseNav } from '../src/tg.js';
+import { TG_COMMANDS } from '../src/glue.js';
 import { OWNER, world } from './helpers.js';
 
 const texts = (b?: Button[][]) => (b ?? []).flat().map((x) => x.text);
@@ -29,7 +30,7 @@ async function batch(textA = 'Пост A') {
 }
 
 describe('Telegram UX: command menu', () => {
-  it('registers the owner commands with Russian descriptions, the profile texts and the menu button; errors are only logged', async () => {
+  it('the one HQ bot registers two commands (/start, /pult) with Russian descriptions, its profile texts and the menu button; errors are only logged', async () => {
     const calls: { m: string; args: unknown[] }[] = [];
     const api = new Proxy({}, {
       get: (_t, m: string) => (...args: unknown[]) => {
@@ -37,23 +38,20 @@ describe('Telegram UX: command menu', () => {
         return m === 'setMyShortDescription' ? Promise.reject(new Error('flood')) : Promise.resolve(true);
       },
     }) as unknown as Api;
-    const ok = await setupBotMenu(api, { commands: [], ownerCommands: { chatId: OWNER, commands: DIRECTOR_COMMANDS }, description: 'd', shortDescription: 's', menuButtonChatId: OWNER });
+    const ok = await setupBotMenu(api, { commands: [], ownerCommands: { chatId: OWNER, commands: TG_COMMANDS }, description: HQ_PROFILE.description, shortDescription: HQ_PROFILE.short, menuButtonChatId: OWNER });
     expect(ok).toBe(4); // one step failed, the others went through
     const owner = calls.find((c) => c.m === 'setMyCommands' && (c.args[1] as { scope?: unknown })?.scope)!;
     expect(owner.args[1]).toEqual({ scope: { type: 'chat', chat_id: OWNER } });
     const list = owner.args[0] as { command: string; description: string }[];
-    expect(list.length).toBeLessThanOrEqual(20);
-    for (const c of ['start', 'status', 'approve', 'tasks', 'builders', 'costs', 'org', 'drill', 'retry', 'desk', 'away', 'help']) expect(list.map((x) => x.command)).toContain(c);
-    expect(list.every((c) => /[а-яё]/i.test(c.description) && /^[a-z0-9_]+$/.test(c.command))).toBe(true);
+    expect(list.map((x) => x.command)).toEqual(['start', 'pult']);
+    expect(list.every((c) => /[а-яё]/i.test(c.description))).toBe(true);
     expect(calls.find((c) => c.m === 'setChatMenuButton')!.args[0]).toEqual({ chat_id: OWNER, menu_button: { type: 'commands' } });
-    // department bots do not read messages: no commands, a description that points to the Director
-    const dept = deptBotMenu('sales', 'firtech_hq_bot');
-    expect(dept.commands).toEqual([]);
-    expect(dept.description).toContain('@firtech_hq_bot');
-    expect(dept.shortDescription!.length).toBeLessThanOrEqual(120);
+    expect(HQ_PROFILE.description.length).toBeLessThanOrEqual(512);
+    expect(HQ_PROFILE.short.length).toBeLessThanOrEqual(120);
+    expect(HQ_PROFILE.description).toContain('Пульт');
   });
 
-  it('/start shows the reply keyboard; its buttons map to the commands', async () => {
+  it('legacy (Пульт commands, TG_APPROVAL_CARDS): /start of the Director shows the reply keyboard; its buttons map to the commands', async () => {
     const w = world();
     await w.director.onCommand('start');
     expect(w.messenger.options.at(-1)).toMatchObject({ html: true, keyboard: KEYBOARD });

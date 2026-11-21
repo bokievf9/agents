@@ -87,6 +87,10 @@
 сам (`forum_topic_created`).
 
 ## Директор (бот `HQ_BOT_TOKEN`, только `OWNER_TELEGRAM_ID`, личный чат)
+
+> **С 2026-11-22 один бот HQ** (пункт 13 ревью владельца): в Telegram только напоминания (`src/notices.ts`) и ответы на вопросы (`src/assistant.ts`),
+> команды ниже работают из Пульта (`POST /admin/command`), в боте остались `/start` и `/pult`; карточки с кнопками только с `TG_APPROVAL_CARDS=on`.
+> Боты отделов (`*_BOT_TOKEN` в этом файле) сняты и игнорируются. Контракт: `docs/telegram-ux.md`, `../../docs/process-census.md` раздел 11.
 Любое сообщение разбирается LLM в одно из: задача отделу, вопрос о статусе, изменение правил, «нужен строитель»
 (задача `blocked` с пометкой `builder`, отдел `hq`). Ответ модели не команда: отдел, настройка и агент проверяются по
 спискам, неизвестное отклоняется. Изменение правил пишется только после кнопки «Применить»: настройки `tz`,
@@ -444,6 +448,7 @@ DEMO-персоны по нишам), `src/cabinet-api.ts` (`buildCabinet`, ма
 Директора или `hq import`: после деплоя этого изменения загрузить новый текст `marketing-head.md` и `sales-head.md`.
 
 ## Переменные
+Токены ботов отделов ниже с 2026-11-22 не используются (одна строка в лог); новые флаги `TG_APPROVAL_CARDS`, `TG_GROUP_REPORTS` (по умолчанию off).
 См. `.env.example`: `HQ_BOT_TOKEN`, `OWNER_TELEGRAM_ID`, `TZ` (часы компании, Душанбе), `OWNER_TZ` (часы владельца, Куала-Лумпур), `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL_FAST/SMART`;
 необязательные `MARKETING_BOT_TOKEN`, `SALES_BOT_TOKEN`, `LEAD_WEBHOOK_TOKEN`, `OFFICE_TOKEN`, `ADMIN_TOKEN`, `PRESENCE_AWAY_AFTER_MIN`, `WEBHOOK_PORT`, `BATCH_SIZE`, `SLOT_HOURS`,
 `REPLY_LEVEL`, `SALES_BUDGET_USD`, `HQ_GROUP_ID`, `HQ_TOPICS` (JSON `{"general":2,"marketing":3}`; ключи: `general` и

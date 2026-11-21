@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@fir/core": "workspace:*",
+    "@fir/fira": "workspace:*",
     "@fir/hq": "workspace:*",
     "@fir/worker-analyst": "workspace:*",
     "@fir/worker-billing": "workspace:*",

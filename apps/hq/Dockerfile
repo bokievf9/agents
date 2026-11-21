@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/core/package.json packages/core/
 COPY packages/hq/package.json packages/hq/
+COPY packages/fira/package.json packages/fira/
 COPY packages/workers/content-maker/package.json packages/workers/content-maker/
 COPY packages/workers/monitoring/package.json packages/workers/monitoring/
 COPY packages/workers/finance/package.json packages/workers/finance/
@@ -32,6 +33,7 @@ COPY apps/hq/package.json apps/hq/
 RUN pnpm install --frozen-lockfile
 COPY packages/core packages/core
 COPY packages/hq packages/hq
+COPY packages/fira packages/fira
 COPY packages/workers packages/workers
 COPY apps/hq apps/hq
 COPY knowledge knowledge
@@ -40,7 +42,9 @@ RUN pnpm --filter "hq..." build \
     && node -e "new (require('/out/node_modules/better-sqlite3'))(':memory:').exec('select 1')" \
     && test -f /out/node_modules/@fir/core/assets/fonts/onest-latin-400-normal.woff \
     && test -f /out/node_modules/@fir/core/assets/fonts/onest-cyrillic-700-normal.woff \
-    && test -f /out/node_modules/@fir/core/assets/fonts/onest-cyrillic-ext-700-normal.woff
+    && test -f /out/node_modules/@fir/core/assets/fonts/onest-cyrillic-ext-700-normal.woff \
+    && test -f /out/node_modules/@fir/fira/role-packs/executive-assistant.md \
+    && test -f /out/node_modules/@fir/fira/company-packs/firtech.json
 
 FROM node:22-bookworm-slim
 LABEL app=hq

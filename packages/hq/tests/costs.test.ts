@@ -1,4 +1,4 @@
-import { MockLlm } from '@fir/core';
+import { MockChatLlm, MockLlm } from '@fir/core';
 import { describe, expect, it } from 'vitest';
 import { Hq, exportOrg, importOrg, meterLlm } from '../src/index.js';
 import { setup } from './helpers.js';
@@ -176,5 +176,35 @@ describe('limits: 80% alert, 100% soft stop, urgent work goes on', () => {
     expect(await urgent.complete({ tier: 'haiku', system: 's', messages: [{ role: 'user', content: 'u' }] })).toBe('x');
     const prio = meterLlm(new MockLlm(() => 'x'), hq, { agentId: 'content-maker', taskId: rush.id });
     expect(await prio.complete({ tier: 'haiku', system: 's', messages: [{ role: 'user', content: 'u' }] })).toBe('x');
+  });
+  it('chat (native tool use) is metered too: one costs row per model call, real usage when reported, the limit refuses it', async () => {
+    const { hq } = setup();
+    const inner = new MockChatLlm([{ tools: [{ name: 'leads_overview' }] }, { text: 'Сегодня 2 заявки.' }], { inputTokens: 1000, outputTokens: 50, model: 'claude-sonnet-5-5' });
+    const llm = meterLlm(inner, hq, { agentId: 'director' });
+    expect(llm.chat).toBeDefined();
+    await llm.chat!({ tier: 'sonnet', system: [{ text: 's', cache: true }], messages: [{ role: 'user', content: 'сколько заявок?' }] });
+    await llm.chat!({ tier: 'sonnet', system: 's', messages: [{ role: 'user', content: 'x' }] });
+    const rows = hq.db.prepare("SELECT model, input_tokens i, output_tokens o FROM costs WHERE agent_id = 'director'").all() as { model: string; i: number; o: number }[];
+    expect(rows).toEqual([{ model: 'claude-sonnet-5-5', i: 1000, o: 50 }, { model: 'claude-sonnet-5-5', i: 1000, o: 50 }]);
+    // a client without usage is estimated; a client without chat gets no chat
+    const est = meterLlm(new MockChatLlm([{ text: 'ok' }]), hq, { agentId: 'director' });
+    await est.chat!({ tier: 'haiku', system: 'x'.repeat(400), messages: [{ role: 'user', content: 'y' }] });
+    expect((hq.db.prepare("SELECT model, input_tokens i FROM costs WHERE agent_id = 'director' ORDER BY id DESC LIMIT 1").get() as { model: string; i: number })).toEqual({ model: 'haiku', i: 101 });
+    expect(meterLlm(new MockLlm(() => 'x'), hq, { agentId: 'director' }).chat).toBeUndefined();
+    hq.upsertAgent({ ...hq.agent('marketing-head')!, budgetUsdMonth: 1 });
+    hq.recordCost({ agentId: 'content-maker', model: 'm', inputTokens: 0, outputTokens: 0, usd: 2 });
+    const capped = meterLlm(new MockChatLlm([{ text: 'x' }]), hq, { agentId: 'content-maker' });
+    await expect(capped.chat!({ tier: 'sonnet', system: 's', messages: [{ role: 'user', content: 'x' }] })).rejects.toThrow(/Лимит/);
+  });
+
+  it('an alert carries its kind and a short line for Telegram; the sink gets both, the activity row the kind only', async () => {
+    const { hq } = setup();
+    const got: { text: string; kind?: string; short?: string }[] = [];
+    hq.onAlert((text, o) => void got.push({ text, ...o }));
+    await hq.alert('Модель не отвечает', { kind: 'llm', short: 'LLM недоступна' });
+    await hq.alert('Что-то ещё');
+    expect(got).toEqual([{ text: 'Модель не отвечает', kind: 'llm', short: 'LLM недоступна' }, { text: 'Что-то ещё' }]);
+    const acts = hq.activity(5).filter((a) => a.action === 'alert').map((a) => a.detail);
+    expect(acts).toEqual(['other', 'llm']);
   });
 });

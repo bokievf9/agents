@@ -1,6 +1,6 @@
 import { Cron } from 'croner';
 import { errMsg, escapeHtml, log, schedule, stripHtml, tryJson, zonedParts, zonedToMs, type ApprovalQueue, type Button, type LlmClient, type Messenger } from '@fir/core';
-import { meterLlm, type Hq, type Task } from '@fir/hq';
+import { meterLlm, type AlertOpts, type Hq, type Task } from '@fir/hq';
 import { z } from 'zod';
 import { dailyCron, weeklyCron } from './config.js';
 import { helpHtml } from './commands.js';
@@ -10,6 +10,8 @@ import type { Reporter } from './reporter.js';
 import { openBuilderTasks } from './bridge.js';
 import { Progress, deptRu, lastReason, reasonRu } from './progress.js';
 import { OwnerChannel, type InboxKind } from './presence.js';
+import type { OwnerNotices } from './notices.js';
+import { pultLinks, type PultLinks } from './links.js';
 import { KEYBOARD, approvalCardFormat, bold, cb, clip, code, esc, menuCommand, parseNav, type Nav } from './tg.js';
 
 /** Tasks per page of the /tasks list. */
@@ -84,6 +86,12 @@ export interface DirectorDeps {
   ownerId: number;
   /** Optional: the summary and alerts are mirrored into the "general" topic of the HQ group. */
   reporter?: Reporter;
+  /**
+   * The reminders of the one HQ bot (2026-11-22). With it, alerts of the reminder kinds and the summaries reach Telegram as short notices; everything
+   * else the Director writes stays in the inbox of the Пульт (the owner channel's `notices` policy).
+   */
+  notices?: OwnerNotices;
+  links?: PultLinks;
 }
 
 const ruRole: Record<string, string> = { director: 'директор', head: 'голова', worker: 'исполнитель' };
@@ -139,12 +147,16 @@ export class Director {
     this.llm = meterLlm(d.llm, d.hq, { agentId: 'director' });
     this.channel = d.messenger instanceof OwnerChannel ? d.messenger : null;
     this.progress = new Progress({ hq: d.hq, messenger: d.messenger, ownerId: d.ownerId, ...(this.channel ? { channel: this.channel } : {}) });
-    d.hq.onAlert((text) => this.alertOwner(text));
+    d.hq.onAlert((text, o) => this.alertOwner(text, o));
     d.queue.setCardFormat(approvalCardFormat(d.hq, this.editors));
   }
 
   private get hq(): Hq {
     return this.d.hq;
+  }
+
+  private get links(): PultLinks {
+    return this.d.links ?? pultLinks();
   }
 
   /** The last message sent by `say` (a command reply can become the live message of the task it created). */
@@ -220,16 +232,19 @@ export class Director {
 
   // ---- the three things the Director writes by itself ----
   async sendMorningSummary(): Promise<void> {
+    const night = this.d.notices?.takeNight() ?? null;
     const text = this.morningSummary();
     await this.say(text, undefined, 'summary');
+    await this.d.notices?.push('summary', this.morningShort(night), '');
     await this.d.reporter?.post('general', text);
     this.hq.setSetting('held_alerts', '[]');
   }
 
-  /** Monday's digest: the week in numbers and what each department reported. Not held by quiet hours (it comes at 08:30 on his clock). */
+  /** Monday's digest: the week in numbers. Not held by quiet hours (it comes at 08:30 on his clock). */
   async sendWeeklyDigest(): Promise<void> {
     const text = this.weeklyDigest();
     await this.say(text, undefined, 'summary');
+    await this.d.notices?.push('summary', this.weeklyShort(), '');
     await this.d.reporter?.post('general', text);
   }
 
@@ -273,6 +288,7 @@ export class Director {
     return out.join('\n\n');
   }
 
+  /** The full morning summary (the inbox of the Пульт, the group topic with TG_GROUP_REPORTS=on). */
   morningSummary(): string {
     const hq = this.hq;
     const p = zonedParts(hq.now(), hq.ownerTz);
@@ -302,6 +318,83 @@ export class Director {
     const held = this.held();
     if (held.length) out.push(`Инциденты за ночь:\n${held.map((h) => `- ${h}`).join('\n')}`);
     return out.join('\n\n');
+  }
+
+
+  /** The week in a few lines and one link, for Telegram (owner 2026-11-22: «короче, чем сейчас»; the full digest is in the inbox of the Пульт). */
+  weeklyShort(): string {
+    const hq = this.hq;
+    const now = hq.now();
+    const since = now - 7 * DAY;
+    const day = (at: number) => {
+      const p = zonedParts(at, hq.ownerTz);
+      return `${String(p.d).padStart(2, '0')}.${String(p.mo).padStart(2, '0')}`;
+    };
+    const count = this.counter();
+    const leads = count('SELECT COUNT(*) c FROM li_leads WHERE created_at >= ?', since);
+    const lost = count("SELECT COUNT(*) c FROM activity WHERE action = 'lost_lead' AND at >= ?", since);
+    const clients = count('SELECT COUNT(*) c FROM cab_clients WHERE created_at >= ?', since);
+    const revenue = count("SELECT COALESCE(SUM(amount_usd), 0) c FROM bl_invoices WHERE status = 'paid' AND paid_at >= ?", since);
+    const done = count("SELECT COUNT(*) c FROM tasks WHERE status = 'done' AND updated_at >= ? AND (',' || tags || ',') NOT LIKE '%,drill,%'", since);
+    const blocked = hq.tasks({ status: 'blocked', limit: 100 }).filter((t) => !t.tags.includes('drill')).length;
+    const approved = count("SELECT COUNT(*) c FROM decisions WHERE decision IN ('approve','auto') AND at >= ?", since);
+    const rejected = count("SELECT COUNT(*) c FROM decisions WHERE decision = 'reject' AND at >= ?", since);
+    const waiting = hq.queuedApprovals().length + hq.heldApprovals().length + this.d.queue.pending().length;
+    const spend = hq.costSummary(since).reduce((a, r) => a + r.usd, 0);
+    return [
+      `Недельный дайджест, ${day(since)}-${day(now)}`,
+      `Заявок ${leads}${lost ? ` (не доставлено ${lost})` : ''}, новых клиентов ${clients}, оплат ${money(revenue)}.`,
+      `Задач выполнено ${done}, застряло ${blocked}. Одобрено ${approved}, отклонено ${rejected}, ждёт вас ${waiting}.`,
+      `Расходы на модели ${money(spend)}.`,
+      `Пульт: ${this.links.to('home')}`,
+    ].join('\n');
+  }
+
+  /** A COUNT/SUM over a table that may not exist yet (a worker never ran): 0. */
+  private counter(): (sql: string, ...args: unknown[]) => number {
+    return (sql, ...args) => {
+      try {
+        return (this.hq.db.prepare(sql).get(...args) as { c: number | null } | undefined)?.c ?? 0;
+      } catch {
+        return 0;
+      }
+    };
+  }
+
+  /**
+   * The morning in a few lines and one link, for Telegram (owner 2026-11-22: «короче, чем сейчас»; the full summary with the reports of the
+   * departments is in the inbox of the Пульт): the day's numbers, what waits for him, the heads' one-liners, the LLM spend, the night.
+   * `night`: the notices of the quiet hours in one line (`OwnerNotices.takeNight`).
+   */
+  morningShort(night: string | null = null): string {
+    const hq = this.hq;
+    const p = zonedParts(hq.now(), hq.ownerTz);
+    const since = hq.now() - DAY;
+    const count = this.counter();
+    const leads = count('SELECT COUNT(*) c FROM li_leads WHERE created_at >= ?', since);
+    const clients = count('SELECT COUNT(*) c FROM cab_clients WHERE created_at >= ?', since);
+    const paid = count("SELECT COUNT(*) c FROM bl_invoices WHERE status = 'paid' AND paid_at >= ?", since);
+    const revenue = count("SELECT COALESCE(SUM(amount_usd), 0) c FROM bl_invoices WHERE status = 'paid' AND paid_at >= ?", since);
+    const waiting = hq.queuedApprovals().length + this.d.queue.pending().length;
+    const blocked = hq.tasks({ status: 'blocked', limit: 100 }).filter((t) => !t.tags.includes('drill')).length;
+    const out: string[] = [
+      `Утренняя сводка, ${String(p.d).padStart(2, '0')}.${String(p.mo).padStart(2, '0')}`,
+      `За сутки: заявок ${leads}, новых клиентов ${clients}, оплат ${paid}${paid ? ` на ${money(revenue)}` : ''}.`,
+      waiting + blocked > 0 ? `Ждёт вас: одобрений ${waiting}, застрявших задач ${blocked}.` : 'Ничего не ждёт вашего решения.',
+    ];
+    for (const line of this.summaryLines) {
+      const text = line();
+      if (text) out.push(oneLine(text, 200));
+    }
+    const usage = hq.llmUsage(since);
+    if (usage.calls > 0) out.push(`LLM за вчера: ${usage.calls} вызовов, ${money(usage.usd)}.`);
+    if (night) out.push(night);
+    else if (!this.d.notices) {
+      const held = this.held();
+      if (held.length) out.push(`Инциденты за ночь: ${held.slice(0, 5).map((h) => oneLine(h, 120)).join('; ')}`);
+    }
+    out.push(`Пульт: ${this.links.to('home')}`);
+    return out.join('\n');
   }
 
   /**
@@ -342,8 +435,17 @@ export class Director {
     }
   }
 
-  /** Alerts go out at once; in quiet hours they wait for the morning summary. */
-  async alertOwner(text: string): Promise<void> {
+  /**
+   * Alerts go out at once; in quiet hours they wait for the morning summary. With the notices of the one HQ bot the full text goes to the inbox of
+   * the Пульт and Telegram gets one short line, only for the reminder kinds (lost lead, email, models, money limit, a service down).
+   */
+  async alertOwner(text: string, o: AlertOpts = {}): Promise<void> {
+    if (this.d.notices) {
+      await this.say(`Алерт: ${text}`, undefined, 'alert');
+      await this.d.notices.alert(text, o);
+      await this.d.reporter?.post('general', `Алерт: ${o.short ?? text}`);
+      return;
+    }
     if (this.hq.isQuiet()) {
       this.hq.setSetting('held_alerts', JSON.stringify([...this.held(), oneLine(text, 300)].slice(-20)));
       return;
@@ -356,6 +458,12 @@ export class Director {
   /** The Telegram glue calls this after approval buttons ran, so tasks follow the owner's decisions. */
   afterDecision(): void {
     this.hq.reconcileApprovals();
+  }
+
+  /** The legacy cards in Telegram: an «Править» waiting for the owner's text takes it. True when a text was consumed. */
+  async consumeEdit(text: string): Promise<boolean> {
+    for (const e of this.editors.values()) if (await e.consume(text)) return true;
+    return false;
   }
 
   async onEditPressed(approvalId: number): Promise<string | null> {

@@ -1,4 +1,4 @@
-import { escapeHtml, type ApprovalRow, type BotCommand, type BotMenu, type Button, type CardFormat, type ReplyKeyboard } from '@fir/core';
+import { escapeHtml, type ApprovalRow, type BotCommand, type Button, type CardFormat, type ReplyKeyboard } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import type { ApprovalEditor } from './editor.js';
 import { DIRECTOR_MENU } from './commands.js';
@@ -39,21 +39,18 @@ export function menuCommand(text: string): string | null {
 /** The owner's menu (scoped to his private chat), made from the one command list (`commands.ts`): at most 20 shown. */
 export const DIRECTOR_COMMANDS: BotCommand[] = DIRECTOR_MENU;
 
+/** The profile of the one HQ bot (2026-11-22): a reminder that answers questions; control lives in the Пульт. */
+export const HQ_PROFILE = {
+  description:
+    'HQ Fir Tech: напоминает владельцу о главном (новый клиент, заявка, документ на одобрение, оплата, этап) и отвечает на любой вопрос о компании обычным текстом. Управление в Пульте firtech.pro/admin. Отвечает только владельцу.',
+  short: 'HQ Fir Tech: напоминания и ответы владельцу. Управление в Пульте.',
+};
+
 export const DIRECTOR_PROFILE = {
   description:
     'Директор Fir Tech: единственный голос компании агентов для владельца. Задачи обычным текстом, одобрения карточками с кнопками, статус отделов и задач в одно касание. Отвечает только владельцу.',
   short: 'Директор Fir Tech: задачи, одобрения и статус отделов. Только для владельца.',
 };
-
-/** Department bots only post reports into their topic of the HQ group; they do not read messages. */
-export function deptBotMenu(dept: string, directorUsername = 'firtech_hq_bot'): BotMenu {
-  const name = deptRu(dept);
-  return {
-    commands: [],
-    description: `Бот отдела «${name}» Fir Tech: публикует отчёты отдела в его теме группы HQ. Сообщения он не читает: задачи, одобрения и команды отдела у Директора, @${directorUsername}.`,
-    shortDescription: `Отчёты отдела «${name}» в группе HQ. Команды: @${directorUsername}`,
-  };
-}
 
 // ---- approval cards ----
 export const KIND_RU: Record<string, string> = {

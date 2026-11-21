@@ -8,8 +8,15 @@ import { z } from 'zod';
 export interface Config extends BaseConfig {
   dbFile: string;
   instructionsDir: string;
-  /** Marketing bot token. Without it the Marketing head is silent (no group posts). */
-  marketingBotToken: string | undefined;
+  /**
+   * Department bot tokens that are still set in the env (owner 2026-11-22: «в Telegram один бот, сам HQ»). They are ignored: one log line, no polling,
+   * no posts. Names only, never the values.
+   */
+  retiredBots: string[];
+  /** `TG_APPROVAL_CARDS=on`: approval cards with buttons in Telegram again (off by default: decisions only in the review center). */
+  tgApprovalCards: boolean;
+  /** `TG_GROUP_REPORTS=on`: department reports into the topics of the HQ group again, posted by the HQ bot (off by default: reports stay in the Пульт). */
+  tgGroupReports: boolean;
   /** Telegram group of the HQ (with topics) and the topic ids by key: general, approvals, or a department id. */
   groupId: number | undefined;
   topics: Record<string, number>;
@@ -25,7 +32,6 @@ export interface Config extends BaseConfig {
   /** Monthly limit of the Marketing department in USD (0: none). Used only when the head is first created. */
   marketingBudgetUsd: number;
   /** Support bot token. Without it the Support head is silent in the group (checks and alerts still work). */
-  supportBotToken: string | undefined;
   /** Support: what the monitoring checks, fixed monthly costs by item, department limit (0: none). */
   monitor: MonitorConfig;
   fixedCostsUsdMonth: Record<string, number>;
@@ -46,7 +52,6 @@ export interface Config extends BaseConfig {
   /** `PAY_TOLERANCE`: under-payment the watcher accepts, percent 0..0.5; default 0 (exact). */
   payTolerancePct: number;
   /** Sales bot token (@firtech_leads_bot). Without it the Sales head is silent (no group posts). */
-  salesBotToken: string | undefined;
   /** Shared secret of `POST /lead` (header `x-lead-token`); without it the webhook server does not start. */
   leadWebhookToken: string | undefined;
   webhookPort: number;
@@ -74,8 +79,6 @@ export interface Config extends BaseConfig {
   referralReward: string;
   kpValidDays: number;
   /** Production and Back Office bot tokens: without them the heads are silent in the group. */
-  productionBotToken: string | undefined;
-  backofficeBotToken: string | undefined;
   /** Monthly limits of the two departments in USD (0: none). Used only when the head is first created. */
   productionBudgetUsd: number;
   backofficeBudgetUsd: number;
@@ -132,6 +135,9 @@ function num(env: NodeJS.ProcessEnv, key: string, def: number, min: number, max:
   return n;
 }
 
+/** The bots of the departments, retired on 2026-11-22: HQ_BOT_TOKEN is the only bot of the owner (the client bot and Polly are separate). */
+export const RETIRED_BOT_TOKENS = ['MARKETING_BOT_TOKEN', 'SUPPORT_BOT_TOKEN', 'SALES_BOT_TOKEN', 'CONTENT_BOT_TOKEN', 'PROSPECTOR_BOT_TOKEN', 'PRODUCTION_BOT_TOKEN', 'BACKOFFICE_BOT_TOKEN'] as const;
+
 const topicsSchema = z.record(z.string(), z.number().int().positive());
 
 /** The site's referral rule (owner decision 2026-11-19), in the words of the answer to a referrer. */
@@ -158,7 +164,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...base,
     dbFile: `${base.dataDir}/hq.db`,
     instructionsDir: optional(env, 'INSTRUCTIONS_DIR') ?? new URL('../instructions', import.meta.url).pathname,
-    marketingBotToken: optional(env, 'MARKETING_BOT_TOKEN'),
+    retiredBots: RETIRED_BOT_TOKENS.filter((k) => optional(env, k) !== undefined),
+    tgApprovalCards: (env.TG_APPROVAL_CARDS ?? 'off').toLowerCase() === 'on',
+    tgGroupReports: (env.TG_GROUP_REPORTS ?? 'off').toLowerCase() === 'on',
     groupId,
     topics,
     clipsPerWeek: Math.round(num(env, 'CLIPS_PER_WEEK', 7, 1, 7)),
@@ -168,7 +176,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     rendersDir: `${base.dataDir}/renders`,
     renderReels: (env.REELS_RENDER ?? 'on').toLowerCase() !== 'off',
     marketingBudgetUsd: num(env, 'MARKETING_BUDGET_USD', 0, 0, 100_000),
-    supportBotToken: optional(env, 'SUPPORT_BOT_TOKEN'),
     monitor: loadMonitorConfig(env, base.dataDir),
     fixedCostsUsdMonth: parseFixedCosts(optional(env, 'FIXED_COSTS_USD_MONTH')),
     supportBudgetUsd: num(env, 'SUPPORT_BUDGET_USD', 0, 0, 100_000),
@@ -181,7 +188,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     openverseClientSecret: optional(env, 'OPENVERSE_CLIENT_SECRET'),
     contentBackgrounds: (env.CONTENT_BACKGROUNDS ?? 'off').toLowerCase() === 'on',
     payTolerancePct: parseTolerance(optional(env, 'PAY_TOLERANCE')),
-    salesBotToken: optional(env, 'SALES_BOT_TOKEN'),
     leadWebhookToken: optional(env, 'LEAD_WEBHOOK_TOKEN'),
     officeToken: optional(env, 'OFFICE_TOKEN'),
     adminToken: optional(env, 'ADMIN_TOKEN'),
@@ -196,8 +202,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     salesBudgetUsd: num(env, 'SALES_BUDGET_USD', 0, 0, 100_000),
     referralReward: optional(env, 'REFERRAL_REWARD') ?? DEFAULT_REFERRAL_REWARD,
     kpValidDays: Math.round(num(env, 'KP_VALID_DAYS', 14, 1, 90)),
-    productionBotToken: optional(env, 'PRODUCTION_BOT_TOKEN'),
-    backofficeBotToken: optional(env, 'BACKOFFICE_BOT_TOKEN'),
     productionBudgetUsd: num(env, 'PRODUCTION_BUDGET_USD', 0, 0, 100_000),
     backofficeBudgetUsd: num(env, 'BACKOFFICE_BUDGET_USD', 0, 0, 100_000),
     knowledgeDir: optional(env, 'KNOWLEDGE_DIR'),

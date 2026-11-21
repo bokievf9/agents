@@ -114,6 +114,8 @@ export class LostLeads {
     const n = rows.length;
     await this.hq.alert(
       `${n} ${plural(n, 'обращение не доставлено', 'обращения не доставлены', 'обращений не доставлены')} владельцу, причина: ${reasons.join('; ')}.${contacts.length ? ` Связаться с людьми: ${contacts.join(', ')}.` : ''} Подробности: задачи продаж (/tasks sales) и журнал.`,
+      // Telegram gets the count and the reason only: the contacts stay in the Пульт (the inbox has the full text)
+      { kind: 'lost_lead', short: `Потеряно заявок: ${n} (${reasons[0] ?? 'сбой'}). Контакты в Пульте.` },
     );
     return n;
   }
