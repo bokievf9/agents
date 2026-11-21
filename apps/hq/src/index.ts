@@ -222,6 +222,7 @@ const backoffice = new BackofficeHead({
 // Cabinet v3 (2026-11-22): the client's documents (accept, sign), threads and uploads, the playground of agents. The heads hand the owner's approvals to it.
 const chatGateForAgents = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
 const cabinet = buildCabinet({
+  unsubscribeSecret: cfg.unsubscribeSecret,
   hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents, kpValidDays: startVals.kpValidDays,
   tools: () => toolsFor(hq, tools, { agentId: 'documents', dept: BACKOFFICE, messenger, ownerId: cfg.ownerId }),
 });

@@ -2,6 +2,7 @@ import { errMsg, log, type ApprovalQueue, type LlmClient, type Messenger } from 
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx } from '@fir/hq';
 import { deployPlan, DeployerWorker, DeployStore, parseTarget } from '@fir/worker-deployer';
 import type { Invoice } from '@fir/worker-billing';
+import { legalMeta, legalPartyOfLead } from '@fir/worker-lead-intake';
 import {
   fmtDate, kindSpecs as pmKinds, MILESTONE_KINDS, PmStore, ProjectManagerWorker, stageDueAt, stageTitleRu, type Milestone, type MilestoneKind, type Project,
 } from '@fir/worker-project-manager';
@@ -262,7 +263,7 @@ export class ProductionHead {
       title: `Счёт этапа ${no}: ${p.client}`, dept: 'support', creator: 'head', priority: 1,
       meta: {
         action: 'kp_invoice', client: p.client, amountUsd: next.amountUsd, totalUsd, what: `Этап ${no} из ${all.length}: «${stageTitle(next)}», КП #${p.packId ?? '-'}`, packId: p.packId, leadId: p.leadId,
-        projectId: p.id, stageNo: no, stageCount: all.length,
+        projectId: p.id, stageNo: no, stageCount: all.length, ...(p.leadId !== null ? legalMeta(legalPartyOfLead(this.hq.db, p.leadId)) : {}),
         chain: `Цепочка: проект #${p.id}: этап ${no - 1} принят → счёт этапа ${no} (эта карточка) → этап ${no} стартует после оплаты${last ? ', доступы передаём после оплаты' : ''}`,
       },
     });

@@ -219,3 +219,12 @@ describe('a stale card (drill 2026-11-21): the invoice was voided or paid before
     expect(delivered).toHaveLength(0);
   });
 });
+
+describe('the invoice names the legal customer', () => {
+  it('invoiceText prints the legal label instead of the client name when it is given', () => {
+    const r = setup();
+    const inv = r.store.addInvoice({ client: 'Алиса', amountUsd: 100, what: 'Этап 1', method: null, dueDate: '2026-11-30', subscriptionId: null, newProject: true } as never, 2026);
+    expect(r.worker.invoiceText(inv, {}, 'ООО Ромашка, адрес: Душанбе')).toContain('Клиент: ООО Ромашка, адрес: Душанбе');
+    expect(r.worker.invoiceText(inv)).toContain('Клиент: Алиса');
+  });
+});

@@ -1,6 +1,7 @@
 import { errMsg, log, migrate, type Tools } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import { ensureCabinetTables } from './cabinet.js';
+import { channelsFor, consentFor, unsubscribeToken, type MailKind } from './client-prefs.js';
 import { EmailFailures, type EmailKind } from './email-failures.js';
 
 /**
@@ -25,15 +26,18 @@ export interface MailNotice {
   subject: Bilingual;
   text: Bilingual;
 }
-export type MailOutcome = 'email' | 'off' | 'failed' | 'no_client';
+/** `no_consent`: the client switched this kind off; `no_unsubscribe`: no `UNSUBSCRIBE_SECRET` or no site account id, so the letter cannot carry the link and is not sent. */
+export type MailOutcome = 'email' | 'off' | 'failed' | 'no_client' | 'no_consent' | 'no_unsubscribe';
 
-interface ClientRow { id: number; email: string; name: string; locale: string }
+interface ClientRow { id: number; email: string; name: string; locale: string; supabase_id?: string }
 
 export interface ClientMailDeps {
   hq: Hq;
   /** The toolbox with `email.send` (Resend); without it the thread line is the only delivery (`off`). */
   tools: () => Tools;
   siteUrl: string;
+  /** `UNSUBSCRIBE_SECRET` shared with the site; without it news and recommendations are never sent. */
+  unsubscribeSecret?: string | undefined;
 }
 
 const THREAD_TITLE: Record<'ru' | 'en', (thread: string) => string> = {
@@ -52,7 +56,7 @@ export class ClientMail {
   }
 
   private client(id: number): ClientRow | undefined {
-    return this.db.prepare('SELECT id, email, name, locale FROM cab_clients WHERE id = ?').get(id) as ClientRow | undefined;
+    return this.db.prepare('SELECT id, email, name, locale, supabase_id FROM cab_clients WHERE id = ?').get(id) as ClientRow | undefined;
   }
 
   cabinetUrl(locale: string | null | undefined, thread?: string): string {
@@ -88,6 +92,8 @@ export class ClientMail {
       return 'off';
     }
     if (!tools.can('email.send')) return 'off';
+    // the client's own channel choice for letters about his project (email unless he chose Telegram and is linked to the bot)
+    if (!channelsFor(this.db, c.id, 'project').email) return 'off';
     const en = c.locale === 'en';
     const hello = en ? `Hello${c.name ? `, ${c.name}` : ''}!` : `Здравствуйте${c.name ? `, ${c.name}` : ''}!`;
     let why: string;
@@ -95,6 +101,47 @@ export class ClientMail {
       const sent = await tools.email.send({
         to: c.email, subject: en ? n.subject.en : n.subject.ru,
         text: `${hello}\n\n${en ? n.text.en : n.text.ru}\n\n${en ? 'Open your cabinet' : 'Откройте личный кабинет'}: ${this.cabinetUrl(c.locale, thread)}\n\nFir Tech\nhello@firtech.pro`,
+      });
+      if (sent.ok) return 'email';
+      why = String(sent.error);
+    } catch (e) {
+      why = errMsg(e).slice(0, 60);
+    }
+    new EmailFailures(this.d.hq).record(kind, ref, why || 'unknown');
+    return 'failed';
+  }
+
+  /**
+   * A news or recommendation letter (never a letter about the client's project: that is `send`). Goes only when the client switched that kind on
+   * (`marketing_consent` for news, `recommendations_consent` for recommendations), always email, always with the «Отписаться» link in the text and the
+   * `List-Unsubscribe` / `List-Unsubscribe-Post` headers (RFC 8058 one-click) that point at the site, signed with `UNSUBSCRIBE_SECRET`. Without the secret
+   * or the client's site account id the letter is not sent (`no_unsubscribe`), never sent without a working link. Never throws.
+   */
+  async sendCampaign(clientId: number, kind: Exclude<MailKind, 'project'>, n: MailNotice, ref: string): Promise<MailOutcome> {
+    const c = this.client(clientId);
+    if (!c) return 'no_client';
+    if (!consentFor(this.db, c.id, kind)) return 'no_consent';
+    const secret = this.d.unsubscribeSecret;
+    if (!secret || secret.length < 16 || !c.supabase_id) return 'no_unsubscribe';
+    let tools: Tools;
+    try {
+      tools = this.d.tools();
+    } catch (e) {
+      log('warn', 'client mail tools unavailable', { err: errMsg(e) });
+      return 'off';
+    }
+    if (!tools.can('email.send')) return 'off';
+    const en = c.locale === 'en';
+    const site = this.d.siteUrl.replace(/\/$/, '');
+    const token = unsubscribeToken(c.supabase_id, kind === 'news' ? 'marketing' : 'recommendations', secret);
+    const link = `${site}/${en ? 'en' : 'ru'}/cabinet/unsubscribe?token=${encodeURIComponent(token)}`;
+    const hello = en ? `Hello${c.name ? `, ${c.name}` : ''}!` : `Здравствуйте${c.name ? `, ${c.name}` : ''}!`;
+    let why: string;
+    try {
+      const sent = await tools.email.send({
+        to: c.email, subject: en ? n.subject.en : n.subject.ru,
+        text: `${hello}\n\n${en ? n.text.en : n.text.ru}\n\nFir Tech\nhello@firtech.pro\n\n${en ? 'Unsubscribe' : 'Отписаться'}: ${link}`,
+        headers: { 'List-Unsubscribe': `<${site}/api/cabinet/unsubscribe?token=${encodeURIComponent(token)}>`, 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' },
       });
       if (sent.ok) return 'email';
       why = String(sent.error);

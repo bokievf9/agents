@@ -480,7 +480,7 @@ export class SupportHead {
           hasDomain: typeof m.hasDomain === 'boolean' ? m.hasDomain : lead?.hasDomain ?? null,
           hasHosting: typeof m.hasHosting === 'boolean' ? m.hasHosting : lead?.hasHosting ?? null,
         };
-        const inv = await this.billing.createInvoice(ctx, { client: m.client, amountUsd, what: typeof m.what === 'string' ? m.what : 'Оплата этапа по КП', newProject: stageNo === null || stageNo === 1, link, infra });
+        const inv = await this.billing.createInvoice(ctx, { client: m.client, amountUsd, what: typeof m.what === 'string' ? m.what : 'Оплата этапа по КП', newProject: stageNo === null || stageNo === 1, link, infra, ...(typeof m.legalLabel === 'string' && m.legalLabel ? { legal: m.legalLabel } : {}) });
         if (projectId !== null && stageNo !== null) {
           const ms = new PmStore(this.hq.db, this.hq.now).stageMilestone(projectId, stageNo);
           if (ms) new PmStore(this.hq.db, this.hq.now).setStageInvoice(ms.id, inv.number);

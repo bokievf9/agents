@@ -110,6 +110,11 @@ describe('telegram, email, mac queue, chain', () => {
     const { t, journal } = tools({ dept: 'support', fetch: net.fetch, config: { resendApiKey: 'RSKEY', emailFrom: 'Fir Tech <hello@firtech.pro>' } });
     expect(await t.email.send({ to: 'client@example.com', subject: 'Счёт', text: 'Ссылка на оплату' })).toEqual({ ok: true, value: { id: 'em_1' } });
     expect(JSON.parse(String(net.calls[0]!.init.body))).toMatchObject({ from: 'Fir Tech <hello@firtech.pro>', to: ['client@example.com'], subject: 'Счёт' });
+    // List-Unsubscribe headers reach Resend; a header with a line break is refused
+    const hdr = { 'List-Unsubscribe': '<https://firtech.pro/api/cabinet/unsubscribe?token=x>', 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click' };
+    expect(await t.email.send({ to: 'client@example.com', subject: 'Новости', text: 'x', headers: hdr })).toMatchObject({ ok: true });
+    expect(JSON.parse(String(net.calls[1]!.init.body)).headers).toEqual(hdr);
+    expect(await t.email.send({ to: 'client@example.com', subject: 's', text: 'x', headers: { 'X-A': 'a\nBcc: z@z.co' } })).toMatchObject({ error: 'invalid' });
     expect(await t.email.send({ to: 'not an email', subject: 's', text: 't' })).toMatchObject({ error: 'invalid' });
     expect(await t.email.send({ to: 'a@b.co', subject: 'two\nlines', text: 't' })).toMatchObject({ error: 'invalid' });
     journal.settings.set('tools.email.2026-11-20', '100');

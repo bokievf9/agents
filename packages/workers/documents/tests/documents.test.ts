@@ -100,3 +100,24 @@ describe('exact price and the conditions line', () => {
     expect(fillTemplate(loadTemplate('act'), { ...data, price: '$350' })).toContain('Стоимость работ: $350.');
   });
 });
+
+describe('the customer of a document is the cabinet client\'s legal name and address', () => {
+  it('a task with `legalLabel` names that customer in the contract; without it the client name stays', async () => {
+    const { openDb } = await import('@fir/core');
+    const { DocumentsWorker } = await import('../src/index.js');
+    const db = openDb(':memory:');
+    const staged: string[] = [];
+    const ctx = {
+      llm: { enabled: false, complete: () => Promise.reject(new Error('no llm')) }, db, tz: 'Asia/Dushanbe', now: () => Date.UTC(2026, 10, 23, 5),
+      requestApproval: (_k: string, p: { text: string }) => Promise.resolve(staged.push(p.text) - 1), log: () => undefined,
+    };
+    const worker = new DocumentsWorker();
+    const task = (meta: Record<string, unknown>) => ({ id: 1, meta }) as never;
+    await worker.run(task({ action: 'doc', type: 'contract', client: 'Алиса', legalLabel: 'ООО Ромашка, адрес: Душанбе, ул. Рудаки 1' }), ctx as never);
+    await worker.run(task({ action: 'doc', type: 'contract', client: 'Алиса' }), ctx as never);
+    expect(staged[0]).toContain('ООО Ромашка, адрес: Душанбе, ул. Рудаки 1 (далее Заказчик)');
+    expect(staged[0]).toContain('Заказчик: ООО Ромашка, адрес: Душанбе, ул. Рудаки 1');
+    expect(staged[1]).toContain('Алиса (далее Заказчик)');
+    expect(staged[1]).not.toContain('Ромашка');
+  });
+});

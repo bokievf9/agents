@@ -1,3 +1,4 @@
+import { EXTRA_COLUMNS, NOTIFY_CHANNELS, profileExtras, profileView, type ProfileRow } from './client-prefs.js';
 import { errMsg, log, type Db } from '@fir/core';
 import { ProspectStore, STATUSES as PROSPECT_STATUSES, TRANSITIONS as PROSPECT_TRANSITIONS, type Status as ProspectStatus } from '@fir/worker-prospector';
 import { CsStore } from '@fir/worker-customer-support';
@@ -75,7 +76,11 @@ const clientPost = z.object({
   telegram: z.string().trim().max(120).default(''),
   locale: z.enum(['ru', 'en']).default('ru'),
   supabaseId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),
-  marketingConsent: z.boolean().default(false),
+  marketingConsent: z.boolean().optional(),
+  recommendationsConsent: z.boolean().optional(),
+  notifyChannel: z.enum(NOTIFY_CHANNELS).optional(),
+  phone: z.string().trim().max(40).optional(),
+  company: z.string().trim().max(120).optional(),
 });
 const ticketCreate = z.object({ text: z.string().trim().min(1).max(1000) });
 /** `POST /admin/clients/:id`: only the fields that are sent change (a field sent empty clears it). */
@@ -85,6 +90,7 @@ const profilePatch = z.object({
   phone: z.string().trim().max(40).optional(),
   company: z.string().trim().max(120).optional(),
   locale: z.enum(['ru', 'en']).optional(),
+  ...profileExtras,
 });
 const leadMessage = z.object({ text: z.string().trim().min(1).max(MESSAGE_CAP) });
 const CAB_LEADS_CAP = 20;
@@ -495,16 +501,21 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     const d = parsed.data;
     const t = now();
     const existed = one<{ id: number }>('SELECT id FROM cab_clients WHERE email = ?', d.email);
+    // a field the site did not send keeps its stored value on a repeated registration (an unsubscribe must survive the next sign-in sync)
+    const flag = (v: boolean | undefined) => (v === undefined ? null : v ? 1 : 0);
     db.prepare(
-      `INSERT INTO cab_clients (email, name, telegram, locale, supabase_id, marketing_consent, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO cab_clients (email, name, telegram, locale, supabase_id, marketing_consent, recommendations_consent, notify_channel, phone, company, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, COALESCE(?, 0), COALESCE(?, 0), COALESCE(?, 'email'), COALESCE(?, ''), COALESCE(?, ''), ?, ?)
        ON CONFLICT(email) DO UPDATE SET name = excluded.name, telegram = excluded.telegram, locale = excluded.locale, supabase_id = excluded.supabase_id,
-         marketing_consent = excluded.marketing_consent, updated_at = excluded.updated_at`,
-    ).run(d.email, d.name, d.telegram, d.locale, d.supabaseId, d.marketingConsent ? 1 : 0, t, t);
+         marketing_consent = COALESCE(?, marketing_consent), recommendations_consent = COALESCE(?, recommendations_consent), notify_channel = COALESCE(?, notify_channel),
+         phone = COALESCE(?, phone), company = COALESCE(?, company), updated_at = excluded.updated_at`,
+    ).run(d.email, d.name, d.telegram, d.locale, d.supabaseId, flag(d.marketingConsent), flag(d.recommendationsConsent), d.notifyChannel ?? null, d.phone ?? null, d.company ?? null, t, t,
+      flag(d.marketingConsent), flag(d.recommendationsConsent), d.notifyChannel ?? null, d.phone ?? null, d.company ?? null);
     const c = one<CabRow>('SELECT * FROM cab_clients WHERE email = ?', d.email)!;
     const linked = linkLeads(c);
     attachLegacyDocs(c.id);
     if (!existed) hooks.notifyOwner?.(`Новый аккаунт в кабинете: ${c.name || c.email}, лидов привязано ${linked}`);
-    return ok({ client: { id: c.id, email: c.email, name: c.name, telegram: c.telegram, locale: c.locale, createdAt: iso(c.created_at) }, linkedLeads: linked });
+    return ok({ client: { ...profileView(c as CabRow & ProfileRow), createdAt: iso(c.created_at) }, linkedLeads: linked });
   }
 
   const newest = <T extends { createdAt: string | null }>(list: T[]) => list.sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')).slice(0, CAB_LIST_CAP);
@@ -726,10 +737,16 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
         vals.push(p[k]!);
       }
     }
+    for (const [k, col] of Object.entries(EXTRA_COLUMNS) as [keyof typeof EXTRA_COLUMNS, string][]) {
+      const v = p[k];
+      if (v === undefined) continue;
+      sets.push(`${col} = ?`);
+      vals.push(typeof v === 'boolean' ? (v ? 1 : 0) : v);
+    }
     if (sets.length) db.prepare(`UPDATE cab_clients SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...vals, now(), id);
     const fresh = cabById(id)!;
     if (p.telegram !== undefined) linkLeads(fresh);
-    return ok({ client: { id: fresh.id, email: fresh.email, name: fresh.name, telegram: fresh.telegram, phone: fresh.phone ?? '', company: fresh.company ?? '', locale: fresh.locale } });
+    return ok({ client: profileView(fresh as CabRow & ProfileRow) });
   }
 
   function clientsRoute(method: string, seg: string[], query: URLSearchParams, body: unknown): CrmReply | Promise<CrmReply> {

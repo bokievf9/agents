@@ -4,7 +4,7 @@ import { errMsg, log, parseStages, stagesFor, tryJson, type ApprovalQueue, type 
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import { billingStoreFor, type Invoice } from '@fir/worker-billing';
 import { csStoreFor } from '@fir/worker-customer-support';
-import { guessNiche, KIND_REPLY, LeadIntakeWorker, leadStoreFor, TEMP_RU, type Delivery, type Lead } from '@fir/worker-lead-intake';
+import { guessNiche, KIND_REPLY, LeadIntakeWorker, leadStoreFor, legalMeta, legalPartyOfLead, TEMP_RU, type Delivery, type Lead } from '@fir/worker-lead-intake';
 import { planStageDates, PmStore, type Product } from '@fir/worker-project-manager';
 import {
   COPY_PREFIX, kindSpecs as prospectKinds, markReplied, onDecision as onProspectDecision, ProspectorWorker, PROSPECT_KINDS, statsText, storeFor as prospectStoreFor,
@@ -235,10 +235,12 @@ export class SalesHead implements ApprovalEditor {
     // the owner edited the contract inside the pending pack: Back Office drafts from his text, not from the template (untouched: the template stays)
     const editedContract = pack.contractEdited === true && typeof pack.contract === 'string' && pack.contract.trim() ? { contractText: pack.contract } : {};
     const products = directions.map((d) => OFFERS[d].title);
-    const contractMeta = { action: 'doc', type: 'contract', client, what, products, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project?.id ?? null, priceUsd: totalUsd, stages, ...(monthlyUsd > 0 ? { monthlyUsd } : {}), ...infra, ...editedContract };
+    // the customer of the contract and the invoice: the legal name and address of the cabinet client, when he gave them (read again when the contract card is made)
+    const legal = lead ? legalMeta(legalPartyOfLead(hq.db, lead.id)) : {};
+    const contractMeta = { action: 'doc', type: 'contract', client, what, products, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project?.id ?? null, priceUsd: totalUsd, stages, ...(monthlyUsd > 0 ? { monthlyUsd } : {}), ...infra, ...legal, ...editedContract };
     const invoiceMeta = {
       action: 'kp_invoice', client, amountUsd: first.amountUsd, totalUsd, what: `Этап 1 из ${stages.length}: «${first.title.ru}», КП #${packId}: ${title}`, products, packId, leadId: lead?.id ?? null,
-      projectId: project?.id ?? null, stageNo: 1, stageCount: stages.length, chain: line('invoice'), ...infra,
+      projectId: project?.id ?? null, stageNo: 1, stageCount: stages.length, chain: line('invoice'), ...infra, ...legal,
     };
     if (this.cabinet && cabinetClient !== null && lead) {
       this.cabinet.onQuoteApproved({
