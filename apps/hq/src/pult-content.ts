@@ -3,7 +3,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import { macQueued, macSettle, type ApprovalQueue } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import { PublishStore, captionOf } from '@fir/worker-publisher';
-import { RenderQueue, SIZES, shortReason, kitScopeOf, splitKit, splitPlatforms, storeFor, type ArticleRow, type ContentStore, type Item, type ReadyRow } from '@fir/worker-content-maker';
+import { RenderQueue, SIZES, findNiche, shortReason, kitScopeOf, splitKit, splitPlatforms, storeFor, type ArticleRow, type ContentStore, type Item, type ReadyRow } from '@fir/worker-content-maker';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import type { MarketingHead } from './heads/marketing.js';
@@ -23,6 +23,14 @@ export interface PultContentDeps {
   decide: (approvalId: number, action: 'approve' | 'reject') => Promise<unknown>;
 }
 
+export const STUDIO_TYPES = ['clip', 'post', 'carousel', 'story'] as const;
+const itemRef = z.union([z.number().int().positive(), z.string().regex(/^\d{1,12}$/)]).transform(Number);
+/** `POST /admin/content/orders`: Content Studio orders (docs/admin-crm-api.md, «Content Studio»). */
+const orderBody = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('prompt'), prompt: z.string().trim().min(3).max(1000), type: z.enum(STUDIO_TYPES).optional() }).strict(),
+  z.object({ mode: z.literal('variant'), fromItemId: itemRef, note: z.string().trim().max(500).optional() }).strict(),
+  z.object({ mode: z.literal('niche'), fromItemId: itemRef, niche: z.string().trim().min(1).max(60), note: z.string().trim().max(500).optional() }).strict(),
+]);
 export const CONTENT_ACTIONS = ['approve', 'reject', 'revise', 'published', 'rerender', 'failed'] as const;
 const PLATFORMS = ['instagram', 'tiktok', 'shorts'] as const;
 /** `url` on `published` (and `failed` as a whole) come from the owner's Mac helper (`packages/mac-poster`): the row is marked `via = 'mac'`. */
@@ -254,5 +262,100 @@ export function createPultContent(d: PultContentDeps) {
     return view();
   }
 
-  return { list, post };
+  // ---- Content Studio: one feed of everything, orders for the Content Maker ----
+  const STATUSES: readonly Status[] = ['draft', 'pending', 'approved', 'rendering', 'ready', 'published', 'rejected'];
+  const KINDS: readonly Kind[] = ['clip', 'post', 'carousel', 'story', 'article', 'profile'];
+  const rid = (n: number) => `ap_${n}`;
+
+  /** The order (`meta.studio`) a content item came from: the task of its newest card. */
+  function originOf(linkId: number | undefined): { orderId: number; mode: string; fromItemId: number | null } | null {
+    if (linkId === undefined) return null;
+    const r = db.prepare('SELECT t.id id, t.meta meta FROM task_approvals a JOIN tasks t ON t.id = a.task_id WHERE a.id = ?').get(linkId) as { id: number; meta: string } | undefined;
+    if (!r) return null;
+    const studio = (JSON.parse(r.meta) as { studio?: { mode?: unknown; fromItemId?: unknown } }).studio;
+    return studio && typeof studio.mode === 'string' ? { orderId: r.id, mode: studio.mode, fromItemId: typeof studio.fromItemId === 'number' ? studio.fromItemId : null } : null;
+  }
+
+  /**
+   * `GET /admin/content/feed?status=&kind=&limit=&cursor=`: every content item and article, newest first (by planned day, then id), with the review id of its
+   * card (`reviewId`, `ap_<n>` or null) and `origin` (the Studio order it came from, or null). `cursor` is the offset of the next page.
+   */
+  function feed(query: URLSearchParams): AdminReply {
+    const status = query.get('status') ?? '';
+    const kind = query.get('kind') ?? '';
+    if (status && !(STATUSES as readonly string[]).includes(status)) return fail(400, 'invalid', { hint: 'status', allowed: STATUSES });
+    if (kind && !(KINDS as readonly string[]).includes(kind)) return fail(400, 'invalid', { hint: 'kind', allowed: KINDS });
+    const limRaw = query.get('limit');
+    const limit = limRaw === null || limRaw === '' ? 50 : /^\d+$/.test(limRaw) ? Math.min(Math.max(Number(limRaw), 1), 200) : NaN;
+    if (!Number.isFinite(limit)) return fail(400, 'invalid', { hint: 'limit' });
+    const curRaw = query.get('cursor');
+    if (curRaw && !/^\d{1,6}$/.test(curRaw)) return fail(400, 'invalid', { hint: 'cursor' });
+    const offset = curRaw ? Number(curRaw) : 0;
+    const s = store();
+    const queued = macQueued(db);
+    const rows = (db.prepare('SELECT id FROM cm_items ORDER BY planned_date DESC, id DESC LIMIT 400').all() as { id: number }[]).map((r) => s.item(r.id)!);
+    const all = [
+      ...rows.map((it) => ({ v: itemView(it, queued), link: linkOf('content_item', 'itemId', it.id) })),
+      ...s.articles().map((a) => ({ v: articleView(a), link: linkOf('article', 'articleId', a.id) })),
+    ]
+      .filter((x) => (!status || x.v.status === status) && (!kind || x.v.kind === kind))
+      .sort((a, b) => (a.v.plannedDate < b.v.plannedDate ? 1 : a.v.plannedDate > b.v.plannedDate ? -1 : String(b.v.id).localeCompare(String(a.v.id), 'en', { numeric: true })));
+    const page = all.slice(offset, offset + limit);
+    return ok({
+      items: page.map(({ v, link }) => ({ ...v, reviewId: link ? rid(link.id) : null, origin: originOf(link?.id) })),
+      nextCursor: all.length > offset + limit ? String(offset + limit) : null, statuses: STATUSES, kinds: KINDS, total: all.length,
+    });
+  }
+
+  function orderView(taskId: number) {
+    const t = hq.task(taskId);
+    if (!t) return null;
+    const studio = (t.meta.studio ?? {}) as { mode?: string; prompt?: string; type?: string; fromItemId?: number; niche?: string };
+    const card = db.prepare("SELECT id, payload FROM task_approvals WHERE kind = 'content_item' AND (task_id = ? OR task_id IN (SELECT id FROM tasks WHERE parent_id = ?)) ORDER BY id DESC LIMIT 1").get(t.id, t.id) as { id: number; payload: string } | undefined;
+    const itemId = card ? Number((JSON.parse(card.payload) as { itemId?: unknown }).itemId) : NaN;
+    const item = Number.isInteger(itemId) ? store().item(itemId) : undefined;
+    let state: 'working' | 'delivered' | 'failed' = 'working';
+    let error: string | null = null;
+    if (card && item) state = 'delivered';
+    else if (t.status === 'blocked' || t.status === 'rejected') {
+      state = 'failed';
+      error = (hq.events(t.id).at(-1)?.body ?? 'не получилось').slice(0, 300);
+    }
+    return {
+      id: t.id, mode: studio.mode ?? 'prompt', prompt: studio.prompt ?? '', type: studio.type ?? null, niche: studio.niche ?? null, fromItemId: studio.fromItemId ?? null,
+      state, error, createdAt: new Date(t.createdAt).toISOString(), itemId: item ? item.id : null, reviewId: card ? rid(card.id) : null, itemStatus: item ? itemView(item).status : null,
+    };
+  }
+
+  /** `GET /admin/content/orders?limit=`: the Studio orders, newest first, each with its state and, once delivered, the new item and its review id. */
+  function orders(query: URLSearchParams): AdminReply {
+    const limRaw = query.get('limit');
+    const limit = limRaw === null || limRaw === '' ? 30 : /^\d+$/.test(limRaw) ? Math.min(Math.max(Number(limRaw), 1), 100) : NaN;
+    if (!Number.isFinite(limit)) return fail(400, 'invalid', { hint: 'limit' });
+    const ids = db.prepare("SELECT id FROM tasks WHERE json_extract(meta, '$.studio') IS NOT NULL ORDER BY id DESC LIMIT ?").all(limit) as { id: number }[];
+    return ok({ items: ids.map((r) => orderView(r.id)).filter((x): x is NonNullable<typeof x> => x !== null) });
+  }
+
+  /** `POST /admin/content/orders`: `{ mode: 'prompt', prompt, type? }`, `{ mode: 'variant', fromItemId, note? }` or `{ mode: 'niche', fromItemId, niche, note? }` -> `{ ok, order }`. */
+  function createOrder(body: unknown): AdminReply {
+    if (!d.marketing) return fail(503, 'unavailable');
+    const parsed = orderBody.safeParse(body ?? {});
+    if (!parsed.success) return fail(400, 'invalid', { allowed: ['prompt', 'variant', 'niche'] });
+    const b = parsed.data;
+    let made: { taskId: number } | null;
+    if (b.mode === 'prompt') made = d.marketing.requestStudioOrder({ mode: 'prompt', prompt: b.prompt, ...(b.type ? { type: b.type } : {}) });
+    else {
+      const item = store().item(b.fromItemId);
+      if (!item) return fail(404, 'not_found');
+      if (item.type === 'profile') return fail(409, 'not_applicable', { reason: 'старт-кит профиля не переделывается' });
+      const niche = b.mode === 'niche' ? findNiche(b.niche) : undefined;
+      if (b.mode === 'niche' && !niche) return fail(400, 'invalid_niche');
+      const link = linkOf('content_item', 'itemId', item.id);
+      made = d.marketing.requestStudioOrder({ mode: b.mode, itemId: item.id, reviewId: link ? rid(link.id) : '', ...(b.note ? { note: b.note } : {}), ...(niche ? { niche: { id: niche.id, name: niche.name } } : {}) });
+    }
+    if (!made) return fail(409, 'not_applicable');
+    return ok({ order: orderView(made.taskId) });
+  }
+
+  return { list, post, feed, orders, createOrder };
 }

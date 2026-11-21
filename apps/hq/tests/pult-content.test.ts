@@ -244,3 +244,54 @@ describe('articles in the calendar', () => {
     expect((await other.p.call('POST', `/admin/content/a${other.art.id}`, { action: 'reject' })).json.item.status).toBe('rejected');
   });
 });
+
+describe('Content Studio: feed and orders', () => {
+  it('feed lists everything newest first with filters, review id and cursor; bad filters are 400', async () => {
+    const p = await packed({ cadence: NEW_PACK });
+    const r = await p.call('GET', '/admin/content/feed?limit=5');
+    expect(r.status).toBe(200);
+    expect(r.json.items).toHaveLength(5);
+    expect(r.json.total).toBe(17);
+    expect(r.json.nextCursor).toBe('5');
+    expect(r.json.items[0]).toMatchObject({ status: 'pending', origin: null });
+    expect(r.json.items[0].reviewId).toMatch(/^ap_\d+$/);
+    const next = await p.call('GET', '/admin/content/feed?limit=200&cursor=5&kind=clip');
+    expect(next.json.items.every((i: any) => i.kind === 'clip')).toBe(true);
+    for (const bad of ['status=x', 'kind=x', 'limit=0x', 'cursor=-1']) expect((await p.call('GET', `/admin/content/feed?${bad}`)).status).toBe(400);
+  });
+
+  it('a prompt order is a Content Maker task; the result comes back as an approval linked to the order', async () => {
+    const p = pultWorld();
+    expect((await p.call('POST', '/admin/content/orders', { mode: 'prompt', prompt: 'a' })).status).toBe(400);
+    expect((await p.call('POST', '/admin/content/orders', { mode: 'prompt', prompt: 'Про ночные заявки', extra: 1 })).status).toBe(400);
+    const r = await p.call('POST', '/admin/content/orders', { mode: 'prompt', prompt: 'Про ночные заявки в барбершопе', type: 'post' });
+    expect(r.status).toBe(200);
+    expect(r.json.order).toMatchObject({ mode: 'prompt', state: 'working', itemId: null, reviewId: null, type: 'post' });
+    expect(p.w.hq.task(r.json.order.id)!.meta).toMatchObject({ action: 'topic', type: 'post', source: 'owner' });
+    await p.w.marketing.onHeartbeat();
+    const list = (await p.call('GET', '/admin/content/orders')).json.items;
+    expect(list[0]).toMatchObject({ id: r.json.order.id, state: 'delivered', itemStatus: 'pending' });
+    expect(list[0].reviewId).toMatch(/^ap_\d+$/);
+    expect(store(p).item(list[0].itemId)!.type).toBe('post');
+    const feed = (await p.call('GET', '/admin/content/feed')).json.items.find((i: any) => i.id === list[0].itemId);
+    expect(feed.origin).toEqual({ orderId: r.json.order.id, mode: 'prompt', fromItemId: null });
+    expect(feed.reviewId).toBe(list[0].reviewId);
+  });
+
+  it('more variant and for a niche: a new item next to the original, linked by reviseOf and by the order; bad input is refused', async () => {
+    const p = await packed({ cadence: NEW_PACK });
+    const clip = await firstOf(p, 'clip');
+    const v = await p.call('POST', '/admin/content/orders', { mode: 'variant', fromItemId: clip.id });
+    expect(v.status).toBe(200);
+    const n = await p.call('POST', '/admin/content/orders', { mode: 'niche', fromItemId: String(clip.id), niche: 'барбершоп', note: 'без цен' });
+    expect(n.status).toBe(200);
+    expect(p.w.hq.task(n.json.order.id)!.meta).toMatchObject({ action: 'revise_item', fromItemId: clip.id, studio: { mode: 'niche', fromItemId: clip.id } });
+    await p.w.marketing.onHeartbeat();
+    const list = (await p.call('GET', '/admin/content/orders')).json.items;
+    expect(list.map((o: any) => [o.mode, o.state, o.fromItemId])).toEqual([['niche', 'delivered', clip.id], ['variant', 'delivered', clip.id]]);
+    expect(list[0].itemId).not.toBe(clip.id);
+    expect((await p.call('POST', '/admin/content/orders', { mode: 'niche', fromItemId: clip.id, niche: 'нет такой ниши xyz' })).json.error).toBe('invalid_niche');
+    expect((await p.call('POST', '/admin/content/orders', { mode: 'variant', fromItemId: 99999 })).status).toBe(404);
+    expect((await p.call('POST', '/admin/content/orders', { mode: 'variant' })).status).toBe(400);
+  });
+});

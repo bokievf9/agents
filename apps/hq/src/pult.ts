@@ -72,6 +72,8 @@ export function createPult(d: PultDeps) {
     if (a === 'hub') return method === 'GET' && seg.length === 1 ? ok(hub.get()) : fail(404, 'not_found');
     if (a === 'content') {
       if (method === 'GET' && seg.length === 1) return content.list(query);
+      if (seg[1] === 'feed' && seg.length === 2) return method === 'GET' ? content.feed(query) : fail(404, 'not_found');
+      if (seg[1] === 'orders' && seg.length === 2) return method === 'GET' ? content.orders(query) : method === 'POST' ? content.createOrder(body) : fail(404, 'not_found');
       if (method === 'POST' && seg.length === 2) return content.post(seg[1]!, body);
       return fail(404, 'not_found');
     }

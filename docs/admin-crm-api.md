@@ -306,6 +306,24 @@ P-22: «вопрос решён» in the cabinet. Only the client's own cabinet 
 - `rerender`: рилс ставится в очередь рендера (как `/render`), у поста, карусели и истории PNG рисуются заново. Нельзя (не одобрен, рендер выключен, не нарисовалось): 409 `cannot_rerender` + `reason`.
 - Без головы Маркетинга `revise`, `published`, `rerender` дают 503 `unavailable`.
 
+## Content Studio (2026-11-23)
+Раздел Content рабочего места HQ: общая лента всего контента и заказы Content Maker. Всё под `/admin`, заголовок `x-admin-token`. Недельный календарь остаётся `GET /admin/content?week=`.
+
+`GET /admin/content/feed?status=&kind=&limit=&cursor=` -> `{ ok, items, nextCursor, statuses, kinds, total }`. Все материалы (`cm_items`, последние 400) и статьи, новые первыми (день выхода, затем id). `status` из `draft|pending|approved|rendering|ready|published|rejected`, `kind` из `clip|post|carousel|story|article|profile`, `limit` 1..200 (50), `cursor` смещение следующей страницы; плохое значение 400 `invalid` + `hint`. Строка как в календаре плюс `reviewId` (`ap_<n>` карточки одобрения материала или статьи, иначе `null`: по нему раздел Approvals открывает карточку) и `origin`: `{ orderId, mode, fromItemId }`, если материал сделан по заказу Studio, иначе `null`. Файлы (`files[].path`) играются через `GET /admin/files/<path>` с Range.
+
+`POST /admin/content/orders` тело одно из:
+- `{ "mode": "prompt", "prompt": "3..1000 знаков", "type"?: "clip|post|carousel|story" }`: свободный заказ, один новый материал (по умолчанию рилс). Задача Маркетинга `action: topic` для Content Maker (`creator: owner`, `meta.source: owner`);
+- `{ "mode": "variant", "fromItemId": 41, "note"?: "до 500" }`: «ещё вариант»: тот же материал, другой хук и угол;
+- `{ "mode": "niche", "fromItemId": 41, "niche": "барбершоп", "note"?: "до 500" }`: «под нишу»: тот же материал, переписанный под нишу (название или id как у `/article`).
+`fromItemId` число или строка цифр (статью `a<n>` нельзя). Ответ `{ ok, order }`. `variant` и `niche` идут как «Правки» (`revise_item`, `meta.reviseOf` = `reviewId` исходного): новый материал это отдельная карточка в одобрениях (`parentId` указывает на исходную), исходный остаётся у владельца; у `meta.studio` задачи `{ mode, fromItemId, niche?, prompt? }`. Лишние поля, неизвестный `mode`, пустой промпт 400 `invalid`; неизвестная ниша 400 `invalid_niche`; нет материала 404; старт-кит профиля 409 `not_applicable`; нет головы Маркетинга 503 `unavailable`.
+
+`GET /admin/content/orders?limit=` (1..100, 30) -> `{ ok, items: [ order ] }`, новые первыми:
+```json
+{ "id": 118, "mode": "prompt|variant|niche", "prompt": "", "type": "post", "niche": null, "fromItemId": null, "state": "working|delivered|failed",
+  "error": null, "createdAt": "...", "itemId": 57, "reviewId": "ap_204", "itemStatus": "pending" }
+```
+`id` номер задачи. `working`: Content Maker пишет; `delivered`: готов `itemId` и карточка `reviewId` в одобрениях (`itemStatus` как в ленте); `failed`: задача заблокирована, причина в `error`. Решение по результату владелец принимает в Approvals (`POST /admin/review/<reviewId>`) или кнопками календаря.
+
 ## GET /admin/files/<path>
 Отдаёт только файлы из `DATA_DIR/renders` (картинки и видео календаря). Нужен `x-admin-token`, остальные ответы не JSON-контракт, а байты.
 - Путь очищается: `..`, `.`, пустые сегменты, `\`, NUL, абсолютные пути и повторное кодирование дают 400; затем `realpath` файла и папки, префикс проверяется (симлинк наружу 404).
