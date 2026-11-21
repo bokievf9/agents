@@ -95,7 +95,7 @@ export class DemoUsage {
   }
 
   /**
-   * The client a request names: by email (the cabinet account, created at once when HQ has not met it yet: the site signs the visitor in before the demo),
+   * The client a request names: by email (the cabinet account; created only when `opts.create` is not false, and the public agent routes never create one: M1),
    * else by `supabase_id` or the numeric HQ id. null: nobody identified (or an unknown id).
    */
   resolveClient(who: { email?: string | undefined; cabinetId?: string | undefined; name?: string | undefined; locale?: string | undefined }, opts: { create?: boolean } = {}): number | null {
