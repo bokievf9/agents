@@ -16,6 +16,7 @@ import type { MarketingHead } from './heads/marketing.js';
 import type { OwnerChannel } from './presence.js';
 import { AuditStore } from './audit-shared.js';
 import { fail, ok } from './pult-crm.js';
+import { PILOT_DIRECTIONS, withPilot } from '@fir/worker-presales';
 import { ReviewVersions, type ReviewVersion } from './review-versions.js';
 
 /**
@@ -88,6 +89,8 @@ const postBody = z.object({
   text: z.preprocess((v) => (typeof v === 'string' ? { draft: v } : v), textBody).optional(),
   /** Which document of a КП pack the text replaces (`presales_pack` only). */
   doc: z.enum(DOC_KEYS).optional(),
+  /** `presales_pack` of a flagship (Персональный ИИ, ИИ-компания): puts the block «пилот бесплатно за кейс и отзыв» into the КП (`true`) or takes it out (`false`); no `text` needed. */
+  pilot: z.boolean().optional(),
   note: z.string().trim().min(1).max(4000).optional(),
   slot: z.string().trim().min(1).max(40).optional(),
   platform: z.enum(['instagram', 'tiktok', 'shorts', 'youtube']).optional(),
@@ -309,7 +312,7 @@ export function createReview(d: ReviewDeps) {
   const draftOf = (b: z.output<typeof postBody>): string => (b.text?.draft ?? b.text?.body ?? '').trim();
 
   /** `presales_pack`: `doc` names the document (`kp`, `estimate`, `contract`); pending: the proposal's payload and the stored draft change, the card stays open; approved: КП and смета go to the client's cabinet again. */
-  async function editPack(l: TaskApproval, b: z.output<typeof postBody>): Promise<AdminReply> {
+  async function editPack(l: TaskApproval, b: z.output<typeof postBody>, extra: Payload = {}): Promise<AdminReply> {
     if (!b.doc) return fail(400, 'invalid', { hint: 'doc is required for a КП pack: kp, estimate or contract' });
     const next = draftOf(b);
     if (!next) return fail(400, 'invalid', { hint: 'text.draft is required' });
@@ -326,11 +329,11 @@ export function createReview(d: ReviewDeps) {
       if (packId === null || !packRevisable(payload)) return fail(409, 'locked', { reason: 'клиент уже принял КП' });
       if (l.approvalId === null) return fail(409, 'not_pending', { status: baseStatus(l) });
       await d.cabinet?.reviseDelivered(b.doc === 'kp' ? 'ps_quote' : 'ps_estimate', packId, next);
-      queue.amendPayload(l.approvalId, { [b.doc]: next });
+      queue.amendPayload(l.approvalId, { [b.doc]: next, ...extra });
     } else {
       const core = openApproval(l);
       if (core === null) return fail(409, 'not_pending', { status: baseStatus(l) });
-      const { result } = await d.channel.capture(() => queue.applyPatch(core, b.doc === 'contract' ? { contract: next, contractEdited: true } : { [b.doc!]: next }));
+      const { result } = await d.channel.capture(() => queue.applyPatch(core, b.doc === 'contract' ? { contract: next, contractEdited: true } : { [b.doc!]: next, ...extra }));
       if (!result) return fail(409, 'not_applied', { status: queue.get(core)?.status ?? baseStatus(l) });
       await queue.settleCard(core).catch(() => false);
     }
@@ -701,7 +704,17 @@ export function createReview(d: ReviewDeps) {
     return ok({ item: view(l) });
   }
 
+  /** `{ action: 'edit', pilot: true|false }` on a flagship's КП: the pilot block goes in or out of the КП text (the owner's switch, nothing automatic); the pack's `pilot` field follows. */
+  async function pilotRoute(l: TaskApproval, b: z.output<typeof postBody>): Promise<AdminReply> {
+    const payload = payloadOf(l);
+    if (!PILOT_DIRECTIONS.includes(str(payload.direction))) return fail(409, 'not_applicable', { reason: 'пилот только у Персонального ИИ и ИИ-компании' });
+    const next = withPilot(str(payload.kp), b.pilot === true);
+    if (next.trim() === str(payload.kp).trim()) return fail(409, 'not_applied', { reason: b.pilot ? 'блок пилота уже в КП' : 'блока пилота в КП нет' });
+    return editPack(l, { ...b, doc: 'kp', text: { draft: next } }, { pilot: b.pilot === true });
+  }
+
   async function editRoute(l: TaskApproval, b: z.output<typeof postBody>): Promise<AdminReply> {
+    if (l.kind === 'presales_pack' && b.pilot !== undefined && !b.text) return pilotRoute(l, b);
     if (!b.text) return fail(400, 'invalid', { hint: 'text is required' });
     if (l.kind === 'presales_pack') return editPack(l, b);
     if (baseStatus(l) === 'approved') return reviseApprovedDoc(l, b);

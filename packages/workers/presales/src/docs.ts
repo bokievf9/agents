@@ -72,7 +72,7 @@ const PILOT_TEXT = [
  * only names the trade and says the terms are written down before the start. `on` false takes the block out again. Idempotent either way.
  */
 export function withPilot(kp: string, on: boolean): string {
-  const without = kp.replace(new RegExp(`\\n*${PILOT_HEAD}\\n[\\s\\S]*?(?=\\n## |$)`), '').replace(/\n{3,}/g, '\n\n');
+  const without = kp.replace(new RegExp(`\\n*${PILOT_HEAD}\\n[\\s\\S]*?(?=\\n## |$)`), '').replace(/([^\n])\n## /g, '$1\n\n## ');
   if (!on) return without;
   const at = without.indexOf('\n## Срок действия');
   return at === -1 ? `${without.trimEnd()}\n\n${PILOT_TEXT}\n` : `${without.slice(0, at).trimEnd()}\n\n${PILOT_TEXT}\n${without.slice(at)}`;
