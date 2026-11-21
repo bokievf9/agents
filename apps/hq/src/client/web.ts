@@ -439,6 +439,8 @@ export class WebChatEngine {
         return { reply: s.llmAnswers >= cap ? w.cap : w.fallback, buttons: intakeButton(lang) };
       default:
     }
+    // a signed-in client asks for a call: the account is the contact, the lead is linked to it (once)
+    if (out.callAsked && s.draft.identity && !out.q.leadMade) return this.leadFromQ(s, lang, out.q, s.draft.identity.email, false);
     this.saveQ(s.id, out.q);
     this.history.remember(s.id, 'user', text);
     this.history.remember(s.id, 'assistant', out.text);
@@ -498,7 +500,7 @@ export class WebChatEngine {
     try {
       const taskId = sinks.createLead(lead, lead.service);
       this.finished(s, `разговор: ${enrichment.productFamily || 'продукт не определён'}, намерение ${enrichment.intentScore}${handoff ? ', просил менеджера' : ''} · задача #${taskId}`, taskId, 'lead');
-      this.saveQ(s.id, state);
+      this.saveQ(s.id, { ...state, leadMade: true });
     } catch (e) {
       this.d.onLost?.('chat', `заявка из разговора не создана: ${errMsg(e)}`, { contact, ref: `сессия ${s.id.slice(0, 8)}`, text: message });
       this.setState(s, 'idle', this.fresh(s));

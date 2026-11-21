@@ -202,8 +202,16 @@ describe('the lead of a conversation: enrichment on the card', () => {
     await w.say('У меня салон красоты', { clientEmail: 'anvar@example.com', cabinetId: 'sb-1', clientName: 'Анвар' });
     const r = await w.say('Заявки в Instagram теряются', { clientEmail: 'anvar@example.com', cabinetId: 'sb-1', clientName: 'Анвар' });
     expect(r.cta).toEqual(['builder', 'call']);
-    // a contact is not asked for from a signed-in client: the account is the contact; a hand-off goes to the thread (below)
+    // a contact is not asked for from a signed-in client: the account is the contact
     expect(w.leads).toEqual([]);
+    const call = await w.say('Давайте созвонимся', { clientEmail: 'anvar@example.com', cabinetId: 'sb-1', clientName: 'Анвар' });
+    expect(call).toMatchObject({ state: 'done', leadCreated: true });
+    expect(w.leads).toHaveLength(1);
+    expect(w.leads[0]).toMatchObject({ contact: 'anvar@example.com', name: 'Анвар', clientEmail: 'anvar@example.com', cabinetId: 'sb-1', clientName: 'Анвар', product: 'Бот-администратор для услуг' });
+    expect((w.leads[0]!.enrichment as { builderLink: string }).builderLink).toMatch(/^\/ru\/builder\?b=k\.salon/);
+    // asked once: a second call request makes no second lead
+    await w.say('И ещё раз про созвон', { clientEmail: 'anvar@example.com', cabinetId: 'sb-1', clientName: 'Анвар' });
+    expect(w.leads).toHaveLength(1);
   });
 });
 

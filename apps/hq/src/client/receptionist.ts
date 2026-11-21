@@ -40,6 +40,8 @@ export interface QState {
   link?: string;
   askedPrice?: boolean;
   handoff?: boolean;
+  /** The conversation already became a lead (a second call request makes no second one). */
+  leadMade?: boolean;
   /** The visitor's last message hash-free repeat counter: three equal messages in a row count as frustration. */
   lastText?: string;
   repeats?: number;
@@ -128,12 +130,13 @@ const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n -
 export function merge(q: QState, m: Model, visitorText: string): QState {
   const e = m.extract ?? {};
   const next: QState = { ...q, offered: { ...q.offered } };
-  const kind = (BUILDER_KINDS as readonly string[]).includes(e.kind ?? '') ? (e.kind as BuilderKind) : kindFromText(`${e.niche ?? ''} ${visitorText}`);
-  if (kind && !next.kind) next.kind = kind;
+  // what the model heard wins; the visitor's own words only fill what is still empty
+  if ((BUILDER_KINDS as readonly string[]).includes(e.kind ?? '')) next.kind = e.kind as BuilderKind;
+  else if (!next.kind) next.kind = kindFromText(`${e.niche ?? ''} ${visitorText}`) ?? next.kind;
   if (e.niche?.trim() && !next.niche) next.niche = clip(e.niche, 80);
   if (e.pain?.trim()) next.pain = clip(e.pain, 200);
-  const product = e.product && isCatalogueId(e.product) ? e.product : detectKind(`${e.niche ?? ''} ${visitorText}`)?.product;
-  if (product && !next.product) next.product = product;
+  if (e.product && isCatalogueId(e.product)) next.product = e.product;
+  else if (!next.product) next.product = detectKind(`${e.niche ?? ''} ${visitorText}`)?.product ?? next.product;
   const channels = channelsOf(e.channels);
   if (channels.length) next.channels = [...new Set([...(next.channels ?? []), ...channels])];
   const goals = goalsOf(e.goals);
