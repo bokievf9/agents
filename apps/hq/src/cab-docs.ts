@@ -273,6 +273,8 @@ export interface QuoteApproval {
 
 interface ClientRow { id: number; email: string; name: string; locale: string }
 const SEVEN_DAYS = 7 * 86_400_000;
+/** Emails per document in all (the first sending and the retries on start; the owner's «Отправить снова» is not limited). */
+export const MAX_MAIL_ATTEMPTS = 3;
 const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
 const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
 
@@ -322,6 +324,7 @@ export class CabDocs {
     return this.db.prepare('SELECT * FROM cab_documents WHERE id = ?').get(id) as DocRow | undefined;
   }
 
+  /** A new row; `delivered_at` stays null until the client got the notice (`notifyClient`), unless the caller says it is already with him. */
   private insert(r: Partial<DocRow> & Pick<DocRow, 'client_id' | 'kind' | 'title' | 'state'>): DocRow {
     const t = this.d.now();
     const id = Number(
@@ -330,7 +333,7 @@ export class CabDocs {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         r.client_id, r.kind, r.title, r.number ?? '', r.lead_id ?? null, r.project_id ?? null, r.pack_id ?? null, r.state, r.src ?? '', r.src_id ?? null, r.amount_usd ?? null,
-        r.stage_no ?? null, r.body ?? '', r.meta ?? '{}', t, t,
+        r.stage_no ?? null, r.body ?? '', r.meta ?? '{}', t, r.delivered_at === undefined ? null : r.delivered_at,
       ).lastInsertRowid,
     );
     return this.row(id)!;
@@ -395,6 +398,64 @@ export class CabDocs {
     if (r) this.db.prepare('UPDATE cab_documents SET pdf_rel = ?, pdf_sha256 = ? WHERE id = ?').run(r.rel, r.sha256, row.id);
   }
 
+  /** When the PDF of a row was last tried on a read (P-09): a missing one is built again at most every 10 minutes, so a broken font folder does not render on every poll. */
+  private readonly pdfTriedAt = new Map<number, number>();
+
+  /**
+   * P-09: a row whose PDF never got made (a restart in the middle of the background work, missing fonts at that moment) gets it on the next read. Returns the
+   * row as it is now. Never throws: the list must answer even when the PDF still cannot be made.
+   */
+  private async ensurePdf(r: DocRow): Promise<DocRow> {
+    if (r.pdf_rel || r.signed_pdf_rel) return r;
+    const last = this.pdfTriedAt.get(r.id);
+    if (last !== undefined && this.d.now() - last < 10 * 60_000) return r;
+    this.pdfTriedAt.set(r.id, this.d.now());
+    try {
+      await this.attachPdf(r);
+      const now = this.row(r.id) ?? r;
+      if (now.pdf_rel) this.d.hq.log('documents', 'pdf_rebuilt', 'document', String(r.id), r.kind);
+      return now;
+    } catch (e) {
+      log('warn', 'cabinet pdf rebuild failed', { doc: r.id, err: errMsg(e) });
+      return r;
+    }
+  }
+
+  /**
+   * P-09, on the start of HQ: the notices the background work never finished (a restart between the owner's approval and the client's line, `delivered_at IS NULL`)
+   * are sent now, with the PDF made first; an email that failed is tried again. At most `MAX_MAIL_ATTEMPTS` emails per row in all. Returns what it did.
+   */
+  async recoverDeliveries(): Promise<{ delivered: number; remailed: number }> {
+    let delivered = 0;
+    let remailed = 0;
+    const rows = this.db.prepare(
+      `SELECT * FROM cab_documents WHERE kind IN ('quote', 'contract', 'invoice', 'act') AND mail_attempts < ? AND (delivered_at IS NULL OR mail_state = 'failed') ORDER BY id`,
+    ).all(MAX_MAIL_ATTEMPTS) as DocRow[];
+    for (const r of rows) {
+      const what = noticeOf(r);
+      const c = this.client(r.client_id);
+      if (!what || !c) continue;
+      try {
+        if (r.delivered_at === null) {
+          if (!r.pdf_rel) await this.attachPdf(r);
+          if (r.kind === 'quote' && r.pack_id !== null) {
+            const est = this.db.prepare("SELECT * FROM cab_documents WHERE kind = 'other' AND pack_id = ? AND client_id = ?").get(r.pack_id, r.client_id) as DocRow | undefined;
+            if (est && !est.pdf_rel) await this.attachPdf(est);
+          }
+          await this.notifyClient(this.row(r.id)!, what);
+          delivered++;
+        } else {
+          await this.mailRow(r, c, what);
+          remailed++;
+        }
+      } catch (e) {
+        log('warn', 'cabinet delivery recovery failed', { doc: r.id, err: errMsg(e) });
+      }
+    }
+    if (delivered || remailed) this.d.hq.log('documents', 'deliveries_recovered', 'document', '', `delivered ${delivered}, remailed ${remailed}`);
+    return { delivered, remailed };
+  }
+
   // ---- delivery: the owner's approval is the sending ----
   /** The email half of a notice (a link to the cabinet, never a PDF); returns what happened for the journal: `email`, `email_failed:<why>` or `journal` (no Resend). */
   private async mail(c: ClientRow, what: Notice): Promise<string> {
@@ -433,6 +494,8 @@ export class CabDocs {
     const c = this.client(row.client_id);
     if (!c) return;
     postFromFirTech(this.db, this.d.now(), c.id, row.lead_id, c.locale === 'en' ? what.en : what.ru);
+    // the client has the line: the row counts as delivered (P-09: a restart before this point is picked up by `recoverDeliveries`)
+    this.db.prepare('UPDATE cab_documents SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL').run(this.d.now(), row.id);
     const how = await this.mailRow(row, c, what);
     this.d.hq.log('documents', 'doc_delivered', 'document', String(row.id), `${row.kind} ${how}`);
   }
@@ -497,7 +560,7 @@ export class CabDocs {
     });
     const est = this.insert({
       client_id: q.clientId, kind: 'other', title: 'Смета', number: `КП-${q.packId}`, lead_id: q.leadId, project_id: q.projectId, pack_id: q.packId, state: 'issued', src: 'ps_estimate', src_id: q.packId,
-      amount_usd: q.totalUsd, body: q.estimateText,
+      amount_usd: q.totalUsd, body: q.estimateText, delivered_at: this.d.now(),
     });
     this.track((async () => {
       await this.attachPdf(this.row(quote.id)!);
@@ -662,7 +725,7 @@ export class CabDocs {
         .replace(/Заказчик: ____________/, `Заказчик: принято в кабинете firtech.pro, ${date}`);
       const row = this.insert({
         client_id: c.id, kind: 'act', title: 'Акт сдачи-приёмки', number, lead_id: p.leadId, project_id: p.id, pack_id: p.packId, state: 'issued', src: 'auto_act', src_id: p.id, body: text,
-        amount_usd: total > 0 ? total : null,
+        amount_usd: total > 0 ? total : null, delivered_at: t,
       });
       this.db.prepare('UPDATE cab_documents SET accepted_at = ? WHERE id = ?').run(t, row.id);
       this.track(this.attachPdf(this.row(row.id)!));
@@ -702,7 +765,7 @@ export class CabDocs {
         : null;
       const add = (r: Parameters<CabDocs['insert']>[0]): void => {
         if (this.db.prepare('SELECT 1 FROM cab_documents WHERE src = ? AND src_id = ?').get(r.src, r.src_id)) return;
-        const row = this.insert({ ...r, client_id: clientId, lead_id: l.id, project_id: projectId });
+        const row = this.insert({ ...r, client_id: clientId, lead_id: l.id, project_id: projectId, delivered_at: this.d.now() });
         this.track(this.attachPdf(this.row(row.id)!));
         made++;
       };
@@ -773,7 +836,8 @@ export class CabDocs {
     return inv ? this.d.billing.payUrl({ number: inv.number, payKey: inv.pay_key, locale: inv.locale === 'en' ? 'en' : 'ru' }) : null;
   }
 
-  private async view(r: DocRow): Promise<Record<string, unknown>> {
+  private async view(row: DocRow): Promise<Record<string, unknown>> {
+    const r = await this.ensurePdf(row);
     const pay = this.payUrlOf(r);
     return {
       id: r.id, kind: r.kind, title: r.title, number: r.number || null, leadId: r.lead_id, projectId: r.project_id, state: this.liveState(r),

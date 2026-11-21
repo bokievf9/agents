@@ -289,6 +289,10 @@ void dueTick();
 const dueTimer = setInterval(() => void dueTick(), 30_000);
 dueTimer.unref();
 void topicManager.ensure().then((r) => log('info', 'topics checked', { state: r.state, created: r.created }));
+// P-09: cabinet notices a restart cut off (approved, never told to the client) go now, failed emails are tried again (3 emails per document in all).
+void cabinet.docs.recoverDeliveries()
+  .then((r) => { if (r.delivered || r.remailed) log('info', 'cabinet deliveries recovered', r); })
+  .catch((e) => log('warn', 'cabinet delivery recovery failed', { err: errMsg(e) }));
 // Wake every head once at start: tasks that waited while the process was down.
 for (const dept of hq.departments()) {
   const head = hq.headOf(dept);

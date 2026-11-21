@@ -82,3 +82,44 @@ describe('P-07: an email to the client that did not go', () => {
     expect(new EmailFailures(w.hq).summaryLine()).toContain('Писем клиентам не ушло за сутки: 2');
   }, 60_000);
 });
+
+describe('P-09: PDFs and notices made in the background survive a restart', () => {
+  it('a missing PDF is built on the next read of the documents', async () => {
+    const { cid } = await leadWithQuote();
+    const quote = (await docs(cid)).find((d) => d.kind === 'quote');
+    w.db.prepare('UPDATE cab_documents SET pdf_rel = NULL, pdf_sha256 = NULL WHERE id = ?').run(quote.id);
+    const again = (await docs(cid)).find((d) => d.kind === 'quote');
+    expect(again.pdfUrl).toMatch(/^https:\/\/hq\.test\/media\//);
+    expect((w.db.prepare('SELECT pdf_rel FROM cab_documents WHERE id = ?').get(quote.id) as any).pdf_rel).toBeTruthy();
+  }, 60_000);
+
+  it('on start, an approved quote the client never heard of is delivered (PDF, line, email); a failed email is tried again, three emails at most', async () => {
+    const { cid } = await leadWithQuote();
+    const quote = (await docs(cid)).find((d) => d.kind === 'quote');
+    // what a restart between the approval and the background work leaves: the row only
+    w.db.prepare('UPDATE cab_documents SET delivered_at = NULL, pdf_rel = NULL, pdf_sha256 = NULL, mail_state = NULL, mail_attempts = 0 WHERE id = ?').run(quote.id);
+    w.emails.length = 0;
+    expect(await w.cabinet!.docs.recoverDeliveries()).toEqual({ delivered: 1, remailed: 0 });
+    const row = w.db.prepare('SELECT delivered_at, pdf_rel, mail_state FROM cab_documents WHERE id = ?').get(quote.id) as any;
+    expect(row.delivered_at).toBeTruthy();
+    expect(row.pdf_rel).toBeTruthy();
+    expect(row.mail_state).toBe('sent');
+    expect(w.emails).toHaveLength(1);
+    expect(await w.cabinet!.docs.recoverDeliveries()).toEqual({ delivered: 0, remailed: 0 });
+
+    // a failing email: retried on each start until three emails were tried, then left to the owner («Отправить снова»)
+    w.emailFail.on = true;
+    w.db.prepare("UPDATE cab_documents SET mail_state = 'failed', mail_attempts = 1 WHERE id = ?").run(quote.id);
+    expect((await w.cabinet!.docs.recoverDeliveries()).remailed).toBe(1);
+    expect((await w.cabinet!.docs.recoverDeliveries()).remailed).toBe(1);
+    expect((await w.cabinet!.docs.recoverDeliveries()).remailed).toBe(0);
+    expect((w.db.prepare('SELECT mail_attempts FROM cab_documents WHERE id = ?').get(quote.id) as any).mail_attempts).toBe(3);
+    w.emailFail.on = false;
+    w.db.prepare('UPDATE cab_documents SET mail_attempts = 1 WHERE id = ?').run(quote.id);
+    expect((await w.cabinet!.docs.recoverDeliveries()).remailed).toBe(1);
+    expect((w.db.prepare('SELECT mail_state FROM cab_documents WHERE id = ?').get(quote.id) as any).mail_state).toBe('sent');
+    // one line in the client's thread for the quote, not one per retry
+    const lines = (w.db.prepare("SELECT COUNT(*) n FROM cab_messages WHERE text LIKE 'Коммерческое предложение готово%'").get() as any).n;
+    expect(lines).toBe(2); // the first sending and the recovered one after the simulated cut (the thread line is what the cut lost)
+  }, 60_000);
+});
