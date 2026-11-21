@@ -1,4 +1,4 @@
-import { detectText, errMsg, formatSlot, log, productList, productName, smallProjectMaxUsd, tryComplete, type LlmClient } from '@fir/core';
+import { detectText, errMsg, formatSlot, log, productList, productName, tryComplete, type LlmClient } from '@fir/core';
 import { isPriceQuestion } from '@fir/worker-lead-intake';
 import { z } from 'zod';
 import {
@@ -287,14 +287,12 @@ export function enrichmentOf(q: QState, contact: boolean): EnrichmentOut {
 }
 
 // ---- words the code says itself ----
-const rub = (n: number): string => `$${n}`;
 
 /** The stage rule of the price list in one sentence: payment by stages, the small-project limit, «exact price and term before the start». */
 export function stageRule(lang: Lang): string {
-  const small = smallProjectMaxUsd();
   return lang === 'ru'
-    ? `Оплата по этапам: каждый этап до его начала, последний до передачи доступов; проект до ${rub(small)} идёт в два этапа 50 на 50. Точную цену и срок называем до старта, в смете.`
-    : `Payment is by stages: each stage before it starts, the last one before handover; a project up to ${rub(small)} is two stages, 50 and 50. We name the exact price and timing before the start, in the estimate.`;
+    ? `Оплата по этапам: каждый этап до его начала, последний до передачи доступов; небольшие проекты идут двумя этапами, точные доли в смете. Точную цену и срок называем до старта, в смете.`
+    : `Payment is by stages: each stage before it starts, the last one before handover; small projects go in two stages, the exact shares are in the estimate. We name the exact price and timing before the start, in the estimate.`;
 }
 
 /** The products a price answer names: the one that fits the need and its usual companions, three at most; never the personal agents (Dono, Polly). */
@@ -325,7 +323,9 @@ export interface Cta {
 }
 
 /** The offers as text: the builder link first, the call second, Telegram only when asked for. */
-export function ctaText(lang: Lang, o: { link: string; slots: number[]; tz: string; cta: Cta; channel?: 'web' | 'telegram' }): string {
+/** `linkState`: the builder link is shown for the first time (the full paragraph), changed since it was shown (one line, «обновил»), or the same (one short line). */
+export type LinkState = 'first' | 'changed' | 'same';
+export function ctaText(lang: Lang, o: { linkState?: LinkState; link: string; slots: number[]; tz: string; cta: Cta; channel?: 'web' | 'telegram' }): string {
   const out: string[] = [];
   // Telegram asked for: the link to the bot, then one line that pulls back to the builder (the price is visible there at once)
   const pull = o.cta.telegram && o.cta.builder;
@@ -335,9 +335,14 @@ export function ctaText(lang: Lang, o: { link: string; slots: number[]; tz: stri
       ? `Если хотите, за минуту соберу проект, чтобы в Telegram говорить уже с ценой: ${o.link}`
       : `If you like, I can put the project together in a minute, so that in Telegram we already talk with a price: ${o.link}`);
   } else if (o.cta.builder) {
-    out.push(lang === 'ru'
-      ? `Соберите проект сами: я заполнил то, что вы рассказали. Цену и этапы оплаты видно сразу.\n${o.link}`
-      : `You can put the project together yourself: I filled in what you told me. The price and payment stages show right away.\n${o.link}`);
+    const st = o.linkState ?? 'first';
+    out.push(st === 'changed'
+      ? (lang === 'ru' ? `Понял, обновил сборку под это: ${o.link}` : `Got it, I updated the build for that: ${o.link}`)
+      : st === 'same'
+        ? (lang === 'ru' ? `Ссылка на вашу сборку та же: ${o.link}` : `The link to your build is the same: ${o.link}`)
+        : lang === 'ru'
+          ? `Соберите проект сами: я заполнил то, что вы рассказали. Цену и этапы оплаты видно сразу.\n${o.link}`
+          : `You can put the project together yourself: I filled in what you told me. The price and payment stages show right away.\n${o.link}`);
   }
   if (o.cta.call) {
     const when = o.slots.slice(0, 2).map((s) => formatSlot(s, o.tz, lang));
@@ -551,13 +556,14 @@ export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): 
   const compose = async (head: string, cta: Cta): Promise<ReceptionistOut> => {
     const link = `${origin}${builderPath(i.lang, buildOf(q))}`;
     const path = builderPath(i.lang, buildOf(q));
+    const linkState: LinkState = q.link === undefined ? 'first' : q.link !== path ? 'changed' : 'same';
     if (cta.builder) {
       q.offered.builder += 1;
       q.link = path;
     }
     if (cta.call) q.offered.call += 1;
     if (cta.telegram) q.offered.telegram += 1;
-    const tail = ctaText(i.lang, { link, slots: cta.call ? await slots() : [], tz: d.tz(), cta, channel: i.channel ?? 'web' });
+    const tail = ctaText(i.lang, { linkState, link, slots: cta.call ? await slots() : [], tz: d.tz(), cta, channel: i.channel ?? 'web' });
     return { kind: 'reply', text: [head, tail].filter(Boolean).join('\n\n'), q, cta, ...(cta.builder ? { link } : {}), ...(contact ? { contact } : {}), ...(callAsked ? { callAsked: true } : {}), removed: 0 };
   };
 
@@ -574,7 +580,7 @@ export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): 
   }
   // the builder was proposed and the visitor's words changed it («не хочу сайт, только агент»): the link is regenerated and sent again, always as the builder offer
   if (wasLink !== undefined && q.offered.builder > 0 && builderPath(i.lang, buildOf(q)) !== wasLink) {
-    return compose(i.lang === 'ru' ? 'Понял, обновил сборку под это.' : 'Got it, I updated the build for that.', { builder: true, call: false, telegram: false });
+    return compose('', { builder: true, call: false, telegram: false });
   }
 
   if (!d.llm.enabled || !d.gate.llmAllowed()) return { kind: 'fallback', q };

@@ -85,6 +85,7 @@ export function createPult(d: PultDeps) {
       if (method === 'GET' && seg.length === 1) return chats.list(query);
       if (method === 'GET' && seg.length === 2 && id) return chats.get(id);
       if (method === 'POST' && seg.length === 3 && id && seg[2] === 'reply') return chats.reply(id, body);
+      if (method === 'POST' && seg.length === 3 && id && seg[2] === 'unread') return chats.markUnread(id);
       return fail(404, 'not_found');
     }
     if (a === 'trends') {

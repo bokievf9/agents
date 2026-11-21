@@ -218,6 +218,15 @@ describe('enrichment of a lead (ИИ-менеджер заявок 2.0)', () => 
     expect(String(r.staged[0]!.summary)).toContain('Намерение: 64/100');
   });
 
+  it('the builder link of the form page (`page`) is kept on the lead when the estimate and the words have none; the estimate\'s own link wins', async () => {
+    const r = setup();
+    await r.run(r.task(webLead({ message: 'Хочу сайт', estimate: 'Итого: $150', page: '/ru/builder?b=websites.landing~p.site&step=8' })));
+    expect(leadStoreFor(r.ctx).byTask(1)!.enrichment!.builderLink).toBe('/ru/builder?b=websites.landing~p.site&step=8');
+    const r2 = setup();
+    await r2.run(r2.task(webLead({ message: 'Хочу сайт', estimate: 'Сборка: /en/builder?b=k.salon', page: '/ru/builder?b=websites.landing' })));
+    expect(leadStoreFor(r2.ctx).byTask(1)!.enrichment!.builderLink).toBe('/en/builder?b=k.salon');
+  });
+
   it('a lead without one gets it derived: its first lines, the service as the family, the niche, an intent from the temperature, the link of its estimate', async () => {
     const r = setup();
     await r.run(r.task(webLead({ service: 'bots', message: 'Нужен бот для салона, срочно', estimate: 'Пакет: Бот\nСборка: https://firtech.pro/en/builder?b=k.salon~p.adminbot\nИтого: $300' })));

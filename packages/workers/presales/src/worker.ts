@@ -3,7 +3,8 @@ import { detectInfrastructure, log, usd, type Button, type KindSpec, type Payloa
 import type { ApprovalState, Task, TaskApproval, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { leadStoreFor, type Lead } from '@fir/worker-lead-intake';
 import { buildDocs, draftWording, exactLabel, stagesOf, type Brief } from './docs.js';
-import { guessDirection, OFFERS } from './offers.js';
+import { builderEstimate } from './estimate.js';
+import { bundleOffer, guessDirection, OFFERS } from './offers.js';
 import { builderTotal, quotePackage } from './package.js';
 import { splitMessage } from './split.js';
 import { DOC_RU, PresalesStore, type PsDocument } from './store.js';
@@ -65,7 +66,7 @@ export function onDecision(ctx: Pick<WorkerCtx, 'db' | 'now'>, link: Pick<TaskAp
 }
 
 export function briefFromLead(l: Lead): Brief {
-  return { leadId: l.id, client: l.name || '____________', niche: l.niche, request: l.task, estimate: l.estimate, hasDomain: l.hasDomain, hasHosting: l.hasHosting };
+  return { leadId: l.id, client: l.name || '____________', niche: l.niche, request: l.task, estimate: l.estimate, hasDomain: l.hasDomain, hasHosting: l.hasHosting, ...(l.enrichment?.builderLink ? { builderLink: l.enrichment.builderLink } : {}) };
 }
 
 export interface PresalesOptions {
@@ -109,8 +110,11 @@ export class PresalesWorker implements Worker {
       if (!text) return { ok: false, result: '', error: 'Нет ни номера лида, ни текста запроса' };
       brief = { leadId: null, client: '____________', niche: '', request: text, estimate: '', ...detectInfrastructure(text) };
     }
-    const offer = OFFERS[guessDirection({ source, service, text: `${brief.request} ${brief.niche} ${brief.estimate ?? ''}` })];
-    const quote = quotePackage(offer.id, offer.title, `${brief.request} ${brief.niche} ${brief.estimate ?? ''}`);
+    // a builder estimate (several products and extras the client combined) is the price of the КП: the site's quote is the source of truth; without one, one direction from the words
+    const built = builderEstimate({ estimate: brief.estimate, request: brief.request, link: brief.builderLink });
+    const guessed = OFFERS[guessDirection({ source, service, text: `${brief.request} ${brief.niche} ${brief.estimate ?? ''}` })];
+    const offer = built ? bundleOffer(built.directions, guessed) : guessed;
+    const quote = built ? built.quote : quotePackage(offer.id, offer.title, `${brief.request} ${brief.niche} ${brief.estimate ?? ''}`);
     const wording = await draftWording(ctx.llm, this.prompt, brief, offer);
     const docs = buildDocs(this.templates, offer, quote, brief, wording, { validDays: this.validDays }, ctx.now(), ctx.tz);
     const saved = storeFor(ctx).createPack(brief.leadId, offer.id, docs);
@@ -138,9 +142,14 @@ export class PresalesWorker implements Worker {
     // the client's own builder total is only compared, never used as a price: the lead form is public
     const seen = builderTotal(brief.estimate ?? '');
     const mismatch = seen !== null && seen !== quote.totalUsd ? ` Внимание: в конструкторе клиент видел итог ${usd(seen)}, в КП ${usd(quote.totalUsd)}: сверьте состав.` : '';
+    const priced = built
+      ? ` Цена взята из сметы конструктора (${built.source === 'link' ? 'по ссылке сборки, цены каталога сайта' : 'присланная сметой клиента'}).`
+        + `${built.linkTotalUsd !== null ? ` Внимание: по ссылке сборки каталог даёт ${usd(built.linkTotalUsd)}, в смете клиента ${usd(quote.totalUsd)}: сверьте состав.` : ''}`
+        + `${built.onRequest.length ? ` По смете, без цены (в сумму не входит): ${built.onRequest.join(', ')}.` : ''}`
+      : '';
     const summary = [
       `${DOC_RU.kp}, смета и черновик договора #${packId}: ${who}`,
-      `Направление: ${offer.title}, цена ${exactLabel(quote)}${quote.lines.length > 1 ? ` (${quote.lines.map((l) => l.label).join(' + ')})` : ''}. Оплата по этапам (${stages.map((x) => `${x.no}: ${usd(x.amountUsd)}`).join(', ')}), каждый до его начала. КП действует ${this.validDays} дн.${mismatch}`,
+      `Направление: ${offer.title}, цена ${exactLabel(quote)}${quote.lines.length > 1 ? ` (${quote.lines.map((l) => l.label).join(' + ')})` : ''}. Оплата по этапам (${stages.map((x) => `${x.no}: ${usd(x.amountUsd)}`).join(', ')}), каждый до его начала. КП действует ${this.validDays} дн.${mismatch}${priced}`,
       'Тексты длинные: «Скопировать документы» пришлёт их сообщениями.',
       ...(cabinet
         ? [

@@ -137,3 +137,20 @@ describe('lead breakdown data', () => {
     expect((await p.item(x.id)).meta.lead.builderUrl).toBe('https://firtech.pro/ru/builder?b=ENR');
   });
 });
+
+describe('presales_pack: the ids of the document rows', () => {
+  it('documents[].id and meta.pack.documentIds are the ps_documents rows of the pack (null / skipped when no row exists)', async () => {
+    const p = reviewWorld();
+    const lead = p.lead('Анна');
+    const rows = new PresalesStore(p.w.db, p.t).createPack(lead.id, 'admin', [{ kind: 'kp', title: 'КП', body: 'КП v1' }, { kind: 'estimate', title: 'Смета', body: 'Смета v1' }, { kind: 'contract', title: 'Договор', body: 'Договор v1' }]);
+    const x = await p.propose('sales', 'presales_pack', { ...PACK, packId: rows[0]!.packId, leadId: lead.id }, 'пакет', { release: true });
+    const item = await p.item(x.id);
+    expect(item.text.documents.map((d: any) => [d.key, d.id])).toEqual([['kp', rows[0]!.id], ['estimate', rows[1]!.id], ['contract', rows[2]!.id]]);
+    expect(item.meta.pack.documentIds).toEqual(rows.map((r) => r.id));
+    // a pack without rows (a stub proposal): ids are null and the list is empty, the card still works
+    const y = await p.propose('sales', 'presales_pack', { ...PACK, packId: 99, leadId: lead.id }, 'пакет без строк', { release: true });
+    const bare = await p.item(y.id);
+    expect(bare.text.documents.map((d: any) => d.id)).toEqual([null, null, null]);
+    expect(bare.meta.pack.documentIds).toEqual([]);
+  });
+});

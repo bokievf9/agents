@@ -81,6 +81,17 @@ describe('product names: one map, no «бот» in the name of an AI product', (
     expect(hits).toEqual([]);
   });
 
+  it('«50 на 50» / «50/50» is not said by the chat, the client bot or its instructions: the split lives in the terms page and the documents (owner 2026-11-22)', () => {
+    const hits: string[] = [];
+    for (const entry of ['apps/hq/src/client', 'apps/hq/instructions/client-bot.md']) {
+      const abs = join(ROOT, entry);
+      for (const f of statSync(abs).isDirectory() ? files(abs) : [abs]) {
+        if (/50\s*(?:на|\/|and|-)\s*50|50 и 50|50 and 50/iu.test(readFileSync(f, 'utf8'))) hits.push(relative(ROOT, f));
+      }
+    }
+    expect(hits).toEqual([]);
+  });
+
   it('the scan really sees the dirs it is told about (a template, an instruction, a playbook)', () => {
     const seen = SCAN.flatMap((p) => expand(p)).map((d) => relative(ROOT, d));
     expect(seen).toEqual(expect.arrayContaining(['apps/hq/src', 'apps/hq/instructions', 'knowledge', 'packages/workers/presales/templates', 'packages/workers/documents/templates']));
@@ -119,6 +130,14 @@ describe('product names: one map, no «бот» in the name of an AI product', (
     expect(system).toContain(productName('adminbot', 'ru'));
     expect(system).toContain(productName('intake', 'ru'));
     expect(readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8')).toContain('«ИИ-менеджер заявок Fir Tech»');
+  });
+
+  it('the client bot does not pitch Dono and Polly: one neutral line that they exist, nothing in the list of products to offer', () => {
+    const md = readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8');
+    const lines = md.split('\n').filter((l) => /Dono|Polly/.test(l));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/только если человек сам спросит/);
+    expect(md).not.toContain('Наши собственные продукты');
   });
 
   it('the КП, the estimate and the contract name the product from the map (the presales and prospector offers)', () => {

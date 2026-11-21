@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS ch_messages (
   at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ch_messages_lead ON ch_messages (lead_id);
+CREATE TABLE IF NOT EXISTS ch_unread (
+  thread_id TEXT PRIMARY KEY,
+  at INTEGER NOT NULL
+);
 `;
 
 export type ChatChannel = 'web' | 'telegram' | 'cabinet';
@@ -268,16 +272,22 @@ export function createChats(d: ChatsDeps) {
     return threads.sort((a, b) => b.lastAt - a.lastAt || a.id.localeCompare(b.id));
   }
 
-  /** Client messages after the last owner or HQ message. */
-  const unreadOf = (t: Thread): number => {
+  /** Client messages after the last owner or HQ message; a thread the owner marked unread counts at least 1 until somebody answers it. */
+  const unreadOf = (t: Thread, flags: Map<string, number> = unreadFlags()): number => {
     const lastAnswer = t.messages.filter((m) => m.from !== 'client').at(-1)?.at ?? -1;
-    return t.messages.filter((m) => m.from === 'client' && m.at > lastAnswer).length;
+    const n = t.messages.filter((m) => m.from === 'client' && m.at > lastAnswer).length;
+    if (n > 0) return n;
+    const flagged = [t.id, ...t.aliases].some((a) => (flags.get(a) ?? -2) >= lastAnswer);
+    return flagged ? 1 : 0;
   };
+  function unreadFlags(): Map<string, number> {
+    return new Map((all<{ thread_id: string; at: number }>('SELECT thread_id, at FROM ch_unread')).map((r) => [r.thread_id, r.at]));
+  }
 
-  const threadView = (t: Thread) => {
+  const threadView = (t: Thread, flags: Map<string, number> = unreadFlags()) => {
     const last = t.messages.at(-1);
     return {
-      id: t.id, client: { id: t.clientId, name: t.name, email: t.email, contact: t.contact }, channels: t.channels, lastAt: t.lastAt ? iso(t.lastAt) : null, unread: unreadOf(t),
+      id: t.id, client: { id: t.clientId, name: t.name, email: t.email, contact: t.contact }, channels: t.channels, lastAt: t.lastAt ? iso(t.lastAt) : null, unread: unreadOf(t, flags),
       preview: last ? oneLine(last.text) : oneLine(t.summary), leadId: t.leadId, ticketId: t.ticketId, textsStored: t.textsStored, openTicket: t.openTicket,
     };
   };
@@ -293,15 +303,27 @@ export function createChats(d: ChatsDeps) {
     if (curRaw && !/^\d+$/.test(curRaw)) return fail(400, 'invalid', { hint: 'cursor' });
     const from = curRaw ? Number(curRaw) : 0;
     const t = now();
-    const open = build().filter((x) => status === 'all' || unreadOf(x) > 0 || x.openTicket || t - x.lastAt <= OPEN_WINDOW_MS);
+    const flags = unreadFlags();
+    const open = build().filter((x) => status === 'all' || unreadOf(x, flags) > 0 || x.openTicket || t - x.lastAt <= OPEN_WINDOW_MS);
     const page = open.slice(from, from + limit);
-    return ok({ items: page.map(threadView), unread: open.filter((x) => unreadOf(x) > 0).length, nextCursor: from + limit < open.length ? String(from + limit) : null });
+    return ok({ items: page.map((x) => threadView(x, flags)), unread: open.filter((x) => unreadOf(x, flags) > 0).length, nextCursor: from + limit < open.length ? String(from + limit) : null });
   }
 
   function get(id: string): AdminReply {
     const t = find(id);
     if (!t) return fail(404, 'not_found');
-    return ok({ thread: threadView(t), messages: t.messages.map((m) => ({ id: m.id, at: iso(m.at), from: m.from, channel: m.channel, text: m.text, attachments: m.attachments })) });
+    // `thread`: the cabinet thread of the message (`lead` for everything that is not a thread message: the request, a ticket, Telegram, the site chat, the owner's own lines)
+    return ok({ thread: threadView(t), messages: t.messages.map((m) => ({ id: m.id, at: iso(m.at), from: m.from, channel: m.channel, thread: threadOfMessage(m.id) ?? 'lead', text: m.text, attachments: m.attachments })) });
+  }
+
+  /** `POST /admin/chats/:id/unread`: the owner marks the client unread again. Already unread: nothing changes. The mark lasts until somebody answers. */
+  function markUnread(id: string): AdminReply {
+    const t = find(id);
+    if (!t) return fail(404, 'not_found');
+    if (unreadOf(t) === 0) db.prepare('INSERT INTO ch_unread (thread_id, at) VALUES (?, ?) ON CONFLICT(thread_id) DO UPDATE SET at = excluded.at').run(t.id, now());
+    hq.log('owner', 'chat_unread', 'chat', t.id, 'marked');
+    const fresh = find(t.id) ?? t;
+    return ok({ thread: threadView(fresh) });
   }
 
   /** The cabinet thread a message id belongs to: `lead` (a request-thread message), a `cab_tmsgs` thread name, or null when it is not a cabinet message. */
@@ -394,5 +416,5 @@ export function createChats(d: ChatsDeps) {
     return ok({ sent, via, message: { id: stored.id, at: iso(stored.at), from: 'owner', channel: stored.channel, text, attachments: [] }, thread: threadView(find(t.id) ?? t) });
   }
 
-  return { list, get, reply };
+  return { list, get, reply, markUnread };
 }

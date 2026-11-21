@@ -31,6 +31,8 @@ export const pricesSchema = z
     // Payment by stages (2026-11-21): templates and the small-project threshold; the built-in copy (`stage-templates.ts`) is used when the site has not published them yet.
     stages: z.unknown().optional(),
     smallProjectMaxUsd: amount.optional(),
+    // The builder's bundle discount in percent (the site's `bundleDiscountPercent`); 10 when the site does not publish it yet.
+    bundleDiscountPercent: z.number().min(0).max(50).optional(),
     // The site's shape: `{kind:'from', from}`, `{kind:'plans', plans}` or `{kind:'quote'}`. A bare number or `{from}` is read too
     // (our own normalised copy, older shapes). Normalised below to the HQ keys.
     products: z.record(z.string(), z.unknown()),
@@ -65,7 +67,7 @@ export const pricesSchema = z
     for (const k of PRODUCT_KEYS) if (!(k in products)) ctx.addIssue({ code: 'custom', message: `products.${k} is missing` });
     for (const id of ['dono', 'polly']) if (!p.agentPlans.some((x) => x.id === id)) ctx.addIssue({ code: 'custom', message: `agentPlans.${id} is missing` });
     if (!p.contentPlans.some((x) => x.id === 'content')) ctx.addIssue({ code: 'custom', message: 'contentPlans.content is missing' });
-    return { ...p, products, titles, stages: normalizeStages(p.stages, (m, x) => log('warn', m, x)) };
+    return { ...p, bundleDiscountPercent: p.bundleDiscountPercent ?? 10, products, titles, stages: normalizeStages(p.stages, (m, x) => log('warn', m, x)) };
   });
 export type Prices = z.infer<typeof pricesSchema>;
 

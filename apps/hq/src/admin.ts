@@ -1,3 +1,4 @@
+import { createDirectorHistory } from './director-history.js';
 import { errMsg, log, type ApprovalQueue } from '@fir/core';
 import type { Hq, Task } from '@fir/hq';
 import { openBuilderTasks } from './bridge.js';
@@ -101,6 +102,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
     ...(d.cabinetTicket ? { cabinetTicket: (t: { id: number; name: string; text: string; telegram: string; leadId?: number }) => void d.cabinetTicket!(t).catch((e) => log('warn', 'cabinet ticket flow failed', { err: errMsg(e) })) } : {}),
   });
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));
+  const history = createDirectorHistory(hq.db, now);
   const pult = createPult({
     hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply,
     marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange, tools: d.tools, ...(d.cabinet ? { cabinet: d.cabinet.docs } : {}),
@@ -262,12 +264,20 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
           })),
         });
       }
+      case 'GET director/history': {
+        const raw = query.get('limit');
+        const limit = raw === null || raw === '' ? 50 : /^\d+$/.test(raw) ? Math.min(Math.max(Number(raw), 1), 200) : NaN;
+        if (!Number.isFinite(limit)) return fail(400, 'invalid', { hint: 'limit' });
+        return ok({ items: history.list(limit) });
+      }
       case 'POST say': {
         const text = typeof b.text === 'string' ? b.text.trim() : '';
         if (!text || text.length > 2000) return fail(400, 'invalid');
         const before = maxTaskId();
+        history.add('owner', text);
         const { replies } = await channel.capture(() => director.onText(text));
         const taskId = firstOwnerTaskAfter(before);
+        for (const r of replies) history.add('hq', r, taskId);
         return ok({ replies, ...(taskId !== undefined ? { taskId } : {}) });
       }
       case 'POST command': {
@@ -275,8 +285,10 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
         const arg = typeof b.arg === 'string' ? b.arg.slice(0, 1000) : '';
         if (!name || !commands.has(name)) return fail(400, 'unknown_command');
         const before = maxTaskId();
+        history.add('command', `/${name}${arg ? ` ${arg}` : ''}`);
         const { replies } = await channel.capture(() => director.onCommand(name, arg));
         const taskId = firstOwnerTaskAfter(before);
+        for (const r of replies) history.add('hq', r, taskId);
         return ok({ replies, ...(taskId !== undefined ? { taskId } : {}) });
       }
       case 'GET drill':

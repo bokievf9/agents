@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { MockLlm, OffLlm, openDb, productList, smallProjectMaxUsd, type LlmClient, type LlmRequest } from '@fir/core';
+import { MockLlm, OffLlm, openDb, productList, type LlmClient, type LlmRequest } from '@fir/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { decodeBuild } from '../src/client/builder-link.js';
 import { DEMO_TURNS, personaSystem } from '../src/client/persona.js';
@@ -74,6 +74,22 @@ const salonModel = (req: LlmRequest, n: number): string => {
 };
 
 describe('qualification: from the first words to the builder link', () => {
+  it('the builder paragraph is full once; a changed link says «обновил», an unchanged one is one short line (4-message salon dialogue)', async () => {
+    const w = world({ turns: salonModel });
+    await w.say('Здравствуйте, у меня салон красоты в Душанбе');
+    const b = await w.say('Теряются заявки вечером, они приходят в Instagram');
+    expect(b.reply.match(/Соберите проект сами/g)).toHaveLength(1);
+    const c = await w.say('пришлите ссылку на сборку ещё раз');
+    expect(c.reply).toContain(`Ссылка на вашу сборку та же: ${b.builderLink}`);
+    expect(c.reply).not.toContain('Соберите проект сами');
+    expect(c.builderLink).toBe(b.builderLink);
+    const d = await w.say('и ещё сайт нужен');
+    expect(d.builderLink).not.toBe(b.builderLink);
+    expect(d.reply).toContain(`Понял, обновил сборку под это: ${d.builderLink}`);
+    expect(d.reply).not.toContain('Соберите проект сами');
+    expect(d.reply.match(/builder\?b=/g)).toHaveLength(1);
+  });
+
   it('a salon owner: two turns, the builder link first, the call second, no Telegram, state kept', async () => {
     const w = world({ turns: salonModel });
     const transcript: string[] = [];
@@ -223,7 +239,8 @@ describe('prices: only from the price list, with the stage rule', () => {
     const r = await w.say('Сколько стоит бот?');
     expect(w.calls()).toHaveLength(0);
     expect(r.reply).toMatch(/Цены на сайте, в долларах: .*от \$\d+/s);
-    expect(r.reply).toContain(`проект до $${smallProjectMaxUsd()} идёт в два этапа 50 на 50`);
+    expect(r.reply).toContain('небольшие проекты идут двумя этапами, точные доли в смете');
+    expect(r.reply).not.toMatch(/50 на 50|50\/50|50 and 50/);
     expect(r.reply).toMatch(/Точную цену и срок называем до старта/);
     expect(r.cta).toEqual(['builder', 'call']);
     const en = await w.say('How much does it cost?', { locale: 'en' });

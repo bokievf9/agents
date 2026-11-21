@@ -16,7 +16,7 @@ export const NEED_RULES: NeedRule[] = [
   { id: 'department', re: /(?<![\p{L}])(ии|ai)[- ]?отдел|отдел из (ии|агент)|баз[ауыойе] знаний|knowledge base|ai department/iu, product: 'ai' },
   { id: 'miniapp', re: /mini ?app|мини-?апп|мини-?приложени|магазин (в|внутри) телеграм|каталог (в|внутри) телеграм/iu, product: 'miniapp' },
   { id: 'content', re: /контент|рилс|reels|посты|постов|соцсет|ведение (инстаграм|instagram)|content plan|social media/iu, product: 'content' },
-  { id: 'automation', re: /автоматизац|таблиц|crm|отчёт(ы|ов)|отчет(ы|ов)|рассылк|интеграци|automation|spreadsheet|reports?\b/iu, product: 'automation' },
+  { id: 'automation', re: /автоматизац|таблиц|crm|отчёт(ы|ов)|отчет(ы|ов)|рассыл(к|ок)|интеграци|automation|spreadsheet|reports?\b/iu, product: 'automation' },
   { id: 'assistant', re: /личн(ый|ого) (ассистент|помощник)|персональн\w+ (ассистент|помощник)|personal (assistant|agent)/iu, product: 'agent' },
   { id: 'booking', re: /администратор|запис(ь|и|ывать|ывает|ываться|аться)|бронь|бронир|booking|appointment|reservation|\breceptionist\b|front desk/iu, product: 'admin' },
   { id: 'intake', re: /приём заявок|приема заявок|принимать заявки|обрабатывать заявки|менеджер заявок|заявк\w+ (ночью|вечером|в instagram|из instagram)|квалифицир|lead intake|lead manager|qualif/iu, product: 'receptionist' },

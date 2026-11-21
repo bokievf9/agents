@@ -322,3 +322,55 @@ describe('POST /admin/chats/:id/reply: which cabinet thread the answer lands in'
     expect(p.w.db.prepare('SELECT COUNT(*) n FROM ch_messages').get()).toEqual({ n: 0 });
   });
 });
+
+describe('GET /admin/chats/:id: the thread of every message, and POST /admin/chats/:id/unread', () => {
+  it('every message carries `thread` (lead for the request, tickets and the owner lines; support, project-N as stored), so the last client message gives the default reply thread', async () => {
+    const p = reviewWorld();
+    const a = cabinetLead(p, 'anna@example.com', 'Анна');
+    p.w.clock.t += 1000;
+    addCabMessage(p.w.db, p.t(), { clientId: a.clientId, leadId: a.leadId, from: 'client', text: 'Про заявку' });
+    p.w.clock.t += 1000;
+    addThreadMessage(p.w.db, p.t(), { clientId: a.clientId, thread: 'project-5', from: 'client', text: 'Про проект' });
+    p.w.clock.t += 1000;
+    addThreadMessage(p.w.db, p.t(), { clientId: a.clientId, thread: 'project-5', from: 'manager', text: 'Ответ по проекту', by: 'owner' });
+    p.w.clock.t += 1000;
+    addThreadMessage(p.w.db, p.t(), { clientId: a.clientId, thread: 'support', from: 'client', text: 'Про кабинет' });
+    const t = await thread(p, `c${a.clientId}`);
+    expect(t.messages.every((m: any) => typeof m.thread === 'string')).toBe(true);
+    const by = (text: string) => t.messages.find((m: any) => m.text === text).thread;
+    expect(by('Про заявку')).toBe('lead');
+    expect(by('Хочу бота для салона')).toBe('lead');
+    expect(by('Про проект')).toBe('project-5');
+    expect(by('Ответ по проекту')).toBe('project-5');
+    expect(by('Про кабинет')).toBe('support');
+    // the site's default: the thread of the client's last message
+    expect([...t.messages].reverse().find((m: any) => m.from === 'client').thread).toBe('support');
+  });
+
+  it('unread: a read thread (answered) becomes unread again, an unread one stays as it is, the next answer clears it, an unknown id is 404', async () => {
+    const p = reviewWorld();
+    const a = cabinetLead(p, 'anna@example.com', 'Анна');
+    p.w.clock.t += 1000;
+    addCabMessage(p.w.db, p.t(), { clientId: a.clientId, leadId: a.leadId, from: 'client', text: 'Вопрос' });
+    p.w.clock.t += 1000;
+    const id = `c${a.clientId}`;
+    // the request itself and the question: two unread messages; marking again changes nothing
+    expect((await thread(p, id)).thread.unread).toBe(2);
+    expect((await p.call('POST', `/admin/chats/${id}/unread`)).json).toMatchObject({ ok: true, thread: { unread: 2 } });
+    await p.call('POST', `/admin/chats/${id}/reply`, { text: 'Ответ.' });
+    p.w.clock.t += 1000;
+    expect((await thread(p, id)).thread.unread).toBe(0);
+    const again = await p.call('POST', `/admin/chats/${id}/unread`);
+    expect(again.json).toMatchObject({ ok: true, thread: { id, unread: 1 } });
+    expect((await threads(p, 'status=open')).find((x: any) => x.id === id).unread).toBe(1);
+    expect((await p.call('GET', '/admin/chats?status=open')).json.unread).toBe(1);
+    // the mark survives reads and goes when somebody answers
+    expect((await thread(p, id)).thread.unread).toBe(1);
+    p.w.clock.t += 1000;
+    await p.call('POST', `/admin/chats/${id}/reply`, { text: 'Ещё раз.' });
+    p.w.clock.t += 1000;
+    expect((await thread(p, id)).thread.unread).toBe(0);
+    expect((await p.call('POST', '/admin/chats/nope/unread')).status).toBe(404);
+    expect((await p.call('GET', `/admin/chats/${id}/unread`)).status).toBe(404);
+  });
+});

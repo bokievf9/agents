@@ -129,6 +129,30 @@ describe('admin API', () => {
     }
   });
 
+  it('GET /admin/director/history: the owner lines, the commands and the answers of HQ, newest last, limit checked', async () => {
+    const w = world({ presence: true, llm: taskLlm() });
+    const { server, call } = await start(w);
+    try {
+      await call('POST', '/admin/presence', { mode: 'desk' });
+      expect((await call('GET', '/admin/director/history')).json).toMatchObject({ ok: true, items: [] });
+      await call('POST', '/admin/say', { text: 'сделай клип про барбершоп' });
+      w.clock.t += 1000;
+      await call('POST', '/admin/command', { name: 'status' });
+      const h = (await call('GET', '/admin/director/history')).json.items as { role: string; text: string; at: string; taskId: number | null }[];
+      expect(h.map((x) => x.role)).toEqual(['owner', 'hq', 'command', 'hq']);
+      expect(h[0]).toMatchObject({ text: 'сделай клип про барбершоп', taskId: null });
+      expect(h[1]!.text).toContain('Задача #');
+      expect(h[1]!.taskId).toBe(w.hq.tasks({ dept: 'marketing' })[0]!.id);
+      expect(h[2]!.text).toBe('/status');
+      expect(Date.parse(h[3]!.at)).toBeGreaterThan(Date.parse(h[0]!.at));
+      expect((await call('GET', '/admin/director/history?limit=2')).json.items.map((x: { role: string }) => x.role)).toEqual(['command', 'hq']);
+      for (const bad of ['limit=0x', 'limit=-1', 'limit=abc']) expect((await call('GET', `/admin/director/history?${bad}`)).status, bad).toBe(400);
+      expect((await call('POST', '/admin/director/history', {})).status).toBe(404);
+    } finally {
+      server.close();
+    }
+  });
+
   it('say creates a task, returns the replies inline, keeps Telegram and the inbox quiet, and the line is readable', async () => {
     const w = world({ presence: true, llm: taskLlm() });
     const { server, call } = await start(w);

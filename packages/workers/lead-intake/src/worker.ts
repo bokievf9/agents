@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { detectInfrastructure, formatSlot, log, placeholderHold, tryComplete, tryJson, zonedParts, zonedToMs, type KindSpec, type Payload } from '@fir/core';
 import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { LeadStore, type Enrichment, type Lang, type Lead } from './store.js';
-import { deriveEnrichment, enrichmentLines, guessDeadline, guessNiche, hasMoney, hasPlaceholder, isPriceQuestion, scoreLead, TEMP_RU, tpl } from './text.js';
+import { builderLinkIn, deriveEnrichment, enrichmentLines, guessDeadline, guessNiche, hasMoney, hasPlaceholder, isPriceQuestion, scoreLead, TEMP_RU, tpl } from './text.js';
 
 /**
  * `lead_reply`: the first answer to the client. Starts at `replyLevel` (1 by the brief) and goes through the normal
@@ -31,6 +31,8 @@ export const webLeadSchema = z.object({
   budget: z.string().trim().max(40).default(''),
   message: z.string().trim().max(2000).default(''),
   estimate: z.string().trim().max(1500).default(''),
+  /** The page the form was sent from (the builder's `/ru/builder?b=...` when the lead came from it): its link prices the КП when the estimate text is cut. */
+  page: z.string().trim().max(600).default(''),
   locale: z.enum(['ru', 'en']).default('ru'),
   slot: z.string().trim().max(40).default(''),
   source: z.string().trim().max(40).default(''),
@@ -237,7 +239,7 @@ export class LeadIntakeWorker implements Worker {
 
     // the conversation summary: the chat's own, else derived from the lead's words; it is kept on the lead and shown on the card
     const enrichment: Enrichment = w.enrichment ?? deriveEnrichment({ message: w.message, estimate: w.estimate, service: w.service, product: w.product, niche: c.niche, temperature });
-    store.setEnrichment(lead.id, { ...enrichment, niche: enrichment.niche || c.niche });
+    store.setEnrichment(lead.id, { ...enrichment, niche: enrichment.niche || c.niche, builderLink: enrichment.builderLink || builderLinkIn(w.page) });
     const t = tpl(lang);
     const slotText = chosenSlot ? formatSlot(chosenSlot, ctx.tz, 'ru') : `предложены: ${slots.map((s) => formatSlot(s, ctx.tz, 'ru')).join(' / ')}`;
     const viaBot = w.chatId !== undefined;

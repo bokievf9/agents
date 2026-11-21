@@ -10,6 +10,7 @@ import type { DirectionId } from './offers.js';
  */
 export interface PackageLine {
   label: string;
+  /** Negative for the bundle discount of a builder estimate. */
   usd: number;
 }
 export interface PackageQuote {
@@ -18,6 +19,8 @@ export interface PackageQuote {
   /** The monthly fee of a subscription package, USD; null when there is none. */
   monthlyUsd: number | null;
   lines: PackageLine[];
+  /** The stage template products of the builder's most expensive part (`site`, `bot`, `automation`, `app`); absent: the direction's own. */
+  stageIds?: string[];
 }
 
 const sum = (lines: PackageLine[]): number => lines.reduce((s, l) => s + l.usd, 0);

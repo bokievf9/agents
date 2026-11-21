@@ -180,3 +180,24 @@ export function guessDirection(parts: { source?: string; service?: string; text?
   for (const [re, id] of KEYWORDS) if (re.test(text)) return id;
   return (parts.service && SERVICE[parts.service]) || 'admin';
 }
+
+/**
+ * The offer of a several-product build: the most expensive part gives the id (documents, stages), the title names every part (`Сайт + ИИ-администратор`),
+ * the timeline lists each direction's own, the scope takes the first bullets of each direction (5-8 in all). One direction: that offer as it is.
+ */
+export function bundleOffer(directions: DirectionId[], fallback: Offer): Offer {
+  const offers = directions.map((d) => OFFERS[d]);
+  if (offers.length === 0) return fallback;
+  if (offers.length === 1) return offers[0]!;
+  const first = offers[0]!;
+  const per = Math.max(2, Math.floor(8 / offers.length));
+  const scope = offers.flatMap((o) => o.scope.slice(0, per)).slice(0, 8);
+  return {
+    id: first.id,
+    title: offers.map((o) => o.title).join(' + '),
+    fromUsd: first.fromUsd,
+    ...(first.monthlyUsd !== undefined ? { monthlyUsd: first.monthlyUsd } : {}),
+    timeline: offers.map((o) => `${o.title}: ${o.timeline}`).join('; '),
+    scope: scope.length >= 5 ? scope : first.scope,
+  };
+}

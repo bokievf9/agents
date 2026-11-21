@@ -410,14 +410,20 @@ export function createReview(d: ReviewDeps) {
       case 'presales_pack': {
         const leadId = num(payload.leadId);
         const f = leadFacts(leadId);
+        // the rows of this pack in `ps_documents` (the newest of each kind): the site matches its document rows by these ids
+        const packIdNum = num(payload.packId);
+        const rowIds = new Map<string, number>();
+        if (packIdNum !== null && has('ps_documents')) {
+          for (const r of db.prepare('SELECT id, kind FROM ps_documents WHERE pack_id = ? ORDER BY id').all(packIdNum) as { id: number; kind: string }[]) rowIds.set(r.kind, r.id);
+        }
         const docs = [
           { key: 'kp', title: 'Коммерческое предложение', body: str(payload.kp) }, { key: 'estimate', title: 'Смета', body: str(payload.estimate) }, { key: 'contract', title: 'Договор (черновик)', body: str(payload.contract) },
-        ].filter((x) => x.body);
+        ].filter((x) => x.body).map((x) => ({ id: rowIds.get(x.key) ?? null, ...x }));
         return generic(l, payload, `КП: ${str(payload.client) || f.lead?.name || 'клиент'}, ${str(payload.what)}`, {
           text: { body: str(payload.kp), documents: docs }, edit: 'pack', editApproved: status === 'approved' && packRevisable(payload), leadId,
           meta: {
             lead: f.lead, client: f.client,
-            pack: { id: num(payload.packId), direction: str(payload.direction), totalUsd: num(payload.totalUsd), prepayUsd: num(payload.prepayUsd), prepayPercent: num(payload.prepayPercent), stages: Array.isArray(payload.stages) ? payload.stages : null, timeline: str(payload.timeline) || null },
+            pack: { id: num(payload.packId), documentIds: docs.map((x) => x.id).filter((x): x is number => x !== null), direction: str(payload.direction), totalUsd: num(payload.totalUsd), prepayUsd: num(payload.prepayUsd), prepayPercent: num(payload.prepayPercent), stages: Array.isArray(payload.stages) ? payload.stages : null, timeline: str(payload.timeline) || null },
           },
         });
       }

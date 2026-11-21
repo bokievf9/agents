@@ -21,6 +21,8 @@ export interface Brief {
   request: string;
   /** The builder's summary from the site (the chosen package, its total); the package is read from it. */
   estimate?: string;
+  /** The builder link the site sent (the lead's enrichment keeps it): prices the build when the estimate text is missing or cut. */
+  builderLink?: string;
   /** What the client already has: true or false when known, null or absent when nobody asked (the КП then says both are paid by the client). */
   hasDomain?: boolean | null;
   hasHosting?: boolean | null;
@@ -83,16 +85,19 @@ const fmtDate = (ms: number, tz: string): string => {
 const bullets = (items: string[]) => items.map((s) => `- ${s}`).join('\n');
 
 /** The stages of a package (owner decision 2026-11-21): the template of the most expensive part, a small project is two stages 50/50. */
-export const stagesOf = (o: Offer, q: PackageQuote): PaymentStage[] => stagesFor(q.totalUsd, [o.id]);
+export const stagesOf = (o: Offer, q: PackageQuote): PaymentStage[] => stagesFor(q.totalUsd, q.stageIds?.length ? q.stageIds : [o.id]);
 
 /** `| Этап | Что входит | Сумма |`: the stage plan the client pays by; each stage is paid before it starts. */
 export function stageTable(stages: PaymentStage[]): string {
   return ['| Этап | Что входит | Сумма |', '|---|---|---|', ...stages.map((s) => `| Этап ${s.no} | ${s.title.ru} | ${usd(s.amountUsd)} (${s.share}%) |`)].join('\n');
 }
 
+/** A price line: the bundle discount of a builder estimate is negative. */
+export const signed = (n: number): string => (n < 0 ? `-${usd(-n)}` : usd(n));
+
 export function priceTable(q: PackageQuote): string {
   const rows: [string, string][] = [
-    ...q.lines.map((l): [string, string] => [l.label, usd(l.usd)]),
+    ...q.lines.map((l): [string, string] => [l.label, signed(l.usd)]),
     ...(q.lines.length > 1 ? [['Итого', usd(q.totalUsd)] as [string, string]] : []),
     ...(q.monthlyUsd ? [['Ежемесячно (подписка)', `${usd(q.monthlyUsd)} в месяц`] as [string, string]] : []),
     ['Сопровождение (по желанию)', `${usd(supportMonthlyUsd())} в месяц`],
@@ -123,7 +128,7 @@ export function buildDocs(tpl: Templates, o: Offer, q: PackageQuote, b: Brief, w
     line_items: ['| № | Позиция | Стоимость |', '|---|---|---|', ...scope.map((s, i) => `| ${i + 1} | ${s} | входит |`)].join('\n'),
     totals: [
       '| Позиция | USD |', '|---|---|',
-      ...q.lines.map((l) => `| ${l.label} | ${usd(l.usd)} |`),
+      ...q.lines.map((l) => `| ${l.label} | ${signed(l.usd)} |`),
       `| Итого | ${exactLabel(q)} |`,
       `| Сопровождение (по желанию) | ${usd(supportMonthlyUsd())} в месяц |`,
     ].join('\n'),
