@@ -300,8 +300,13 @@ export function createFiraLead(o: FiraLeadOptions): FiraLead {
       }
       if (flags.intent === 'price') st.q.askedPrice = true;
       const ready = !offeredAlready && (propose || flags.ready === true || isEnough(st.q) || flags.intent === 'builder' || flags.intent === 'call' || flags.builder || flags.call);
+      // the honest line of the guards (a price or a date was cut) stays at the end whatever the question rules drop
+      const note = spec.guards.note;
       let reply = stripLinks(words);
+      const noted = Boolean(note) && reply.endsWith(note);
+      if (noted) reply = reply.slice(0, -note.length).trim();
       reply = ready ? withoutTrailingQuestion(reply) : oneQuestion(reply);
+      if (noted) reply = `${reply} ${note}`.trim();
       // text.detect on our own words: flagged text is rewritten once (Haiku), through the same guards again
       const lint = lintReply(reply, lang);
       if (lint.flagged) {
