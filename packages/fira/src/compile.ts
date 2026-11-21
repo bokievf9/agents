@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { LlmSystemBlock, LlmToolDef } from '@fir/core';
 import type { AgentSpec, ModelPolicy, ModelTier, TaskKind } from './spec.js';
+import { secrecyLines } from './secrecy.js';
 import type { ToolRegistry } from './tools.js';
 
 /**
@@ -90,6 +91,7 @@ export function systemText(spec: AgentSpec, toolNames: readonly string[]): strin
     '- Не проси паспорта, пароли и номера карт. Не обсуждай чужих клиентов и их данные.',
   );
   if (company.rights.locked.length) out.push(`- Это решает человек, ты только передаёшь: ${company.rights.locked.join(', ')}.`);
+  out.push('', '## Неразглашение', ...secrecyLines(spec.audience));
   return out.join('\n');
 }
 

@@ -148,6 +148,10 @@ export interface JournalEntry {
   unknown: boolean;
   inputTokens?: number;
   outputTokens?: number;
+  /** Non-disclosure: the turn was a probe (refused by code), sentences the leak guard cut and what they gave away (kinds only, never text). */
+  probe?: boolean;
+  leaked?: number;
+  leakKinds?: string[];
   texts?: { user: string; reply: string };
 }
 

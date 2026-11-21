@@ -17,6 +17,8 @@ export interface Outcome {
   unknown: boolean;
   /** `handoff_owner`: the one line for the owner (the app delivers it, e.g. `hq.alert(kind: 'human')`), and why. */
   owner?: { line: string; reason: string };
+  /** The turn was an attempt to get the inside out (`isProbe`): answered with the refusal, no model call. */
+  probe?: boolean;
 }
 
 export interface ToolCtx {

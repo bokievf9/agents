@@ -1,6 +1,7 @@
 import { errMsg, log, tryChat, turnText, turnToolUses, type LlmBlock, type LlmChatMessage, type LlmClient, type LlmSystemBlock } from '@fir/core';
 import { compile, tierFor, withBudget } from './compile.js';
 import { applyGuards, type GuardContext } from './guards.js';
+import { isProbe, leakGuard, probeReply, type LeakContext } from './secrecy.js';
 import type { AgentSpec, TaskKind } from './spec.js';
 import type { Audience, Journal, Knowledge, KnowledgeHit, Lesson, Lessons, Memory, Mode, PersonProfile } from './stores.js';
 import { BUILTIN_TOOLS, runTool, type Outcome, type ToolCtx, type ToolRegistry } from './tools.js';
@@ -37,6 +38,8 @@ export interface RunDeps {
   /** App tools (override built-ins of the same name). */
   tools?: ToolRegistry;
   guard: GuardContext;
+  /** Names of other clients for the leak guard (`secrecy.ts`); absent: none. */
+  leak?: LeakContext;
   /** USD spent this month by this agent (absent: no budget check). */
   spentUsd?: () => Promise<number>;
   /** Turns of history sent to the model. */
@@ -58,6 +61,8 @@ export interface RunOut {
   fallback: boolean;
   removed: number;
   flagged: string[];
+  /** Sentences the leak guard cut (non-disclosure). */
+  leaked: number;
   fingerprint: string;
 }
 
@@ -112,7 +117,11 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
   let fallback = false;
   let inputTokens = 0;
   let outputTokens = 0;
-  const ruled = deps.before ? await deps.before(conv, ctx) : null;
+  // non-disclosure: a plain attempt to get the inside out is refused by code, before the app's rules and the model (the owner is not refused)
+  const secret = audience !== 'owner';
+  const probe = secret && isProbe(conv.text);
+  if (probe) outcome.probe = true;
+  const ruled = probe ? { reply: probeReply(conv.lang) } : deps.before ? await deps.before(conv, ctx) : null;
   if (ruled) {
     reply = ruled.reply;
     if (ruled.handoff) outcome.handoff = ruled.handoff;
@@ -155,7 +164,9 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
     fallback = true;
     outcome.handoff ??= 'ответ снят охранниками';
   }
-  const guarded = g.text || fb(conv.lang).handoff;
+  // the leak guard on everything that did not come from code: paths, env names, keys, IPs, /admin, other clients' names
+  const lk = secret && !ruled && g.text ? leakGuard(g.text, conv.lang, deps.leak) : { text: g.text, cut: 0, kinds: [] as string[] };
+  const guarded = lk.text || fb(conv.lang).handoff;
   const text = deps.after ? (await deps.after(guarded, outcome, conv)).trim() || guarded : guarded;
 
   // memory: live keeps texts liveDays, anon anonHours (a captured contact promotes it), demo nothing
@@ -171,12 +182,13 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
       companyId, agentId, specVersion: spec.version, conversationId: conv.id, at: now, mode: conv.mode, tier: tier ?? 'none', rounds,
       tools: [...outcome.used], handoff: Boolean(outcome.handoff), contact: Boolean(outcome.contact), removed: g.removed, flagged: g.flagged.length,
       fallback, unknown: outcome.unknown, ...(inputTokens || outputTokens ? { inputTokens, outputTokens } : {}),
+      ...(probe ? { probe: true } : {}), ...(lk.cut ? { leaked: lk.cut, leakKinds: [...lk.kinds] } : {}),
       ...(conv.mode === 'live' ? { texts: { user: conv.text, reply: text } } : {}),
     });
   } catch (e) {
     // a store that fails never loses the reply: the person still gets it
     log('warn', 'fira: store failed after a turn', { agent: agentId, err: errMsg(e) });
   }
-  log('info', 'fira turn', { agent: agentId, v: spec.version, rounds, tools: outcome.used.length, fallback, handoff: Boolean(outcome.handoff) });
-  return { reply: text, outcome, rounds, tier, fallback, removed: g.removed, flagged: g.flagged, fingerprint: c.fingerprint };
+  log('info', 'fira turn', { agent: agentId, v: spec.version, rounds, tools: outcome.used.length, fallback, handoff: Boolean(outcome.handoff), ...(probe ? { probe: true } : {}), ...(lk.cut ? { leaked: lk.cut } : {}) });
+  return { reply: text, outcome, rounds, tier, fallback, removed: g.removed, flagged: g.flagged, leaked: lk.cut, fingerprint: c.fingerprint };
 }
