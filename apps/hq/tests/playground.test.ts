@@ -15,10 +15,10 @@ function setup(handler?: (req: LlmRequest, n: number) => string, o: { llm?: OffL
   ensureCabinetTables(db);
   db.prepare("INSERT INTO cab_clients (id, email, name, created_at, updated_at) VALUES (1, 'liza@example.com', 'Лиза', 1, 1), (2, 'other@example.com', 'Другой', 1, 1)").run();
   const llm = o.llm ?? new MockLlm(handler ?? (() => JSON.stringify({ reply: 'Здравствуйте!' })));
-  const handoffs: { clientId: number; text: string }[] = [];
+  const handoffs: { clientId: number; agentId: number }[] = [];
   const owner: string[] = [];
   const pg = new Playground({
-    db, now: () => clock.t, tz: () => 'Asia/Dushanbe', llm, secret: 'unit-secret', handoff: (clientId, text) => void handoffs.push({ clientId, text }), notifyOwner: (t) => void owner.push(t),
+    db, now: () => clock.t, tz: () => 'Asia/Dushanbe', llm, secret: 'unit-secret', handoff: (clientId, agentId) => void handoffs.push({ clientId, agentId }), notifyOwner: (t) => void owner.push(t),
     uploadText: (cid, uid) => (cid === 1 && uid === 'up_text_ok_1' ? { name: 'faq.txt', text: 'Доставка по городу бесплатно от 50 долларов.' } : null),
   });
   return { db, clock, pg, handoffs, owner, llm: llm as MockLlm };
@@ -181,9 +181,11 @@ describe('chat: the gateway LLM with memory per conversation and the tools', () 
     expect(owner.join()).not.toContain('@anvar');
     const r4 = await pg.chatAdmin(1, a.id, { conversationId: 'conv-11111111', text: 'Позовите человека' });
     expect(r4.body.usedTools).toEqual(['handoff_human']);
-    expect(handoffs).toHaveLength(1);
-    expect(handoffs[0]!.text).toMatch(/передал разговор человеку/);
-    expect(handoffs[0]!.text).toContain('просит живого сотрудника');
+    expect(handoffs).toEqual([{ clientId: 1, agentId: a.id }]);
+    // P-21: the line is the client's (his agent thread): the reason, the visitor's words and the contact he gave in this conversation; a test chat is not mailed
+    const line = db.prepare("SELECT text, notify FROM cab_tmsgs WHERE thread = ? AND \"from\" = 'agent' ORDER BY id DESC LIMIT 1").get(`agent-${a.id}`) as { text: string; notify: number };
+    expect(line.text).toMatch(/^Посетитель просит человека \(просит живого сотрудника\), агент «[^»]+» передал разговор вам\. Его сообщение: «Позовите человека»\. Контакт: Анвар, @anvar\./);
+    expect(line.notify).toBe(0);
     expect(pg.leadsOf(1, a.id).body.items).toHaveLength(1);
     const counts = (pg.journalOf(1, a.id).body.items as any[])[0].counts;
     expect(counts).toMatchObject({ message: 4, handoff: 1, lead_captured: 1, 'tool:faq_search': 1, 'tool:booking_slots': 1 });

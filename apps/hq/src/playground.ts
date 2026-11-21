@@ -7,7 +7,7 @@ import { addThreadMessage, ensureCabinetTables } from './cabinet.js';
  * The playground (2026-11-22): an agent instance per cabinet client, for those who do not need a website. Its persona is built from the answers of the
  * client's builder lead (niche, goals, tone, company); it answers through the gateway LLM with memory per conversation and may use five tools:
  * the FAQ and knowledge notes, booking slots (a stub: fixed slots, nothing is booked in a real calendar), lead capture (into the client's own list),
- * and a handoff to a human (a message into the support thread). Limits per day, `draft` until the client turns it `live`. A live agent is reachable
+ * and a handoff to a human (P-21: a line to the agent's OWNER, the client, in his `agent-<id>` thread with the visitor's words and contact; Fir Tech's support is not involved). Limits per day, `draft` until the client turns it `live`. A live agent is reachable
  * from the client's own site through the public `POST /agent/:publicId/chat` with the per-agent token. A DEMO persona per niche serves the builder preview
  * (no token, no memory beyond the browser session, nothing stored). The journal keeps counts only, never texts. Contract: `docs/admin-crm-api.md`.
  */
@@ -287,8 +287,11 @@ export interface PlaygroundDeps {
   gate?: { llmAllowed(): boolean; llmUsed(): void } | undefined;
   /** The client's text knowledge (`uploadId` of a txt, md or csv upload) for `POST .../knowledge`. */
   uploadText?: ((clientId: number, uploadId: string) => { name: string; text: string } | null) | undefined;
-  /** The handoff: a message into the client's support thread and a ticket for the Support head. */
-  handoff?: ((clientId: number, text: string) => void) | undefined;
+  /**
+   * P-21: told after a handoff (the line is already in the client's agent thread): the app puts a fact into the owner's inbox. No ticket for Fir Tech's support:
+   * the visitor is the client's customer, the client answers him.
+   */
+  handoff?: ((clientId: number, agentId: number) => void) | undefined;
   /** An owner inbox line (counts and names of agents only, no visitor texts). */
   notifyOwner?: ((text: string) => void) | undefined;
   /** Lets the app wake or journal; absent in tests. */
@@ -626,7 +629,7 @@ export class Playground {
     const knowledge = this.db.prepare('SELECT title, text FROM pg_knowledge WHERE agent_id = ? ORDER BY id').all(a.id) as { title: string; text: string }[];
     const ctx: ToolCtx = {
       agent: a, conv: o.conversationId, tools, knowledge, used: [], store: true,
-      capture: (c) => this.capture(a, o.conversationId, c), book: (c) => this.book(a, o.conversationId, c), handoff: (reason) => this.handoff(a, o.conversationId, reason), slots: () => slotsFor(t, this.d.tz()),
+      capture: (c) => this.capture(a, o.conversationId, c), book: (c) => this.book(a, o.conversationId, c), handoff: (reason) => this.handoff(a, o.conversationId, reason, o.text, o.channel), slots: () => slotsFor(t, this.d.tz()),
     };
     const out = await this.think(ctx, a.persona, history.map((m) => ({ role: m.role, content: m.text })), o.text);
     this.db.prepare('INSERT INTO pg_messages (agent_id, conv_id, role, text, at) VALUES (?, ?, ?, ?, ?)').run(a.id, o.conversationId, 'user', o.text, t);
@@ -714,9 +717,24 @@ export class Playground {
     addThreadMessage(this.db, this.d.now(), { clientId: a.client_id, thread: `agent-${a.id}`, from: 'agent', text: `Заявка на время ${c.slot}: ${c.name || 'без имени'}, ${c.contact || 'контакт не указан'}` });
   }
 
-  private handoff(a: AgentRow, conv: string, reason: string): void {
+  /**
+   * P-21: the visitor asked for a person. The agent's owner (the client) gets a line in his agent thread with the visitor's message and the contact the visitor gave in
+   * this conversation (`capture_lead`), and an email «новое сообщение» (P-13) when it came from his site (`widget`); the journal counts it. No Fir Tech ticket and
+   * no auto-answer: the visitor is the client's customer. A test chat of the client himself (`cabinet`) gets the line without the email.
+   */
+  private handoff(a: AgentRow, conv: string, reason: string, text: string, channel: 'cabinet' | 'widget'): void {
     this.count(a.id, 'handoff');
-    this.d.handoff?.(a.client_id, `Агент «${a.name}» передал разговор человеку (${reason}). Разговор ${conv}, вкладка «Ваш агент».`);
+    const lead = this.db.prepare('SELECT name, contact FROM pg_leads WHERE agent_id = ? AND conv_id = ? ORDER BY id DESC LIMIT 1').get(a.id, conv) as { name: string; contact: string } | undefined;
+    const said = text.replace(/\s+/g, ' ').trim().slice(0, 300);
+    const line = [
+      `Посетитель просит человека (${reason || 'по запросу'}), агент «${a.name}» передал разговор вам.`,
+      said ? `Его сообщение: «${said}».` : '',
+      lead ? `Контакт: ${lead.name ? `${lead.name}, ` : ''}${lead.contact}.` : 'Контакт посетитель не оставил: ответить можно, когда он напишет в этот разговор снова.',
+      `Разговор ${conv}, вкладка «Ваш агент».`,
+    ].filter(Boolean).join(' ');
+    addThreadMessage(this.db, this.d.now(), { clientId: a.client_id, thread: `agent-${a.id}`, from: 'agent', text: line, notify: channel === 'widget' });
+    this.d.journal?.('playground', 'agent_handoff', String(a.id));
+    this.d.handoff?.(a.client_id, a.id);
   }
 
   // ---- the builder preview ----

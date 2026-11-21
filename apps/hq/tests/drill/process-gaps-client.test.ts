@@ -357,3 +357,40 @@ describe('P-02: HQ is the one channel for a site lead; the site\'s booked window
   }, 60_000);
 });
 
+describe('P-21: the handoff of a client\'s agent reaches the agent\'s owner, not Fir Tech\'s support', () => {
+  it('a visitor on the client\'s site asks for a person: the agent thread gets his words and contact, the client an email; no ticket, no auto-answer', async () => {
+    const { cid, leadId } = await cabinetLead();
+    const created = await w.adm('POST', `/admin/clients/${cid}/agents`, { leadId, company: 'Салон Gaps', niche: 'салон' });
+    expect(created.status, created.text).toBe(200);
+    const agent = created.json.item;
+    await w.adm('PATCH', `/admin/clients/${cid}/agents/${agent.id}`, { state: 'live', channels: { siteWidget: 'https://gaps.example' } });
+    const conv = 'visitor-conv-0001';
+    // the visitor left his contact earlier in this conversation (capture_lead)
+    w.db.prepare('INSERT INTO pg_leads (agent_id, conv_id, name, contact, note, at) VALUES (?, ?, ?, ?, ?, ?)').run(agent.id, conv, 'Мадина', '+992 93 000 11 22', '', w.hq.now());
+    const tickets = () => (w.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'cs_tickets'").get() ? (w.db.prepare('SELECT COUNT(*) n FROM cs_tickets').get() as { n: number }).n : 0);
+    const before = tickets();
+    w.emails.length = 0;
+    // the model is down: no FAQ hit, the agent hands the visitor over
+    w.state.down = true;
+    const r = await w.http('POST', `/agent/${agent.publicId}/chat`, { conversationId: conv, text: 'Можно поговорить с администратором?' }, { 'x-agent-token': created.json.token, origin: 'https://gaps.example' });
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as any).usedTools).toEqual(['handoff_human']);
+    w.state.down = false;
+    const line = w.db.prepare("SELECT text, notify FROM cab_tmsgs WHERE thread = ? AND \"from\" = 'agent' ORDER BY id DESC LIMIT 1").get(`agent-${agent.id}`) as { text: string; notify: number };
+    expect(line.text).toContain('Посетитель просит человека (нет ответа в базе знаний)');
+    expect(line.text).toContain('Его сообщение: «Можно поговорить с администратором?»');
+    expect(line.text).toContain('Контакт: Мадина, +992 93 000 11 22.');
+    expect(line.notify).toBe(1);
+    // nothing in Fir Tech's support: no ticket, no Support task, no line in the support thread
+    expect(tickets()).toBe(before);
+    expect(w.db.prepare("SELECT COUNT(*) n FROM cab_tmsgs WHERE thread = 'support'").get()).toEqual({ n: 0 });
+    await w.beat();
+    expect(w.queue.pending().some((p) => p.kind === 'support_answer')).toBe(false);
+    // the journal counts it; the owner of Fir Tech gets the fact only; the client gets the email «от вашего агента»
+    expect((w.db.prepare("SELECT n FROM pg_journal WHERE agent_id = ? AND kind = 'handoff'").get(agent.id) as { n: number }).n).toBe(1);
+    expect(await w.cabinet!.mail!.messageTick()).toBe(1);
+    expect(mails('Новое сообщение в кабинете Fir Tech')[0]!.text).toContain('от вашего агента');
+    expect(mails('Новое сообщение в кабинете Fir Tech')[0]!.text).not.toContain('Мадина');
+    expect(g.leaks(['Мадина', '+992 93 000 11 22', 'Можно поговорить'])).toEqual([]);
+  }, 60_000);
+});

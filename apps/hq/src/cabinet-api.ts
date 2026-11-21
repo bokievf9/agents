@@ -1,9 +1,7 @@
-import type { Db, LlmClient, Tools } from '@fir/core';
+import type { LlmClient, Tools } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import type { BillingWorker } from '@fir/worker-billing';
-import { CsStore } from '@fir/worker-customer-support';
 import { CabDocs } from './cab-docs.js';
-import { addThreadMessage } from './cabinet.js';
 import { CabThreads } from './cab-threads.js';
 import { ClientMail } from './client-mail.js';
 import { Playground } from './playground.js';
@@ -60,7 +58,8 @@ export function buildCabinet(o: CabinetDeps): CabinetApi {
   });
   const playground = new Playground({
     db: o.hq.db, now, tz: () => o.hq.tz, llm: o.llm, secret: o.secret ?? o.mediaSecret, gate: o.gate, uploadText: (cid, uid) => threads.uploadText(cid, uid), notifyOwner,
-    handoff: supportHandoff(o.hq.db, now, { cabinetTicket, notifyOwner }),
+    // P-21: the handoff of a client's agent goes to the client (his agent thread); the owner only hears the fact
+    handoff: (clientId, agentId) => notifyOwner(`Агент #${agentId} клиента ${clientId} передал разговор посетителя владельцу агента (тред агента в кабинете клиента)`),
     journal: (agent, action, detail) => o.hq.log(agent, action, 'agent', detail),
   });
   ref.pg = playground;
@@ -131,17 +130,3 @@ export function createCabinetApi(m: { docs: CabDocs; threads: CabThreads; playgr
   };
 }
 
-/**
- * The handoff of an agent (and any system line for the client's support thread): a message in the support thread, a Support ticket in the usual flow. The
- * ticket text carries the line; the answer the owner approves comes back into the same thread.
- */
-export function supportHandoff(db: Db, now: () => number, deps: { cabinetTicket?: (t: { id: number; name: string; text: string; telegram: string }) => void; notifyOwner?: (text: string) => void }) {
-  return (clientId: number, text: string): void => {
-    const c = db.prepare('SELECT id, email, name, telegram FROM cab_clients WHERE id = ?').get(clientId) as { id: number; email: string; name: string; telegram: string } | undefined;
-    if (!c) return;
-    const tk = new CsStore(db, now).addCabinetTicket({ clientName: c.name || c.email, contact: c.email, text, thread: 'support' });
-    addThreadMessage(db, now(), { clientId, thread: 'support', from: 'agent', text });
-    deps.notifyOwner?.(`Агент клиента ${c.name || c.email} передал разговор человеку`);
-    deps.cabinetTicket?.({ id: tk.id, name: tk.clientName, text: tk.text, telegram: c.telegram });
-  };
-}
