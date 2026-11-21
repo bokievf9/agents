@@ -3,6 +3,7 @@ import { errMsg, log, type ApprovalQueue } from '@fir/core';
 import type { Hq, Task } from '@fir/hq';
 import { openBuilderTasks } from './bridge.js';
 import type { Director } from './director.js';
+import type { DrillStatus } from './drill.js';
 import { createCrm } from './admin-crm.js';
 import type { CabinetApi } from './cabinet-api.js';
 import type { Calls } from './calls.js';
@@ -27,6 +28,8 @@ export interface AdminDeps {
   commandNames: string[];
   /** `/drill` of the Drill (GET: report, POST: the argument). */
   drill?: (arg: string) => Promise<string>;
+  /** The drill table as data (`GET /admin/processes`). */
+  drillStatus?: () => DrillStatus;
   now?: () => number;
   /** The Support head drafts the answer to a cabinet ticket (the row is already stored). Fire and forget. */
   cabinetTicket?: (t: { id: number; name: string; text: string; telegram: string; leadId?: number }) => Promise<unknown>;
@@ -111,7 +114,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   const history = createDirectorHistory(hq.db, now);
   const pult = createPult({
     hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply,
-    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange, settings: d.settings, tools: d.tools, ...(d.cabinet ? { cabinet: d.cabinet.docs } : {}), ...(d.calls ? { calls: d.calls } : {}),
+    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange, settings: d.settings, tools: d.tools, ...(d.drill && d.drillStatus ? { drill: { command: d.drill, status: d.drillStatus } } : {}), ...(d.cabinet ? { cabinet: d.cabinet.docs } : {}), ...(d.calls ? { calls: d.calls } : {}),
   });
 
   const maxTaskId = () => (hq.db.prepare('SELECT COALESCE(MAX(id), 0) m FROM tasks').get() as { m: number }).m;

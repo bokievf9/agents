@@ -69,6 +69,15 @@ const DEPT_ORDER = ['marketing', 'sales', 'support', 'production', 'backoffice']
 type State = 'ok' | 'wait' | 'fail' | 'run';
 const ICON: Record<State, string> = { ok: '✅', wait: '⚠️', fail: '❌', run: '⏳' };
 
+export interface DrillStatus {
+  state: 'none' | 'running' | 'done';
+  startedAt: string | null;
+  elapsedMs: number;
+  counts: Record<'ok' | 'wait' | 'fail' | 'run', number>;
+  openApprovals: number;
+  rows: { worker: string; title: string; state: 'ok' | 'wait' | 'fail' | 'run'; ms: number; text: string }[];
+}
+
 interface Row { worker: string; title: string; state: State; ms: number; text: string; missing?: boolean }
 
 const oneLine = (s: string, n: number) => {
@@ -260,6 +269,24 @@ export class Drill {
       }
     }
     return rows;
+  }
+
+  /** The same rows as the table of `/drill report`, as data for the Пульт (`GET /admin/processes`): no side effects except `advance()`. */
+  status(): DrillStatus {
+    const started = Number(this.hq.setting(STARTED) || 0);
+    if (!this.drillTasks().length && !started) return { state: 'none', startedAt: null, elapsedMs: 0, counts: { ok: 0, wait: 0, fail: 0, run: 0 }, rows: [], openApprovals: 0 };
+    this.advance();
+    const rows = this.rows();
+    const counts = { ok: 0, wait: 0, fail: 0, run: 0 };
+    for (const r of rows) counts[r.state]++;
+    const open = this.openApprovals(this.family(this.drillTasks()).map((t) => t.id));
+    return {
+      state: counts.run > 0 && !rows.every((r) => r.state !== 'run' || r.missing) ? 'running' : 'done',
+      startedAt: started ? new Date(started).toISOString() : null,
+      elapsedMs: started ? this.hq.now() - started : 0,
+      counts, openApprovals: open,
+      rows: rows.map((r) => ({ worker: r.worker, title: r.title, state: r.state, ms: r.ms, text: r.text })),
+    };
   }
 
   reportText(): string {

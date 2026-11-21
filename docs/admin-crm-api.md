@@ -822,3 +822,21 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 - `POST /admin/agents/:id/instructions` тело `{ text, note? }` (1..20000 знаков, `note` до 200, лишние поля 400 `invalid`) → новая версия, ответ как у карточки. Первая правка агента с непустыми инструкциями сначала сохраняет прежний текст как v1 (`actor: "seed"`), так что откат к исходному всегда возможен. Тот же текст: 409 `unchanged`. Голова читает инструкции из базы при каждом использовании, правка действует сразу. Журнал: `instructions_changed`, актор `owner`.
 - `POST /admin/agents/:id/instructions/rollback` тело `{ version, note? }` → создаёт НОВУЮ версию с текстом выбранной (история не стирается), ответ как у карточки. 404 `unknown_version`, 409 `unchanged` (выбранная версия уже действует).
 - Версии хранятся в таблице `instruction_versions` (`packages/hq/src/schema.ts`); `Hq.setInstructions` пишет их для всех путей (Пульт, правило Директора, `reload-instructions`).
+
+## Processes (2026-11-23, ветка `hq-processes`)
+Раздел HQ «Processes»: карта цепочек процессов (`process-audit`) со здоровьем каждого шага. Всё под `x-admin-token`, код `apps/hq/src/pult-processes.ts`.
+
+`GET /admin/processes` → `{ ok, generatedAt, windowDays: 7, counts: {ok, warn, fail, idle}, chains, drill }`:
+```json
+{ "chains": [ { "id": "client", "title": "Заявка, КП, договор, оплата, производство, приёмка", "health": "warn",
+    "steps": [ { "id": "lead", "title": "Заявка принята", "hint": "…", "health": "fail", "lastOkAt": "2026-11-22T10:00:00.000Z",
+                 "failures7d": 1, "stuck": 0, "lastFailure": { "at": "2026-11-22T11:00:00.000Z", "text": "Сбой: шаблон [цена]" } } ] } ],
+  "drill": { "state": "none|running|done", "startedAt": null, "elapsedMs": 0, "openApprovals": 0, "counts": {"ok":0,"wait":0,"fail":0,"run":0},
+             "rows": [ { "worker": "lead-intake", "title": "Менеджер заявок", "state": "ok|wait|fail|run", "ms": 4200, "text": "готово" } ] } }
+```
+- Цепочки (`id`): `client` (заявка, КП у клиента, КП принято, договор, подпись, счёт, оплата, проект, этап принят, акт), `support` (тикет, ответ в SLA 4 ч), `content` (тренды, материал, публикация), `letters` (письма клиентам), `infra` (рутины, одобрения).
+- Здоровье шага: `fail` = за 7 дней были сбои и последний позже последнего успеха (или успеха нет); `warn` = были сбои или есть зависшие (порог на шаг: письмо 1 ч, ответ 4 ч, КП или договор без реакции 7 дней, проверка просрочки счёта и вех); `idle` = данных ещё нет; `ok` иначе. Здоровье цепочки = худшее из шагов. Данные только из таблиц HQ (`tasks`, `cab_documents`, `bl_invoices`, `pm_*`, `cs_tickets`, `email_failures`, `task_approvals`, `routines`); задачи с тегом `drill` и тестовый клиент «Тест учения» не считаются. Текстов клиентов нет, только причина сбоя в одну строку.
+- `drill`: `null`, если дрилл не подключён; иначе таблица учений как данные (те же строки, что у `/drill report`).
+
+`POST /admin/processes/drill` `{ "action": "start" | "clear" }` → `{ ok, action, text, drill }`. `start` это существующие учения (`/drill`): тестовые задачи с тегом `drill` и тестовый клиент «Тест учения», клиенту ничего не уходит, повторный `start` во время работы ничего не создаёт; `clear` это `/drill clear` (задачи, одобрения и тестовые данные удаляются). 400 `bad_request` для другого тела, 503 `unavailable` без дрилла.
+
