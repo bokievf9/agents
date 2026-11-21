@@ -258,6 +258,11 @@ export function createPultCrm(d: PultCrmDeps) {
           if (m.status !== 'done') await d.channel.capture(() => d.director.onCommand('mready', `${id} ${m.stageNo}`));
         }
       } else if (b.action === 'complete_milestone') {
+        // P-15: a stage of the payment plan is accepted for the client only when it waits for his acceptance (paid and done)
+        if (m.stageNo !== null && m.acceptedAt === null) {
+          if (m.paidAt === null) return fail(409, 'not_paid', { hint: 'Этап не оплачен: принять его нельзя.' });
+          if (m.status !== 'done') return fail(409, 'not_ready', { hint: 'Этап ещё в работе: сначала «Этап готов» (ready_milestone), клиент получит «Принять этап».' });
+        }
         // the same path as `/mdone`: a «Сдача» starts the deploy, the last milestone closes the project (idempotent: a closed one says so);
         // a stage of the payment plan is ACCEPTED (the next invoice is proposed), done or not
         if (m.stageNo !== null ? m.acceptedAt === null : m.status !== 'done') await d.channel.capture(() => d.director.onCommand('mdone', `${id} ${m.stageNo ?? m.kind}`));
@@ -269,6 +274,16 @@ export function createPultCrm(d: PultCrmDeps) {
       }
     } else if (b.action === 'set_status') {
       if (!(PROJECT_STATUSES as readonly string[]).includes(b.status)) return fail(400, 'invalid', { allowed: PROJECT_STATUSES });
+      // P-15: a project of the payment plan closes through the acceptance of its last stage (the act, the last invoice paid), never by a status flip
+      if (b.status === 'done') {
+        const open = pm.stageMilestones(id).filter((x) => x.acceptedAt === null);
+        if (open.length) {
+          return fail(409, 'stages_open', {
+            stages: open.map((x) => x.stageNo),
+            hint: 'Проект закрывается приёмкой последнего этапа: этап готов (ready_milestone), клиент принимает (или complete_milestone), акт уходит сам. Последний этап должен быть оплачен.',
+          });
+        }
+      }
       pm.setStatus(id, b.status as (typeof PROJECT_STATUSES)[number]);
       hq.log('owner', 'project_status', 'project', String(id), b.status);
     } else {

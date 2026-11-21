@@ -336,3 +336,37 @@ describe('P-08: a КП of several products', () => {
     expect(productDirections(['site', 'nope', 'site', 'admin'], 'site')).toEqual(['site', 'admin']);
   });
 });
+
+describe('P-15: the owner accepts only a stage that waits for acceptance; a project closes through its last stage', () => {
+  it('/mdone and complete_milestone refuse a running or unpaid stage; set_status done refuses open stages; ready then accept works', async () => {
+    const { cid } = await leadWithQuote();
+    const pid = await toRunningProject(cid);
+    const pm = new PmStore(w.db, w.hq.now);
+    const s1 = pm.stageMilestone(pid, 1)!;
+    const s2 = pm.stageMilestone(pid, 2)!;
+    w.emails.length = 0;
+    // running stage 1: the owner cannot accept it for the client
+    expect(await w.production.command('mdone', `${pid} 1`)).toContain(`/mready ${pid} 1`);
+    const running = await w.adm('POST', `/admin/crm/projects/${pid}`, { action: 'complete_milestone', milestoneId: s1.id });
+    expect(running.status).toBe(409);
+    expect(running.json).toMatchObject({ error: 'not_ready', hint: expect.stringContaining('ready_milestone') });
+    expect((await w.adm('POST', `/admin/crm/projects/${pid}`, { action: 'complete_milestone', milestoneId: s2.id })).json.error).toBe('not_paid');
+    expect(pm.stageMilestone(pid, 1)!.acceptedAt).toBeNull();
+    await w.cabinet!.docs.idle();
+    expect(w.emails).toEqual([]); // the client got no «Этап принят»
+    // closing the project by status is refused while stages are open
+    const close = await w.adm('POST', `/admin/crm/projects/${pid}`, { action: 'set_status', status: 'done' });
+    expect(close.status).toBe(409);
+    expect(close.json.error).toBe('stages_open');
+    expect(close.json.stages).toEqual(pm.stageMilestones(pid).map((m) => m.stageNo));
+    expect(pm.project(pid)!.status).not.toBe('done');
+    // other statuses still work
+    expect((await w.adm('POST', `/admin/crm/projects/${pid}`, { action: 'set_status', status: 'paused' })).status).toBe(200);
+    expect((await w.adm('POST', `/admin/crm/projects/${pid}`, { action: 'set_status', status: 'active' })).status).toBe(200);
+    // ready, then the owner accepts for the client: allowed now
+    expect((await w.adm('POST', `/admin/crm/projects/${pid}`, { action: 'ready_milestone', milestoneId: s1.id })).status).toBe(200);
+    const acc = await w.adm('POST', `/admin/crm/projects/${pid}`, { action: 'complete_milestone', milestoneId: s1.id });
+    expect(acc.status, acc.text).toBe(200);
+    expect(pm.stageMilestone(pid, 1)!.acceptedAt).toBeTruthy();
+  }, 120_000);
+});

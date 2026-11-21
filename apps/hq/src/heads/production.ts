@@ -191,8 +191,8 @@ export class ProductionHead {
   }
 
   /**
-   * A stage is accepted: by the owner (`/mdone <project> <stage>`) or by the client in the cabinet. Once only. The stage must be paid; the
-   * client can accept only a finished stage (`done`), the owner may accept a running one. Accepting proposes the invoice of the NEXT stage
+   * A stage is accepted: by the owner (`/mdone <project> <stage>`) or by the client in the cabinet. Once only. The stage must be paid and finished
+   * (`done`, the client's «awaiting acceptance»), for the owner too (P-15). Accepting proposes the invoice of the NEXT stage
    * (Support, a locked card with the pay link); the invoice of the last stage also puts the handover task on hold until it is paid;
    * accepting the last stage closes the project.
    */
@@ -203,7 +203,16 @@ export class ProductionHead {
     if (!p || !m) return { status: 'unknown', text: 'Такого этапа нет.' };
     if (m.acceptedAt !== null) return { status: 'already', text: `Этап ${stageNo} уже принят.` };
     if (m.paidAt === null) return { status: 'not_paid', text: `Этап ${stageNo} ещё не оплачен: принять его нельзя.` };
-    if (by === 'client' && m.status !== 'done') return { status: 'not_ready', text: `Этап ${stageNo} ещё в работе: принять его можно, когда он будет готов.` };
+    // P-15: nobody accepts a stage that is still running, the owner included: the client would read «Этап принят» for work he never saw.
+    // The owner first marks it ready (`/mready`, Пульт `ready_milestone`): the client gets «Принять этап»; then either of them accepts.
+    if (m.status !== 'done') {
+      return {
+        status: 'not_ready',
+        text: by === 'client'
+          ? `Этап ${stageNo} ещё в работе: принять его можно, когда он будет готов.`
+          : `Этап ${stageNo} ещё в работе (не ждёт приёмки): сначала отметьте его готовым командой /mready ${p.id} ${stageNo}, клиент получит «Принять этап».`,
+      };
+    }
     if (!store.acceptStage(m.id)) return { status: 'already', text: `Этап ${stageNo} уже принят.` };
     this.hq.log(by, 'stage_accepted', 'project', String(p.id), `stage ${stageNo}`);
     const all = store.stageMilestones(p.id);
