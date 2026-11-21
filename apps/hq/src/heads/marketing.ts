@@ -441,7 +441,8 @@ export class MarketingHead implements ApprovalEditor {
   private async decide(task: Task): Promise<{ action: Action; topic?: string; type?: 'clip' | 'carousel' | 'post' | 'story' }> {
     const metaAction = task.meta.action;
     if (typeof metaAction === 'string' && ACTIONS.includes(metaAction as Action)) {
-      return { action: metaAction as Action, ...(typeof task.meta.topic === 'string' ? { topic: task.meta.topic } : {}) };
+      const t = task.meta.type;
+      return { action: metaAction as Action, ...(typeof task.meta.topic === 'string' ? { topic: task.meta.topic } : {}), ...(t === 'clip' || t === 'carousel' || t === 'post' || t === 'story' ? { type: t } : {}) };
     }
     const res = await tryJson(
       this.llmFor(HEAD_ID, task.id),
@@ -909,6 +910,40 @@ export class MarketingHead implements ApprovalEditor {
       meta: { action: 'revise_item', fromItemId: itemId, feedback: note.slice(0, 2000), previous: item.text, reviseOf: reviewId, reviseNote: note.slice(0, 2000) },
     });
     this.hq.log('owner', 'revision_requested', 'content_item', String(itemId));
+    this.hq.wake(HEAD_ID, 'task');
+    return { taskId: t.id };
+  }
+
+  /**
+   * Content Studio (`POST /admin/content/orders`): the owner's order for the Content Maker. `prompt`: one new item on a free topic (`type`, default a reel);
+   * `variant`: another take on an existing item (new hook and angle); `niche`: the same item rewritten for a niche. The last two are a «Правки»-style task
+   * (`revise_item`, `meta.reviseOf` = the review id of the original, so the review center links the new card to it); all three carry `meta.studio` for the order list.
+   * null: the original is missing or is a profile kit.
+   */
+  requestStudioOrder(o: { mode: 'prompt'; prompt: string; type?: 'clip' | 'post' | 'carousel' | 'story' } | { mode: 'variant' | 'niche'; itemId: number; reviewId: string; note?: string; niche?: { id: string; name: string } }): { taskId: number } | null {
+    if (o.mode === 'prompt') {
+      const t = this.hq.createTask({
+        title: `Заказ владельца: ${o.prompt.replace(/\s+/g, ' ')}`.slice(0, 200), body: o.prompt.slice(0, 1000), dept: MARKETING, creator: 'owner',
+        meta: { action: 'topic', topic: o.prompt.slice(0, 300), type: o.type ?? 'clip', source: 'owner', studio: { mode: 'prompt', prompt: o.prompt.slice(0, 1000), type: o.type ?? 'clip' } },
+      });
+      this.hq.log('owner', 'studio_order', 'task', String(t.id), 'prompt');
+      this.hq.wake(HEAD_ID, 'task');
+      return { taskId: t.id };
+    }
+    const item = this.store().item(o.itemId);
+    if (!item || item.type === 'profile') return null;
+    const note = (o.note ?? '').trim().slice(0, 500);
+    const feedback = (o.mode === 'variant'
+      ? `Сделай другой вариант этого материала: та же тема и формат, другой хук и другой угол, не повторяй прежний текст.${note ? ` Пожелание: ${note}` : ''}`
+      : `Перепиши этот материал под нишу «${o.niche?.name ?? ''}»: примеры, боли и язык её аудитории, тот же формат и та же идея.${note ? ` Пожелание: ${note}` : ''}`).slice(0, 2000);
+    const t = this.hq.createTask({
+      title: `${o.mode === 'variant' ? 'Ещё вариант' : `Под нишу ${o.niche?.name ?? ''}`} к материалу #${o.itemId}`.slice(0, 200), body: feedback.slice(0, 1000), dept: MARKETING, creator: 'owner',
+      meta: {
+        action: 'revise_item', fromItemId: o.itemId, feedback, previous: item.text, reviseOf: o.reviewId, reviseNote: feedback,
+        studio: { mode: o.mode, fromItemId: o.itemId, ...(o.niche ? { niche: o.niche.id } : {}), ...(note ? { prompt: note } : {}) },
+      },
+    });
+    this.hq.log('owner', 'studio_order', 'task', String(t.id), o.mode);
     this.hq.wake(HEAD_ID, 'task');
     return { taskId: t.id };
   }
