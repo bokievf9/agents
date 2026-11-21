@@ -8,7 +8,7 @@ import type { CabinetApi } from './cabinet-api.js';
 import type { Calls } from './calls.js';
 import { createPult } from './pult.js';
 import type { BillingWorker } from '@fir/worker-billing';
-import type { ClientChannel } from './client/channel.js';
+import type { ChatsClient } from './chats.js';
 import type { MarketingHead } from './heads/marketing.js';
 import { buildOffice } from './office.js';
 import type { OwnerChannel } from './presence.js';
@@ -36,7 +36,7 @@ export interface AdminDeps {
   acceptStage?: (projectId: number, stageNo: number) => Promise<{ status: 'accepted' | 'already' | 'not_paid' | 'not_ready' | 'unknown'; text: string }>;
   /** «Пульт v3»: Billing (reminder text, pay links), the client bot (replies to Telegram leads), the website chat (replies to web leads). */
   billing?: BillingWorker;
-  client?: Pick<ClientChannel, 'send'>;
+  client?: ChatsClient;
   webReply?: (sessionId: string, text: string) => boolean;
   /** «Пульт v3» content calendar: the Marketing head (approve/reject/revise/rerender run its code) and the folder of rendered files (`DATA_DIR/renders`). */
   marketing?: MarketingHead;

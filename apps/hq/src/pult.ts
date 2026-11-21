@@ -3,7 +3,6 @@ import type { Hq } from '@fir/hq';
 import type { BillingWorker } from '@fir/worker-billing';
 import type { AdminReply } from './admin.js';
 import type { createCrm } from './admin-crm.js';
-import type { ClientChannel } from './client/channel.js';
 import type { Director } from './director.js';
 import type { OwnerChannel } from './presence.js';
 import type { MarketingHead } from './heads/marketing.js';
@@ -15,7 +14,7 @@ import { createMetrics, SiteEvents } from './pult-events.js';
 import { createHub } from './pult-hub.js';
 import { createPultCrm, fail, ok } from './pult-crm.js';
 import type { Calls } from './calls.js';
-import { createChats } from './chats.js';
+import { createChats, type ChatsClient } from './chats.js';
 import { createReview } from './review.js';
 import { createPultTrends } from './pult-trends.js';
 import { createReach } from './reach.js';
@@ -35,7 +34,7 @@ export interface PultDeps {
   now: () => number;
   crm: ReturnType<typeof createCrm>;
   billing?: BillingWorker | undefined;
-  client?: Pick<ClientChannel, 'send'> | undefined;
+  client?: ChatsClient | undefined;
   webReply?: ((sessionId: string, text: string) => boolean) | undefined;
   marketing?: MarketingHead | undefined;
   rendersDir?: string | undefined;
@@ -92,6 +91,7 @@ export function createPult(d: PultDeps) {
       if (method === 'GET' && seg.length === 2 && id) return chats.get(id);
       if (method === 'POST' && seg.length === 3 && id && seg[2] === 'reply') return chats.reply(id, body);
       if (method === 'POST' && seg.length === 3 && id && seg[2] === 'unread') return chats.markUnread(id);
+      if (method === 'POST' && seg.length === 3 && id && seg[2] === 'resume') return chats.resume(id);
       return fail(404, 'not_found');
     }
     if (a === 'trends') {

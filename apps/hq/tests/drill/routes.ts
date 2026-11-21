@@ -12,7 +12,7 @@ export const ADMIN: [string, string][] = [
   ['POST', '/admin/presence'], ['POST', '/admin/ping'], ['POST', '/admin/inbox/read'], ['POST', '/admin/say'], ['POST', '/admin/command'], ['POST', '/admin/drill'], ['POST', '/admin/approvals/1'], ['POST', '/admin/approvals/99999'],
   ['POST', '/admin/tasks/1/retry'], ['POST', '/admin/tasks/99999/retry'], ['POST', '/admin/prices/reload'],
   ['POST', '/admin/crm/prospects/1'], ['POST', '/admin/crm/tickets/1'], ['POST', '/admin/crm/leads/1'], ['POST', '/admin/crm/leads/1/reply'], ['POST', '/admin/crm/leads/1/call'], ['POST', '/admin/crm/leads/99999/reply'],
-  ['POST', '/admin/crm/projects/1'], ['POST', '/admin/crm/invoices/1'], ['POST', '/admin/content/1'], ['POST', '/admin/content/a1'], ['POST', '/admin/review/ap_1'], ['POST', '/admin/chats/c1/reply'], ['POST', '/admin/chats/zzz/reply'], ['POST', '/admin/trends'],
+  ['POST', '/admin/crm/projects/1'], ['POST', '/admin/crm/invoices/1'], ['POST', '/admin/content/1'], ['POST', '/admin/content/a1'], ['POST', '/admin/review/ap_1'], ['POST', '/admin/chats/c1/reply'], ['POST', '/admin/chats/zzz/reply'], ['POST', '/admin/chats/c1/resume'], ['POST', '/admin/chats/zzz/resume'], ['POST', '/admin/trends'],
   ['POST', '/admin/company/routines/support-daily'], ['POST', '/admin/company/routines/support-daily/run'], ['POST', '/admin/company/routines/nope/run'], ['POST', '/admin/company/trust/lead_reply'], ['POST', '/admin/company/trust/nope'],
   ['POST', '/admin/clients'], ['POST', '/admin/clients/1/tickets'], ['POST', '/admin/clients/1/leads/1/messages'], ['POST', '/admin/clients/1/projects/1/milestones/1/accept'],
 ];

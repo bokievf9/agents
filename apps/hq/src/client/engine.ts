@@ -5,7 +5,7 @@ import { isPriceQuestion } from '@fir/worker-lead-intake';
 import { asksCatalogue } from './needs.js';
 import { clip, GREETING, intakeRecord, TurnHistory } from './shared.js';
 import { enrichmentOf, newQ, productNamesOf, receptionistTurn, type EnrichmentOut } from './receptionist.js';
-import { ChatStore, maskUsername, RefStore, refFromStartArg, textHash, type Chat, type Draft } from './store.js';
+import { ChatStore, RefStore, refFromStartArg, textHash, type Chat, type Draft } from './store.js';
 import {
   BUDGETS, budgetButtons, DEADLINES, deadlineButtons, esc, haveButtons, HAVES, haveFlags, parseHave, menuButtons, NEEDS, needButtons, productCardButtons, productCardHtml, productListButtons,
   productListHtml, SERVICE, T, X, type Budget, type Deadline, type Have, type Lang, type Need,
@@ -51,6 +51,17 @@ export interface ClientSinks {
   createAudit?(a: { url: string; contact: string; name?: string; locale: Lang; chatId: number }): Promise<AuditOutcome>;
 }
 
+/** What the client bot hands to HQ for the owner. `text` is the client's own words (a thread line in the Пульт, never Telegram); no text: a fact only. */
+export interface OwnerLine {
+  kind: 'human' | 'message' | 'ticket';
+  chatId: number;
+  /** The client's first name (empty when Telegram gave none). */
+  name: string;
+  text?: string;
+  /** Why the line is there (`Нужен человек`, `Сообщение без ответа модели`...), for the Пульт. */
+  why?: string;
+}
+
 export interface ClientEngineDeps {
   db: Db;
   now: () => number;
@@ -68,8 +79,13 @@ export interface ClientEngineDeps {
   /** Where the daily LLM counter is kept between restarts (HQ settings). */
   counter?: CounterStore;
   sinks?: ClientSinks;
-  /** Plain text to the owner through the Director when the client bot cannot write to him (he never opened it). */
-  ownerFallback?: (text: string) => Promise<void>;
+  /**
+   * The way to the owner (one HQ bot, owner 2026-11-22): the client bot never writes to him. A client who asks for a person, writes after the hand-off or needs an
+   * answer becomes a line of his thread in the Пульт and a reminder of the HQ bot (`client-inbox.ts`); the owner answers in `/admin/chats`.
+   */
+  toOwner?: (line: OwnerLine) => void;
+  /** The one line the owner gets when he writes to the client bot himself (where the chats are now). */
+  ownerHint?: string;
   /** A request accepted from a person that failed before the owner could see it: `lost_lead` and the hourly alert (see `lost-leads.ts`). */
   onLost?: (source: LostSource, reason: string, info?: LostInfo) => void;
   /** True while the model gateway is known to be down: the free conversation answers with the scripted «принял» and records a lead. */
@@ -85,6 +101,9 @@ export interface ClientEngineDeps {
  * come back through `deliver`. Stores per chat only the `cb_chats` row; client texts go into lead and ticket records
  * the way the website form does, never into logs.
  */
+/** What the owner reads when he writes to the client bot: the chats are in the Пульт. */
+const OWNER_HINT = 'Этот бот для клиентов. Ответы клиентам и возврат бота сценарию: в Пульте, раздел «Чаты».';
+
 export class ClientEngine implements ClientChannel {
   readonly store: ChatStore;
   private readonly refs: RefStore;
@@ -124,6 +143,24 @@ export class ClientEngine implements ClientChannel {
     this.remember(chatId, 'assistant', text);
   }
 
+  /**
+   * The owner took the chat over (he answered from the Пульт: the bot stays quiet there) or gave it back to the bot's script (`resume` in the Пульт).
+   * False for a chat the bot does not know.
+   */
+  handOver(chatId: number, human: boolean): boolean {
+    const chat = this.store.get(chatId);
+    if (!chat) return false;
+    const mark = 'отвечает человек';
+    const summary = human ? (chat.summary.includes(mark) ? chat.summary : `${chat.summary ? `${chat.summary} · ` : ''}${mark}`) : chat.summary.replace(` · ${mark}`, '').replace(mark, '').trim();
+    this.store.update(chatId, { muted: human, summary });
+    return true;
+  }
+
+  /** Whether the bot is quiet in this chat (a person has taken it over). */
+  isHandedOver(chatId: number): boolean {
+    return this.store.get(chatId)?.muted === true;
+  }
+
   /** The chat of a Telegram username, for delivering an approved audit to someone who already wrote to the bot. */
   findChat(username: string): number | undefined {
     return this.store.chatIdByUsername(username);
@@ -131,7 +168,7 @@ export class ClientEngine implements ClientChannel {
 
   // ---- entry points (the grammy glue calls these, private chats only) ----
   async onCommand(from: From, name: string, arg: string): Promise<void> {
-    if (from.chatId === this.d.ownerId) return this.ownerCommand(name, arg.trim());
+    if (from.chatId === this.d.ownerId) return this.ownerSay(this.d.ownerHint ?? OWNER_HINT);
     const chat = this.chat(from);
     if (this.limiter.hit(chat.chatId) === 'drop') return;
     switch (name) {
@@ -178,8 +215,8 @@ export class ClientEngine implements ClientChannel {
     await this.say(chat.chatId, out === 'ok' ? t.auditOk : out === 'duplicate' ? t.auditDup : out === 'rate_limited' ? t.auditBusy : t.auditUsage);
   }
 
-  async onText(from: From, raw: string, replyTo?: number): Promise<void> {
-    if (from.chatId === this.d.ownerId) return this.ownerText(raw, replyTo);
+  async onText(from: From, raw: string): Promise<void> {
+    if (from.chatId === this.d.ownerId) return this.ownerSay(this.d.ownerHint ?? OWNER_HINT);
     const cmd = /^\/([a-z_]+)(?:@\w+)?(?:\s+([\s\S]*))?$/i.exec(raw.trim());
     if (cmd) return this.onCommand(from, cmd[1]!.toLowerCase(), cmd[2] ?? '');
     const first = this.chat(from);
@@ -188,7 +225,7 @@ export class ClientEngine implements ClientChannel {
     if (rate === 'drop') return;
     if (rate === 'warn') {
       await this.say(chat.chatId, T[chat.lang].slow);
-      await this.notifyOwner(`⏸ <b>Лимит сообщений</b> · ${this.who(chat)}\nБольше ${this.d.perHour ?? 20} сообщений за час, бот молчит до конца часа. /reply ${chat.chatId} текст`, chat.chatId);
+      log('info', 'client bot rate limit', { chatId: chat.chatId, perHour: this.d.perHour ?? 20 });
       return;
     }
     if (this.isSpam(chat, raw)) {
@@ -300,7 +337,7 @@ export class ClientEngine implements ClientChannel {
   private chat(from: From): Chat & { fresh: boolean } {
     const existing = this.store.get(from.chatId);
     const lang: Lang = existing?.lang ?? (from.langCode?.toLowerCase().startsWith('en') ? 'en' : 'ru');
-    return { ...this.store.touch(from.chatId, from.username ?? '', lang), fresh: !existing };
+    return { ...this.store.touch(from.chatId, from.username ?? '', lang, from.firstName?.trim() ?? ''), fresh: !existing };
   }
 
   private async welcome(chat: Chat, from: From, short = false): Promise<void> {
@@ -425,10 +462,6 @@ export class ClientEngine implements ClientChannel {
     }
     this.store.update(chat.chatId, { leadTask: taskId, summary: `${masked} · задача #${taskId}` });
     log('info', 'client bot lead', { chatId: chat.chatId, taskId });
-    await this.notifyOwner(
-      `🆕 <b>Заявка в клиентском боте</b> · ${this.who(chat)}\n${esc(masked)}, задача продаж #${taskId}. Первый ответ бот отправит сам (уровень lead_reply), всё с ценой придёт вам на одобрение.`,
-      chat.chatId,
-    );
   }
 
   // ---- «Я уже клиент» ----
@@ -450,7 +483,7 @@ export class ClientEngine implements ClientChannel {
       const taskId = await this.sinks.createTicket(client, clip(text, 2000), chat.chatId);
       this.store.update(chat.chatId, { summary: `клиент: тикет, задача #${taskId}` });
       log('info', 'client bot ticket', { chatId: chat.chatId, taskId });
-      await this.notifyOwner(`🧾 <b>Клиент написал в бот</b> · ${this.who(chat)}\nКлиент ${esc(client)}, задача сопровождения #${taskId}. Ответ по справке уйдёт сам, остальное придёт на одобрение.`, chat.chatId);
+      this.d.toOwner?.({ kind: 'ticket', chatId: chat.chatId, name: chat.name });
       return;
     }
     await this.say(chat.chatId, t.clientLeadAck(night));
@@ -468,12 +501,8 @@ export class ClientEngine implements ClientChannel {
     await this.dropCard(chat);
     this.store.update(chat.chatId, { muted: true, state: 'idle', draft: {}, card: null, summary: `${chat.summary ? `${chat.summary} · ` : ''}позвал человека` });
     await this.say(chat.chatId, t.human(this.isNight()));
-    const link = chat.username ? `https://t.me/${esc(chat.username)}` : `tg://user?id=${chat.chatId}`;
-    await this.notifyOwner(
-      `👤 <b>Зовут человека</b> · ${this.who(chat)} · ${chat.lang}\n<a href="${link}">Открыть профиль</a>\nСводка: ${esc(chat.summary || 'новый разговор')}\n\n` +
-        `Бот в этом чате замолчал и пересылает сообщения сюда. Ответ: ответьте на это сообщение или /reply ${chat.chatId} текст. Вернуть бота: /resume ${chat.chatId}`,
-      chat.chatId,
-    );
+    // the hand-off: the owner hears it from the HQ bot (a reminder with a link into the chat), never from this bot; the client's next messages become lines of his thread
+    this.d.toOwner?.({ kind: 'human', chatId: chat.chatId, name: chat.name, why: chat.summary || 'новый разговор' });
   }
 
   // ---- free conversation ----
@@ -487,7 +516,7 @@ export class ClientEngine implements ClientChannel {
     await this.say(chat.chatId, T[chat.lang].slotPicked(formatSlot(slot, this.d.tz(), chat.lang)));
     this.store.update(chat.chatId, { summary: `${chat.summary} · выбрал звонок` });
     await this.sinks.bookCall?.(lead.leadId, slot).catch((e) => log('warn', 'client bot call booking failed', { lead: lead.leadId, err: errMsg(e) }));
-    await this.notifyOwner(`📞 <b>Лид #${lead.leadId} выбрал звонок</b> · ${this.who(chat)}\n${esc(formatSlot(slot, this.d.tz(), 'ru'))}. Подтвердите: /reply ${chat.chatId} текст`, chat.chatId);
+    this.d.toOwner?.({ kind: 'message', chatId: chat.chatId, name: chat.name, text: `Выбрал окно для звонка: ${formatSlot(slot, this.d.tz(), 'ru')}`, why: `Лид #${lead.leadId} выбрал звонок` });
     return true;
   }
 
@@ -574,93 +603,10 @@ export class ClientEngine implements ClientChannel {
     return repeats >= 2;
   }
 
-  // ---- owner side (his private chat with the client bot) ----
-  private async ownerCommand(name: string, arg: string): Promise<void> {
-    const target = /^(\d+)(?:\s+([\s\S]+))?$/.exec(arg);
-    const known = target ? this.store.get(Number(target[1])) : undefined;
-    switch (name) {
-      case 'chats':
-        await this.ownerSay(this.chatsText());
-        return;
-      case 'mute':
-      case 'resume': {
-        if (!known) return void (await this.ownerSay(`Формат: /${name} <chatId>, номера в /chats.`));
-        this.store.update(known.chatId, { muted: name === 'mute' });
-        await this.ownerSay(name === 'mute' ? `Бот молчит в чате ${known.chatId}, сообщения клиента приходят сюда.` : `Бот снова отвечает в чате ${known.chatId}.`);
-        return;
-      }
-      case 'reply': {
-        if (!known || !target?.[2]?.trim()) return void (await this.ownerSay('Формат: /reply <chatId> текст. Номера в /chats, или ответьте на уведомление о клиенте.'));
-        await this.relay(known.chatId, target[2].trim());
-        return;
-      }
-      default:
-        await this.ownerSay(
-          '<b>Клиентский бот: команды владельца</b>\n/chats: последние разговоры\n/reply &lt;chatId&gt; текст: ответить клиенту (или ответьте на уведомление)\n/mute &lt;chatId&gt;: бот молчит в чате\n/resume &lt;chatId&gt;: бот снова отвечает\n\nОстальное, как всегда, через Директора.',
-        );
-    }
-  }
-
-  private async ownerText(text: string, replyTo?: number): Promise<void> {
-    const cmd = /^\/([a-z_]+)(?:@\w+)?(?:\s+([\s\S]*))?$/i.exec(text.trim());
-    if (cmd) return this.ownerCommand(cmd[1]!.toLowerCase(), (cmd[2] ?? '').trim());
-    const chatId = replyTo !== undefined ? this.store.noticeChat(replyTo) : undefined;
-    if (chatId === undefined) {
-      await this.ownerSay('Чтобы ответить клиенту, ответьте (reply) на уведомление о нём или напишите /reply &lt;chatId&gt; текст. Список: /chats');
-      return;
-    }
-    await this.relay(chatId, text.trim());
-  }
-
-  /** The owner's text goes to the client verbatim; the bot stays quiet in that chat until /resume. */
-  private async relay(chatId: number, text: string): Promise<void> {
-    if (!text) return;
-    try {
-      await this.send(chatId, text);
-    } catch (e) {
-      const blocked = e instanceof ClientBlockedError;
-      log('warn', 'client bot relay failed', { chatId, blocked });
-      await this.ownerSay(blocked ? `Не доставлено: клиент ${chatId} заблокировал бота.` : `Не доставлено в чат ${chatId}: ${esc(errMsg(e)).slice(0, 200)}`);
-      return;
-    }
-    const chat = this.store.get(chatId);
-    this.store.update(chatId, { muted: true, ...(chat && !chat.summary.includes('отвечает человек') ? { summary: `${chat.summary ? `${chat.summary} · ` : ''}отвечает человек` } : {}) });
-    await this.ownerSay(`Отправлено в чат ${chatId}. Бот там молчит, вернуть: /resume ${chatId}`);
-  }
-
-  private chatsText(): string {
-    const list = this.store.recent(15);
-    if (!list.length) return 'Разговоров пока нет.';
-    const now = this.d.now();
-    const ago = (t: number) => {
-      const m = Math.floor((now - t) / 60_000);
-      return m < 60 ? `${m} мин` : m < 1440 ? `${Math.floor(m / 60)} ч` : `${Math.floor(m / 1440)} дн`;
-    };
-    const lines = list.map((c) => {
-      const flags = [c.muted ? 'бот молчит' : '', c.blocked ? 'заблокировал бота' : '', c.state !== 'idle' ? `шаг: ${c.state}` : ''].filter(Boolean).join(', ');
-      return `<code>${c.chatId}</code> ${esc(maskUsername(c.username))} · ${c.lang} · ${ago(c.lastAt)} назад${flags ? ` · ${flags}` : ''}\n${esc(c.summary || 'без заявки')}`;
-    });
-    return `<b>Разговоры</b> (${this.store.count()} всего, LLM сегодня ${this.limiter.llmToday})\n\n${lines.join('\n\n')}`;
-  }
-
   // ---- sending ----
-  private who(chat: Chat): string {
-    return `<code>${chat.chatId}</code> ${chat.username ? `@${esc(chat.username)}` : 'без username'}`;
-  }
-
-  /** A message from the client to the owner; his Telegram reply to it goes back to the client. */
+  /** A client's words for the owner: a line of his thread and a reminder (HQ), never a Telegram message from this bot. */
   private async forward(chat: Chat, text: string, why: string): Promise<void> {
-    await this.notifyOwner(`💬 <b>${esc(why)}</b> · ${this.who(chat)}\n${esc(clip(text, 1500))}\n\n↩️ Ответьте на это сообщение или /reply ${chat.chatId} текст.`, chat.chatId);
-  }
-
-  private async notifyOwner(html: string, chatId: number): Promise<void> {
-    try {
-      const id = await this.d.transport.send(this.d.ownerId, html, undefined, { silent: this.isNight() });
-      this.store.addNotice(id, chatId);
-    } catch (e) {
-      log('warn', 'client bot cannot write to the owner', { err: errMsg(e) });
-      await this.d.ownerFallback?.(`Клиентский бот: ${html.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')}\n\n(Откройте клиентский бот и нажмите /start, чтобы отвечать клиентам из него.)`).catch(() => undefined);
-    }
+    this.d.toOwner?.({ kind: 'message', chatId: chat.chatId, name: chat.name, text: clip(text, 1500), why });
   }
 
   private async ownerSay(html: string): Promise<void> {

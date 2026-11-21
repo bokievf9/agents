@@ -289,14 +289,6 @@ export const COMMANDS: Record<Lang, { command: string; description: string }[]> 
   ],
 };
 
-export const OWNER_COMMANDS = [
-  { command: 'chats', description: 'Последние разговоры' },
-  { command: 'reply', description: '<chatId> текст: ответить клиенту' },
-  { command: 'mute', description: '<chatId>: бот молчит в чате' },
-  { command: 'resume', description: '<chatId>: бот снова отвечает' },
-  { command: 'help', description: 'Команды владельца' },
-];
-
 export const PROFILE: Record<Lang, { short: string; description: string }> = {
   ru: {
     short: 'Fir Tech: сайты, Telegram-боты, приложения и автоматизация. Расскажите о задаче: ответ за 5 минут, круглосуточно.',

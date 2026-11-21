@@ -50,6 +50,7 @@ import { HQ_PROFILE } from './tg.js';
 import { COMMAND_NAMES, routedTo } from './commands.js';
 import { installOwnerGlue, TG_COMMANDS } from './glue.js';
 import { pultLinks } from './links.js';
+import { ClientInbox, clientToOwner } from './client-inbox.js';
 import { OwnerNotices } from './notices.js';
 import { OwnerAssistant } from './assistant.js';
 import { createReach } from './reach.js';
@@ -160,7 +161,9 @@ const clientBot = cfg.clientBotToken
   ? new ClientBot({
       token: cfg.clientBotToken, db, now: hq.now, tz: () => hq.tz, llm: clientLlm, counter, ownerId: cfg.ownerId, instructions: readClientInstructions(),
       quietHours: cfg.clientQuietHours, perHour: cfg.clientRatePerHour, dailyCap: cfg.clientLlmDailyCap,
-      ownerFallback: (text) => messenger.send(cfg.ownerId, text),
+      // one bot: «позвать человека» and the client's words after it go to the thread in the Пульт and a reminder of the HQ bot, never from the client bot
+      toOwner: clientToOwner({ inbox: new ClientInbox(db, hq.now), notices, links, now: hq.now, onError: (e) => log('warn', 'client bot hand-off failed', { err: errMsg(e) }) }),
+      ownerHint: `Этот бот для клиентов. Ответы клиентам и возврат бота сценарию: в Пульте, ${links.to('chats')}`,
       onLost: (source, reason, info) => lost.record(source, reason, info), gatewayDown,
     })
   : null;

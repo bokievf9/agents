@@ -47,6 +47,8 @@ export interface Chat {
   muted: boolean;
   blocked: boolean;
   summary: string;
+  /** The first name Telegram gave (empty when none): the reminder of the HQ bot names the client by it. */
+  name: string;
   /** The Sales task of the last lead from this chat (call slot picks refer to it). */
   leadTask: number | null;
   lastHash: string;
@@ -66,6 +68,7 @@ CREATE TABLE IF NOT EXISTS cb_chats (
   muted INTEGER NOT NULL DEFAULT 0,
   blocked INTEGER NOT NULL DEFAULT 0,
   summary TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
   lead_task INTEGER,
   last_hash TEXT NOT NULL DEFAULT '',
   repeats INTEGER NOT NULL DEFAULT 0,
@@ -73,21 +76,16 @@ CREATE TABLE IF NOT EXISTS cb_chats (
   last_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS cb_chats_last ON cb_chats (last_at);
-CREATE TABLE IF NOT EXISTS cb_notices (
-  msg_id INTEGER PRIMARY KEY,
-  chat_id INTEGER NOT NULL,
-  at INTEGER NOT NULL
-);
 `;
 
 interface Row {
   chat_id: number; username: string; lang: string; state: string; draft: string; card: number | null; muted: number; blocked: number;
-  summary: string; lead_task: number | null; last_hash: string; repeats: number; created_at: number; last_at: number;
+  summary: string; name: string; lead_task: number | null; last_hash: string; repeats: number; created_at: number; last_at: number;
 }
 
 const toChat = (r: Row): Chat => ({
   chatId: r.chat_id, username: r.username, lang: r.lang === 'en' ? 'en' : 'ru', state: r.state as ChatState, draft: JSON.parse(r.draft) as Draft,
-  card: r.card, muted: r.muted === 1, blocked: r.blocked === 1, summary: r.summary, leadTask: r.lead_task, lastHash: r.last_hash,
+  card: r.card, muted: r.muted === 1, blocked: r.blocked === 1, summary: r.summary, name: r.name, leadTask: r.lead_task, lastHash: r.last_hash,
   repeats: r.repeats, createdAt: r.created_at, lastAt: r.last_at,
 });
 
@@ -100,6 +98,8 @@ export const maskUsername = (u: string): string => (u ? `@${u.slice(0, 2)}***` :
 export class ChatStore {
   constructor(private readonly db: Db, private readonly now: () => number) {
     migrate(db, SCHEMA);
+    // chats of a database made before the name column
+    if (!(db.prepare('PRAGMA table_info(cb_chats)').all() as { name: string }[]).some((c) => c.name === 'name')) db.exec("ALTER TABLE cb_chats ADD COLUMN name TEXT NOT NULL DEFAULT ''");
   }
 
   get(chatId: number): Chat | undefined {
@@ -108,14 +108,14 @@ export class ChatStore {
   }
 
   /** The chat, created on first contact; username and activity refreshed, a blocked flag cleared (they wrote again). */
-  touch(chatId: number, username: string, lang: Lang): Chat {
+  touch(chatId: number, username: string, lang: Lang, name = ''): Chat {
     const t = this.now();
     this.db
       .prepare(
-        `INSERT INTO cb_chats (chat_id, username, lang, created_at, last_at) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(chat_id) DO UPDATE SET username = excluded.username, last_at = excluded.last_at, blocked = 0`,
+        `INSERT INTO cb_chats (chat_id, username, lang, name, created_at, last_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(chat_id) DO UPDATE SET username = excluded.username, name = CASE WHEN excluded.name != '' THEN excluded.name ELSE cb_chats.name END, last_at = excluded.last_at, blocked = 0`,
       )
-      .run(chatId, username.slice(0, 40), lang, t, t);
+      .run(chatId, username.slice(0, 40), lang, name.slice(0, 40), t, t);
     return this.get(chatId)!;
   }
 
@@ -128,6 +128,7 @@ export class ChatStore {
     if (p.card !== undefined) cols.card = p.card;
     if (p.muted !== undefined) cols.muted = p.muted ? 1 : 0;
     if (p.blocked !== undefined) cols.blocked = p.blocked ? 1 : 0;
+    if (p.name !== undefined) cols.name = p.name.slice(0, 40);
     if (p.summary !== undefined) cols.summary = p.summary.slice(0, 200);
     if (p.leadTask !== undefined) cols.lead_task = p.leadTask;
     if (p.lastHash !== undefined) cols.last_hash = p.lastHash;
@@ -156,16 +157,6 @@ export class ChatStore {
 
   count(): number {
     return (this.db.prepare('SELECT COUNT(*) AS n FROM cb_chats').get() as { n: number }).n;
-  }
-
-  /** A message to the owner about a chat: his Telegram reply to it goes back to that chat. */
-  addNotice(msgId: number, chatId: number): void {
-    this.db.prepare('INSERT OR REPLACE INTO cb_notices (msg_id, chat_id, at) VALUES (?, ?, ?)').run(msgId, chatId, this.now());
-    this.db.prepare('DELETE FROM cb_notices WHERE at < ?').run(this.now() - 30 * 86_400_000);
-  }
-
-  noticeChat(msgId: number): number | undefined {
-    return (this.db.prepare('SELECT chat_id FROM cb_notices WHERE msg_id = ?').get(msgId) as { chat_id: number } | undefined)?.chat_id;
   }
 }
 

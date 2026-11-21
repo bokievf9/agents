@@ -9,7 +9,7 @@ import { ProspectorWorker } from '@fir/worker-prospector';
 import { describe, expect, it } from 'vitest';
 import { ClientBot } from '../src/client/bot.js';
 import { ClientBlockedError } from '../src/client/channel.js';
-import { ClientEngine, type ClientTransport, type From } from '../src/client/engine.js';
+import { ClientEngine, type ClientTransport, type From, type OwnerLine } from '../src/client/engine.js';
 import { inWindow, linksOnly, RateLimiter, sanitizeAnswer } from '../src/client/sanitize.js';
 import { catalogueText, CLASSIC_IDS, nicheHint, PRODUCT_IDS, PRODUCTS } from '../src/client/products.js';
 import { systemPrompt } from '../src/client/prompt.js';
@@ -93,9 +93,11 @@ function world(o: Opts = {}) {
   const reporter = new Reporter(undefined, {}, new Map());
   const director = new Director({ hq, llm, messenger, queue, ownerId: OWNER, reporter });
   const transport = new MemoryTransport();
+  /** What the client bot hands to HQ for the owner (the thread line and the reminder): it writes nothing to him itself. */
+  const lines: OwnerLine[] = [];
   const engine = new ClientEngine({
     db, now: () => clock.t, tz: () => hq.tz, transport, llm, ownerId: OWNER, instructions: readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8'),
-    perHour: o.perHour ?? 20, dailyCap: o.dailyCap ?? 300,
+    perHour: o.perHour ?? 20, dailyCap: o.dailyCap ?? 300, toOwner: (l) => lines.push(l),
   });
   const sales = new SalesHead({ hq, llm, queue, messenger, ownerId: OWNER, reporter, prospector: new ProspectorWorker(), replyLevel: o.replyLevel ?? 1, client: engine });
   const monitor = new MonitoringWorker({
@@ -120,7 +122,7 @@ function world(o: Opts = {}) {
     await engine.onButton(ME, `b:${budget}`, card());
     await engine.onButton(ME, 'h:none', card());
   };
-  return { clock, db, messenger, hq, queue, llm, director, transport, engine, sales, support, decide, leadTasks, llmCalls, card, intake };
+  return { clock, db, messenger, hq, queue, llm, director, transport, lines, engine, sales, support, decide, leadTasks, llmCalls, card, intake };
 }
 
 const buttonTexts = (b?: Button[][]) => (b ?? []).flat().map((x) => x.text);
@@ -255,8 +257,8 @@ describe('the intake (3 steps and one short question about domain and hosting)',
     // a second press on the old card is stale and creates nothing
     expect(await w.engine.onButton(ME, 'b:mid', done.messageId)).toBe('Уже неактуально');
     expect(w.leadTasks()).toHaveLength(1);
-    // the owner heard about it in the client bot
-    expect(w.transport.last(OWNER)!.html).toContain('Заявка в клиентском боте');
+    // the client bot writes nothing to the owner: the lead reminder comes from the HQ bot's scan of the leads
+    expect(w.transport.to(OWNER)).toEqual([]);
   });
 
   it('free text answers are accepted at every step: new cards, the old keyboard disappears', async () => {
@@ -297,7 +299,8 @@ describe('replies back to the client', () => {
     // «1» picks the first call slot
     await w.engine.onText(ME, '1');
     expect(w.transport.last(CLIENT)!.html).toContain('Записал звонок');
-    expect(w.transport.last(OWNER)!.html).toContain('выбрал звонок');
+    expect(w.transport.to(OWNER)).toEqual([]);
+    expect(w.lines.at(-1)).toMatchObject({ kind: 'message', chatId: CLIENT, name: 'Dilnoza', why: expect.stringContaining('выбрал звонок') });
   });
 
   it('level 0: the reply waits for the owner, then the bot sends it', async () => {
@@ -407,53 +410,49 @@ describe('«Я уже клиент»', () => {
 });
 
 describe('«Позвать человека»', () => {
-  it('mutes the bot and pings the owner; client texts are forwarded; the owner answers by reply or /reply; /resume brings the bot back', async () => {
+  it('mutes the bot and hands the call to HQ (a line and a reminder there), never a message from the bot; the client\'s next texts become lines of his thread', async () => {
     const w = world();
     await w.engine.onCommand(ME, 'start', '');
     await w.engine.onButton(ME, 'm:human', w.card());
     expect(w.engine.store.get(CLIENT)!.muted).toBe(true);
     expect(w.transport.last(CLIENT)!.html).toContain('Зову человека');
-    const ping = w.transport.last(OWNER)!;
-    expect(ping.html).toContain('Зовут человека');
-    expect(ping.html).toContain(`/resume ${CLIENT}`);
-    expect(ping.html).toContain('https://t.me/dilnoza_salon');
+    expect(w.lines).toEqual([{ kind: 'human', chatId: CLIENT, name: 'Dilnoza', why: expect.any(String) }]);
 
     await w.engine.onText(ME, 'Хочу обсудить бота для двух филиалов');
     expect(w.llmCalls()).toBe(0);
-    const forwarded = w.transport.last(OWNER)!;
-    expect(forwarded.html).toContain('двух филиалов');
+    expect(w.lines.at(-1)).toMatchObject({ kind: 'message', chatId: CLIENT, text: 'Хочу обсудить бота для двух филиалов' });
+    await w.engine.onMedia(ME, 'фото');
+    expect(w.lines.at(-1)!.text).toContain('фото');
+    // not one message to the owner from the client bot, whatever the client does
+    expect(w.transport.to(OWNER)).toEqual([]);
 
-    // Telegram reply to the forwarded notice: relayed verbatim (HTML-escaped)
-    await w.engine.onText({ chatId: OWNER }, 'Здравствуйте, это Фирдавс. Удобно созвониться <завтра>?', forwarded.id);
-    expect(w.transport.last(CLIENT)!.html).toBe('Здравствуйте, это Фирдавс. Удобно созвониться &lt;завтра&gt;?');
-    await w.engine.onCommand({ chatId: OWNER }, 'reply', `${CLIENT} Жду ваш номер`);
-    expect(w.transport.last(CLIENT)!.html).toBe('Жду ваш номер');
-    expect(w.transport.last(OWNER)!.html).toContain('Отправлено');
-
-    await w.engine.onCommand({ chatId: OWNER }, 'chats', '');
-    const chats = w.transport.last(OWNER)!.html;
-    expect(chats).toContain(String(CLIENT));
-    expect(chats).toContain('@di***');
-    expect(chats).not.toContain('dilnoza_salon');
-    expect(chats).toContain('бот молчит');
-
-    await w.engine.onCommand({ chatId: OWNER }, 'resume', String(CLIENT));
+    // the owner's answer from the Пульт: the bot stays quiet; `resume` gives the chat back to the script
+    expect(w.engine.handOver(CLIENT, true)).toBe(true);
+    expect(w.engine.isHandedOver(CLIENT)).toBe(true);
+    expect(w.engine.store.get(CLIENT)!.summary).toContain('отвечает человек');
+    expect(w.engine.handOver(CLIENT, false)).toBe(true);
     expect(w.engine.store.get(CLIENT)!.muted).toBe(false);
+    expect(w.engine.store.get(CLIENT)!.summary).not.toContain('отвечает человек');
     await w.engine.onText(ME, 'А вы делаете ботов для салонов?');
     expect(w.llmCalls()).toBe(1);
     expect(w.transport.typings).toBe(1);
-    await w.engine.onCommand({ chatId: OWNER }, 'mute', String(CLIENT));
-    expect(w.engine.store.get(CLIENT)!.muted).toBe(true);
+    expect(w.engine.handOver(999, true)).toBe(false);
   });
 
-  it('/human works as a command; the owner\'s other texts get a hint, not the client flow', async () => {
+  it('/human works as a command; whatever the owner writes to the client bot gets one line about the Пульт, never the client flow or the old commands', async () => {
     const w = world();
     await w.engine.onCommand(ME, 'human', '');
     expect(w.engine.store.get(CLIENT)!.muted).toBe(true);
+    expect(w.lines).toHaveLength(1);
     await w.engine.onCommand(ME, 'human', '');
     expect(w.transport.last(CLIENT)!.html).toContain('уже в курсе');
-    await w.engine.onText({ chatId: OWNER }, 'привет');
-    expect(w.transport.last(OWNER)!.html).toContain('/reply');
+    expect(w.lines).toHaveLength(1); // asked twice, told once
+    for (const text of ['привет', `/reply ${CLIENT} текст`, '/resume', '/chats']) {
+      await w.engine.onText({ chatId: OWNER }, text);
+      expect(w.transport.last(OWNER)!.html).toContain('в Пульте');
+      expect(w.transport.last(OWNER)!.html).not.toContain('/reply');
+    }
+    expect(w.transport.last(CLIENT)!.html).toContain('уже в курсе'); // nothing went to the client
     expect(w.engine.store.get(OWNER)).toBeUndefined();
   });
 });
@@ -466,7 +465,8 @@ describe('free conversation', () => {
     expect(out).toContain('Делаем ботов для салонов.');
     expect(out).not.toMatch(/300|5 дней/);
     expect(out).toContain('Стоимость и сроки назовём');
-    expect(w.transport.last(OWNER)!.html).toContain('Вопрос о цене или сроках');
+    expect(w.transport.to(OWNER)).toEqual([]);
+    expect(w.lines.at(-1)).toMatchObject({ kind: 'message', why: 'Вопрос о цене или сроках' });
   });
 
   it('a direct price question gets the template and the intake button, without the LLM', async () => {
@@ -482,13 +482,13 @@ describe('free conversation', () => {
     const w = world({ answer: (req) => (req.messages.at(-1)!.content.includes('договор') ? 'Уточню у команды и вернусь здесь.\n[[team]]' : '') });
     await w.engine.onText(ME, 'Можно изменить договор?');
     expect(w.transport.last(CLIENT)!.html).toBe('Уточню у команды и вернусь здесь.');
-    expect(w.transport.last(OWNER)!.html).toContain('Нужен человек');
+    expect(w.lines.at(-1)).toMatchObject({ kind: 'message', why: 'Нужен человек (вопрос к команде)' });
     await w.engine.onText(ME, 'Ещё вопрос про интеграцию');
     expect(w.transport.last(CLIENT)!.html).toContain('Менеджер ответит в рабочее время');
     // and the question is not lost: it became a lead record that Sales and the owner see
     expect(w.leadTasks()).toHaveLength(1);
     expect(JSON.stringify(w.leadTasks()[0]!.meta.lead)).toContain('интеграцию');
-    expect(w.transport.sent.some((m) => m.chatId === OWNER && m.html.includes('Заявка в клиентском боте'))).toBe(true);
+    expect(w.transport.to(OWNER)).toEqual([]);
   });
 
   it('LLM off: template plus «передал команде»', async () => {
@@ -625,11 +625,12 @@ describe('grammy wiring', () => {
     expect(probe.pollingError()).toContain('409');
   });
 
-  it('setup sets commands in RU and EN, the owner\'s commands and both descriptions, ignoring errors', async () => {
+  it('setup sets commands in RU and EN, clears the owner\'s old commands and sets both descriptions, ignoring errors', async () => {
     const { bot, calls } = fakeBot();
     await bot.setup();
     const methods = calls.map((c) => c.method);
-    expect(methods.filter((m) => m === 'setMyCommands')).toHaveLength(3);
+    expect(methods.filter((m) => m === 'setMyCommands')).toHaveLength(2);
+    expect(methods.filter((m) => m === 'deleteMyCommands')).toHaveLength(1);
     expect(methods.filter((m) => m === 'setMyDescription')).toHaveLength(2);
     expect(methods.filter((m) => m === 'setMyShortDescription')).toHaveLength(2);
     for (const c of calls.filter((x) => x.method === 'setMyShortDescription')) expect(String(c.payload.short_description).length).toBeLessThanOrEqual(120);

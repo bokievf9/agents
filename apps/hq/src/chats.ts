@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import { addCabMessage, addThreadMessage, ensureCabinetTables } from './cabinet.js';
 import type { ClientChannel } from './client/channel.js';
+import { ClientInbox } from './client-inbox.js';
 import { fail, ok } from './pult-crm.js';
 
 /**
@@ -13,10 +14,13 @@ import { fail, ok } from './pult-crm.js';
  * person becomes a lead, a ticket or a cabinet client. The owner's reply goes out on the client's last channel without an approval (he wrote it himself).
  * Contract: `docs/admin-crm-api.md`, section «Ревью-центр (2026-11-21)».
  */
+/** The client bot as the chats see it: the way out, and (when the bot is there) taking a chat over from its script and giving it back. */
+export type ChatsClient = Pick<ClientChannel, 'send'> & { handOver?(chatId: number, human: boolean): boolean };
+
 export interface ChatsDeps {
   hq: Hq;
   now: () => number;
-  client?: Pick<ClientChannel, 'send'> | undefined;
+  client?: ChatsClient | undefined;
   webReply?: ((sessionId: string, text: string) => boolean) | undefined;
 }
 
@@ -111,6 +115,7 @@ interface Thread {
   ticketId: number | null;
   openTicket: boolean;
   chatIds: number[];
+  botMuted: boolean;
   sessionIds: string[];
   textsStored: boolean;
   summary: string;
@@ -120,6 +125,7 @@ export function createChats(d: ChatsDeps) {
   const { hq, now } = d;
   const db = hq.db;
   migrate(db, SCHEMA);
+  new ClientInbox(db, now); // the table of the client bot's lines (`client-inbox.ts`)
   const has = (t: string) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t) !== undefined;
   const all = <T>(sql: string, ...p: unknown[]) => db.prepare(sql).all(...p) as T[];
 
@@ -147,7 +153,8 @@ export function createChats(d: ChatsDeps) {
       "SELECT id, client_id, thread, \"from\", text, at, author FROM cab_tmsgs WHERE thread NOT LIKE 'agent-%' ORDER BY id",
     );
     const sessions = has('web_chat_sessions') ? all<{ id: string; summary: string; created_at: number; updated_at: number }>('SELECT id, summary, created_at, updated_at FROM web_chat_sessions') : [];
-    const bots = has('cb_chats') ? all<{ chat_id: number; username: string; summary: string; last_at: number }>('SELECT chat_id, username, summary, last_at FROM cb_chats') : [];
+    const bots = has('cb_chats') ? all<{ chat_id: number; username: string; summary: string; last_at: number; muted: number }>('SELECT chat_id, username, summary, last_at, muted FROM cb_chats') : [];
+    const inbound = all<{ id: number; chat_id: number; text: string; at: number }>('SELECT id, chat_id, text, at FROM ch_inbound');
     const owner = all<{ id: number; lead_id: number | null; client_id: number | null; session_id: string | null; chat_id: number | null; channel: ChatChannel; text: string; at: number }>('SELECT * FROM ch_messages');
     const replies = has('approvals')
       ? all<{ id: number; payload: string; decided_at: number | null }>("SELECT a.id, a.payload, a.decided_at FROM approvals a WHERE a.kind IN ('lead_reply', 'lead_price') AND a.status = 'executed'")
@@ -250,6 +257,11 @@ export function createChats(d: ChatsDeps) {
         channels.add(m.channel);
         messages.push({ id: `ow_${m.id}`, at: m.at, from: 'owner', channel: m.channel, text: m.text, attachments: [] });
       }
+      for (const m of inbound) {
+        if (!chatIds.includes(m.chat_id)) continue;
+        channels.add('telegram');
+        messages.push({ id: `tg_${m.id}`, at: m.at, from: 'client', channel: 'telegram', text: m.text, attachments: [] });
+      }
       if (chatIds.length) channels.add('telegram');
       if (sessionIds.length) channels.add('web');
       if (myClients.length) channels.add('cabinet');
@@ -265,7 +277,7 @@ export function createChats(d: ChatsDeps) {
       const lastAt = Math.max(0, messages.at(-1)?.at ?? 0, bot?.last_at ?? 0, sess?.updated_at ?? 0, newest?.createdAt ?? 0);
       threads.push({
         id, aliases, clientId: client?.id ?? null, name, email: firstEmail, contact, channels: [...channels], messages, lastAt, leadId: newest?.id ?? null,
-        ticketId: myTickets.sort((a, b) => b.id - a.id)[0]?.id ?? null, openTicket: myTickets.some((t) => t.status === 'open'), chatIds, sessionIds,
+        ticketId: myTickets.sort((a, b) => b.id - a.id)[0]?.id ?? null, openTicket: myTickets.some((t) => t.status === 'open'), chatIds, botMuted: bots.some((b) => chatIds.includes(b.chat_id) && b.muted === 1), sessionIds,
         textsStored: messages.length > 0 || myLeads.length > 0 || myTickets.length > 0 || myClients.length > 0, summary: bot?.summary || sess?.summary || '',
       });
     }
@@ -288,7 +300,7 @@ export function createChats(d: ChatsDeps) {
     const last = t.messages.at(-1);
     return {
       id: t.id, client: { id: t.clientId, name: t.name, email: t.email, contact: t.contact }, channels: t.channels, lastAt: t.lastAt ? iso(t.lastAt) : null, unread: unreadOf(t, flags),
-      preview: last ? oneLine(last.text) : oneLine(t.summary), leadId: t.leadId, ticketId: t.ticketId, textsStored: t.textsStored, openTicket: t.openTicket,
+      preview: last ? oneLine(last.text) : oneLine(t.summary), leadId: t.leadId, ticketId: t.ticketId, textsStored: t.textsStored, openTicket: t.openTicket, botMuted: t.botMuted,
     };
   };
   const find = (id: string): Thread | undefined => build().find((t) => t.id === id || t.aliases.includes(id));
@@ -385,6 +397,8 @@ export function createChats(d: ChatsDeps) {
         if (ch === 'telegram' && chatId !== undefined && d.client) {
           await d.client.send(chatId, text);
           via = 'telegram';
+          // a person answered: the bot stays quiet in that chat until `resume` (the owner's choice, as `/reply` did)
+          d.client.handOver?.(chatId, true);
         } else if (ch === 'web' && sessionId !== undefined && d.webReply?.(sessionId, text)) via = 'web';
         else if (ch === 'cabinet' && hasCabinet) via = 'cabinet';
       } catch (e) {
@@ -416,5 +430,18 @@ export function createChats(d: ChatsDeps) {
     return ok({ sent, via, message: { id: stored.id, at: iso(stored.at), from: 'owner', channel: stored.channel, text, attachments: [] }, thread: threadView(find(t.id) ?? t) });
   }
 
-  return { list, get, reply, markUnread };
+  /** `POST /admin/chats/:id/resume`: the bot's script answers this client again (the owner gives the chat back). 409 `no_bot_chat` for a thread without a bot chat. */
+  function resume(id: string): AdminReply {
+    const t = find(id);
+    if (!t) return fail(404, 'not_found');
+    if (!t.chatIds.length) return fail(409, 'no_bot_chat');
+    for (const chatId of t.chatIds) {
+      if (d.client?.handOver) d.client.handOver(chatId, false);
+      else db.prepare('UPDATE cb_chats SET muted = 0 WHERE chat_id = ?').run(chatId);
+    }
+    hq.log('owner', 'chat_resume', 'chat', t.id, 'bot');
+    return ok({ thread: threadView(find(t.id) ?? t) });
+  }
+
+  return { list, get, reply, markUnread, resume };
 }

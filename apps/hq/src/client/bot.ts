@@ -3,8 +3,8 @@ import { createBot, errMsg, log, startPolling, type Button, type Db, type LlmCli
 import type { BotProbe } from '@fir/worker-monitoring';
 import { ClientBlockedError, type ClientChannel } from './channel.js';
 import type { CounterStore } from './sanitize.js';
-import { ClientEngine, type ClientSinks, type ClientTransport, type From } from './engine.js';
-import { COMMANDS, OWNER_COMMANDS, PROFILE } from './texts.js';
+import { ClientEngine, type ClientSinks, type ClientTransport, type From, type OwnerLine } from './engine.js';
+import { COMMANDS, PROFILE } from './texts.js';
 import type { LostInfo, LostSource } from '../lost-leads.js';
 
 const keyboard = (buttons?: Button[][]) => ({ inline_keyboard: (buttons ?? []).map((row) => row.map((b) => ({ text: b.text, callback_data: b.data }))) });
@@ -53,7 +53,9 @@ export interface ClientBotOptions {
   perHour: number;
   dailyCap: number;
   counter?: CounterStore;
-  ownerFallback?: (text: string) => Promise<void>;
+  /** The hand-off to the HQ bot and the Пульт (see `ClientEngineDeps.toOwner`). */
+  toOwner?: (line: OwnerLine) => void;
+  ownerHint?: string;
   /** See `ClientEngineDeps`: lost requests, the gateway state, the wait for the model. */
   onLost?: (source: LostSource, reason: string, info?: LostInfo) => void;
   gatewayDown?: () => boolean;
@@ -88,7 +90,7 @@ export class ClientBot implements ClientChannel {
     });
     this.engine = new ClientEngine({
       db: o.db, now: o.now, tz: o.tz, transport: grammyTransport(this.bot), llm: o.llm, ownerId: o.ownerId, instructions: o.instructions,
-      quietHours: o.quietHours, perHour: o.perHour, dailyCap: o.dailyCap, ...(o.counter ? { counter: o.counter } : {}), ...(o.ownerFallback ? { ownerFallback: o.ownerFallback } : {}),
+      quietHours: o.quietHours, perHour: o.perHour, dailyCap: o.dailyCap, ...(o.counter ? { counter: o.counter } : {}), ...(o.toOwner ? { toOwner: o.toOwner } : {}), ...(o.ownerHint ? { ownerHint: o.ownerHint } : {}),
       ...(o.onLost ? { onLost: o.onLost } : {}), ...(o.gatewayDown ? { gatewayDown: o.gatewayDown } : {}), ...(o.llmTimeoutMs !== undefined ? { llmTimeoutMs: o.llmTimeoutMs } : {}),
     });
     this.wire();
@@ -100,6 +102,14 @@ export class ClientBot implements ClientChannel {
 
   send(chatId: number, text: string): Promise<void> {
     return this.engine.send(chatId, text);
+  }
+
+  handOver(chatId: number, human: boolean): boolean {
+    return this.engine.handOver(chatId, human);
+  }
+
+  isHandedOver(chatId: number): boolean {
+    return this.engine.isHandedOver(chatId);
   }
 
   /** Per-chat queue: order kept inside a chat, chats independent. Errors are logged, never thrown into grammy. */
@@ -137,8 +147,7 @@ export class ClientBot implements ClientChannel {
     this.bot.on('message:text', (ctx) => {
       const f = from(ctx);
       const text = ctx.message.text;
-      const replyTo = ctx.message.reply_to_message?.message_id;
-      this.serial(f.chatId, () => this.engine.onText(f, text, replyTo));
+      this.serial(f.chatId, () => this.engine.onText(f, text));
     });
     for (const [filter, kind] of MEDIA) {
       this.bot.on(filter as 'message:photo', (ctx) => {
@@ -154,7 +163,8 @@ export class ClientBot implements ClientChannel {
     const steps: [string, () => Promise<unknown>][] = [
       ['commands', () => api.setMyCommands(COMMANDS.en)],
       ['commands ru', () => api.setMyCommands(COMMANDS.ru, { language_code: 'ru' })],
-      ['commands owner', () => api.setMyCommands(OWNER_COMMANDS, { scope: { type: 'chat', chat_id: this.o.ownerId } })],
+      // the owner's old commands (/chats, /reply, /mute, /resume) are gone: the chats are in the Пульт
+      ['commands owner', () => api.deleteMyCommands({ scope: { type: 'chat', chat_id: this.o.ownerId } })],
       ['description', () => api.setMyDescription(PROFILE.en.description)],
       ['description ru', () => api.setMyDescription(PROFILE.ru.description, { language_code: 'ru' })],
       ['short description', () => api.setMyShortDescription(PROFILE.en.short)],
