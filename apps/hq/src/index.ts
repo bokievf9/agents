@@ -307,6 +307,8 @@ const dueTick = async () => {
   await emailFailures.flush().catch((e) => log('warn', 'email failures flush failed', { err: errMsg(e) }));
   // P-13: a manager's or Support's answer in a cabinet thread: one email «новое сообщение» per thread an hour, none when the client already read it
   await cabinet.mail?.messageTick().catch((e) => log('warn', 'client message mail failed', { err: errMsg(e) }));
+  // P-20: call reminders a day and an hour before (client and owner), once each
+  await calls.tick().catch((e) => log('warn', 'call reminders failed', { err: errMsg(e) }));
 };
 void dueTick();
 const dueTimer = setInterval(() => void dueTick(), 30_000);

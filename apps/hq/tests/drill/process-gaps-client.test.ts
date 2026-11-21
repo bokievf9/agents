@@ -307,3 +307,35 @@ describe('P-19: confirming or moving a call reaches the client by email and the 
   }, 60_000);
 });
 
+describe('P-20: reminders a day and an hour before, client and owner, once each', () => {
+  it('24 h and 1 h before: thread line, email and an owner inbox line; nothing twice; a call booked within a day gets only the hour one', async () => {
+    const { cid, leadId } = await cabinetLead();
+    await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { at: new Date(SLOT_B).toISOString() });
+    w.emails.length = 0;
+    const calls = w.callBook;
+    expect(await calls.tick()).toBe(0);
+    w.clock.t = SLOT_B - 24 * HOUR + 60_000;
+    expect(await calls.tick()).toBe(1);
+    expect(await calls.tick()).toBe(0);
+    expect(mails('Завтра созвон с Fir Tech')).toHaveLength(1);
+    expect((await leadThread(cid, leadId)).some((t) => /^Напоминаем: завтра созвон с Fir Tech, пятница, 20 ноября[^.]*14:00\.$/.test(t))).toBe(true);
+    const inbox = () => (w.db.prepare("SELECT text FROM owner_inbox WHERE text LIKE '%созвон: лид%'").all() as { text: string }[]).map((r) => r.text);
+    expect(inbox().some((t) => t.startsWith(`Завтра созвон: лид #${leadId}`) && t.includes('время ещё не подтверждено'))).toBe(true);
+    w.clock.t = SLOT_B - HOUR + 60_000;
+    expect(await calls.tick()).toBe(1);
+    expect(await calls.tick()).toBe(0);
+    expect(mails('Через час созвон с Fir Tech')).toHaveLength(1);
+    expect(inbox().some((t) => t.startsWith(`Через час созвон: лид #${leadId}`))).toBe(true);
+    // a call set 3 hours ahead: no day reminder, the hour one only
+    w.clock.t = SLOT_B + 2 * HOUR;
+    const soon = SLOT_B + 5 * HOUR;
+    await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { action: 'reschedule', at: new Date(soon).toISOString() });
+    w.emails.length = 0;
+    expect(await calls.tick()).toBe(0);
+    w.clock.t = soon - HOUR + 1000;
+    expect(await calls.tick()).toBe(1);
+    expect(w.emails.map((e) => e.subject)).toEqual(['Через час созвон с Fir Tech']);
+    expect(g.leaks([EMAIL])).toEqual([]);
+  }, 60_000);
+});
+
