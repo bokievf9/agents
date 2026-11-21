@@ -1,0 +1,455 @@
+{
+  "company": "firtech",
+  "docs": [
+    {
+      "id": "public-products-contract",
+      "title": "Линейка продуктов (контракт сайта)",
+      "tier": "public",
+      "source": "firtech/docs/products-contract.md",
+      "file": "public-products-contract.md",
+      "chars": 3408,
+      "sha": "80fe8ed2cd17"
+    },
+    {
+      "id": "public-sales-playbook-site",
+      "title": "Как продаём (playbook сайта)",
+      "tier": "public",
+      "source": "firtech/docs/sales-playbook-site.md",
+      "file": "public-sales-playbook-site.md",
+      "chars": 10224,
+      "sha": "6d2a3a8ba37f"
+    },
+    {
+      "id": "public-site-aiteams",
+      "title": "ИИ-отделы и ИИ-компания",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#aiTeams",
+      "file": "public-site-aiteams.md",
+      "chars": 32204,
+      "sha": "10c0ed1838f4"
+    },
+    {
+      "id": "public-site-comparepage",
+      "title": "Сравнение с рынком",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#comparePage",
+      "file": "public-site-comparepage.md",
+      "chars": 2990,
+      "sha": "ba60800acd2b"
+    },
+    {
+      "id": "public-site-demosection",
+      "title": "Демо на сайте",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#demoSection",
+      "file": "public-site-demosection.md",
+      "chars": 2731,
+      "sha": "8f7a60226ab8"
+    },
+    {
+      "id": "public-site-faq",
+      "title": "Частые вопросы",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#faq",
+      "file": "public-site-faq.md",
+      "chars": 2681,
+      "sha": "724c9e5de378"
+    },
+    {
+      "id": "public-site-guarantee",
+      "title": "Гарантия",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#guarantee",
+      "file": "public-site-guarantee.md",
+      "chars": 207,
+      "sha": "26dcf7de72f0"
+    },
+    {
+      "id": "public-site-how",
+      "title": "Как мы работаем",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#how",
+      "file": "public-site-how.md",
+      "chars": 2625,
+      "sha": "dad5b7808977"
+    },
+    {
+      "id": "public-site-ladder",
+      "title": "Лестница: агент, автопилот, отдел",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#ladder",
+      "file": "public-site-ladder.md",
+      "chars": 1442,
+      "sha": "254d42b7b0cc"
+    },
+    {
+      "id": "public-site-payhow",
+      "title": "Как платить",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#payHow",
+      "file": "public-site-payhow.md",
+      "chars": 1857,
+      "sha": "d777e534222b"
+    },
+    {
+      "id": "public-site-pricinghome",
+      "title": "Цены и этапы оплаты",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#pricingHome",
+      "file": "public-site-pricinghome.md",
+      "chars": 338,
+      "sha": "31d59f66fbc6"
+    },
+    {
+      "id": "public-site-privacy",
+      "title": "Политика конфиденциальности",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#privacy",
+      "file": "public-site-privacy.md",
+      "chars": 6033,
+      "sha": "840dbe96fe87"
+    },
+    {
+      "id": "public-site-process",
+      "title": "Процесс работы",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#process",
+      "file": "public-site-process.md",
+      "chars": 352,
+      "sha": "91707bf0788c"
+    },
+    {
+      "id": "public-site-productpage",
+      "title": "Страницы продуктов",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#productPage",
+      "file": "public-site-productpage.md",
+      "chars": 33713,
+      "sha": "df013d5d4016"
+    },
+    {
+      "id": "public-site-products",
+      "title": "Продукты Fir Tech",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#products",
+      "file": "public-site-products.md",
+      "chars": 2355,
+      "sha": "5d46ad7a1712"
+    },
+    {
+      "id": "public-site-referral",
+      "title": "Рекомендации",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#referral",
+      "file": "public-site-referral.md",
+      "chars": 1241,
+      "sha": "1837089499a6"
+    },
+    {
+      "id": "public-site-servicedetails",
+      "title": "Услуги подробно",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#serviceDetails",
+      "file": "public-site-servicedetails.md",
+      "chars": 3915,
+      "sha": "d186e6a710c6"
+    },
+    {
+      "id": "public-site-services",
+      "title": "Услуги",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#services",
+      "file": "public-site-services.md",
+      "chars": 565,
+      "sha": "4fdd997cfdc7"
+    },
+    {
+      "id": "public-site-sla",
+      "title": "Скорость ответа",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#sla",
+      "file": "public-site-sla.md",
+      "chars": 135,
+      "sha": "c949eab51fce"
+    },
+    {
+      "id": "public-site-solution-promises",
+      "title": "Обещания решений по нишам",
+      "tier": "public",
+      "source": "firtech/src/content/solution-promises.ts",
+      "file": "public-site-solution-promises.md",
+      "chars": 3752,
+      "sha": "5c710cab54b7"
+    },
+    {
+      "id": "public-site-solutions",
+      "title": "Решения по нишам",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#solutions",
+      "file": "public-site-solutions.md",
+      "chars": 8588,
+      "sha": "423c34349bd5"
+    },
+    {
+      "id": "public-site-terms",
+      "title": "Оферта",
+      "tier": "public",
+      "source": "firtech/src/content/ru.ts#terms",
+      "file": "public-site-terms.md",
+      "chars": 5486,
+      "sha": "84bd52d3ffee"
+    },
+    {
+      "id": "internal-apps-hq-instructions-backoffice-head",
+      "title": "Инструкция: backoffice-head",
+      "tier": "internal",
+      "source": "agents/apps/hq/instructions/backoffice-head.md",
+      "file": "internal-apps-hq-instructions-backoffice-head.md",
+      "chars": 1578,
+      "sha": "2a690c783c2e"
+    },
+    {
+      "id": "internal-apps-hq-instructions-client-bot",
+      "title": "Инструкция: client-bot",
+      "tier": "internal",
+      "source": "agents/apps/hq/instructions/client-bot.md",
+      "file": "internal-apps-hq-instructions-client-bot.md",
+      "chars": 6673,
+      "sha": "2b861dd750f4"
+    },
+    {
+      "id": "internal-apps-hq-instructions-director",
+      "title": "Инструкция: director",
+      "tier": "internal",
+      "source": "agents/apps/hq/instructions/director.md",
+      "file": "internal-apps-hq-instructions-director.md",
+      "chars": 1096,
+      "sha": "1a2128f03c51"
+    },
+    {
+      "id": "internal-apps-hq-instructions-marketing-head",
+      "title": "Инструкция: marketing-head",
+      "tier": "internal",
+      "source": "agents/apps/hq/instructions/marketing-head.md",
+      "file": "internal-apps-hq-instructions-marketing-head.md",
+      "chars": 3615,
+      "sha": "9d603bfe8b72"
+    },
+    {
+      "id": "internal-apps-hq-instructions-production-head",
+      "title": "Инструкция: production-head",
+      "tier": "internal",
+      "source": "agents/apps/hq/instructions/production-head.md",
+      "file": "internal-apps-hq-instructions-production-head.md",
+      "chars": 2206,
+      "sha": "5e0ee4420904"
+    },
+    {
+      "id": "internal-apps-hq-instructions-sales-head",
+      "title": "Инструкция: sales-head",
+      "tier": "internal",
+      "source": "agents/apps/hq/instructions/sales-head.md",
+      "file": "internal-apps-hq-instructions-sales-head.md",
+      "chars": 4042,
+      "sha": "f07b8a7baf9e"
+    },
+    {
+      "id": "internal-apps-hq-instructions-support-head",
+      "title": "Инструкция: support-head",
+      "tier": "internal",
+      "source": "agents/apps/hq/instructions/support-head.md",
+      "file": "internal-apps-hq-instructions-support-head.md",
+      "chars": 3310,
+      "sha": "2de36350c6b8"
+    },
+    {
+      "id": "internal-company",
+      "title": "Fir Tech как компания агентов",
+      "tier": "internal",
+      "source": "COMPANY.md",
+      "file": "internal-company.md",
+      "chars": 10387,
+      "sha": "c55af2c82f00"
+    },
+    {
+      "id": "internal-docs-architecture-hq",
+      "title": "Архитектура HQ",
+      "tier": "internal",
+      "source": "docs/architecture-hq.md",
+      "file": "internal-docs-architecture-hq.md",
+      "chars": 14255,
+      "sha": "5ec0a4886c46"
+    },
+    {
+      "id": "internal-docs-fira-architecture",
+      "title": "Архитектура Fira",
+      "tier": "internal",
+      "source": "agents/docs/fira-architecture.md",
+      "file": "internal-docs-fira-architecture.md",
+      "chars": 23759,
+      "sha": "85f8857f4f54"
+    },
+    {
+      "id": "internal-docs-process-census",
+      "title": "Перепись процессов",
+      "tier": "internal",
+      "source": "agents/docs/process-census.md",
+      "file": "internal-docs-process-census.md",
+      "chars": 105672,
+      "sha": "259368e41144"
+    },
+    {
+      "id": "internal-knowledge-playbooks-analyst",
+      "title": "Плейбук: analyst",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/analyst.md",
+      "file": "internal-knowledge-playbooks-analyst.md",
+      "chars": 5385,
+      "sha": "19883e6ecd29"
+    },
+    {
+      "id": "internal-knowledge-playbooks-content-maker",
+      "title": "Плейбук: content-maker",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/content-maker.md",
+      "file": "internal-knowledge-playbooks-content-maker.md",
+      "chars": 6164,
+      "sha": "d39c19a40833"
+    },
+    {
+      "id": "internal-knowledge-playbooks-ig-audit",
+      "title": "Плейбук: ig-audit",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/ig-audit.md",
+      "file": "internal-knowledge-playbooks-ig-audit.md",
+      "chars": 3042,
+      "sha": "d5b42888a641"
+    },
+    {
+      "id": "internal-knowledge-playbooks-ig-captions",
+      "title": "Плейбук: ig-captions",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/ig-captions.md",
+      "file": "internal-knowledge-playbooks-ig-captions.md",
+      "chars": 3032,
+      "sha": "2e841e3c3f78"
+    },
+    {
+      "id": "internal-knowledge-playbooks-ig-carousel-story",
+      "title": "Плейбук: ig-carousel-story",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/ig-carousel-story.md",
+      "file": "internal-knowledge-playbooks-ig-carousel-story.md",
+      "chars": 3233,
+      "sha": "7ee1b716efc9"
+    },
+    {
+      "id": "internal-knowledge-playbooks-ig-engage",
+      "title": "Плейбук: ig-engage",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/ig-engage.md",
+      "file": "internal-knowledge-playbooks-ig-engage.md",
+      "chars": 5482,
+      "sha": "8ee468a1c4e7"
+    },
+    {
+      "id": "internal-knowledge-playbooks-ig-human",
+      "title": "Плейбук: ig-human",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/ig-human.md",
+      "file": "internal-knowledge-playbooks-ig-human.md",
+      "chars": 3326,
+      "sha": "e2e4e576ec92"
+    },
+    {
+      "id": "internal-knowledge-playbooks-ig-plan",
+      "title": "Плейбук: ig-plan",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/ig-plan.md",
+      "file": "internal-knowledge-playbooks-ig-plan.md",
+      "chars": 4202,
+      "sha": "f30bc7f381ef"
+    },
+    {
+      "id": "internal-knowledge-playbooks-ig-profile",
+      "title": "Плейбук: ig-profile",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/ig-profile.md",
+      "file": "internal-knowledge-playbooks-ig-profile.md",
+      "chars": 3701,
+      "sha": "8c28b0868ac9"
+    },
+    {
+      "id": "internal-knowledge-playbooks-ig-reels",
+      "title": "Плейбук: ig-reels",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/ig-reels.md",
+      "file": "internal-knowledge-playbooks-ig-reels.md",
+      "chars": 4142,
+      "sha": "1b63b8010404"
+    },
+    {
+      "id": "internal-knowledge-playbooks-ig-viral",
+      "title": "Плейбук: ig-viral",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/ig-viral.md",
+      "file": "internal-knowledge-playbooks-ig-viral.md",
+      "chars": 3592,
+      "sha": "a83df264e690"
+    },
+    {
+      "id": "internal-knowledge-playbooks-project-from-quote-to-delivery",
+      "title": "Плейбук: project-from-quote-to-delivery",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/project-from-quote-to-delivery.md",
+      "file": "internal-knowledge-playbooks-project-from-quote-to-delivery.md",
+      "chars": 754,
+      "sha": "de61b86dadcb"
+    },
+    {
+      "id": "internal-knowledge-playbooks-publisher",
+      "title": "Плейбук: publisher",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/publisher.md",
+      "file": "internal-knowledge-playbooks-publisher.md",
+      "chars": 4664,
+      "sha": "975b111a58fb"
+    },
+    {
+      "id": "internal-knowledge-playbooks-renderer-builder",
+      "title": "Плейбук: renderer-builder",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/renderer-builder.md",
+      "file": "internal-knowledge-playbooks-renderer-builder.md",
+      "chars": 5333,
+      "sha": "b5da3c36494b"
+    },
+    {
+      "id": "internal-knowledge-playbooks-sales",
+      "title": "Плейбук: sales",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/sales.md",
+      "file": "internal-knowledge-playbooks-sales.md",
+      "chars": 6417,
+      "sha": "957479f95c32"
+    },
+    {
+      "id": "internal-knowledge-playbooks-seo",
+      "title": "Плейбук: seo",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/seo.md",
+      "file": "internal-knowledge-playbooks-seo.md",
+      "chars": 5697,
+      "sha": "eb0bd502b4c1"
+    },
+    {
+      "id": "internal-knowledge-playbooks-trend-scout",
+      "title": "Плейбук: trend-scout",
+      "tier": "internal",
+      "source": "agents/knowledge/playbooks/trend-scout.md",
+      "file": "internal-knowledge-playbooks-trend-scout.md",
+      "chars": 4577,
+      "sha": "17e0b475fbd0"
+    }
+  ]
+}

@@ -11,7 +11,8 @@
     "test": "vitest run && vitest run -c vitest.chaos.config.ts",
     "yt-auth": "tsx --conditions=source --env-file-if-exists=.env.local src/yt-auth.ts",
     "reload-instructions": "tsx --conditions=source --env-file-if-exists=.env.local src/reload-instructions.ts",
-    "import-prospects": "tsx --conditions=source --env-file-if-exists=.env.local src/import-prospects.ts"
+    "import-prospects": "tsx --conditions=source --env-file-if-exists=.env.local src/import-prospects.ts",
+    "fira-compare": "tsx --conditions=source --env-file-if-exists=.env.local scripts/fira-compare.ts"
   },
   "dependencies": {
     "@fir/core": "workspace:*",

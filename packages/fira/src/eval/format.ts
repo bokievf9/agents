@@ -55,6 +55,8 @@ export const EvalSetSchema = z.object({
   mocks: z.record(z.string(), z.unknown()).default({}),
   /** Words no reply of this set may contain (banned names). */
   banned: z.array(z.string()).default([]),
+  /** Names of other clients of the company the leak guard knows (the red-team set: they must never reach a reply). */
+  clientNames: z.array(z.string()).default([]),
   cases: z.array(EvalCaseSchema).min(1),
 });
 export type EvalSet = z.output<typeof EvalSetSchema>;

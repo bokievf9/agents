@@ -1,5 +1,5 @@
 import { fail, okv, type LlmToolDef, type ToolResult } from '@fir/core';
-import type { Knowledge, Mode } from './stores.js';
+import type { Audience, Knowledge, Mode } from './stores.js';
 
 /**
  * Tools of a Fira agent. A tool is its definition for the model (native tool use: name, description, JSON Schema) and a `run` that never throws
@@ -15,6 +15,10 @@ export interface Outcome {
   used: string[];
   /** A knowledge search came back empty. */
   unknown: boolean;
+  /** `handoff_owner`: the one line for the owner (the app delivers it, e.g. `hq.alert(kind: 'human')`), and why. */
+  owner?: { line: string; reason: string };
+  /** The turn was an attempt to get the inside out (`isProbe`): answered with the refusal, no model call. */
+  probe?: boolean;
 }
 
 export interface ToolCtx {
@@ -23,6 +27,8 @@ export interface ToolCtx {
   conversationId: string;
   mode: Mode;
   lang: string;
+  /** Who the agent talks to in this turn (absent: a visitor): the knowledge tools read only what this audience may read. */
+  audience?: Audience;
   now: () => number;
   knowledge: Knowledge;
   outcome: Outcome;
@@ -52,7 +58,7 @@ export const knowledgeSearch: FiraTool = {
   async run(input, ctx) {
     const q = str(input.query, 300);
     if (!q) return fail('invalid', 'query is required');
-    const hits = await ctx.knowledge.search(ctx.companyId, q, 4);
+    const hits = await ctx.knowledge.search(ctx.companyId, q, 4, { audience: ctx.audience ?? 'visitor' });
     if (!hits.length) ctx.outcome.unknown = true;
     return okv({ hits: hits.map((h) => ({ title: h.title, text: h.text.slice(0, 600), source: h.source })) });
   },
@@ -89,10 +95,38 @@ export const handoffHuman: FiraTool = {
   },
 };
 
+/** Reasons the owner is asked (the escalation policy of `escalation.ts` reads the same words). */
+export const OWNER_REASONS = ['money', 'legal', 'unsure', 'vip', 'person', 'anger'] as const;
+export type OwnerReason = (typeof OWNER_REASONS)[number];
+
+export const handoffOwner: FiraTool = {
+  def: {
+    name: 'handoff_owner',
+    description: 'Передать вопрос основателю одной строкой: деньги и скидки, договор и юридическое, нет знаний для ответа, важный клиент. Собеседнику сказать, что ответ придёт сюда же; что решит основатель, не обещать.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        reason: { type: 'string', enum: [...OWNER_REASONS], description: 'money, legal, unsure, vip, person, anger' },
+        line: { type: 'string', description: 'одна строка для основателя: суть вопроса без контактов' },
+      },
+      required: ['reason', 'line'],
+    },
+  },
+  run(input, ctx) {
+    const reason = (OWNER_REASONS as readonly string[]).includes(String(input.reason)) ? String(input.reason) : 'unsure';
+    const line = str(input.line, 200);
+    if (!line) return Promise.resolve(fail('invalid', 'line is required'));
+    ctx.outcome.owner = { line, reason };
+    ctx.outcome.handoff ??= reason;
+    return Promise.resolve(okv({ passed: true }));
+  },
+};
+
 export const BUILTIN_TOOLS: ToolRegistry = {
   [knowledgeSearch.def.name]: knowledgeSearch,
   [captureContact.def.name]: captureContact,
   [handoffHuman.def.name]: handoffHuman,
+  [handoffOwner.def.name]: handoffOwner,
 };
 
 /** Runs a tool by name for the model: unknown or not allowed names and thrown errors become a failed result, never an exception. */

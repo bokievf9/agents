@@ -1,8 +1,9 @@
 import { errMsg, log, tryChat, turnText, turnToolUses, type LlmBlock, type LlmChatMessage, type LlmClient, type LlmSystemBlock } from '@fir/core';
 import { compile, tierFor, withBudget } from './compile.js';
 import { applyGuards, type GuardContext } from './guards.js';
+import { isProbe, leakGuard, probeReply, type LeakContext } from './secrecy.js';
 import type { AgentSpec, TaskKind } from './spec.js';
-import type { Journal, Knowledge, KnowledgeHit, Lesson, Lessons, Memory, Mode, PersonProfile } from './stores.js';
+import type { Audience, Journal, Knowledge, KnowledgeHit, Lesson, Lessons, Memory, Mode, PersonProfile } from './stores.js';
 import { BUILTIN_TOOLS, runTool, type Outcome, type ToolCtx, type ToolRegistry } from './tools.js';
 
 /**
@@ -23,6 +24,8 @@ export interface Conversation {
   task?: TaskKind;
   /** The app's instruction for this turn only (e.g. the lead manager: «сейчас не задавай вопроса, предложи»); goes into the per-turn block. */
   note?: string;
+  /** Who is talking (default: the spec's audience): a signed-in client, an anonymous visitor, the owner. */
+  audience?: Audience;
 }
 
 export interface RunDeps {
@@ -35,17 +38,24 @@ export interface RunDeps {
   /** App tools (override built-ins of the same name). */
   tools?: ToolRegistry;
   guard: GuardContext;
+  /** Names of other clients for the leak guard (`secrecy.ts`); absent: none. */
+  leak?: LeakContext;
   /** USD spent this month by this agent (absent: no budget check). */
   spentUsd?: () => Promise<number>;
-  /** Turns of history sent to the model. */
+  /** Turns of history sent to the model (default: every turn of the conversation that has not expired). */
   historyTurns?: number;
+  /** Upper bound of the history's characters: the oldest turns go first when a long conversation passes it (default 24 000). */
+  historyChars?: number;
   /**
    * Deterministic rules of the app that run before the model (the receptionist's code paths: a person asked for, a price question answered from
    * the price list). A non-null answer is the reply of the turn: no model call, still guards, memory and journal.
    */
   before?: (conv: Conversation, ctx: ToolCtx) => Promise<{ reply: string; handoff?: string } | null>;
-  /** Code the app adds after the words (the offers in their order, a link); runs after the guards, so its own prices and links are not cut. */
-  after?: (reply: string, outcome: Outcome, conv: Conversation) => Promise<string>;
+  /**
+   * Code the app adds after the words (the offers in their order, a link); runs after the guards, so its own prices and links are not cut. `info`: the
+   * model gave nothing (`noModel`: off, down, refused, looping; the reply is the fallback) or the guards cut every sentence (`cutAll`).
+   */
+  after?: (reply: string, outcome: Outcome, conv: Conversation, info: { fallback: boolean; noModel: boolean; cutAll: boolean }) => Promise<string>;
 }
 
 export interface RunOut {
@@ -56,10 +66,24 @@ export interface RunOut {
   fallback: boolean;
   removed: number;
   flagged: string[];
+  /** Sentences the leak guard cut (non-disclosure). */
+  leaked: number;
   fingerprint: string;
 }
 
-const HISTORY = 12;
+/** The whole conversation (owner 2026-11-23: «держит весь контекст диалога»): the TTL of the mode bounds it, the character budget trims the oldest. */
+const HISTORY = 10_000;
+const HISTORY_CHARS = 24_000;
+
+/** The newest turns that fit `max` characters, starting with the person (the Messages API wants a user turn first). */
+export function fitHistory<T extends { role: string; text: string }>(turns: T[], max: number): T[] {
+  let total = 0;
+  let from = turns.length;
+  while (from > 0 && total + turns[from - 1]!.text.length <= max) total += turns[--from]!.text.length;
+  const out = turns.slice(from);
+  while (out.length && out[0]!.role !== 'user') out.shift();
+  return out;
+}
 const TOOL_RESULT_MAX = 2000;
 
 const FALLBACK = {
@@ -91,25 +115,30 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
   const agentId = spec.id;
   const now = deps.now();
   const outcome: Outcome = { used: [], unknown: false };
-  const ctx: ToolCtx = { companyId, agentId, conversationId: conv.id, mode: conv.mode, lang: conv.lang, now: deps.now, knowledge: deps.knowledge, outcome };
+  const audience: Audience = conv.audience ?? spec.audience;
+  const ctx: ToolCtx = { companyId, agentId, conversationId: conv.id, mode: conv.mode, lang: conv.lang, audience, now: deps.now, knowledge: deps.knowledge, outcome };
 
   let tier = withBudget(tierFor(spec.model, conv.task), spec.model, deps.spentUsd ? await deps.spentUsd() : 0);
   const [history, profile, lessons, hits] = await Promise.all([
     conv.mode === 'demo' ? Promise.resolve([]) : deps.memory.turns(companyId, conv.id, deps.historyTurns ?? HISTORY, now),
     conv.contactKey && conv.mode !== 'demo' ? deps.memory.profile(companyId, conv.contactKey, now) : Promise.resolve(null),
     deps.lessons.near(companyId, agentId, spec.role.id, conv.text, 3),
-    deps.knowledge.search(companyId, conv.text, 3),
+    deps.knowledge.search(companyId, conv.text, 3, { audience }),
   ]);
   const extra = turnBlock({ profile, lessons, hits, note: conv.note });
   const system: LlmSystemBlock[] = [...c.system, ...(extra ? [{ text: extra }] : [])];
-  const messages: LlmChatMessage[] = [...history.map((t) => ({ role: t.role, content: t.text })), { role: 'user', content: conv.text }];
+  const messages: LlmChatMessage[] = [...fitHistory(history, deps.historyChars ?? HISTORY_CHARS).map((t) => ({ role: t.role, content: t.text })), { role: 'user', content: conv.text }];
 
   let reply = '';
   let rounds = 0;
   let fallback = false;
   let inputTokens = 0;
   let outputTokens = 0;
-  const ruled = deps.before ? await deps.before(conv, ctx) : null;
+  // non-disclosure: a plain attempt to get the inside out is refused by code, before the app's rules and the model (the owner is not refused)
+  const secret = audience !== 'owner';
+  const probe = secret && isProbe(conv.text);
+  if (probe) outcome.probe = true;
+  const ruled = probe ? { reply: probeReply(conv.lang) } : deps.before ? await deps.before(conv, ctx) : null;
   if (ruled) {
     reply = ruled.reply;
     if (ruled.handoff) outcome.handoff = ruled.handoff;
@@ -137,7 +166,8 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
     }
   } else tier = null;
 
-  if (!reply.trim()) {
+  const noModel = !reply.trim();
+  if (noModel) {
     fallback = true;
     const best = hits[0];
     if (best && best.score >= 0.5) reply = best.text;
@@ -152,8 +182,10 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
     fallback = true;
     outcome.handoff ??= 'ответ снят охранниками';
   }
-  const guarded = g.text || fb(conv.lang).handoff;
-  const text = deps.after ? (await deps.after(guarded, outcome, conv)).trim() || guarded : guarded;
+  // the leak guard on everything that did not come from code: paths, env names, keys, IPs, /admin, other clients' names
+  const lk = secret && !ruled && g.text ? leakGuard(g.text, conv.lang, deps.leak) : { text: g.text, cut: 0, kinds: [] as string[] };
+  const guarded = lk.text || fb(conv.lang).handoff;
+  const text = deps.after ? (await deps.after(guarded, outcome, conv, { fallback, noModel, cutAll: !noModel && !g.text })).trim() || guarded : guarded;
 
   // memory: live keeps texts liveDays, anon anonHours (a captured contact promotes it), demo nothing
   try {
@@ -168,12 +200,13 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
       companyId, agentId, specVersion: spec.version, conversationId: conv.id, at: now, mode: conv.mode, tier: tier ?? 'none', rounds,
       tools: [...outcome.used], handoff: Boolean(outcome.handoff), contact: Boolean(outcome.contact), removed: g.removed, flagged: g.flagged.length,
       fallback, unknown: outcome.unknown, ...(inputTokens || outputTokens ? { inputTokens, outputTokens } : {}),
+      ...(probe ? { probe: true } : {}), ...(lk.cut ? { leaked: lk.cut, leakKinds: [...lk.kinds] } : {}),
       ...(conv.mode === 'live' ? { texts: { user: conv.text, reply: text } } : {}),
     });
   } catch (e) {
     // a store that fails never loses the reply: the person still gets it
     log('warn', 'fira: store failed after a turn', { agent: agentId, err: errMsg(e) });
   }
-  log('info', 'fira turn', { agent: agentId, v: spec.version, rounds, tools: outcome.used.length, fallback, handoff: Boolean(outcome.handoff) });
-  return { reply: text, outcome, rounds, tier, fallback, removed: g.removed, flagged: g.flagged, fingerprint: c.fingerprint };
+  log('info', 'fira turn', { agent: agentId, v: spec.version, rounds, tools: outcome.used.length, fallback, handoff: Boolean(outcome.handoff), ...(probe ? { probe: true } : {}), ...(lk.cut ? { leaked: lk.cut } : {}) });
+  return { reply: text, outcome, rounds, tier, fallback, removed: g.removed, flagged: g.flagged, leaked: lk.cut, fingerprint: c.fingerprint };
 }

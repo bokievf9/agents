@@ -1,4 +1,4 @@
-import type { Knowledge, KnowledgeChunk, KnowledgeHit, KnowledgeMiss } from '../stores.js';
+import { tiersFor, type Audience, type Knowledge, type KnowledgeChunk, type KnowledgeHit, type KnowledgeMiss } from '../stores.js';
 
 /**
  * STUB of the Supabase adapter (no network in this package yet). It fixes the shape of the requests the real adapter will send to PostgREST
@@ -40,14 +40,15 @@ export class SupabaseKnowledge implements Knowledge {
       method: 'POST',
       path: '/rest/v1/knowledge_chunks',
       query: { on_conflict: 'company_id,id' },
-      body: chunks.map((c, i) => ({
-        id: c.id, company_id: c.companyId, source: c.source, title: c.title, text: c.text, ref: c.ref ?? null,
+      // a `secret` chunk never leaves the process
+      body: chunks.flatMap((c, i) => (c.tier === 'secret' ? [] : [{
+        id: c.id, company_id: c.companyId, source: c.source, tier: c.tier ?? 'public', title: c.title, text: c.text, ref: c.ref ?? null,
         updated_at: new Date(c.updatedAt).toISOString(), embedding: embeddings[i] ?? null,
-      })),
+      }])),
     }),
-    search: (companyId: string, query: string, embedding: number[], k: number): SupabaseRequest => {
+    search: (companyId: string, query: string, embedding: number[], k: number, audience: Audience = 'visitor'): SupabaseRequest => {
       if (embedding.length !== this.cfg.dims) throw new Error(`fira: embedding has ${embedding.length} dims, the column has ${this.cfg.dims}`);
-      return { method: 'POST', path: '/rest/v1/rpc/fira_match_chunks', body: { p_company: companyId, p_query: query, p_embedding: embedding, p_k: k } };
+      return { method: 'POST', path: '/rest/v1/rpc/fira_match_chunks', body: { p_company: companyId, p_query: query, p_embedding: embedding, p_k: k, p_tiers: tiersFor(audience) } };
     },
     missed: (companyId: string, query: string, at: number): SupabaseRequest => ({
       method: 'POST', path: '/rest/v1/rpc/fira_note_miss', body: { p_company: companyId, p_query: query.slice(0, 200), p_at: new Date(at).toISOString() },
