@@ -41,6 +41,9 @@ import { seedTiming } from '../../src/timing.js';
 import { COMMAND_NAMES, routedTo } from '../../src/commands.js';
 import { createWebhook } from '../../src/webhook.js';
 import { resolveMedia } from '@fir/worker-publisher';
+import { UPLOAD_TYPES } from '@fir/core';
+import { buildCabinet } from '../../src/cabinet-api.js';
+import { toolsFor, type AppTools } from '../../src/tools.js';
 import { RateLimiter } from '../../src/client/sanitize.js';
 import { instructionsDir, NOW, OWNER, routedLlm } from '../helpers.js';
 import { WORDING } from '../chain-helpers.js';
@@ -53,7 +56,13 @@ export const TOKENS = { admin: 'adm-tok', lead: 'lead-tok', chat: 'chat-tok', ev
 export const SECRET_CLIENT = { name: 'Dilnoza Karimova', email: 'dilnoza.k@example.com', phone: '+992 90 123 45 67' };
 
 /** The whole company as `index.ts` wires it, minus the Telegram network: every head, the Director, the Drill, the admin API and the real webhook server. */
-export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolean } = {}) {
+export const MEDIA_BASE = 'https://hq.test/media';
+
+/**
+ * `flow: true` wires Cabinet v3 like `index.ts` does (documents to the client's cabinet, accept and sign, threads, uploads, the playground, the public agent route);
+ * without it the world is the older one (a cabinet lead's КП makes the contract and the invoice at once), which the older drill tests still describe.
+ */
+export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolean; flow?: boolean } = {}) {
   const clock = { t: NOW };
   const t = () => clock.t;
   const db = openDb(':memory:');
@@ -125,6 +134,37 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const production = new ProductionHead({ hq, tools, llm: llm as any, queue, messenger: channel, ownerId: OWNER, reporter } as any);
   support.onPaid = async (inv) => [...production.onInvoicePaid(inv), ...(await sales.onInvoicePaid(inv))];
   const backoffice = new BackofficeHead({ hq, tools, llm: llm as any, queue, messenger: channel, ownerId: OWNER, reporter, knowledgeDir: join(process.cwd(), '..', '..', 'knowledge'), ops: { dataDir, rendersDir, ageRecipient: undefined } } as any);
+  // Cabinet v3 (opt-in): the same wiring as index.ts
+  const emails: { to: string; subject: string; text: string }[] = [];
+  const emailFail = { on: false };
+  const cabTools: AppTools = {
+    config: { dataDir, rendersDir, mediaSecret: MEDIA_SECRET, mediaBase: MEDIA_BASE, resendApiKey: 'RSKEY', emailFrom: 'Fir Tech <hello@firtech.pro>' },
+    fetch: ((url: string, init: RequestInit) => {
+      if (url.startsWith('https://api.resend.com/emails')) {
+        if (emailFail.on) return Promise.resolve(new Response('boom', { status: 500 }));
+        const b = JSON.parse(String(init.body)) as { to: string[]; subject: string; text: string };
+        emails.push({ to: b.to[0]!, subject: b.subject, text: b.text });
+        return Promise.resolve(Response.json({ id: `em_${emails.length}` }));
+      }
+      return Promise.resolve(new Response('nf', { status: 404 }));
+    }) as any,
+    sleep: () => Promise.resolve(),
+  };
+  const cabinet = o.flow
+    ? buildCabinet({
+        hq, llm: llm as any, billing, siteUrl: 'https://firtech.pro', dataDir, mediaSecret: MEDIA_SECRET, mediaBase: MEDIA_BASE, secret: 'pg-test-secret',
+        tools: () => toolsFor(hq, cabTools, { agentId: 'documents', dept: 'backoffice', messenger: channel, ownerId: OWNER }),
+      })
+    : undefined;
+  if (cabinet) {
+    sales.cabinet = cabinet.docs;
+    backoffice.cabinet = cabinet.docs;
+    support.cabinet = cabinet.docs;
+    support.onPaid = async (inv) => {
+      cabinet.docs.onPaid(inv);
+      return [...production.onInvoicePaid(inv), ...(await sales.onInvoicePaid(inv))];
+    };
+  }
   for (const name of routedTo('production')) director.commands.set(name, { dept: 'production', run: (arg) => production.command(name, arg) });
   for (const name of routedTo('backoffice')) director.commands.set(name, { dept: 'backoffice', run: (arg) => backoffice.command(name, arg) });
   const drill = new Drill({
@@ -178,7 +218,7 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
     cabinetTicket: (x: any) => support.cabinetTicket(x.id, x.name, x.text, x.telegram, x.leadId),
     reloadPrices: () => { reloads.n++; return reloads.fail ? Promise.reject(new Error('site down')) : Promise.resolve({ source: 'fetched' as const, updatedAt: '2026-11-21' }); },
     acceptStage: (pid, no) => Promise.resolve(production.acceptStage(pid, no, 'client')),
-    billing, marketing, tools: tools as any, rendersDir, onRoutinesChange: () => undefined,
+    billing, marketing, tools: tools as any, rendersDir, onRoutinesChange: () => undefined, ...(cabinet ? { cabinet } : {}),
     client: { send: (chatId: number, text: string) => { toClient.push({ chatId, text }); return Promise.resolve(); } } as any,
     webReply: (sessionId: string, text: string) => { toWeb.push({ sessionId, text }); return webChat.store.queueOwnerReply(sessionId, text); },
   });
@@ -202,7 +242,12 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
       blog: blogApi(db, t, () => hq.tz),
       pay: payApi(db, billing, t, () => hq.tz),
       events: { token: TOKENS.events, handle: eventsApi(db, t, () => hq.tz).handle },
-      media: { resolve: (sig: string, rel: string) => resolveMedia(rendersDir, MEDIA_SECRET, sig, rel) },
+      media: {
+        resolve: (sig: string, rel: string, exp?: number | null) => rel.startsWith('uploads/')
+          ? resolveMedia(dataDir, MEDIA_SECRET, sig, rel, { exp: exp ?? null, now: t(), types: UPLOAD_TYPES })
+          : resolveMedia(rendersDir, MEDIA_SECRET, sig, rel, { exp: exp ?? null, now: t() }),
+      },
+      ...(cabinet ? { agent: { handle: (id: string, r: any) => cabinet.playground.handlePublic(id, r) } } : {}),
     },
   );
   let url = '';
@@ -241,7 +286,7 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const close = () => new Promise<void>((res) => (url ? webhook.close(() => res()) : res()));
   return {
     bot, api, press, say, settle, clock, db, tg, hq, queue, channel, llm, calls, state, director, marketing, support, sales, production, backoffice, drill, billing, payWatch, chain, chainGets, admin, webhook, url, http, adm,
-    heartbeat, beat, decide, cmd, alerts, posted, lost, webChat, reloads, toWeb, toClient, tools, fetched, rendersDir, dataDir, sleeps, outbox, ownerSaw, close, startRoutines: () => startRoutines(hq),
+    cabinet, emails, emailFail, heartbeat, beat, decide, cmd, alerts, posted, lost, webChat, reloads, toWeb, toClient, tools, fetched, rendersDir, dataDir, sleeps, outbox, ownerSaw, close, startRoutines: () => startRoutines(hq),
   };
 }
 export type DrillWorld = Awaited<ReturnType<typeof drillWorld>>;

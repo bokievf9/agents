@@ -95,6 +95,8 @@ export interface Config extends BaseConfig {
   igTokenIssuedAt: string | undefined;
   /** Signs the public `/media/<sig>/<path>` URLs: `MEDIA_SECRET`, else `WEB_CHAT_TOKEN`. Without both the route answers 404. */
   mediaSecret: string | undefined;
+  /** Key for the Telegram tokens of the clients' agents at rest (`PG_SECRET`); absent: the media secret is used. */
+  pgSecret: string | undefined;
   trendsRegions: string[];
   gscServiceAccountJson: string | undefined;
   gscSiteUrl: string | undefined;
@@ -207,6 +209,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     igPublicBase: optional(env, 'IG_PUBLIC_BASE')?.replace(/\/+$/, ''),
     igTokenIssuedAt: optional(env, 'IG_TOKEN_ISSUED_AT'),
     mediaSecret: optional(env, 'MEDIA_SECRET') ?? optional(env, 'WEB_CHAT_TOKEN'),
+    pgSecret: optional(env, 'PG_SECRET'),
     trendsRegions: (optional(env, 'TRENDS_REGIONS') ?? 'KZ,UZ,RU').split(',').map((r) => r.trim().toUpperCase()).filter((r) => /^[A-Z]{2}$/.test(r)),
     gscServiceAccountJson: optional(env, 'GSC_SERVICE_ACCOUNT_JSON'),
     gscSiteUrl: optional(env, 'GSC_SITE_URL'),

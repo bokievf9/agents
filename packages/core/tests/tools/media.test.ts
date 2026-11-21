@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import { markdownToPdfDoc, qrMatrix, rsDivisor, rsRemainder, scriptRuns } from '../../src/index.js';
 import { tools } from './helpers.js';
+import { makePng } from './png.js';
 
 type Decoder = (d: Uint8ClampedArray, w: number, h: number) => { data: string } | null;
 const jsqrMod = createRequire(import.meta.url)('jsqr') as Decoder | { default: Decoder };
@@ -76,6 +77,25 @@ describe('media.pdf', () => {
     expect(b.toString('latin1')).toMatch(/Onest/);
     const one = await t.media.pdf({ title: 'Акт', sections: [{ paragraphs: ['Работы приняты.'] }] });
     expect(one).toMatchObject({ ok: true, value: { pages: 1 } });
+  });
+
+  it('the two parties of a contract side by side, the client\'s drawn signature as a picture', async () => {
+    const { t } = tools({ dept: 'backoffice' });
+    const base = { title: 'Договор № 2026-5', sections: [{ heading: '1. Предмет', paragraphs: ['Исполнитель делает сайт.'] }] };
+    const unsigned = await t.media.pdf({ ...base, parties: [{ role: 'Исполнитель', name: 'Fir Tech', date: '22.11.2026' }, { role: 'Заказчик', name: 'Анвар' }] });
+    const signed = await t.media.pdf({
+      ...base, parties: [{ role: 'Исполнитель', name: 'Fir Tech', details: ['hello@firtech.pro'], date: '22.11.2026' }, { role: 'Заказчик', name: 'Анвар Каримов', date: '22.11.2026', signature: makePng({ stroke: true }) }],
+    });
+    expect(unsigned.ok && signed.ok).toBe(true);
+    if (!unsigned.ok || !signed.ok) return;
+    expect(signed.value.bytes.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(unsigned.value.bytes.toString('latin1')).not.toMatch(/\/Subtype \/Image/);
+    expect(signed.value.bytes.toString('latin1')).toMatch(/\/Subtype \/Image/);
+    // more than two parties, or a signature that is not bytes, is refused with the reason
+    const three = await t.media.pdf({ ...base, parties: [{ role: 'a', name: 'b' }, { role: 'a', name: 'b' }, { role: 'a', name: 'b' }] });
+    expect(three).toMatchObject({ ok: false, error: 'invalid' });
+    const text = await t.media.pdf({ ...base, parties: [{ role: 'a', name: 'b', signature: 'data:image/png;base64,AAAA' as unknown as Uint8Array }] });
+    expect(text).toMatchObject({ ok: false, error: 'invalid' });
   });
 
   it('a bad document is invalid with the reason; rights by department', async () => {

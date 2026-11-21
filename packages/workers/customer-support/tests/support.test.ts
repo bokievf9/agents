@@ -135,3 +135,19 @@ describe('SLA and lists', () => {
     expect(setup().worker.ticketsText(setup().ctx)).toBe('Тикетов нет.');
   });
 });
+
+describe('a cabinet ticket written in a project or support thread (Cabinet v3)', () => {
+  it('its approved answer lands in that thread once, not in a lead thread', async () => {
+    const { db, ctx, specs } = setup();
+    db.exec("CREATE TABLE cab_clients (id INTEGER PRIMARY KEY, email TEXT)");
+    db.prepare("INSERT INTO cab_clients (id, email) VALUES (5, 'anvar@example.com')").run();
+    const store = csStoreFor(ctx);
+    const tk = store.addCabinetTicket({ clientName: 'Anvar', contact: 'anvar@example.com', text: '[по проекту #3] Когда макет?', thread: 'project-3' });
+    expect(store.ticket(tk.id)?.source).toBe('cabinet');
+    await specs[KIND_ANSWER]!.execute({ text: 'Макет будет завтра.', ticketId: tk.id, name: 'Anvar', contact: 'anvar@example.com' }, 1);
+    await specs[KIND_ANSWER]!.execute({ text: 'Макет будет завтра.', ticketId: tk.id, name: 'Anvar', contact: 'anvar@example.com' }, 1);
+    const rows = db.prepare('SELECT client_id, thread, "from", text FROM cab_tmsgs').all();
+    expect(rows).toEqual([{ client_id: 5, thread: 'project-3', from: 'manager', text: 'Макет будет завтра.' }]);
+    expect(store.ticket(tk.id)).toMatchObject({ status: 'answered', answer: 'Макет будет завтра.' });
+  });
+});

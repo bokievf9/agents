@@ -29,6 +29,8 @@ import { blogApi } from './blog.js';
 import { payApi } from './pay.js';
 import { cachedStatus } from './status.js';
 import { createAdmin } from './admin.js';
+import { buildCabinet } from './cabinet-api.js';
+import { UPLOAD_TYPES } from '@fir/core';
 import { serveFile } from './pult-files.js';
 import { eventsApi } from './pult-events.js';
 import { OwnerChannel } from './presence.js';
@@ -46,7 +48,7 @@ import { DIRECTOR_COMMANDS, DIRECTOR_PROFILE, deptBotMenu } from './tg.js';
 import { COMMAND_NAMES, routedTo } from './commands.js';
 import { installOwnerGlue } from './glue.js';
 import { createReach } from './reach.js';
-import { appTools } from './tools.js';
+import { appTools, toolsFor } from './tools.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
@@ -174,12 +176,24 @@ director.onSalesReply = (id, text) => sales.startReply(id, text);
 director.onSalesCommand = (name, arg) => sales.salesCommand(name, arg);
 director.editors.set('sales:reply', sales); // the owner's text after /reply <id>
 const production = new ProductionHead({ hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter });
-// The first payment of a КП starts the project (reserved by the approved КП) and asks the referral payout; `/paid` and later the on-chain check land here.
-support.onPaid = async (inv) => [...production.onInvoicePaid(inv), ...(await sales.onInvoicePaid(inv))];
 const backoffice = new BackofficeHead({
   hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter, knowledgeDir: cfg.knowledgeDir,
   ops: { dataDir: cfg.dataDir, rendersDir: cfg.rendersDir, ageRecipient: cfg.backupAgeRecipient },
 });
+// Cabinet v3 (2026-11-22): the client's documents (accept, sign), threads and uploads, the playground of agents. The heads hand the owner's approvals to it.
+const chatGateForAgents = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
+const cabinet = buildCabinet({
+  hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents,
+  tools: () => toolsFor(hq, tools, { agentId: 'documents', dept: BACKOFFICE, messenger, ownerId: cfg.ownerId }),
+});
+sales.cabinet = cabinet.docs;
+backoffice.cabinet = cabinet.docs;
+support.cabinet = cabinet.docs;
+// The first payment of a КП starts the project (reserved by the approved КП) and asks the referral payout; `/paid` and later the on-chain check land here.
+support.onPaid = async (inv) => {
+  cabinet.docs.onPaid(inv);
+  return [...production.onInvoicePaid(inv), ...(await sales.onInvoicePaid(inv))];
+};
 for (const name of routedTo('production')) director.commands.set(name, { dept: 'production', run: (arg) => production.command(name, arg) });
 for (const name of routedTo('backoffice')) director.commands.set(name, { dept: 'backoffice', run: (arg) => backoffice.command(name, arg) });
 const drill = new Drill({
@@ -285,7 +299,7 @@ const admin = cfg.adminToken
   ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: COMMAND_NAMES, drill: (arg) => drill.command(arg), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),
       reloadPrices: async () => { const r = await loadPrices(pricesOpts); return { source: r.source, updatedAt: r.prices.updatedAt }; },
       acceptStage: (projectId, stageNo) => Promise.resolve(production.acceptStage(projectId, stageNo, 'client')),
-      billing, marketing, tools, rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
+      billing, marketing, tools, cabinet, rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
     })
   : null;
 // Presence: the site pings while it is open; without pings the owner counts as away and a digest goes to Telegram.
@@ -328,7 +342,17 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cf
         blog: blogApi(db, hq.now, () => hq.tz),
         pay: payApi(db, billing, hq.now, () => hq.tz),
         ...(cfg.siteEventsToken ? { events: { token: cfg.siteEventsToken, handle: eventsApi(db, hq.now, () => hq.tz).handle } } : {}),
-        ...(cfg.mediaSecret ? { media: { resolve: (sig: string, rel: string) => resolveMedia(cfg.rendersDir, cfg.mediaSecret!, sig, rel) } } : {}),
+        ...(cfg.mediaSecret
+          ? {
+              media: {
+                // renders (Instagram, the cabinet's PDFs) and the clients' uploads under DATA_DIR/uploads; expiring links carry `?e=`
+                resolve: (sig: string, rel: string, exp?: number | null) => rel.startsWith('uploads/')
+                  ? resolveMedia(cfg.dataDir, cfg.mediaSecret!, sig, rel, { exp: exp ?? null, now: hq.now(), types: UPLOAD_TYPES })
+                  : resolveMedia(cfg.rendersDir, cfg.mediaSecret!, sig, rel, { exp: exp ?? null, now: hq.now() }),
+              },
+            }
+          : {}),
+        agent: { handle: (id, r) => cabinet.playground.handlePublic(id, r) },
       },
     ).listen(cfg.webhookPort, '0.0.0.0', () => log('info', 'webhook listening', { port: cfg.webhookPort, lead: Boolean(cfg.leadWebhookToken), chat: Boolean(webChat), admin: Boolean(admin) }))
   : null;

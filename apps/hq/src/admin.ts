@@ -3,6 +3,7 @@ import type { Hq, Task } from '@fir/hq';
 import { openBuilderTasks } from './bridge.js';
 import type { Director } from './director.js';
 import { createCrm } from './admin-crm.js';
+import type { CabinetApi } from './cabinet-api.js';
 import { createPult } from './pult.js';
 import type { BillingWorker } from '@fir/worker-billing';
 import type { ClientChannel } from './client/channel.js';
@@ -41,6 +42,8 @@ export interface AdminDeps {
   onRoutinesChange?: () => void;
   /** The agents' toolbox adapters and keys: `GET /admin/company` lists the tools with their state. */
   tools?: AppTools;
+  /** Cabinet v3 (2026-11-22): documents, threads, uploads, the playground (`cabinet-api.ts`); its owner-side hooks are bound here. */
+  cabinet?: CabinetApi;
 }
 
 export interface AdminRequest {
@@ -71,6 +74,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   const hits: number[] = [];
   let served = 0;
   const crm = createCrm(hq.db, now, {
+    ...(d.cabinet ? { cabinet: d.cabinet } : {}),
     // a plain inbox line, not an approval: Telegram only through the away digest rules of the channel
     notifyOwner: (text) => void channel.notify('message', text).catch((e) => log('warn', 'cabinet notify failed', { err: errMsg(e) })),
     // the Sales head's journal of the lead's task gets the client's message (the inbox line for the owner is made by the cabinet code)
@@ -84,6 +88,17 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
     ...(d.billing ? { payUrl: (inv: { number: string; payKey: string | null; locale: 'ru' | 'en' }) => d.billing!.payUrl(inv) } : {}),
     ...(d.acceptStage ? { acceptStage: d.acceptStage } : {}),
     ...(d.cabinetTicket ? { cabinetTicket: (t) => void d.cabinetTicket!(t).catch((e) => log('warn', 'cabinet ticket flow failed', { err: errMsg(e) })) } : {}),
+  });
+  d.cabinet?.bind({
+    notifyOwner: (text) => void channel.notify('message', text).catch((e) => log('warn', 'cabinet notify failed', { err: errMsg(e) })),
+    leadJournal: (taskId, text) => {
+      try {
+        hq.comment(taskId, 'sales-head', text);
+      } catch (e) {
+        log('warn', 'cabinet lead journal failed', { err: errMsg(e) });
+      }
+    },
+    ...(d.cabinetTicket ? { cabinetTicket: (t: { id: number; name: string; text: string; telegram: string; leadId?: number }) => void d.cabinetTicket!(t).catch((e) => log('warn', 'cabinet ticket flow failed', { err: errMsg(e) })) } : {}),
   });
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));
   const pult = createPult({

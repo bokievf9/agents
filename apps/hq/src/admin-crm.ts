@@ -7,6 +7,8 @@ import { z } from 'zod';
 import { addCabMessage, ensureCabinetTables, MESSAGE_CAP, nextStepOf, stageMoveTitle, stageNextStep, timelineTitle } from './cabinet.js';
 import { stageState, stageTitleRu } from '@fir/worker-project-manager';
 import { ensureStageColumn, nextActionOf, StageContext, type Stage } from './lead-stage.js';
+import { clientNextAction, docNextStep, docsOf, ensureDocTables, projectStateOf } from './cab-docs.js';
+import type { CabinetApi } from './cabinet-api.js';
 
 /**
  * Owner's CRM panels of the website («Пульт», `/admin/crm/*`): read-mostly views over the tables of the workers.
@@ -50,6 +52,8 @@ export interface CrmHooks {
   payUrl?: (inv: { number: string; payKey: string | null; locale: 'ru' | 'en' }) => string | null;
   /** The client accepts a stage (Production: `acceptStage`, which proposes the next invoice). */
   acceptStage?: (projectId: number, stageNo: number) => Promise<{ status: 'accepted' | 'already' | 'not_paid' | 'not_ready' | 'unknown'; text: string }>;
+  /** Cabinet v3 (2026-11-22): documents, threads, uploads and the playground under `/admin/clients/:id/`. Without it those routes answer 404. */
+  cabinet?: CabinetApi;
 }
 
 const clientPost = z.object({
@@ -61,6 +65,14 @@ const clientPost = z.object({
   marketingConsent: z.boolean().default(false),
 });
 const ticketCreate = z.object({ text: z.string().trim().min(1).max(1000) });
+/** `POST /admin/clients/:id`: only the fields that are sent change (a field sent empty clears it). */
+const profilePatch = z.object({
+  name: z.string().trim().max(120).optional(),
+  telegram: z.string().trim().max(120).optional(),
+  phone: z.string().trim().max(40).optional(),
+  company: z.string().trim().max(120).optional(),
+  locale: z.enum(['ru', 'en']).optional(),
+});
 const leadMessage = z.object({ text: z.string().trim().min(1).max(MESSAGE_CAP) });
 const CAB_LEADS_CAP = 20;
 const STAGE_SET = new Set<string>(['new', 'qualified', 'proposal', 'contract', 'paid', 'project', 'lost']);
@@ -356,7 +368,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
   }
 
   // ---- projects ----
-  interface ProjRow { id: number; client: string; what: string; product: string; status: string; source: string; task_id: number | null; created_at: number }
+  interface ProjRow { id: number; client: string; what: string; product: string; status: string; source: string; task_id: number | null; created_at: number; lead_id?: number | null }
   function projects(query: URLSearchParams): CrmReply {
     if (!has('pm_projects')) return unavailable();
     const p = page(query);
@@ -370,12 +382,16 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
         const open = ms.filter((m) => m.status !== 'done');
         const next = open[0];
         const last = ms.at(-1);
+        // Cabinet v3: what the client sees of the project (the state, his documents, the one thing he does next)
+        const stagesNow = stageViews(pr.id, lang);
+        const docs = docsOf(db, { projectId: pr.id, leadId: pr.lead_id ?? null });
         return {
           id: pr.id, client: pr.client, what: cap(pr.what), product: pr.product, status: pr.status, source: pr.source, taskId: pr.task_id,
+          state: projectStateOf(pr.status, stagesNow), documents: docs.map((d) => d.id), nextAction: clientNextAction(docs, stagesNow),
           stage: pr.status === 'draft' ? 'spec' : pr.status === 'done' ? 'done' : next?.kind ?? 'done',
           deadline: iso(next?.due_at ?? last?.due_at), nextMilestone: next ? { kind: next.kind, title: next.title, dueAt: iso(next.due_at) } : null,
           tasksTotal: ms.length, tasksDone: ms.length - open.length, createdAt: iso(pr.created_at),
-          milestones: stageViews(pr.id, lang),
+          milestones: stagesNow,
         };
   }
 
@@ -427,12 +443,13 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
 
   // ---- client cabinet (`/admin/clients/*`): accounts made on the site, scoped views of their own rows ----
   ensureCabinetTables(db);
+  ensureDocTables(db);
   const ensureLeadClientId = () => {
     if (has('li_leads') && !all<{ name: string }>('PRAGMA table_info(li_leads)').some((c) => c.name === 'client_id')) db.exec('ALTER TABLE li_leads ADD COLUMN client_id INTEGER');
   };
   ensureLeadClientId();
   ensureStageColumn(db);
-  interface CabRow { id: number; email: string; name: string; telegram: string; locale: string; supabase_id: string; ref_slug: string | null; created_at: number }
+  interface CabRow { id: number; email: string; name: string; telegram: string; phone?: string; company?: string; locale: string; supabase_id: string; ref_slug: string | null; created_at: number }
   const cabById = (id: number) => one<CabRow>('SELECT * FROM cab_clients WHERE id = ?', id);
 
   /** Links the leads whose contact is the client's email or Telegram handle (case-insensitive, `@` optional); returns all leads linked to the client. */
@@ -490,9 +507,14 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     const projectsOut = has('pm_projects')
       ? newest(all<ProjRow & { lead_id?: number | null }>('SELECT * FROM pm_projects ORDER BY id DESC').filter((p) => mineName(p.client) || (p.lead_id != null && leadIds.has(p.lead_id))).map((p) => projectView(p, c.locale)))
       : [];
+    // the papers of a lead whose documents go through the cabinet (`GET /admin/clients/:id/documents`) are not repeated here, least of all the contract draft of the КП pack
+    const flowLeadIds = new Set(all<{ lead_id: number }>('SELECT DISTINCT lead_id FROM cab_documents WHERE client_id = ? AND lead_id IS NOT NULL', c.id).map((r) => r.lead_id));
+    const flowNames = new Set(lead.filter((l) => flowLeadIds.has(l.id)).map((l) => l.name.trim().toLowerCase()));
     const docs = allDocs().filter((d) => {
       const own = d.leadId !== undefined ? leadIds.has(d.leadId) : mineName(d.client);
       if (!own) return false;
+      if (d.leadId !== undefined && flowLeadIds.has(d.leadId) && d.source !== 'billing') return false;
+      if (d.source === 'back_office' && flowNames.has(d.client.trim().toLowerCase())) return false;
       // the client sees what the owner approved or issued: never drafts, rejected or voided papers
       if (d.source === 'billing') return d.status === 'issued' || d.status === 'paid';
       return CAB_DOC_KINDS.includes(d.kind) && d.status === 'approved';
@@ -512,7 +534,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       ? newest(all<RefRow>('SELECT * FROM rf_referrals ORDER BY id DESC').filter((r) => { const k = r.referrer.trim().toLowerCase(); return k === slug || mineName(r.referrer); }).map(refView))
       : [];
     return ok({
-      client: { id: c.id, name: c.name, email: c.email, telegram: c.telegram, createdAt: iso(c.created_at) },
+      client: { id: c.id, name: c.name, email: c.email, telegram: c.telegram, phone: c.phone ?? '', company: c.company ?? '', locale: c.locale, createdAt: iso(c.created_at) },
       projects: projectsOut, invoices, documents: documentsOut, tickets: ticketsOut, referrals: referralsOut, referralSlug: slug,
       leads: cabinetLeads(c.id),
     });
@@ -535,12 +557,25 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       const replies = all<{ from: string; text: string; at: number }>('SELECT "from", text, at FROM cab_messages WHERE lead_id = ? AND client_id = ? ORDER BY at, id', l.id, clientId);
       const firstManager = replies.find((r) => r.from === 'manager');
       if (firstManager) events.push({ at: firstManager.at, kind: 'reply', title: timelineTitle('reply', lang) });
-      if (has('ps_documents')) {
+      // Cabinet v3: when the quote went to the client's cabinet, the timeline follows HIS papers (sent, accepted, contract sent, signed); the contract draft inside the
+      // КП pack and the contract drafted for the owner are not events of his
+      const flowDocs = docsOf(db, { leadId: l.id });
+      const flowOn = flowDocs.some((d) => d.kind === 'quote');
+      for (const d of flowDocs) {
+        if (d.kind === 'quote') {
+          events.push({ at: d.delivered_at ?? d.created_at, kind: 'kp', title: timelineTitle('kp', lang) });
+          if (d.accepted_at !== null) events.push({ at: d.accepted_at, kind: 'kp_accepted', title: timelineTitle('kp_accepted', lang) });
+        } else if (d.kind === 'contract') {
+          events.push({ at: d.delivered_at ?? d.created_at, kind: 'contract', title: timelineTitle('contract', lang) });
+          if (d.signed_at !== null) events.push({ at: d.signed_at, kind: 'contract_signed', title: timelineTitle('contract_signed', lang) });
+        }
+      }
+      if (has('ps_documents') && !flowOn) {
         for (const d of all<{ kind: string; created_at: number; decided_at: number | null }>("SELECT kind, created_at, decided_at FROM ps_documents WHERE lead_id = ? AND status = 'approved' AND kind IN ('kp', 'contract') ORDER BY id", l.id)) {
           events.push({ at: d.decided_at ?? d.created_at, kind: d.kind, title: timelineTitle(d.kind === 'kp' ? 'kp' : 'contract', lang) });
         }
       }
-      if (has('bo_documents') && !events.some((e) => e.kind === 'contract')) {
+      if (has('bo_documents') && !flowOn && !events.some((e) => e.kind === 'contract')) {
         // compared in JS: SQLite lower() does not fold Cyrillic
         const d = all<{ client: string; created_at: number }>("SELECT client, created_at FROM bo_documents WHERE type = 'contract' AND status != 'rejected' ORDER BY id").find((x) => x.client.trim().toLowerCase() === l.name.trim().toLowerCase());
         if (d) events.push({ at: d.created_at, kind: 'contract', title: timelineTitle('contract', lang) });
@@ -571,12 +606,13 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       }
       for (const m of moves) if (m.object_id === String(l.id) && STAGE_SET.has(m.detail)) events.push({ at: m.at, kind: 'stage', title: stageMoveTitle(m.detail as Stage, lang) });
       events.sort((a, b) => a.at - b.at);
+      const nextAction = clientNextAction(flowDocs, stagesOfLead);
       return {
         id: l.id, createdAt: iso(l.created_at), service: l.service,
         summary: (l.task || (l.estimate ?? '').split('\n')[0] || '').trim().slice(0, 200),
         estimateUsd: invoiceTotal ?? builderTotal(l.estimate ?? ''),
         hasDomain: l.has_domain == null ? null : l.has_domain === 1, hasHosting: l.has_hosting == null ? null : l.has_hosting === 1,
-        stage, nextStep: stageNextStep(stagesOfLead, lang) ?? nextStepOf(stage, lang),
+        stage, nextAction, nextStep: docNextStep(flowDocs, nextAction, lang) ?? stageNextStep(stagesOfLead, lang) ?? nextStepOf(stage, lang),
         timeline: events.map((e) => ({ at: iso(e.at), kind: e.kind, title: e.title })),
         replies: replies.map((r) => ({ at: iso(r.at), text: r.text, from: r.from })),
       };
@@ -653,12 +689,39 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     return ok({ already: r.status === 'already', milestone: m });
   }
 
+  /**
+   * `POST /admin/clients/:id` (also `PATCH`): the profile form of the cabinet. Only the fields sent change; the answer is the whole profile. A new Telegram handle
+   * links the leads that were written with it, like the registration does.
+   */
+  function profilePatchRoute(id: number, body: unknown): CrmReply {
+    const c = cabById(id);
+    if (!c) return fail(404, 'not_found');
+    const parsed = profilePatch.safeParse(body ?? {});
+    if (!parsed.success) return fail(400, 'invalid');
+    const p = parsed.data;
+    const sets: string[] = [];
+    const vals: (string | number)[] = [];
+    for (const k of ['name', 'telegram', 'phone', 'company', 'locale'] as const) {
+      if (p[k] !== undefined) {
+        sets.push(`${k} = ?`);
+        vals.push(p[k]!);
+      }
+    }
+    if (sets.length) db.prepare(`UPDATE cab_clients SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...vals, now(), id);
+    const fresh = cabById(id)!;
+    if (p.telegram !== undefined) linkLeads(fresh);
+    return ok({ client: { id: fresh.id, email: fresh.email, name: fresh.name, telegram: fresh.telegram, phone: fresh.phone ?? '', company: fresh.company ?? '', locale: fresh.locale } });
+  }
+
   function clientsRoute(method: string, seg: string[], query: URLSearchParams, body: unknown): CrmReply | Promise<CrmReply> {
     if (method === 'POST' && seg.length === 0) return clientCreate(body);
     if (method === 'GET' && seg.length === 1 && seg[0] === 'by-email') return clientByEmail(query);
     if (method === 'POST' && seg.length === 4 && seg[1] === 'leads' && seg[3] === 'messages' && /^\d+$/.test(seg[0]!) && /^\d+$/.test(seg[2]!)) return leadMessageCreate(Number(seg[0]), Number(seg[2]), body);
     if (method === 'POST' && seg.length === 6 && seg[1] === 'projects' && seg[3] === 'milestones' && seg[5] === 'accept' && [seg[0], seg[2], seg[4]].every((x) => /^\d+$/.test(x!))) return stageAccept(Number(seg[0]), Number(seg[2]), Number(seg[4]));
     if (method === 'POST' && seg.length === 2 && seg[1] === 'tickets' && /^\d+$/.test(seg[0]!)) return clientTicketCreate(Number(seg[0]), body);
+    if ((method === 'POST' || method === 'PATCH') && seg.length === 1 && /^\d+$/.test(seg[0]!)) return profilePatchRoute(Number(seg[0]), body);
+    const v3 = hooks.cabinet?.route(method, seg, query, body);
+    if (v3) return v3;
     return fail(404, 'not_found');
   }
 

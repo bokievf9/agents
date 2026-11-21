@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CACHE_MAX_BYTES, ToolCache, openDb, resolveMedia, safeRel } from '../../src/index.js';
-import { tools } from './helpers.js';
+import { NOW, tools } from './helpers.js';
 
 describe('ToolCache', () => {
   it('TTL, sweep and the 64 KB cap, in SQLite and in memory', () => {
@@ -68,6 +68,32 @@ describe('files', () => {
     expect(await t.files.url('kits/42/notes.txt')).toMatchObject({ error: 'invalid' });
     expect(await t.files.url('kits/42/gone.png')).toMatchObject({ error: 'not_found' });
     expect(await t.files.get('kits/42/gone.png')).toMatchObject({ error: 'not_found' });
+  });
+
+  it('an expiring link: the signature covers the expiry, so it cannot be moved or cut off; PDF is served, a txt is not', async () => {
+    const { t, dataDir } = setup();
+    await t.files.put('cabinet/c1', 'quote-3.pdf', '%PDF-1.4 test');
+    const root = join(dataDir, 'renders');
+    const u = await t.files.url('cabinet/c1/quote-3.pdf', { ttlMs: 7 * 86_400_000 });
+    expect(u.ok).toBe(true);
+    const m = /^https:\/\/hq\.example\/media\/([0-9a-f]{32})\/(.+)\?e=(\d+)$/.exec(u.ok ? u.value : '')!;
+    expect(m, u.ok ? u.value : '').not.toBeNull();
+    const exp = Number(m[3]);
+    const rel = decodeURIComponent(m[2]!);
+    expect(resolveMedia(root, 'mediasecret', m[1]!, rel, { exp, now: NOW })).toMatchObject({ type: 'application/pdf' });
+    // the link is about 7 days long
+    expect(exp * 1000 - NOW).toBeGreaterThan(6.9 * 86_400_000);
+    expect(exp * 1000 - NOW).toBeLessThan(7.1 * 86_400_000);
+    // expired, moved expiry, expiry cut off, another secret: all the same refusal
+    expect(resolveMedia(root, 'mediasecret', m[1]!, rel, { exp, now: exp * 1000 + 1 })).toBeNull();
+    expect(resolveMedia(root, 'mediasecret', m[1]!, rel, { exp: exp + 86_400, now: NOW })).toBeNull();
+    expect(resolveMedia(root, 'mediasecret', m[1]!, rel)).toBeNull();
+    expect(resolveMedia(root, 'other', m[1]!, rel, { exp, now: NOW })).toBeNull();
+    // a permanent link does not pass as an expiring one and the other way round
+    const forever = await t.files.url('cabinet/c1/quote-3.pdf');
+    const f = /\/media\/([0-9a-f]{32})\/(.+)$/.exec(forever.ok ? forever.value : '')!;
+    expect(resolveMedia(root, 'mediasecret', f[1]!, rel, { exp, now: NOW })).toBeNull();
+    expect(await t.files.url('cabinet/c1/quote-3.pdf', { ttlMs: 99 * 86_400_000 })).toMatchObject({ error: 'invalid' });
   });
 
   it('path safety: no .., no absolute paths, no odd names or types, no symlink out of the folder', async () => {

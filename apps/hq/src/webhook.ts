@@ -45,6 +45,16 @@ const MAX_BODY = 16 * 1024;
 /** The Mac's answer of an Agent Reach job (`POST /admin/reach/jobs/:id/result`, result up to 200 KB) is the one body that may be larger. */
 export const MAX_REACH_BODY = 420 * 1024;
 const REACH_RESULT_PATH = /^\/admin\/reach\/jobs\/\d+\/result$/;
+/** Cabinet v3 bodies that are bigger than a form: a drawn signature (a data URL up to 200 KB) and an uploaded file (10 MB as base64). */
+export const MAX_SIGN_BODY = 330 * 1024;
+export const MAX_UPLOAD_BODY = 14 * 1024 * 1024 + 64 * 1024;
+const SIGN_PATH = /^\/admin\/clients\/\d+\/documents\/\d+\/sign$/;
+const UPLOAD_PATH = /^\/admin\/clients\/\d+\/uploads$/;
+/** The one route that takes `PATCH` (the agent's settings, `playground.ts`); everything else of `/admin/*` is GET or POST. */
+const AGENT_PATCH_PATH = /^\/admin\/clients\/\d+\/agents\/\d+$/;
+const bodyLimit = (path: string): number => (REACH_RESULT_PATH.test(path) ? MAX_REACH_BODY : SIGN_PATH.test(path) ? MAX_SIGN_BODY : UPLOAD_PATH.test(path) ? MAX_UPLOAD_BODY : MAX_BODY);
+/** What a browser shows inline; the rest (Word, zip, text) is offered as a download. */
+const INLINE_TYPES = /^(image\/|video\/|application\/pdf$)/;
 const digest = (s: string) => createHash('sha256').update(s).digest();
 
 export function tokenOk(given: string | undefined, expected: string): boolean {
@@ -163,7 +173,12 @@ export function createWebhook(
      * Public `GET|HEAD /media/<signature>/<path>` for the Instagram Graph API (it fetches our PNG/MP4 by URL). The signature is
      * HMAC(secret, path); `resolve` returns the file only for a valid signature and a path under DATA_DIR/renders. Without it: 404.
      */
-    media?: { resolve: (sig: string, rel: string) => { file: string; type: string; size: number } | null };
+    media?: { resolve: (sig: string, rel: string, exp?: number | null) => { file: string; type: string; size: number } | null };
+    /**
+     * Public `POST|OPTIONS /agent/:publicId/chat` (the playground, `playground.ts`): the site widget of a client's live agent (header `x-agent-token`, the origin the
+     * client set) and the builder preview (`demo-<niche>`, no token). Per-IP limits here, the daily limits of the agent inside `handle`. Without it: 404.
+     */
+    agent?: { handle: (publicId: string, req: { token: string; origin: string; body: unknown }) => Promise<{ status: number; body: Record<string, unknown>; allowOrigin?: string }> };
   } = {},
 ): Server {
   const hits: number[] = [];
@@ -173,6 +188,8 @@ export function createWebhook(
   const blogHits = new Map<string, number[]>();
   const payByIp = new KeyedLimit(60, 60_000);
   const mediaByIp = new KeyedLimit(300, 60_000);
+  const agentByIp = new KeyedLimit(20, 60_000);
+  const agentByIpDay = new KeyedLimit(300, 86_400_000);
   const auditByIp = new KeyedLimit(10, 3_600_000);
   const leadByIp = new KeyedLimit(20, 3_600_000);
   const eventsByIp = new KeyedLimit(120, 60_000);
@@ -201,8 +218,8 @@ export function createWebhook(
             return void stream.pipe(res);
           }
           let body: unknown = null;
-          if (req.method === 'POST') {
-            const raw = await readBody(req, res, REACH_RESULT_PATH.test(url.pathname) ? MAX_REACH_BODY : MAX_BODY);
+          if (req.method === 'POST' || (req.method === 'PATCH' && AGENT_PATCH_PATH.test(url.pathname))) {
+            const raw = await readBody(req, res, bodyLimit(url.pathname));
             if (raw === null) return json(res, 413, { ok: false, error: 'too_large' });
             try {
               body = raw.trim() ? JSON.parse(raw) : {};
@@ -252,20 +269,53 @@ export function createWebhook(
           const fwd = req.headers['x-forwarded-for'];
           const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
           if (!mediaByIp.take(ip, now())) return json(res, 429, { ok: false, error: 'rate_limited' });
-          const m = /^\/media\/([0-9a-f]{32})\/([^?#]+)/.exec(req.url!);
+          const m = /^\/media\/([0-9a-f]{32})\/([^?#]+)(?:\?([^#]*))?/.exec(req.url!);
+          const expRaw = m?.[3] ? new URLSearchParams(m[3]).get('e') : null;
+          if (expRaw !== null && !/^\d{1,12}$/.test(expRaw)) return json(res, 404, { ok: false, error: 'not_found' });
           let rel = '';
           try {
             rel = m ? m[2]!.split('/').map(decodeURIComponent).join('/') : '';
           } catch {
             /* a broken escape is just an unknown file */
           }
-          const found = m && rel ? extra.media.resolve(m[1]!, rel) : null;
+          const found = m && rel ? extra.media.resolve(m[1]!, rel, expRaw === null ? null : Number(expRaw)) : null;
           if (!found) return json(res, 404, { ok: false, error: 'not_found' });
-          res.writeHead(200, { 'content-type': found.type, 'content-length': found.size, 'cache-control': 'public, max-age=3600' });
+          res.writeHead(200, {
+            'content-type': found.type, 'content-length': found.size, 'cache-control': expRaw === null ? 'public, max-age=3600' : 'private, max-age=600', 'x-content-type-options': 'nosniff',
+            ...(INLINE_TYPES.test(found.type) ? {} : { 'content-disposition': 'attachment' }),
+          });
           if (req.method === 'HEAD') return void res.end();
           const stream = createReadStream(found.file);
           stream.on('error', () => res.destroy());
           return void stream.pipe(res);
+        }
+        if (extra.agent && (req.method === 'POST' || req.method === 'OPTIONS') && /^\/agent\/[A-Za-z0-9_-]{1,40}\/chat(?:\?|$)/.test(req.url ?? '')) {
+          const publicId = /^\/agent\/([A-Za-z0-9_-]{1,40})\/chat/.exec(req.url!)![1]!;
+          const origin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
+          // the browser asks first (preflight): the demo is open to any page, a real agent answers with the origin its client set (checked again on the POST)
+          const cors = (allow: string) => ({ 'access-control-allow-origin': allow, 'access-control-allow-headers': 'content-type, x-agent-token', 'access-control-allow-methods': 'POST, OPTIONS', vary: 'origin' });
+          if (req.method === 'OPTIONS') {
+            res.writeHead(204, cors(publicId.startsWith('demo-') ? '*' : origin || '*'));
+            return void res.end();
+          }
+          const fwd = req.headers['x-forwarded-for'];
+          const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+          if (!agentByIp.take(ip, now()) || !agentByIpDay.take(ip, now())) {
+            res.writeHead(429, { 'content-type': 'application/json', ...cors(publicId.startsWith('demo-') ? '*' : origin || '*') });
+            return void res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
+          }
+          const raw = await readBody(req, res, 8 * 1024);
+          if (raw === null) return json(res, 413, { ok: false, error: 'too_large' });
+          let data: unknown = null;
+          try {
+            data = JSON.parse(raw);
+          } catch {
+            /* falls through to invalid */
+          }
+          const token = typeof req.headers['x-agent-token'] === 'string' ? req.headers['x-agent-token'] : '';
+          const out = await extra.agent.handle(publicId, { token, origin, body: data });
+          res.writeHead(out.status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...cors(publicId.startsWith('demo-') ? '*' : out.allowOrigin ?? '') });
+          return void res.end(JSON.stringify(out.body));
         }
         if (req.method === 'GET' && extra.pay && /^\/pay\//.test(req.url ?? '')) {
           const url = new URL(req.url!, 'http://hq.local');
