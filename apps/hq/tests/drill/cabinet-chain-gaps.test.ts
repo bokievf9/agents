@@ -129,8 +129,10 @@ describe('every stage step reaches the client: thread line, unread flag, email, 
     expect(done.status, done.text).toBe(200);
     await w.cabinet!.docs.idle();
     lines = (await threadMsgs(cid, `project-${projectId}`)).map((m) => m.text as string);
-    expect(lines.at(-1)).toBe(`Этап ${last} принят. Проект завершён, спасибо! Акт сдачи-приёмки в разделе «Документы».`);
-    expect(w.emails.at(-1)!.subject).toBe('Проект завершён');
+    // the close, then (P-16) the review request with the referral link
+    expect(lines.at(-2)).toBe(`Этап ${last} принят. Проект завершён, спасибо! Акт сдачи-приёмки в разделе «Документы».`);
+    expect(lines.at(-1)).toMatch(/^Как вам работа с Fir Tech\?/);
+    expect(w.emails.map((e) => e.subject).slice(-2).sort()).toEqual(['Как вам работа с Fir Tech?', 'Проект завершён']);
     expect(pm.project(projectId)!.status).toBe('done');
     const docs = (await w.adm('GET', `/admin/clients/${cid}/documents`)).json.items as any[];
     const acts = docs.filter((d) => d.kind === 'act');

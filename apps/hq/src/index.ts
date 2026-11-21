@@ -309,6 +309,12 @@ const dueTick = async () => {
   await cabinet.mail?.messageTick().catch((e) => log('warn', 'client message mail failed', { err: errMsg(e) }));
   // P-20: call reminders a day and an hour before (client and owner), once each
   await calls.tick().catch((e) => log('warn', 'call reminders failed', { err: errMsg(e) }));
+  // P-16: a review asked a week ago and not given: one inbox line for the owner
+  try {
+    cabinet.docs.reviewTick();
+  } catch (e) {
+    log('warn', 'review tick failed', { err: errMsg(e) });
+  }
 };
 void dueTick();
 const dueTimer = setInterval(() => void dueTick(), 30_000);

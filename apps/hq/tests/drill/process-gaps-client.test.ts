@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies of the API under test */
 import { afterEach, describe, expect, it } from 'vitest';
+import { PmStore } from '@fir/worker-project-manager';
 import { dataUrl, makePng } from '../png.js';
 import { TOKENS, drillWorld, type DrillWorld } from './world.js';
 import { useGuard } from './guard.js';
@@ -392,5 +393,57 @@ describe('P-21: the handoff of a client\'s agent reaches the agent\'s owner, not
     expect(mails('Новое сообщение в кабинете Fir Tech')[0]!.text).toContain('от вашего агента');
     expect(mails('Новое сообщение в кабинете Fir Tech')[0]!.text).not.toContain('Мадина');
     expect(g.leaks(['Мадина', '+992 93 000 11 22', 'Можно поговорить'])).toEqual([]);
+  }, 60_000);
+});
+
+describe('P-16: after the last stage, a review request and the referral link, once; the owner hears in a week without a review', () => {
+  async function closed() {
+    const { cid, leadId } = await cabinetLead();
+    const project = new PmStore(w.db, w.hq.now).createProject({ client: 'Gaps Client', what: 'Mini App для салона', product: 'app', source: 'sales', taskId: null, leadId, packId: null });
+    w.emails.length = 0;
+    const last = { stageNo: 2, title: 'Запуск' };
+    w.cabinet!.docs.onStageAccepted({ id: project.id, leadId, client: 'Gaps Client', what: 'Mini App', packId: null }, last, null, [{ stageNo: 1, title: 'Старт', amountUsd: 150 }, { stageNo: 2, title: 'Запуск', amountUsd: 150 }]);
+    await w.cabinet!.docs.idle();
+    return { cid, leadId, pid: project.id, last };
+  }
+  const projectThread = (cid: number, pid: number) => w.adm('GET', `/admin/clients/${cid}/threads/project-${pid}/messages`).then((r) => (r.json.items as any[]).map((m) => m.text as string));
+
+  it('one line and one email with the form and the ?ref= link; a second acceptance asks nothing; the cabinet form stores one review', async () => {
+    const { cid, leadId, pid, last } = await closed();
+    const asks = (await projectThread(cid, pid)).filter((t) => t.startsWith('Как вам работа с Fir Tech?'));
+    expect(asks).toHaveLength(1);
+    expect(asks[0]).toContain(`https://firtech.pro/ru/cabinet?review=${pid}`);
+    expect(asks[0]).toMatch(/https:\/\/firtech\.pro\/ru\/\?ref=c[0-9a-z]+/);
+    expect(asks[0]).toContain('10% каждого оплаченного им этапа');
+    expect(mails('Как вам работа с Fir Tech?')).toHaveLength(1);
+    // the slug is the one the cabinet shows
+    const slug = (await w.adm('GET', `/admin/clients/by-email?email=${encodeURIComponent(EMAIL)}`)).json.referralSlug;
+    expect(asks[0]).toContain(`?ref=${slug}`);
+    w.cabinet!.docs.onStageAccepted({ id: pid, leadId, client: 'Gaps Client', what: 'Mini App', packId: null }, last, null, []);
+    await w.cabinet!.docs.idle();
+    expect(mails('Как вам работа с Fir Tech?')).toHaveLength(1);
+    // the review form
+    const r = await w.adm('POST', `/admin/clients/${cid}/reviews`, { projectId: pid, rating: 5, text: 'Всё отлично' });
+    expect(r.status, r.text).toBe(200);
+    expect(r.json.item).toMatchObject({ projectId: pid, rating: 5, text: 'Всё отлично' });
+    expect((await w.adm('POST', `/admin/clients/${cid}/reviews`, { projectId: pid, rating: 4 })).status).toBe(409);
+    expect((await w.adm('POST', `/admin/clients/${cid}/reviews`, { projectId: pid, rating: 9 })).status).toBe(400);
+    expect((await w.adm('POST', `/admin/clients/${cid}/reviews`, { projectId: 999, rating: 5 })).status).toBe(404);
+    const list = await w.adm('GET', '/admin/crm/reviews');
+    expect(list.json).toMatchObject({ ok: true, available: true, items: [{ projectId: pid, rating: 5, client: 'Gaps' }] });
+    // a review given: no nudge a week later
+    w.clock.t += 8 * 24 * HOUR;
+    expect(w.cabinet!.docs.reviewTick()).toBe(0);
+  }, 60_000);
+
+  it('no review in a week: one inbox line for the owner, not twice', async () => {
+    await closed();
+    w.clock.t += 6 * 24 * HOUR;
+    expect(w.cabinet!.docs.reviewTick()).toBe(0);
+    w.clock.t += 2 * 24 * HOUR;
+    expect(w.cabinet!.docs.reviewTick()).toBe(1);
+    expect(w.cabinet!.docs.reviewTick()).toBe(0);
+    await w.settle();
+    expect((w.db.prepare("SELECT text FROM owner_inbox WHERE text LIKE 'Отзыва по проекту%'").all() as any[])).toHaveLength(1);
   }, 60_000);
 });

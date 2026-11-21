@@ -3,13 +3,13 @@ import { ProspectStore, STATUSES as PROSPECT_STATUSES, TRANSITIONS as PROSPECT_T
 import { CsStore } from '@fir/worker-customer-support';
 import { parseEnrichment } from '@fir/worker-lead-intake';
 import { builderTotal } from '@fir/worker-presales';
-import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { addCabMessage, ensureCabinetTables, MESSAGE_CAP, nextStepOf, stageMoveTitle, stageNextStep, timelineTitle } from './cabinet.js';
 import { stageState, stageTitleRu } from '@fir/worker-project-manager';
 import { ensureStageColumn, nextActionOf, StageContext, type Stage } from './lead-stage.js';
 import { clientNextAction, docNextStep, docsOf, ensureDocTables, projectStateOf } from './cab-docs.js';
 import type { CabinetApi } from './cabinet-api.js';
+import { ensureRefSlug, listReviews } from './reviews.js';
 
 /**
  * Owner's CRM panels of the website («Пульт», `/admin/crm/*`): read-mostly views over the tables of the workers.
@@ -449,7 +449,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       documents: { available: has('bo_documents') || has('ps_documents') || has('bl_invoices'), pending: Object.values(docs).reduce((a, s) => a + (s.pending ?? 0) + (s.draft ?? 0) + (s.issued ?? 0), 0), byKind: docs },
       projects: { available: has('pm_projects'), active: (projectCounts as Record<string, number>).active ?? 0, byStatus: projectCounts },
       referrals: { available: has('rf_referrals'), total: sum(referralCounts), byStatus: referralCounts },
-      reviews: { available: false, pending: 0 },
+      reviews: has('crm_reviews') ? { available: true, pending: 0, total: listReviews(db, 500).length } : { available: false, pending: 0 },
       chats: { available: has('web_chat_sessions') || has('cb_chats'), ...chats },
     });
   }
@@ -645,14 +645,9 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
 
   /** The client's referral slug (`?start=ref_<slug>` in the bot, `ref:<slug>` on the form): lower-case letters and digits, unique, issued once. */
   function issueSlug(id: number): string {
-    for (let i = 0; i < 5; i++) {
-      const slug = `c${id.toString(36)}${randomBytes(3).toString('hex')}`;
-      if (db.prepare('UPDATE cab_clients SET ref_slug = ? WHERE id = ? AND ref_slug IS NULL').run(slug, id).changes === 1) return slug;
-      const have = one<{ ref_slug: string | null }>('SELECT ref_slug FROM cab_clients WHERE id = ?', id)?.ref_slug;
-      if (have) return have;
-    }
-    return `c${id.toString(36)}`;
+    return ensureRefSlug(db, id);
   }
+
 
   function clientTicketCreate(id: number, body: unknown): CrmReply {
     const c = cabById(id);
@@ -796,7 +791,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
         case 'documents': return get ? documents(query) : fail(404, 'not_found');
         case 'projects': return get ? projects(query) : fail(404, 'not_found');
         case 'referrals': return get ? referrals(query) : fail(404, 'not_found');
-        case 'reviews': return get ? unavailable() : fail(404, 'not_found');
+        case 'reviews': return get ? (!has('crm_reviews') ? unavailable() : ok({ available: true, items: listReviews(db, Number(query.get('limit')) || 100), nextCursor: null })) : fail(404, 'not_found');
         default: return fail(404, 'not_found');
       }
     },

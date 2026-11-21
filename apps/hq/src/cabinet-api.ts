@@ -5,6 +5,7 @@ import { CabDocs } from './cab-docs.js';
 import { CabThreads } from './cab-threads.js';
 import { ClientMail } from './client-mail.js';
 import { Playground } from './playground.js';
+import { addReview } from './reviews.js';
 
 /**
  * The Cabinet v3 routes under `/admin/clients/:id/` (documents, threads, uploads, agents): one dispatcher over the three modules. `admin-crm.ts` calls it
@@ -97,6 +98,9 @@ export function createCabinetApi(m: { docs: CabDocs; threads: CabThreads; playgr
           if (post && seg.length === 4 && b === 'messages') return threads.post(cid, a!, body);
           if (post && seg.length === 4 && b === 'read') return Promise.resolve(threads.read(cid, a!));
           return null;
+        case 'reviews':
+          // P-16: the client's review of a closed project (the cabinet form)
+          return post && seg.length === 2 ? Promise.resolve(addReview(docs.db, docs.now(), cid, body, docs.ownerLine)) : null;
         case 'uploads':
           return post && seg.length === 2 ? Promise.resolve(threads.upload(cid, body)) : null;
         case 'agents': {

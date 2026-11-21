@@ -11,6 +11,7 @@ import type { Playground } from './playground.js';
 import { parseBuilderPlan, wantsPlayground } from './builder-plan.js';
 import { EmailFailures, type EmailKind } from './email-failures.js';
 import type { ClientMail } from './client-mail.js';
+import { ensureRefSlug, hasReview } from './reviews.js';
 
 /**
  * Cabinet v3 documents (2026-11-22): what the client sees of the papers and what he does with them. The owner's approval of a quote, a contract or an
@@ -314,9 +315,16 @@ export class CabDocs {
     ensureDocTables(d.hq.db);
   }
 
-  private get db(): Db {
+  get db(): Db {
     return this.d.hq.db;
   }
+
+  now(): number {
+    return this.d.now();
+  }
+
+  /** A line in the owner's inbox (the cabinet's hook). */
+  readonly ownerLine = (text: string): void => this.d.notifyOwner(text);
 
   /** Waits for the background work started by the owner's decisions (the PDF and the email of a quote); tests and shutdown. */
   async idle(): Promise<void> {
@@ -756,7 +764,50 @@ export class CabDocs {
       ru: `Этап ${m.stageNo} принят. Проект завершён, спасибо!${ruAct}`,
       en: `Stage ${m.stageNo} accepted. The project is complete, thank you!${enAct}`,
       ruMail: 'Проект завершён', enMail: 'Your project is complete',
-    }, 'project_closed_notified');
+    }, 'project_closed_notified');    this.askReview(c, p.id);
+  }
+
+  /**
+   * P-16: the project is closed: once per project, a line in the project thread and an email ask for a review (the cabinet's form, else an answer in the thread)
+   * and give the client his referral link (10% of every paid stage of the client he brings). A week later without a review the owner gets one inbox line.
+   */
+  private askReview(c: ClientRow, projectId: number): void {
+    const mail = this.d.mail;
+    if (!mail || !mail.markOnce(`review:ask:${projectId}`)) return;
+    try {
+      const lang = c.locale === 'en' ? 'en' : 'ru';
+      const site = this.d.siteUrl.replace(/\/$/, '');
+      const form = `${site}/${lang}/cabinet?review=${projectId}`;
+      const ref = `${site}/${lang}/?ref=${ensureRefSlug(this.db, c.id)}`;
+      const text = {
+        ru: `Как вам работа с Fir Tech? Оставьте, пожалуйста, короткий отзыв: ${form} (или просто ответьте здесь). А если знаете, кому ещё нужен сайт, агент или автоматизация, поделитесь вашей ссылкой: ${ref}. За каждого приведённого клиента вы получаете 10% каждого оплаченного им этапа.`,
+        en: `How was working with Fir Tech? Please leave a short review: ${form} (or just answer here). And if you know someone who needs a website, an agent or automation, share your link: ${ref}. For every client you bring you get 10% of each stage they pay.`,
+      };
+      addThreadMessage(this.db, this.d.now(), { clientId: c.id, thread: `project-${projectId}`, from: 'manager', text: lang === 'en' ? text.en : text.ru });
+      this.track(mail.send(c.id, { subject: { ru: 'Как вам работа с Fir Tech?', en: 'How was working with Fir Tech?' }, text }, 'review', `проект #${projectId}`, `project-${projectId}`)
+        .then((how) => this.d.hq.log('documents', 'review_asked', 'project', String(projectId), how)));
+    } catch (e) {
+      log('warn', 'review request failed', { project: projectId, err: errMsg(e) });
+    }
+  }
+
+  /** P-16, from the due ticker: a review asked 7 days ago and not given (no form, no client message in the project thread after the ask): one inbox line for the owner. */
+  reviewTick(): number {
+    const mail = this.d.mail;
+    if (!mail) return 0;
+    let n = 0;
+    const asked = this.db.prepare("SELECT key, at FROM client_marks WHERE key LIKE 'review:ask:%' AND at <= ?").all(this.d.now() - SEVEN_DAYS) as { key: string; at: number }[];
+    for (const a of asked) {
+      const projectId = Number(a.key.slice('review:ask:'.length));
+      if (mail.markedAt(`review:nudge:${projectId}`) !== null) continue;
+      const answered = hasReview(this.db, projectId)
+        || this.db.prepare("SELECT 1 FROM cab_tmsgs WHERE thread = ? AND \"from\" = 'client' AND at > ?").get(`project-${projectId}`, a.at) !== undefined;
+      mail.markOnce(`review:nudge:${projectId}`);
+      if (answered) continue;
+      this.d.notifyOwner(`Отзыва по проекту #${projectId} нет неделю после закрытия. Можно напомнить клиенту в треде проекта (Пульт, чаты).`);
+      n++;
+    }
+    return n;
   }
 
   /** The act of the closed project (a simple completion certificate): made from the template, accepted by the client's own last acceptance, once per project; the PDF follows in the background. */
