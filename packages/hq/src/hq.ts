@@ -212,10 +212,35 @@ export class Hq {
     return r ? toAgent(r) : undefined;
   }
 
-  setInstructions(agentId: string, instructions: string, actor = 'director'): void {
-    if (!this.agent(agentId)) throw new Error(`Unknown agent ${agentId}`);
+  /**
+   * Replaces the instructions and keeps the history (`instruction_versions`): the first change also stores the text that was there
+   * before as version 1, so a rollback to the original is always possible. No row when the text is the same.
+   */
+  setInstructions(agentId: string, instructions: string, actor = 'director', note = ''): void {
+    const agent = this.agent(agentId);
+    if (!agent) throw new Error(`Unknown agent ${agentId}`);
+    if (agent.instructions === instructions) return;
+    const at = this.now();
+    const insert = this.db.prepare('INSERT INTO instruction_versions (agent_id, version, text, actor, note, at) VALUES (?, ?, ?, ?, ?, ?)');
+    const last = this.db.prepare('SELECT MAX(version) v FROM instruction_versions WHERE agent_id = ?').get(agentId) as { v: number | null };
+    let version = last.v ?? 0;
+    if (version === 0 && agent.instructions) insert.run(agentId, ++version, agent.instructions, 'seed', '', at);
+    insert.run(agentId, version + 1, instructions, actor, note, at);
     this.db.prepare('UPDATE agents SET instructions = ? WHERE id = ?').run(instructions, agentId);
     this.log(actor, 'instructions_changed', 'agent', agentId);
+  }
+
+  /** The saved versions of an agent's instructions, newest first (text included only on request). */
+  instructionVersions(agentId: string): { version: number; actor: string; note: string; at: number; chars: number }[] {
+    return (this.db.prepare('SELECT version, actor, note, at, LENGTH(text) chars FROM instruction_versions WHERE agent_id = ? ORDER BY version DESC').all(agentId) as {
+      version: number; actor: string; note: string; at: number; chars: number;
+    }[]);
+  }
+
+  instructionVersion(agentId: string, version: number): { version: number; text: string; actor: string; note: string; at: number } | undefined {
+    return this.db.prepare('SELECT version, text, actor, note, at FROM instruction_versions WHERE agent_id = ? AND version = ?').get(agentId, version) as
+      | { version: number; text: string; actor: string; note: string; at: number }
+      | undefined;
   }
 
   setDeptStatus(dept: string, status: Agent['status']): number {

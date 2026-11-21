@@ -6,6 +6,7 @@ import type { createCrm } from './admin-crm.js';
 import type { Director } from './director.js';
 import type { OwnerChannel } from './presence.js';
 import type { MarketingHead } from './heads/marketing.js';
+import { createAgents } from './pult-agents.js';
 import { createCompany } from './pult-company.js';
 import type { AppTools } from './tools.js';
 import type { CabDocs } from './cab-docs.js';
@@ -58,6 +59,7 @@ export function createPult(d: PultDeps) {
   const content = createPultContent(d);
   const metrics = createMetrics(d.hq.db, d.now, () => d.hq.tz, new SiteEvents(d.hq.db, d.now, () => d.hq.tz));
   const company = createCompany(d);
+  const agents = createAgents(d);
   const review = createReview({
     hq: d.hq, queue: d.queue, director: d.director, channel: d.channel, now: d.now, crm: d.crm, marketing: d.marketing, rendersDir: d.rendersDir, decide: d.decide, ...(d.cabinet ? { cabinet: d.cabinet } : {}),
     callLead: (leadId, at) => crm.handle('POST', ['leads', String(leadId), 'call'], new URLSearchParams(), { at }),
@@ -107,6 +109,7 @@ export function createPult(d: PultDeps) {
     }
     if (a === 'reach') return reach.handle(method, seg, query, body);
     if (a === 'metrics') return method === 'GET' && seg.length === 2 && seg[1] === 'week' ? metrics.week(query) : fail(404, 'not_found');
+    if (a === 'agents') return agents.handle(method, seg.slice(1), body);
     if (a === 'company') {
       const [, kind, rawName, act] = seg;
       if (method === 'GET' && seg.length === 1) return company.get();

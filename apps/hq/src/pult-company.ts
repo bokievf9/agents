@@ -84,12 +84,7 @@ export function createCompany(d: PultCompanyDeps) {
       playbooks: listPlaybooks(d.tools?.config.knowledgeDir),
       workers: office.departments.flatMap((dep) => dep.workers.map((w) => ({ id: w.id, dept: dep.id, title: w.title, state: w.status }))),
       // the agents' toolbox (docs/tools.md): rights by department, set up or not (never a key), today's calls and errors, limits
-      tools: toolCatalog({
-        journal: hq, db, now, tz: hq.tz, config: d.tools?.config ?? {}, ...(d.tools?.renderPng ? { renderPng: d.tools.renderPng } : {}), ...(d.tools?.crm ? { crm: d.tools.crm } : {}), ...(d.tools?.llm ? { llm: d.tools.llm } : {}),
-        // the heads always pass their bot to `telegram.*`; the listing says so through a stand-in
-        messenger: { send: () => Promise.resolve(), sendMessage: () => Promise.resolve(0), edit: () => Promise.resolve(), editButtons: () => Promise.resolve(), sendDocument: () => Promise.resolve(), sendPhotos: () => Promise.resolve() },
-        ownerId: 1,
-      }).map((t) => ({ name: t.name, departments: t.departments, configured: t.configured, callsToday: t.callsToday, errorsToday: t.errorsToday, limits: t.limits, env: t.env })),
+      tools: toolList(d).map((t) => ({ name: t.name, departments: t.departments, configured: t.configured, callsToday: t.callsToday, errorsToday: t.errorsToday, limits: t.limits, env: t.env })),
     });
   }
 
@@ -130,6 +125,16 @@ export function createCompany(d: PultCompanyDeps) {
   }
 
   return { get, playbook, toggle, run, trust };
+}
+
+/** The tool catalogue with today's counters and the set-up state (never a key); shared by `/admin/company` and the agent card. */
+export function toolList(d: Pick<PultCompanyDeps, 'hq' | 'now' | 'tools'>) {
+  return toolCatalog({
+    journal: d.hq, db: d.hq.db, now: d.now, tz: d.hq.tz, config: d.tools?.config ?? {}, ...(d.tools?.renderPng ? { renderPng: d.tools.renderPng } : {}), ...(d.tools?.crm ? { crm: d.tools.crm } : {}), ...(d.tools?.llm ? { llm: d.tools.llm } : {}),
+    // the heads always pass their bot to `telegram.*`; the listing says so through a stand-in
+    messenger: { send: () => Promise.resolve(), sendMessage: () => Promise.resolve(0), edit: () => Promise.resolve(), editButtons: () => Promise.resolve(), sendDocument: () => Promise.resolve(), sendPhotos: () => Promise.resolve() },
+    ownerId: 1,
+  });
 }
 
 const round = (n: number) => Math.round(n * 1e6) / 1e6;
