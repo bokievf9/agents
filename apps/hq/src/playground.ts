@@ -214,6 +214,24 @@ export const DEMOS: Record<Niche, DemoSpec> = {
   },
 };
 
+/**
+ * The demo of the flagship Персональный ИИ (2026-11-22, the site's `/chat?persona=personal`): the one persona that is not a business niche. A fictional coffee shop owner's day
+ * (the scenario of the site's `demoSection.personal`: the morning summary, the mail, the promises, an hour for a task, an English lesson). Kept in memory like `DEMOS`: no data of
+ * anyone is connected, nothing is stored, and the persona never takes contacts or books anything.
+ */
+export const PERSONAL_DEMO: DemoSpec = {
+  company: 'Персональный ИИ владельца кофейни «Утро»',
+  goals: ['собирать утреннюю сводку', 'разбирать почту', 'помнить обещания', 'находить время на дела', 'давать короткий урок английского'],
+  tone: 'спокойный, деловой, на вы',
+  faq: [
+    { title: 'Сегодня', text: 'Три встречи, первая в 10:00 с поставщиком кофе. Две встречи в календаре: 14:00 с арендодателем и 17:30 планёрка с бариста.' },
+    { title: 'Почта', text: 'Пять новых писем: три для сведения, два ждут ответа (банк и поставщик Азиз). Черновики ответов готовы, их нужно открыть и проверить. Счёт за аренду нужно оплатить до пятницы.' },
+    { title: 'Обещания на неделе', text: 'Прайс Азизу до среды, отзыв для Дилноры до пятницы, звонок бухгалтеру, когда будет сдан отчёт.' },
+    { title: 'Время на дела', text: 'Свободный час для отчёта: вторник, 15:00. Напоминание за час, таблица прошлого месяца приложена.' },
+    { title: 'Английский', text: 'Урок на десять минут: три слова, которые владелец путал в прошлый раз. Первое слово: deadline.' },
+  ],
+};
+
 export const slotsFor = (nowMs: number, tz: string): string[] => {
   const out: string[] = [];
   for (let d = 1; d <= 3; d++) {

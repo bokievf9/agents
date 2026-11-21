@@ -439,6 +439,25 @@ describe('the demo tab: persona', () => {
     expect((await w.say('hi', { persona: 'salon', locale: 'en', sessionId: 'visitor-9004-abcd' })).reply).toMatch(/The demo is not available/);
   });
 
+  it('the flagship demo (persona=personal): a coffee shop owner\'s assistant, in memory, no lead, no contact, no booking talk, nothing stored', async () => {
+    const w = world({ turns: (req) => (/личный ИИ-помощник одного человека/.test(req.system) ? 'Доброе утро. Сегодня три встречи, первая в 10:00 с поставщиком.' : 'не та персона') });
+    const r = await w.say('Что у меня сегодня?', { persona: 'personal' });
+    expect(r).toMatchObject({ ok: true, state: 'chat', demo: true });
+    expect(r.reply).toMatch(/три встречи/);
+    const sys = w.calls()[0]!.system;
+    expect(sys).toMatch(/владельца кофейни «Утро»/);
+    expect(sys).toMatch(/Прайс Азизу до среды/); // the facts of the scenario of the site
+    expect(sys).toMatch(/вымышленных данных/);
+    expect(sys).toMatch(/не спрашивай и не проси оставить/);
+    expect(sys).not.toMatch(/Свободные окна|На какое время вас записать/); // it is not a booking receptionist
+    expect(personaSystem('personal', 'en', NOW, 'Asia/Dushanbe')).toMatch(/English/);
+    await w.say('Меня зовут Анвар, +992 90 123 45 67', { persona: 'personal' });
+    expect(w.leads).toEqual([]);
+    expect(w.tickets).toEqual([]);
+    expect(w.engine.store.count()).toBe(0);
+    expect(chatSchema.safeParse({ sessionId: SID, locale: 'ru', text: 'привет', persona: 'personal' }).success).toBe(true);
+  });
+
   it('the schema: persona is one of the niches, `text` and `message` both carry the words, one of them is required', () => {
     const ok = { sessionId: SID, locale: 'ru' };
     expect(chatSchema.safeParse({ ...ok, message: 'привет', persona: 'clinic' }).success).toBe(true);
