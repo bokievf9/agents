@@ -2,7 +2,7 @@ import { errMsg, log, migrate } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
-import { addCabMessage, ensureCabinetTables } from './cabinet.js';
+import { addCabMessage, addThreadMessage, ensureCabinetTables } from './cabinet.js';
 import type { ClientChannel } from './client/channel.js';
 import { fail, ok } from './pult-crm.js';
 
@@ -38,7 +38,8 @@ export type ChatChannel = 'web' | 'telegram' | 'cabinet';
 export type ChatFrom = 'client' | 'hq' | 'owner';
 interface Message { id: string; at: number; from: ChatFrom; channel: ChatChannel; text: string; attachments: unknown[] }
 
-const replyBody = z.object({ text: z.string().trim().min(1).max(2000) }).strict();
+/** `thread`: answer in the client's project or support thread (a message he wrote there); without it the reply goes to the lead thread as before. */
+const replyBody = z.object({ text: z.string().trim().min(1).max(2000), thread: z.string().regex(/^(support|project-\d{1,9})$/).optional() }).strict();
 const iso = (ms: number) => new Date(ms).toISOString();
 const oneLine = (s: string, n = 120) => {
   const one = s.replace(/\s+/g, ' ').trim();
@@ -129,6 +130,10 @@ export function createChats(d: ChatsDeps) {
       ? all<{ id: number; client_name: string; contact: string; text: string; status: string; created_at: number; answered_at: number | null; answer: string | null; lead_id: number | null }>('SELECT id, client_name, contact, text, status, created_at, answered_at, answer, lead_id FROM cs_tickets')
       : [];
     const cabMsgs = all<{ id: number; client_id: number; lead_id: number; from: 'client' | 'manager'; text: string; at: number; ticket_id: number | null; author: string }>('SELECT id, client_id, lead_id, "from", text, at, ticket_id, author FROM cab_messages');
+    // Cabinet v3: the client's messages in his project and support threads (the agent thread is his own business, not shown here)
+    const tmsgs = all<{ id: number; client_id: number; thread: string; from: 'client' | 'manager' | 'agent'; text: string; at: number; author: string }>(
+      "SELECT id, client_id, thread, \"from\", text, at, author FROM cab_tmsgs WHERE thread NOT LIKE 'agent-%' ORDER BY id",
+    );
     const sessions = has('web_chat_sessions') ? all<{ id: string; summary: string; created_at: number; updated_at: number }>('SELECT id, summary, created_at, updated_at FROM web_chat_sessions') : [];
     const bots = has('cb_chats') ? all<{ chat_id: number; username: string; summary: string; last_at: number }>('SELECT chat_id, username, summary, last_at FROM cb_chats') : [];
     const owner = all<{ id: number; lead_id: number | null; client_id: number | null; session_id: string | null; chat_id: number | null; channel: ChatChannel; text: string; at: number }>('SELECT * FROM ch_messages');
@@ -200,6 +205,10 @@ export function createChats(d: ChatsDeps) {
       for (const m of cabHere) {
         channels.add('cabinet');
         messages.push({ id: `cab_${m.id}`, at: m.at, from: m.from === 'client' ? 'client' : m.author === 'owner' ? 'owner' : 'hq', channel: 'cabinet', text: m.text, attachments: [] });
+      }
+      for (const m of tmsgs.filter((x) => clientIds.includes(x.client_id))) {
+        channels.add('cabinet');
+        messages.push({ id: `ct_${m.id}`, at: m.at, from: m.from === 'client' ? 'client' : m.author === 'owner' ? 'owner' : 'hq', channel: 'cabinet', text: m.text, attachments: [] });
       }
       for (const l of myLeads) {
         const ch = originChannel(l.origin, l);
@@ -302,7 +311,7 @@ export function createChats(d: ChatsDeps) {
     const lastIn = [...t.messages].reverse().find((m) => m.from === 'client')?.channel;
     const order = [...new Set<ChatChannel>([...(lastIn ? [lastIn] : []), 'telegram', 'web', 'cabinet'])];
     let via: ChatChannel | 'none' = 'none';
-    for (const ch of order) {
+    for (const ch of parsed.data.thread === undefined ? order : []) {
       try {
         if (ch === 'telegram' && chatId !== undefined && d.client) {
           await d.client.send(chatId, text);
@@ -316,7 +325,13 @@ export function createChats(d: ChatsDeps) {
     }
     // the cabinet thread keeps every reply to a cabinet client (his own channel); without a cabinet the reply is kept here
     let stored: Message;
-    if (hasCabinet) {
+    if (parsed.data.thread !== undefined && t.clientId !== null) {
+      // an answer in the thread the client wrote in (project or support): his own channel, so the cabinet is where it lands
+      const at = now();
+      const id = addThreadMessage(db, at, { clientId: t.clientId, thread: parsed.data.thread, from: 'manager', text, by: 'owner' });
+      via = 'cabinet';
+      stored = { id: `ct_${id}`, at, from: 'owner', channel: 'cabinet', text, attachments: [] };
+    } else if (hasCabinet) {
       const at = now();
       const cabId = addCabMessage(db, at, { clientId: t.clientId!, leadId: lead!.id, from: 'manager', text, by: 'owner' });
       stored = { id: `cab_${cabId}`, at, from: 'owner', channel: 'cabinet', text, attachments: [] };
