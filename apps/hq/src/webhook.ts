@@ -413,8 +413,10 @@ export function createWebhook(
         const lead = parsed.data;
         if (lead.website) return json(res, 200, { ok: true }); // honeypot: bots get a normal answer, nothing is stored
         const made = await onLead(lead);
-        if (typeof made === 'number') return json(res, 200, { ok: true, id: made });
-        json(res, 200, { ok: true, id: made.id, ...(made.leadId != null ? { leadId: made.leadId } : {}) });
+        // P-02: HQ is the one channel that tells the owner about a lead (his inbox, the Sales card): `notified: true` lets the site skip its own bot
+        // (it keeps it only for a lead HQ did not take: an error, a timeout, `queued`). A window in `slot` the site already booked becomes HQ's booking.
+        if (typeof made === 'number') return json(res, 200, { ok: true, id: made, notified: true });
+        json(res, 200, { ok: true, id: made.id, ...(made.leadId != null ? { leadId: made.leadId } : {}), notified: true });
       } catch (e) {
         log('error', 'webhook failed', { err: errMsg(e) });
         json(res, 500, { ok: false, error: 'internal' });

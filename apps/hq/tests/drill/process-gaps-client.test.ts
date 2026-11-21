@@ -339,3 +339,21 @@ describe('P-20: reminders a day and an hour before, client and owner, once each'
   }, 60_000);
 });
 
+describe('P-02: HQ is the one channel for a site lead; the site\'s booked window moves into HQ through `slot`', () => {
+  it('the webhook answers notified: true; a form lead with a slot is HQ\'s booking (not booked on the site twice), the lead is marked notified', async () => {
+    w = await drillWorld({ flow: true });
+    const res = await w.http('POST', '/lead', { ...LEAD, slot: new Date(SLOT_A).toISOString() }, { 'x-lead-token': TOKENS.lead });
+    const body = (await res.json()) as any;
+    expect(body).toMatchObject({ ok: true, id: expect.any(Number), leadId: expect.any(Number), notified: true });
+    await w.beat();
+    expect(bookingOf(body.leadId)).toMatchObject({ at: SLOT_A, source: 'form', site_state: 'site', state: 'pending' });
+    expect(w.site.bookings).toEqual([]);
+    expect(w.hq.task(body.id)!.meta.notifiedAt).toEqual(expect.any(Number));
+    // the call is HQ's from now on: reminders and the Пульт work on it
+    expect((await w.adm('POST', `/admin/crm/leads/${body.leadId}/call`, { action: 'confirm' })).json.booking).toMatchObject({ state: 'confirmed' });
+    // a lead without a cabinet answers the same
+    const plain = await w.http('POST', '/lead', { name: 'Form', contact: '@form_lead', service: 'site', locale: 'ru' }, { 'x-lead-token': TOKENS.lead });
+    expect(await plain.json()).toMatchObject({ ok: true, notified: true });
+  }, 60_000);
+});
+

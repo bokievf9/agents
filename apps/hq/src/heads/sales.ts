@@ -600,6 +600,9 @@ export class SalesHead implements ApprovalEditor {
   private async afterLead(taskId: number, approvals: number): Promise<void> {
     const lead = leadStoreFor({ db: this.hq.db, now: this.hq.now }).byTask(taskId);
     if (!lead) return;
+    // P-02: the lead reached the owner through HQ (the card in the batch, the inbox): the one channel, the site's bot stays quiet for it
+    this.hq.setMeta(taskId, { notifiedAt: this.hq.now() });
+    this.hq.log(LEADS_ID, 'lead_notified', 'lead', String(lead.id));
     await this.report(
       taskId,
       `Лид #${lead.id}: ${TEMP_RU[lead.temperature]}, ниша ${lead.niche || '?'}, задача ${oneLine(lead.task, 80) || '?'}. ${approvals} на одобрение, контакт в карточке.`,
