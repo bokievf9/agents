@@ -292,6 +292,8 @@ const dueTick = async () => {
   await cabinet.docs.expiryTick().catch((e) => log('warn', 'quote expiry tick failed', { err: errMsg(e) }));
   // P-07: emails to clients that did not go (КП, contract, invoice, act, stage notices, clarifying questions): one alert an hour
   await emailFailures.flush().catch((e) => log('warn', 'email failures flush failed', { err: errMsg(e) }));
+  // P-13: a manager's or Support's answer in a cabinet thread: one email «новое сообщение» per thread an hour, none when the client already read it
+  await cabinet.mail?.messageTick().catch((e) => log('warn', 'client message mail failed', { err: errMsg(e) }));
 };
 void dueTick();
 const dueTimer = setInterval(() => void dueTick(), 30_000);

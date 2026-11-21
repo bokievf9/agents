@@ -7,8 +7,11 @@ import type { Hq } from '@fir/hq';
  * «КП-12» or «лид #5», the reason code; never the address or the text) and the owner gets ONE summary alert an hour, the way lost leads do. The document
  * itself carries the mark (`cab_documents.mail_state = 'failed'`) and can be sent again from the Пульт.
  */
-export type EmailKind = 'quote' | 'contract' | 'invoice' | 'act' | 'other' | 'stage' | 'clarify';
-const KIND_RU: Record<EmailKind, string> = { quote: 'КП', contract: 'договор', invoice: 'счёт', act: 'акт', other: 'документ', stage: 'этап проекта', clarify: 'уточняющие вопросы' };
+export type EmailKind = 'quote' | 'contract' | 'invoice' | 'act' | 'other' | 'stage' | 'clarify' | 'message' | 'payment' | 'call' | 'review';
+const KIND_RU: Record<EmailKind, string> = {
+  quote: 'КП', contract: 'договор', invoice: 'счёт', act: 'акт', other: 'документ', stage: 'этап проекта', clarify: 'уточняющие вопросы',
+  message: 'новое сообщение', payment: 'оплата получена', call: 'созвон', review: 'просьба об отзыве',
+};
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS email_failures (

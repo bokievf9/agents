@@ -397,12 +397,12 @@ export function createChats(d: ChatsDeps) {
     if (target !== undefined && t.clientId !== null) {
       // an answer in the thread the client wrote in (project or support): his own channel, so the cabinet is where it lands
       const at = now();
-      const id = addThreadMessage(db, at, { clientId: t.clientId, thread: target, from: 'manager', text, by: 'owner' });
+      const id = addThreadMessage(db, at, { clientId: t.clientId, thread: target, from: 'manager', text, by: 'owner', notify: true });
       via = 'cabinet';
       stored = { id: `ct_${id}`, at, from: 'owner', channel: 'cabinet', text, attachments: [] };
     } else if (hasCabinet) {
       const at = now();
-      const cabId = addCabMessage(db, at, { clientId: t.clientId!, leadId: lead!.id, from: 'manager', text, by: 'owner' });
+      const cabId = addCabMessage(db, at, { clientId: t.clientId!, leadId: lead!.id, from: 'manager', text, by: 'owner', notify: true });
       stored = { id: `cab_${cabId}`, at, from: 'owner', channel: 'cabinet', text, attachments: [] };
     } else {
       const at = now();

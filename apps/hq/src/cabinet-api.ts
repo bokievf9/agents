@@ -5,6 +5,7 @@ import { CsStore } from '@fir/worker-customer-support';
 import { CabDocs } from './cab-docs.js';
 import { addThreadMessage } from './cabinet.js';
 import { CabThreads } from './cab-threads.js';
+import { ClientMail } from './client-mail.js';
 import { Playground } from './playground.js';
 
 /**
@@ -18,6 +19,8 @@ export interface CabinetApi {
   docs: CabDocs;
   threads: CabThreads;
   playground: Playground;
+  /** P-13 and the call, review notices: emails to cabinet clients outside the documents (`client-mail.ts`). Only `buildCabinet` makes it. */
+  mail?: ClientMail;
 }
 
 export interface CabinetHooks {
@@ -48,7 +51,8 @@ export function buildCabinet(o: CabinetDeps): CabinetApi {
   const now = o.hq.now;
   const notifyOwner = (t: string) => hooks.notifyOwner?.(t);
   const cabinetTicket = (t: { id: number; name: string; text: string; telegram: string; leadId?: number }) => hooks.cabinetTicket?.(t);
-  const docs = new CabDocs({ hq: o.hq, now, tools: o.tools, billing: o.billing, siteUrl: o.siteUrl, notifyOwner, ...(o.kpValidDays !== undefined ? { kpValidDays: o.kpValidDays } : {}) });
+  const mail = new ClientMail({ hq: o.hq, tools: o.tools, siteUrl: o.siteUrl });
+  const docs = new CabDocs({ hq: o.hq, now, tools: o.tools, billing: o.billing, siteUrl: o.siteUrl, notifyOwner, mail, ...(o.kpValidDays !== undefined ? { kpValidDays: o.kpValidDays } : {}) });
   const ref: { pg?: Playground } = {};
   const threads = new CabThreads({
     db: o.hq.db, now, dataDir: o.dataDir, mediaSecret: o.mediaSecret, mediaBase: o.mediaBase, cabinetTicket, notifyOwner, leadJournal: (id, t) => hooks.leadJournal?.(id, t),
@@ -62,7 +66,7 @@ export function buildCabinet(o: CabinetDeps): CabinetApi {
   ref.pg = playground;
   docs.attachPlayground(playground);
   const api = createCabinetApi({ docs, threads, playground });
-  return { ...api, bind: (h) => void Object.assign(hooks, h) };
+  return { ...api, mail, bind: (h) => void Object.assign(hooks, h) };
 }
 
 const num = (s: string | undefined): number | null => (s !== undefined && /^\d{1,12}$/.test(s) ? Number(s) : null);

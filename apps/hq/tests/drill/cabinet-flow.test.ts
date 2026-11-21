@@ -204,7 +204,10 @@ describe('Cabinet v3: lead -> КП to the client -> accept -> contract -> signat
     await w.beat();
     await approve('pm_spec');
     expect(new PmStore(w.db, w.hq.now).stageMilestone(cab.projects[0].id, 1)?.paidAt).toBeTruthy();
-    expect(w.emails).toHaveLength(3);
+    // P-13: the payment is confirmed by email too (once, a second «mark_paid» changes nothing)
+    await w.cabinet!.docs.idle();
+    expect(w.emails).toHaveLength(4);
+    expect(w.emails[3]!.subject).toMatch(/^Оплата по счёту FT-\S+ получена$/);
     expect(g.rejections).toEqual([]);
     expect(g.errors()).toEqual([]);
     // no name, contact or text of the client in the logs

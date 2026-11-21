@@ -195,12 +195,23 @@ export class CsStore {
       this.db
         .prepare("INSERT OR IGNORE INTO cab_tmsgs (client_id, thread, \"from\", text, at, ticket_id) VALUES (?, ?, 'manager', ?, ?, ?)")
         .run(c.id, t.thread, answer.trim().slice(0, 2000), this.now(), id);
+      this.flagNotify('cab_tmsgs', id);
       return;
     }
     this.db.exec(CAB_MESSAGES_SCHEMA);
     this.db
       .prepare("INSERT OR IGNORE INTO cab_messages (client_id, lead_id, \"from\", text, at, ticket_id) VALUES (?, ?, 'manager', ?, ?, ?)")
       .run(c.id, t.lead_id, answer.trim().slice(0, 2000), this.now(), id);
+    this.flagNotify('cab_messages', id);
+  }
+
+  /** P-13: the approved answer is a manager line the client hears about by email (the HQ cabinet adds the column; without it nothing happens). */
+  private flagNotify(table: 'cab_messages' | 'cab_tmsgs', ticketId: number): void {
+    try {
+      this.db.prepare(`UPDATE ${table} SET notify = 1 WHERE ticket_id = ? AND "from" = 'manager' AND mailed = 0`).run(ticketId);
+    } catch {
+      /* an older table without the email columns: the thread line is the delivery */
+    }
   }
 
   /** Open tickets older than `slaMs` that were not alerted yet; marks them alerted (one alert per ticket). */

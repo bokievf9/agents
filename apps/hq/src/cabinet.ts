@@ -57,6 +57,10 @@ export function ensureCabinetTables(db: Db): void {
   db.exec(CAB_FILES_SCHEMA);
   // the profile of the cabinet (2026-11-22): phone and company next to the name, the Telegram handle and the language
   for (const c of ['phone', 'company']) if (!hasColumn(db, 'cab_clients', c)) db.exec(`ALTER TABLE cab_clients ADD COLUMN ${c} TEXT NOT NULL DEFAULT ''`);
+  // P-13 (2026-11-22): a manager line the client should hear about by email (`notify`) and whether that email went (`mailed`); see `client-mail.ts`
+  for (const t of ['cab_messages', 'cab_tmsgs']) {
+    for (const c of ['notify', 'mailed']) if (!hasColumn(db, t, c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`);
+  }
   ready.add(db);
 }
 
@@ -64,10 +68,11 @@ const hasTable = (db: Db, t: string) => db.prepare("SELECT 1 FROM sqlite_master 
 const hasColumn = (db: Db, t: string, c: string) => (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).some((x) => x.name === c);
 
 /** Stores one message of a lead's thread. */
-export function addCabMessage(db: Db, now: number, m: { clientId: number; leadId: number; from: MessageFrom; text: string; ticketId?: number; by?: 'owner' | 'hq' }): number {
+/** `notify`: the client gets an email «new message in the cabinet» for it (P-13, at most one per thread an hour, `client-mail.ts`). */
+export function addCabMessage(db: Db, now: number, m: { clientId: number; leadId: number; from: MessageFrom; text: string; ticketId?: number; by?: 'owner' | 'hq'; notify?: boolean }): number {
   ensureCabinetTables(db);
-  return Number(db.prepare('INSERT INTO cab_messages (client_id, lead_id, "from", text, at, ticket_id, author) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-    m.clientId, m.leadId, m.from, m.text.trim().slice(0, MESSAGE_CAP), now, m.ticketId ?? null, m.by ?? 'hq',
+  return Number(db.prepare('INSERT INTO cab_messages (client_id, lead_id, "from", text, at, ticket_id, author, notify) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+    m.clientId, m.leadId, m.from, m.text.trim().slice(0, MESSAGE_CAP), now, m.ticketId ?? null, m.by ?? 'hq', m.notify ? 1 : 0,
   ).lastInsertRowid);
 }
 
@@ -77,7 +82,8 @@ export function recordManagerReply(db: Db, now: number, leadId: number, text: st
     if (!text.trim() || !hasTable(db, 'li_leads') || !hasColumn(db, 'li_leads', 'client_id')) return;
     const r = db.prepare('SELECT client_id FROM li_leads WHERE id = ?').get(leadId) as { client_id: number | null } | undefined;
     if (r?.client_id == null) return;
-    addCabMessage(db, now, { clientId: r.client_id, leadId, from: 'manager', text, by });
+    // P-13: a manager's answer is something the client should hear about: one email «new message» per thread an hour
+    addCabMessage(db, now, { clientId: r.client_id, leadId, from: 'manager', text, by, notify: true });
   } catch {
     /* the thread is a convenience for the client: a failure here never breaks the reply itself */
   }
@@ -85,11 +91,11 @@ export function recordManagerReply(db: Db, now: number, leadId: number, text: st
 
 /** Stores one message of a project, support or agent thread (`thread`: `project-<id>`, `support`, `agent-<id>`). */
 export function addThreadMessage(
-  db: Db, now: number, m: { clientId: number; thread: string; from: 'client' | 'manager' | 'agent'; text: string; attachments?: string[]; ticketId?: number; by?: 'owner' | 'hq' },
+  db: Db, now: number, m: { clientId: number; thread: string; from: 'client' | 'manager' | 'agent'; text: string; attachments?: string[]; ticketId?: number; by?: 'owner' | 'hq'; notify?: boolean },
 ): number {
   ensureCabinetTables(db);
-  return Number(db.prepare('INSERT INTO cab_tmsgs (client_id, thread, "from", text, attachments, at, ticket_id, author) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-    m.clientId, m.thread, m.from, m.text.trim().slice(0, MESSAGE_CAP), JSON.stringify(m.attachments ?? []), now, m.ticketId ?? null, m.by ?? 'hq',
+  return Number(db.prepare('INSERT INTO cab_tmsgs (client_id, thread, "from", text, attachments, at, ticket_id, author, notify) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+    m.clientId, m.thread, m.from, m.text.trim().slice(0, MESSAGE_CAP), JSON.stringify(m.attachments ?? []), now, m.ticketId ?? null, m.by ?? 'hq', m.notify ? 1 : 0,
   ).lastInsertRowid);
 }
 

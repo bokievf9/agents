@@ -10,6 +10,7 @@ import { addCabMessage, addThreadMessage, ensureCabinetTables, postFromFirTech }
 import type { Playground } from './playground.js';
 import { parseBuilderPlan, wantsPlayground } from './builder-plan.js';
 import { EmailFailures, type EmailKind } from './email-failures.js';
+import type { ClientMail } from './client-mail.js';
 
 /**
  * Cabinet v3 documents (2026-11-22): what the client sees of the papers and what he does with them. The owner's approval of a quote, a contract or an
@@ -267,6 +268,8 @@ export interface CabDocsDeps {
   notifyOwner: (text: string) => void;
   /** How long a КП stands (`KP_VALID_DAYS`, the same number the КП text names); default 14. */
   kpValidDays?: number;
+  /** Emails outside the document notices (payment received, P-13; the review request, P-16). Absent: the thread line only. */
+  mail?: ClientMail | undefined;
 }
 
 /** What the Sales head hands over when the owner approved a КП whose lead has a cabinet. */
@@ -662,8 +665,15 @@ export class CabDocs {
     if (!doc) return;
     const c = this.client(doc.client_id);
     const en = c?.locale === 'en';
-    postFromFirTech(this.db, this.d.now(), doc.client_id, doc.lead_id,
-      en ? `Payment received for invoice ${inv.number}${inv.stageNo ? ` (stage ${inv.stageNo})` : ''}. Thank you!` : `Оплата по счёту ${inv.number}${inv.stageNo ? ` (этап ${inv.stageNo})` : ''} получена. Спасибо!`);
+    const ru = `Оплата по счёту ${inv.number}${inv.stageNo ? ` (этап ${inv.stageNo})` : ''} получена. Спасибо!`;
+    const enText = `Payment received for invoice ${inv.number}${inv.stageNo ? ` (stage ${inv.stageNo})` : ''}. Thank you!`;
+    postFromFirTech(this.db, this.d.now(), doc.client_id, doc.lead_id, en ? enText : ru);
+    // P-13: the payment is confirmed by email at once (not the hourly «new message»): the client paid and waits for this word
+    const mail = this.d.mail;
+    if (mail) {
+      this.track(mail.send(doc.client_id, { subject: { ru: `Оплата по счёту ${inv.number} получена`, en: `Payment received for invoice ${inv.number}` }, text: { ru, en: enText } }, 'payment', inv.number)
+        .then((how) => this.d.hq.log('documents', 'payment_mail', 'invoice', inv.number, how)));
+    }
     // the first payment of the sale makes the client's playground agent live (an invoice outside the stage plan counts as the first one)
     if ((inv.stageNo === null || inv.stageNo === 1) && doc.lead_id !== null) {
       try {

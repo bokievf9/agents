@@ -189,6 +189,7 @@ describe('P-14: the owner marks a stage ready', () => {
     expect(unpaid.json.error).toBe('not_paid');
     expect(await w.production.command('mready', `${pid} 2`)).toContain('не оплачен');
     // stage 1 is paid and running: the owner says it is ready
+    await w.cabinet!.docs.idle(); // the payment email of stage 1 (P-13) is out before the count starts
     w.emails.length = 0;
     expect(await w.production.command('mready', `${pid} 1`)).toContain('ждёт приёмки');
     await w.cabinet!.docs.idle();
@@ -344,6 +345,7 @@ describe('P-15: the owner accepts only a stage that waits for acceptance; a proj
     const pm = new PmStore(w.db, w.hq.now);
     const s1 = pm.stageMilestone(pid, 1)!;
     const s2 = pm.stageMilestone(pid, 2)!;
+    await w.cabinet!.docs.idle(); // the payment email of stage 1 (P-13) is out before the count starts
     w.emails.length = 0;
     // running stage 1: the owner cannot accept it for the client
     expect(await w.production.command('mdone', `${pid} 1`)).toContain(`/mready ${pid} 1`);
