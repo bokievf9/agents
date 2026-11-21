@@ -148,8 +148,9 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   // the site's call windows (`GET /api/slots`) and its booking route (`POST /api/slots`) as HQ sees them: tests put free windows (UTC ms) and the answer here
   const site = { slots: [] as number[], bookings: [] as SiteBookingRequest[], answer: 'booked' as SiteBooking };
   const callsRef: { current: Calls | null } = { current: null };
+  const cabinetRef: { current: { playground: { draftForLead(id: number, lang: 'ru' | 'en'): { url: string | null } | null } } | null } = { current: null };
   const freeSlots = () => Promise.resolve((callsRef.current ? callsRef.current.freeOf(site.slots) : site.slots).filter((x) => x > t()));
-  const sales = new SalesHead({ hq, tools, llm: llm as any, queue, messenger: channel, ownerId: OWNER, reporter, batchSize: 3, slotHours: ['10:00', '14:00'], replyLevel: 1, referralReward: '10%', kpValidDays: 14, lost, freeSlots } as any);
+  const sales = new SalesHead({ hq, tools, llm: llm as any, queue, messenger: channel, ownerId: OWNER, reporter, batchSize: 3, slotHours: ['10:00', '14:00'], replyLevel: 1, referralReward: '10%', kpValidDays: 14, lost, freeSlots, demoLink: (leadId: number, lang: 'ru' | 'en') => cabinetRef.current?.playground.draftForLead(leadId, lang)?.url ?? null } as any);
   const auditGate = new AuditGate(t);
   director.onSalesReply = (id, text) => sales.startReply(id, text);
   director.onSalesCommand = (name, arg) => sales.salesCommand(name, arg);
@@ -176,6 +177,7 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   callsRef.current = callBook;
   sales.calls = callBook;
   if (cabinet) {
+    cabinetRef.current = cabinet;
     sales.cabinet = cabinet.docs;
     backoffice.cabinet = cabinet.docs;
     support.cabinet = cabinet.docs;

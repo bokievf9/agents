@@ -63,6 +63,11 @@ export interface LeadIntakeOptions {
    * out by itself at level 1, offers the two nearest of them. Fewer than two, unreachable or absent: the two `slotHours` of the next working days, as before.
    */
   freeSlots?: () => Promise<number[]>;
+  /**
+   * «Демо на ваших данных» (owner 2026-11-22): the app makes the lead's draft agent from his niche and returns the link of its demo chat (null: none). The first
+   * reply carries the link. Called once the niche is known; idempotent per lead (a rework gets the same link).
+   */
+  demoLink?: (leadId: number, lang: Lang) => string | null;
 }
 
 /** What `deliver` receives when the owner approved (or level 1 auto-approved) a reply. */
@@ -145,7 +150,10 @@ export class LeadIntakeWorker implements Worker {
     this.slotHours = opts.slotHours ?? ['11:00', '15:00'];
     this.replyLevel = opts.replyLevel ?? 1;
     this.freeSlots = opts.freeSlots;
+    this.demoLink = opts.demoLink;
   }
+
+  private readonly demoLink: ((leadId: number, lang: Lang) => string | null) | undefined;
 
   /** The two windows of the first reply: the two nearest free ones of the site, else the own hours of the next two working days. */
   private async offerSlots(ctx: WorkerCtx): Promise<[number, number]> {
@@ -268,7 +276,16 @@ export class LeadIntakeWorker implements Worker {
     const route = viaBot ? { chatId: w.chatId } : {};
     const slotLines = chosenSlot ? t.slotChosen(formatSlot(chosenSlot, ctx.tz, lang)) : slots.map((s) => formatSlot(s, ctx.tz, lang)).join('\n');
     const slotsText = chosenSlot ? slotLines : t.slots(formatSlot(slots[0]!, ctx.tz, lang), formatSlot(slots[1]!, ctx.tz, lang));
-    const reply = await this.draftReply(ctx, lead, slotLines, slotsText, feedback, w.product);
+    const drafted = await this.draftReply(ctx, lead, slotLines, slotsText, feedback, w.product);
+    let demo: string | null = null;
+    if (lead.niche.trim() && this.demoLink) {
+      try {
+        demo = this.demoLink(lead.id, lang);
+      } catch (e) {
+        log('warn', 'lead intake: demo agent not made', { leadId: lead.id, err: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    const reply = demo ? `${drafted}\n\n${t.demo(demo)}` : drafted;
 
     await ctx.requestApproval(
       KIND_REPLY,

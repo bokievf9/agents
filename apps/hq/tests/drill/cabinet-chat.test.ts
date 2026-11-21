@@ -66,7 +66,9 @@ describe('threads: lead, project, support', () => {
     addCabMessage(w.db, w.hq.now(), { clientId: cid, leadId, from: 'client', text: 'Старое сообщение до обновления' });
     addCabMessage(w.db, w.hq.now(), { clientId: cid, leadId, from: 'manager', text: 'Старый ответ менеджера' });
     let list = await threads(cid);
-    expect(list.map((t) => t.id).sort()).toEqual([`lead-${leadId}`, `project-${projectId}`, 'support'].sort());
+    // «демо на ваших данных»: the lead with a niche has its demo agent (and its thread) from the start
+    const demoAgent = (w.db.prepare('SELECT id FROM pg_agents WHERE lead_id = ?').get(leadId) as { id: number }).id;
+    expect(list.map((t) => t.id).sort()).toEqual([`agent-${demoAgent}`, `lead-${leadId}`, `project-${projectId}`, 'support'].sort());
     const old = await messages(cid, `lead-${leadId}`);
     expect(list.find((t) => t.id === `lead-${leadId}`)).toMatchObject({ kind: 'lead', refId: leadId, unread: old.filter((m) => m.from === 'firtech').length, title: expect.stringContaining('Нужен бот') });
     expect(list.find((t) => t.id === `project-${projectId}`)).toMatchObject({ kind: 'project', refId: projectId, unread: 0 });
@@ -137,7 +139,7 @@ describe('threads: lead, project, support', () => {
     expect((await w.adm('GET', `/admin/clients/${oid}/threads/lead-${leadId}/messages`)).status).toBe(404);
     expect((await say(oid, `lead-${leadId}`, { text: 'чужая заявка' })).status).toBe(404);
     expect((await w.adm('POST', `/admin/clients/${oid}/threads/lead-${leadId}/read`)).status).toBe(404);
-    for (const tid of ['nope', 'lead-99999', 'project-999', 'agent-1', 'lead-abc', '../support']) expect((await w.adm('GET', `/admin/clients/${cid}/threads/${encodeURIComponent(tid)}/messages`)).status, tid).toBe(404);
+    for (const tid of ['nope', 'lead-99999', 'project-999', 'agent-999', 'lead-abc', '../support']) expect((await w.adm('GET', `/admin/clients/${cid}/threads/${encodeURIComponent(tid)}/messages`)).status, tid).toBe(404);
     expect((await w.adm('GET', '/admin/clients/9999/threads')).status).toBe(404);
     expect((await say(cid, 'support', { text: '' })).status).toBe(400);
     expect((await say(cid, 'support', { text: 'x'.repeat(2001) })).status).toBe(400);
@@ -234,7 +236,8 @@ describe('the agent of the playground through the API', () => {
     expect(viaThread.status, viaThread.text).toBe(200);
     expect(viaThread.json.item.from).toBe('client');
     expect(viaThread.json.reply).toMatchObject({ from: 'agent', text: expect.any(String) });
-    expect((await messages(cid, `agent-${agent.id}`)).map((m) => m.from)).toEqual(['client', 'agent']);
+    // the demo line («демо на ваших данных»: the agent was made with the lead and is the one taken over here), then the client and the agent
+    expect((await messages(cid, `agent-${agent.id}`)).map((m) => m.from)).toEqual(['agent', 'client', 'agent']);
     // the agent talks to nobody else's thread and is not shown in the owner's chats of other clients
     const other = await w.adm('POST', '/admin/clients', { email: 'third@example.com', name: 'Third', telegram: '', locale: 'ru', supabaseId: 'sb-third' });
     expect((await w.adm('GET', `/admin/clients/${other.json.client.id}/agents/${agent.id}`)).status).toBe(404);

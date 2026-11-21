@@ -447,3 +447,50 @@ describe('P-16: after the last stage, a review request and the referral link, on
     expect((w.db.prepare("SELECT text FROM owner_inbox WHERE text LIKE 'Отзыва по проекту%'").all() as any[])).toHaveLength(1);
   }, 60_000);
 });
+
+describe('«демо на ваших данных за 24 часа»: a new lead with a niche gets its draft agent and the demo link at once', () => {
+  it('the first reply carries the link; the demo chat answers with the key and without the token; one agent per lead, reused when the КП is accepted', async () => {
+    const { cid, leadId } = await cabinetLead();
+    const agents = w.db.prepare('SELECT id, client_id, state, public_id FROM pg_agents WHERE lead_id = ?').all(leadId) as any[];
+    expect(agents).toHaveLength(1);
+    expect(agents[0]).toMatchObject({ client_id: cid, state: 'draft' });
+    await w.director.sendApprovalBatch(false);
+    const reply = JSON.parse((w.db.prepare("SELECT payload FROM approvals WHERE kind = 'lead_reply'").get() as { payload: string }).payload).text as string;
+    const link = new RegExp(`https://firtech\\.pro/ru/demo/${agents[0].public_id}\\?k=([A-Za-z0-9_-]+)`).exec(reply);
+    expect(link, reply).not.toBeNull();
+    expect(reply).toContain('попробуйте демо агента, собранное по вашей заявке');
+    // the cabinet shows it in «Ваш агент» (demo mode)
+    expect(((await w.adm('GET', `/admin/clients/${cid}/agents`)).json.items as any[]).map((a) => [a.id, a.mode])).toEqual([[agents[0].id, 'demo']]);
+    // the demo chat: the key opens the draft, no token; a wrong key or no key is refused
+    const demo = await w.http('POST', `/agent/${agents[0].public_id}/chat`, { demoKey: link![1], text: 'Здравствуйте, вы кто?' });
+    expect(demo.status).toBe(200);
+    expect(await demo.json()).toMatchObject({ ok: true, mode: 'demo', reply: expect.any(String) });
+    expect((await w.http('POST', `/agent/${agents[0].public_id}/chat`, { demoKey: 'x'.repeat(32), text: 'Привет' })).status).toBe(401);
+    expect((await w.http('POST', `/agent/${agents[0].public_id}/chat`, { text: 'Привет' })).status).toBe(401);
+    // the КП accepted (the sale lists the playground): the same agent, not a new one
+    expect(w.cabinet!.playground.autoCreateForLead(cid, leadId)).toEqual({ id: agents[0].id, created: false });
+    // the owner's second run of the lead (a rework) gives the same link
+    expect(w.cabinet!.playground.draftForLead(leadId)?.url).toBe(link![0]);
+    expect(w.db.prepare('SELECT COUNT(*) n FROM pg_agents').get()).toEqual({ n: 1 });
+  }, 60_000);
+
+  it('a Telegram lead without a cabinet keeps its demo agent unowned until the account is linked; a lead without a niche gets none', async () => {
+    w = await drillWorld({ flow: true });
+    const taskId = w.sales.createLeadTask({ name: 'Bot Lead', contact: '@bot_lead', service: 'bots', budget: '', message: 'У меня кафе, нужен бот для заказов', estimate: '', locale: 'ru', slot: '', source: 'telegram', chatId: 4343 }, 'bots');
+    await w.beat();
+    const lead = w.db.prepare('SELECT id, niche FROM li_leads WHERE task_id = ?').get(taskId) as { id: number; niche: string };
+    expect(lead.niche).not.toBe('');
+    expect(w.db.prepare('SELECT client_id, state FROM pg_agents WHERE lead_id = ?').get(lead.id)).toEqual({ client_id: 0, state: 'draft' });
+    // linked later: the agent goes to the account when the КП is accepted
+    const cab = await w.adm('POST', '/admin/clients', { email: 'bot.lead@example.com', name: 'Bot Lead', telegram: '', locale: 'ru', supabaseId: 'sb-bot' });
+    const cid = cab.json.client.id as number;
+    w.db.prepare('UPDATE li_leads SET client_id = ? WHERE id = ?').run(cid, lead.id);
+    expect(w.cabinet!.playground.autoCreateForLead(cid, lead.id)?.created).toBe(false);
+    expect(w.db.prepare('SELECT client_id FROM pg_agents WHERE lead_id = ?').get(lead.id)).toEqual({ client_id: cid });
+    // no niche: no agent
+    const t2 = w.sales.createLeadTask({ name: 'X', contact: '@x_lead_x', service: 'other', budget: '', message: 'хочу узнать', estimate: '', locale: 'ru', slot: '', source: 'telegram', chatId: 4444 }, 'other');
+    await w.beat();
+    const l2 = w.db.prepare('SELECT id, niche FROM li_leads WHERE task_id = ?').get(t2) as { id: number; niche: string };
+    if (!l2.niche) expect(w.db.prepare('SELECT COUNT(*) n FROM pg_agents WHERE lead_id = ?').get(l2.id)).toEqual({ n: 0 });
+  }, 60_000);
+});

@@ -61,7 +61,7 @@ export function buildCabinet(o: CabinetDeps): CabinetApi {
     db: o.hq.db, now, tz: () => o.hq.tz, llm: o.llm, secret: o.secret ?? o.mediaSecret, gate: o.gate, uploadText: (cid, uid) => threads.uploadText(cid, uid), notifyOwner,
     // P-21: the handoff of a client's agent goes to the client (his agent thread); the owner only hears the fact
     handoff: (clientId, agentId) => notifyOwner(`Агент #${agentId} клиента ${clientId} передал разговор посетителя владельцу агента (тред агента в кабинете клиента)`),
-    journal: (agent, action, detail) => o.hq.log(agent, action, 'agent', detail),
+    journal: (agent, action, detail) => o.hq.log(agent, action, 'agent', detail), siteUrl: o.siteUrl,
   });
   ref.pg = playground;
   docs.attachPlayground(playground);

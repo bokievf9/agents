@@ -65,17 +65,17 @@ export function createHub(db: Db, now: () => number) {
         push(r.created_at, { id: `ticket:${r.id}`, dept: 'support', kind: 'ticket', title: clip(`${r.client_name}: ${r.text}`), link: `tickets:${r.id}` });
       }
     }
-    // the playground (2026-11-22): the client's demo agent was made when he accepted the КП, and went live with the first payment
+    // the playground (2026-11-22): the client's demo agent was made with his lead («демо на ваших данных») or when he accepted the КП, and went live with the first payment
     if (has('activity') && has('pg_agents')) {
       for (const r of all<{ id: number; action: string; at: number; agent: number; name: string; client: string; client_id: number }>(
         `SELECT a.id, a.action, a.at, g.id agent, g.name, g.client_id, COALESCE(NULLIF(c.name, ''), c.email, '') client
          FROM activity a JOIN pg_agents g ON CAST(a.object_id AS INTEGER) = g.id LEFT JOIN cab_clients c ON c.id = g.client_id
-         WHERE a.object_type = 'agent' AND a.action IN ('agent_auto_created', 'agent_live') ORDER BY a.id DESC LIMIT 10`,
+         WHERE a.object_type = 'agent' AND a.action IN ('agent_auto_created', 'agent_demo_for_lead', 'agent_live') ORDER BY a.id DESC LIMIT 10`,
       )) {
         const live = r.action === 'agent_live';
         push(r.at, {
           id: `agent:${r.action}:${r.id}`, dept: 'production', kind: 'info', link: `clients:${r.client_id}`,
-          title: clip(live ? `Агент «${r.name}» клиента ${r.client} включён в рабочий режим (оплачен этап 1)` : `Агент «${r.name}» клиента ${r.client} создан в демо-режиме (КП принято)`),
+          title: clip(live ? `Агент «${r.name}» клиента ${r.client} включён в рабочий режим (оплачен этап 1)` : `Агент «${r.name}» клиента ${r.client || 'без кабинета'} создан в демо-режиме (${r.action === 'agent_demo_for_lead' ? 'по заявке, демо на данных клиента' : 'КП принято'})`),
         });
       }
     }

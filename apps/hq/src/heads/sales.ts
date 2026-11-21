@@ -67,6 +67,8 @@ export interface SalesDeps {
   lost?: LostLeads;
   /** P-06: the free call windows (the site's `GET /api/slots` minus the ones HQ holds): the first reply offers the two nearest. Absent or empty: `slotHours`. */
   freeSlots?: () => Promise<number[]>;
+  /** «Демо на ваших данных»: the lead's draft agent and its demo link for the first reply (the playground, `Playground.draftForLead`). */
+  demoLink?: (leadId: number, lang: 'ru' | 'en') => string | null;
 }
 
 type Action = 'lead' | 'batch' | 'followups' | 'reply' | 'stats' | 'kp' | 'referral_reminders' | 'kp_declined' | 'call_confirm' | 'none';
@@ -164,6 +166,7 @@ export class SalesHead implements ApprovalEditor {
     this.prospector = d.prospector ?? new ProspectorWorker({ ...(d.batchSize !== undefined ? { batchSize: d.batchSize } : {}) });
     this.leads = d.leads ?? new LeadIntakeWorker({
       ...(d.slotHours ? { slotHours: d.slotHours } : {}), ...(d.replyLevel !== undefined ? { replyLevel: d.replyLevel } : {}), ...(d.freeSlots ? { freeSlots: d.freeSlots } : {}),
+      ...(d.demoLink ? { demoLink: d.demoLink } : {}),
     });
     this.presales = d.presales ?? new PresalesWorker({
       ...(d.kpValidDays !== undefined ? { validDays: d.kpValidDays } : {}),

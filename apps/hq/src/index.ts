@@ -29,7 +29,7 @@ import { blogApi } from './blog.js';
 import { payApi } from './pay.js';
 import { cachedStatus } from './status.js';
 import { createAdmin } from './admin.js';
-import { buildCabinet } from './cabinet-api.js';
+import { buildCabinet, type CabinetApi } from './cabinet-api.js';
 import { UPLOAD_TYPES } from '@fir/core';
 import { serveFile } from './pult-files.js';
 import { eventsApi } from './pult-events.js';
@@ -182,9 +182,12 @@ director.onSupportCommand = (name, args) => support.onCommand(name, args);
 // the site's free call windows (`GET /api/slots`, one request a minute at most) minus the ones HQ already holds: the chat's offer and the first reply (P-06)
 const siteFree = siteSlots(cfg.siteUrl);
 const callsRef: { current: Calls | null } = { current: null };
+const cabinetRef: { current: CabinetApi | null } = { current: null };
 const freeSlots = async (): Promise<number[]> => (callsRef.current ? callsRef.current.freeOf(await siteFree()) : siteFree());
 const sales = new SalesHead({
   hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel, freeSlots,
+  // «демо на ваших данных»: a lead with a niche gets its draft agent at once, the demo link goes into the first reply
+  demoLink: (leadId, lang) => cabinetRef.current?.playground.draftForLead(leadId, lang)?.url ?? null,
   referralReward: cfg.referralReward, kpValidDays: cfg.kpValidDays,
   ...(clientBot ? { client: clientBot } : {}), lost,
 });
@@ -205,6 +208,7 @@ const cabinet = buildCabinet({
   tools: () => toolsFor(hq, tools, { agentId: 'documents', dept: BACKOFFICE, messenger, ownerId: cfg.ownerId }),
 });
 sales.cabinet = cabinet.docs;
+cabinetRef.current = cabinet;
 // P-02/P-04/P-18/P-19/P-20 (2026-11-22): the call bookings live in HQ; the window goes to the site, the client hears it by his channel, reminders a day and an hour before
 const calls = new Calls({
   hq, siteBook: siteBooker(cfg.siteUrl, cfg.siteBookingToken), mail: cabinet.mail,

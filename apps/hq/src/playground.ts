@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { tryJson, zonedParts, type Db, type LlmClient } from '@fir/core';
 import { z } from 'zod';
 import { addThreadMessage, ensureCabinetTables } from './cabinet.js';
@@ -269,7 +269,11 @@ const patchBody = z.object({
     siteWidget: z.string().trim().max(200).regex(/^https?:\/\/[a-z0-9.-]+(:\d+)?$/i).nullable().optional(),
   }).optional(),
 }).strict();
-const chatBody = z.object({ conversationId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).optional(), text: z.string().trim().min(1).max(1000) });
+const chatBody = z.object({
+  conversationId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).optional(), text: z.string().trim().min(1).max(1000),
+  /** «Демо на ваших данных»: the key of the lead's demo link opens his draft agent without the agent token. */
+  demoKey: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/).optional(),
+});
 const knowledgeBody = z.object({ title: z.string().trim().min(1).max(120).optional(), text: z.string().trim().min(1).max(8000).optional(), uploadId: z.string().min(8).max(64).optional() })
   .refine((b) => b.text !== undefined || b.uploadId !== undefined, { message: 'text or uploadId' });
 
@@ -296,6 +300,8 @@ export interface PlaygroundDeps {
   notifyOwner?: ((text: string) => void) | undefined;
   /** Lets the app wake or journal; absent in tests. */
   journal?: ((agentName: string, action: string, detail: string) => void) | undefined;
+  /** The site (`SITE_URL`): the lead's demo link `<site>/<ru|en>/demo/<publicId>?k=<key>` («демо на ваших данных»). */
+  siteUrl?: string | undefined;
 }
 
 interface DemoSession { turns: { role: 'user' | 'assistant'; content: string }[]; last: number }
@@ -389,6 +395,17 @@ export class Playground {
     const parsed = createBody.safeParse(body ?? {});
     if (!parsed.success) return failR(400, 'invalid');
     const b = parsed.data;
+    // the lead's demo agent («демо на ваших данных») is taken over instead of a second one: the client's fields on top, a fresh token shown once
+    const demo = b.leadId !== undefined ? this.db.prepare('SELECT * FROM pg_agents WHERE lead_id = ? AND client_id IN (?, 0) ORDER BY id LIMIT 1').get(b.leadId, clientId) as AgentRow | undefined : undefined;
+    if (demo) {
+      const lead = this.db.prepare('SELECT client_id FROM li_leads WHERE id = ?').get(b.leadId) as { client_id: number | null } | undefined;
+      if (lead?.client_id !== clientId) return failR(404, 'not_found');
+      this.db.prepare('UPDATE pg_agents SET client_id = ?, updated_at = ? WHERE id = ?').run(clientId, this.d.now(), demo.id);
+      const patch = Object.fromEntries(Object.entries({ name: b.name, company: b.company, niche: b.niche, goals: b.goals, tone: b.tone, languages: b.languages, tools: b.tools }).filter(([, v]) => v !== undefined));
+      if (Object.keys(patch).length) this.patch(clientId, demo.id, patch);
+      this.d.journal?.('playground', 'agent_demo_taken', String(demo.id));
+      return this.rotateToken(clientId, demo.id);
+    }
     const n = (this.db.prepare('SELECT COUNT(*) n FROM pg_agents WHERE client_id = ?').get(clientId) as { n: number }).n;
     if (n >= MAX_AGENTS_PER_CLIENT) return failR(409, 'limit', { max: MAX_AGENTS_PER_CLIENT });
     let input: PersonaInput = { company: '', niche: '', goals: [], tone: '', languages: ['ru'] };
@@ -405,21 +422,69 @@ export class Playground {
       company: b.company ?? input.company, niche: b.niche ?? input.niche, goals: b.goals ?? input.goals, tone: b.tone ?? input.tone, languages: b.languages ?? input.languages,
     };
     if (!profile.company && !profile.niche) return failR(400, 'invalid', { reason: 'leadId or company/niche is required' });
+    const { id, token } = this.insertAgent(clientId, b.leadId ?? null, projectId, profile, b.name, b.tools);
+    this.d.journal?.('playground', 'agent_created', String(id));
+    return okR({ item: this.view(this.agent(id)!), token });
+  }
+
+  /** A new `draft` agent row; returns its id and the token (shown once by `create`, never by the lead's demo). */
+  private insertAgent(clientId: number, leadId: number | null, projectId: number | null, profile: PersonaInput, name?: string, toolList?: AgentTool[]): { id: number; token: string } {
     const t = this.d.now();
     const token = `ft_${randomBytes(24).toString('base64url')}`;
     const publicId = `ag_${randomBytes(9).toString('base64url')}`;
-    const tools = b.tools ?? [...AGENT_TOOLS];
+    const tools = toolList ?? [...AGENT_TOOLS];
     const id = Number(
       this.db.prepare(
         `INSERT INTO pg_agents (public_id, token_hash, client_id, lead_id, project_id, name, company, niche, goals, persona, tone, languages, tools, channels, limits, state, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
       ).run(
-        publicId, sha(token), clientId, b.leadId ?? null, projectId, b.name ?? `Агент ${profile.company || profile.niche}`.slice(0, 80), profile.company, profile.niche, JSON.stringify(profile.goals), buildPersona(profile),
+        publicId, sha(token), clientId, leadId, projectId, name ?? `Агент ${profile.company || profile.niche}`.slice(0, 80), profile.company, profile.niche, JSON.stringify(profile.goals), buildPersona(profile),
         profile.tone, JSON.stringify(profile.languages), JSON.stringify(tools), JSON.stringify({ web: true }), '{}', t, t,
       ).lastInsertRowid,
     );
-    this.d.journal?.('playground', 'agent_created', String(id));
-    return okR({ item: this.view(this.agent(id)!), token });
+    return { id, token };
+  }
+
+  /** The key of a lead's demo link (HMAC of the public id with the agents' secret); null without a secret: no link then. */
+  demoKey(publicId: string): string | null {
+    return this.d.secret ? createHmac('sha256', `pg-demo:${this.d.secret}`).update(publicId).digest('base64url').slice(0, 32) : null;
+  }
+
+  private demoUrl(a: Pick<AgentRow, 'public_id'>, lang: 'ru' | 'en'): string | null {
+    const key = this.demoKey(a.public_id);
+    return key ? `${(this.d.siteUrl ?? 'https://firtech.pro').replace(/\/$/, '')}/${lang}/demo/${a.public_id}?k=${key}` : null;
+  }
+
+  /**
+   * «Демо на ваших данных за 24 часа» (owner 2026-11-22): a new lead whose niche is known gets a DRAFT agent at once (persona from the lead, the demo's day cap,
+   * no token outside), one per lead; a lead with a cabinet sees it in «Ваш агент» (a line in its thread), a lead without one (the client bot) keeps it under
+   * `client_id = 0` until his account is linked. Returns the agent and its demo link (null without a secret), or null (no niche, the client's limit, no lead).
+   */
+  draftForLead(leadId: number, lang: 'ru' | 'en' = 'ru'): { id: number; url: string | null; created: boolean } | null {
+    const have = this.db.prepare('SELECT * FROM pg_agents WHERE lead_id = ? ORDER BY id LIMIT 1').get(leadId) as AgentRow | undefined;
+    if (have) return { id: have.id, url: this.demoUrl(have, lang), created: false };
+    let lead: { id: number; name: string; niche: string; task: string; estimate: string | null; lang: string | null; client_id: number | null } | undefined;
+    try {
+      lead = this.db.prepare('SELECT id, name, niche, task, estimate, lang, client_id FROM li_leads WHERE id = ?').get(leadId) as typeof lead;
+    } catch {
+      return null;
+    }
+    if (!lead || !lead.niche.trim()) return null;
+    const clientId = lead.client_id ?? 0;
+    if (clientId && (this.db.prepare('SELECT COUNT(*) n FROM pg_agents WHERE client_id = ?').get(clientId) as { n: number }).n >= MAX_AGENTS_PER_CLIENT) return null;
+    const profile = personaInputFromLead({ name: lead.name, niche: lead.niche, task: lead.task, estimate: lead.estimate ?? '', lang: lead.lang });
+    if (!profile.company && !profile.niche) profile.niche = lead.niche.trim().slice(0, 80);
+    const { id } = this.insertAgent(clientId, lead.id, null, profile);
+    this.d.journal?.('playground', 'agent_demo_for_lead', String(id));
+    if (clientId) {
+      addThreadMessage(this.db, this.d.now(), {
+        clientId, thread: `agent-${id}`, from: 'agent',
+        text: lang === 'en'
+          ? 'We built a demo of your agent from your request; it runs in demo mode. Talk to it here: ask what your customers usually ask. Add your answers to its knowledge and it gets better; it goes live for your customers after the first stage is paid.'
+          : 'Мы собрали демо вашего агента по вашей заявке, он работает в демо-режиме. Поговорите с ним здесь: спросите то, что обычно спрашивают ваши клиенты. Добавьте свои ответы в его базу знаний, и он станет точнее; для ваших клиентов он включится после оплаты первого этапа.',
+      });
+    }
+    return { id, url: this.demoUrl(this.agent(id)!, lang), created: true };
   }
 
   /**
@@ -428,8 +493,12 @@ export class Playground {
    * (he rotates it when he needs it). Once per lead. Returns the agent id, or null when it could not be made (no persona data, the client's limit).
    */
   autoCreateForLead(clientId: number, leadId: number, en = false): { id: number; created: boolean } | null {
-    const have = this.db.prepare('SELECT id FROM pg_agents WHERE client_id = ? AND lead_id = ? ORDER BY id LIMIT 1').get(clientId, leadId) as { id: number } | undefined;
-    if (have) return { id: have.id, created: false };
+    // the lead's demo agent («демо на ваших данных») is the one: reused, and a draft kept without an account goes to the client now
+    const have = this.db.prepare('SELECT id, client_id FROM pg_agents WHERE lead_id = ? AND client_id IN (?, 0) ORDER BY id LIMIT 1').get(leadId, clientId) as { id: number; client_id: number } | undefined;
+    if (have) {
+      if (have.client_id === 0) this.db.prepare('UPDATE pg_agents SET client_id = ?, updated_at = ? WHERE id = ? AND client_id = 0').run(clientId, this.d.now(), have.id);
+      return { id: have.id, created: false };
+    }
     const r = this.create(clientId, { leadId });
     const id = Number((r.body.item as { id?: number } | undefined)?.id);
     if (!r.body.ok || !Number.isInteger(id)) return null;
@@ -601,6 +670,17 @@ export class Playground {
     const a = this.db.prepare('SELECT * FROM pg_agents WHERE public_id = ?').get(publicId) as AgentRow | undefined;
     // an unknown agent and a wrong token look the same, after the same work
     const good = a ? sha(o.token).length === a.token_hash.length && timingSafeEqual(Buffer.from(sha(o.token)), Buffer.from(a.token_hash)) : false;
+    // «демо на ваших данных»: the lead's link opens his draft agent (the demo's day cap), without the agent token
+    const given = (o.body as { demoKey?: unknown } | null)?.demoKey;
+    const key = a ? this.demoKey(a.public_id) : null;
+    const demo = a !== undefined && a.state === 'draft' && a.lead_id !== null && typeof given === 'string' && key !== null && given.length === key.length && timingSafeEqual(Buffer.from(given), Buffer.from(key));
+    if (demo) {
+      const parsed = chatBody.safeParse(o.body ?? {});
+      if (!parsed.success) return failR(400, 'invalid');
+      const r = await this.chat(a, { conversationId: parsed.data.conversationId ?? `d-${randomBytes(9).toString('base64url')}`, text: parsed.data.text, channel: 'demo' });
+      const out = 'error' in r ? failR(r.error === 'limit_reached' ? 429 : 503, r.error) : okR({ reply: r.reply, conversationId: r.conversationId, usedTools: r.usedTools, mode: 'demo' });
+      return { ...out, allowOrigin: '*' };
+    }
     if (!a || !good) return failR(401, 'unauthorized');
     const site = json<{ siteWidget?: string }>(a.channels, {}).siteWidget;
     if (site && o.origin && o.origin.toLowerCase() !== site) return failR(403, 'origin');
@@ -613,7 +693,7 @@ export class Playground {
     return { ...out, ...(site ? { allowOrigin: site } : {}) };
   }
 
-  private async chat(a: AgentRow, o: { conversationId: string; text: string; channel: 'cabinet' | 'widget' }): Promise<ChatOut | { error: string }> {
+  private async chat(a: AgentRow, o: { conversationId: string; text: string; channel: 'cabinet' | 'widget' | 'demo' }): Promise<ChatOut | { error: string }> {
     const limit = json<{ msgsPerDay?: number }>(a.limits, {}).msgsPerDay ?? DEFAULT_LIMITS[a.state === 'live' ? 'live' : 'draft'];
     if (this.usedToday(a.id) >= limit) {
       this.count(a.id, 'limit_hit');
@@ -707,14 +787,14 @@ export class Playground {
     this.db.prepare('INSERT INTO pg_leads (agent_id, conv_id, name, contact, note, at) VALUES (?, ?, ?, ?, ?, ?)').run(a.id, conv, c.name, c.contact, c.note, this.d.now());
     this.count(a.id, 'lead_captured');
     // the client reads it in his agent thread; the owner's inbox gets only the fact (no names, no contacts)
-    addThreadMessage(this.db, this.d.now(), { clientId: a.client_id, thread: `agent-${a.id}`, from: 'agent', text: `Новый контакт от посетителя: ${c.name || 'без имени'}, ${c.contact}${c.note ? `. ${c.note}` : ''}` });
+    if (a.client_id) addThreadMessage(this.db, this.d.now(), { clientId: a.client_id, thread: `agent-${a.id}`, from: 'agent', text: `Новый контакт от посетителя: ${c.name || 'без имени'}, ${c.contact}${c.note ? `. ${c.note}` : ''}` });
     this.d.notifyOwner?.(`Агент «${a.name}»: собран новый контакт`);
   }
 
   private book(a: AgentRow, conv: string, c: { slot: string; name: string; contact: string }): void {
     this.db.prepare('INSERT INTO pg_bookings (agent_id, conv_id, slot, name, contact, at) VALUES (?, ?, ?, ?, ?, ?)').run(a.id, conv, c.slot, c.name, c.contact, this.d.now());
     this.count(a.id, 'booking');
-    addThreadMessage(this.db, this.d.now(), { clientId: a.client_id, thread: `agent-${a.id}`, from: 'agent', text: `Заявка на время ${c.slot}: ${c.name || 'без имени'}, ${c.contact || 'контакт не указан'}` });
+    if (a.client_id) addThreadMessage(this.db, this.d.now(), { clientId: a.client_id, thread: `agent-${a.id}`, from: 'agent', text: `Заявка на время ${c.slot}: ${c.name || 'без имени'}, ${c.contact || 'контакт не указан'}` });
   }
 
   /**
@@ -722,8 +802,10 @@ export class Playground {
    * this conversation (`capture_lead`), and an email «новое сообщение» (P-13) when it came from his site (`widget`); the journal counts it. No Fir Tech ticket and
    * no auto-answer: the visitor is the client's customer. A test chat of the client himself (`cabinet`) gets the line without the email.
    */
-  private handoff(a: AgentRow, conv: string, reason: string, text: string, channel: 'cabinet' | 'widget'): void {
+  private handoff(a: AgentRow, conv: string, reason: string, text: string, channel: 'cabinet' | 'widget' | 'demo'): void {
     this.count(a.id, 'handoff');
+    // the lead trying his own demo (no account yet) has no thread to write to
+    if (a.client_id === 0) return void this.d.journal?.('playground', 'agent_handoff', String(a.id));
     const lead = this.db.prepare('SELECT name, contact FROM pg_leads WHERE agent_id = ? AND conv_id = ? ORDER BY id DESC LIMIT 1').get(a.id, conv) as { name: string; contact: string } | undefined;
     const said = text.replace(/\s+/g, ' ').trim().slice(0, 300);
     const line = [

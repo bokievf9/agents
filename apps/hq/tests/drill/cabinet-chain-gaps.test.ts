@@ -178,10 +178,11 @@ describe('every stage step reaches the client: thread line, unread flag, email, 
   }, 60_000);
 });
 
-describe('the playground agent: made with the accepted КП, live with the first payment', () => {
-  it('accepting a КП whose build lists the playground makes the demo agent at once; the first payment makes it live; the owner sees both; once', async () => {
+describe('the playground agent: made with the lead (демо на ваших данных), kept by the accepted КП, live with the first payment', () => {
+  it('the lead with a niche has its demo agent; accepting the КП keeps the same one; the first payment makes it live; the owner sees both; once', async () => {
     const { cid, leadId, quote } = await toQuote();
-    expect(((await w.adm('GET', `/admin/clients/${cid}/agents`)).json.items as any[])).toEqual([]); // the КП alone makes nothing
+    // «демо на ваших данных» (owner 2026-11-22): the agent is there from the lead, before any КП
+    expect(((await w.adm('GET', `/admin/clients/${cid}/agents`)).json.items as any[]).map((a) => a.leadId)).toEqual([leadId]);
     expect((await w.adm('POST', `/admin/clients/${cid}/documents/${quote.id}/accept`)).status).toBe(200);
     const agents = (await w.adm('GET', `/admin/clients/${cid}/agents`)).json.items as any[];
     expect(agents).toHaveLength(1);
@@ -216,7 +217,7 @@ describe('the playground agent: made with the accepted КП, live with the first
     expect(g.errors()).toEqual([]);
   }, 120_000);
 
-  it('an agent product without a site (z.no) gets the agent without the playground chip; a КП without either gets none', async () => {
+  it('an agent product without a site (z.no) keeps one agent; a КП without either keeps only the lead\'s demo agent', async () => {
     const { cid, quote } = await toQuote({ ...LEAD, source: 'agent', estimate: 'Ниша: клиника\nСборка: https://firtech.pro/ru/builder?b=k.clinic~p.agent~l.telegram~z.no' });
     expect((await w.adm('POST', `/admin/clients/${cid}/documents/${quote.id}/accept`)).status).toBe(200);
     expect(((await w.adm('GET', `/admin/clients/${cid}/agents`)).json.items as any[])).toHaveLength(1);
@@ -224,7 +225,8 @@ describe('the playground agent: made with the accepted КП, live with the first
 
     const plain = await toQuote({ ...LEAD, source: 'agent', estimate: 'Сборка: https://firtech.pro/ru/builder?b=k.clinic~p.agent~l.telegram~z.need' });
     expect((await w.adm('POST', `/admin/clients/${plain.cid}/documents/${plain.quote.id}/accept`)).status).toBe(200);
-    expect(((await w.adm('GET', `/admin/clients/${plain.cid}/agents`)).json.items as any[])).toEqual([]);
+    // the lead with a niche has its demo agent from the start; the КП adds nothing
+    expect(((await w.adm('GET', `/admin/clients/${plain.cid}/agents`)).json.items as any[])).toHaveLength(1);
   }, 120_000);
 });
 
