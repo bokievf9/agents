@@ -124,3 +124,60 @@ describe('P-13: the client hears about a new message and a payment by email', ()
     expect(mails(`Оплата по счёту ${inv.number} получена`)[0]).toMatchObject({ to: EMAIL });
   }, 60_000);
 });
+
+/** Two windows of the site: Thursday 10:00 and Friday 14:00, Dushanbe (UTC+5). */
+const SLOT_A = Date.UTC(2026, 10, 19, 5, 0);
+const SLOT_B = Date.UTC(2026, 10, 20, 9, 0);
+const chat = (sessionId: string, text: string, extra: Record<string, unknown> = {}) =>
+  w.http('POST', '/chat', { sessionId, locale: 'ru', text, ...extra }, { 'x-chat-token': TOKENS.chat }).then((r) => r.json() as Promise<any>);
+
+describe('P-03: the website chat never asks an anonymous visitor for a contact; the picked window is kept and travels into the lead', () => {
+  it('anonymous: the call offer and the hand-off point to the sign-in; «1» keeps the window; signed in, «да» makes the lead with it', async () => {
+    w = await drillWorld({ flow: true });
+    w.site.slots = [SLOT_A, SLOT_B];
+    const sid = 'anon-session-0001';
+    const offer = await chat(sid, 'давайте созвонимся');
+    expect(offer.cta).toContain('call');
+    expect(offer.reply).toMatch(/ближайшие окна для созвона: четверг, 19 ноября[^;]*10:00; пятница, 20 ноября[^.]*14:00/);
+    expect(offer.reply).toContain('Напишите номер окна (1 или 2)');
+    expect(offer.reply).toContain('https://firtech.pro/ru/cabinet/login');
+    expect(offer.reply).not.toMatch(/оставьте контакт|@username/i);
+    // the visitor picks the first window: kept in the session, no lead (the site would not take it), the way to the sign-in
+    const pick = await chat(sid, '1');
+    expect(pick.reply).toMatch(/^Хорошо, четверг, 19 ноября[^.]*10:00\. Чтобы закрепить это время, войдите в кабинет: https:\/\/firtech\.pro\/ru\/cabinet\/login/);
+    expect(pick.leadCreated).toBeUndefined();
+    expect(w.db.prepare("SELECT COUNT(*) n FROM tasks WHERE json_extract(meta, '$.action') = 'lead'").get()).toEqual({ n: 0 });
+    // a person asked for: no contact asked, the sign-in instead
+    const person = await chat('anon-session-0002', 'позовите живого менеджера');
+    expect(person.handoff).toBe(true);
+    expect(person.reply).toContain('войдите в кабинет (https://firtech.pro/ru/cabinet/login)');
+    expect(person.reply).not.toMatch(/оставьте контакт/i);
+    // back signed in, the same session: «да» makes the lead with the window
+    const yes = await chat(sid, 'да', { clientEmail: EMAIL, cabinetId: 'sb-gaps-c', clientName: 'Gaps' });
+    expect(yes.leadCreated).toBe(true);
+    expect(yes.reply).toMatch(/^Записал созвон: четверг, 19 ноября[^.]*10:00\./);
+    const task = w.db.prepare("SELECT meta FROM tasks WHERE json_extract(meta, '$.action') = 'lead'").get() as { meta: string };
+    expect(JSON.parse(task.meta).lead).toMatchObject({ slot: new Date(SLOT_A).toISOString(), clientEmail: EMAIL, sessionId: sid });
+    await w.beat();
+    expect(w.db.prepare('SELECT chosen_slot FROM li_leads').get()).toEqual({ chosen_slot: SLOT_A });
+    // a second «да» makes nothing more
+    await chat(sid, 'да', { clientEmail: EMAIL });
+    expect(w.db.prepare("SELECT COUNT(*) n FROM tasks WHERE json_extract(meta, '$.action') = 'lead'").get()).toEqual({ n: 1 });
+    expect(g.leaks([EMAIL])).toEqual([]);
+  }, 60_000);
+
+  it('a signed-in visitor picks a window by weekday and hour: the lead is made at once', async () => {
+    w = await drillWorld({ flow: true });
+    w.site.slots = [SLOT_A, SLOT_B];
+    const sid = 'signed-session-01';
+    const who = { clientEmail: EMAIL, cabinetId: 'sb-gaps-c', clientName: 'Gaps' };
+    const offer = await chat(sid, 'давайте созвонимся', who);
+    expect(offer.reply).toContain('Напишите номер окна (1 или 2), и я запишу.');
+    expect(offer.reply).not.toContain('cabinet/login');
+    const pick = await chat(sid, 'давайте в пятницу в 14', who);
+    expect(pick.leadCreated).toBe(true);
+    expect(pick.reply).toMatch(/^Записал созвон: пятница, 20 ноября[^.]*14:00\./);
+    const task = w.db.prepare("SELECT meta FROM tasks WHERE json_extract(meta, '$.action') = 'lead'").get() as { meta: string };
+    expect(JSON.parse(task.meta).lead.slot).toBe(new Date(SLOT_B).toISOString());
+  }, 60_000);
+});

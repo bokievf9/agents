@@ -1,4 +1,4 @@
-import { detectText, errMsg, formatSlot, log, productList, productName, tryComplete, type LlmClient } from '@fir/core';
+import { detectText, errMsg, formatSlot, log, productList, productName, tryComplete, zonedParts, type LlmClient } from '@fir/core';
 import { isPriceQuestion } from '@fir/worker-lead-intake';
 import { z } from 'zod';
 import {
@@ -20,6 +20,8 @@ import { T, type Lang } from './texts.js';
 /** Clarifying questions before the proposal (owner 2026-11-21: three, not five); the turn after the last question proposes the builder. */
 export const MAX_QUALIFY_TURNS = 3;
 export const SITE_ORIGIN = 'https://firtech.pro';
+/** The cabinet's sign-in page: where an anonymous website visitor is sent to leave a request or book a call (the site takes neither without it). */
+export const loginUrlOf = (origin: string, lang: 'ru' | 'en'): string => `${origin.replace(/\/$/, '')}/${lang}/cabinet/login`;
 export const BOT_LINK = 'https://t.me/firtech_bot';
 
 export type Timeline = DetailDeadline;
@@ -55,6 +57,10 @@ export interface QState {
   /** The visitor's last message hash-free repeat counter: three equal messages in a row count as frustration. */
   lastText?: string;
   repeats?: number;
+  /** P-03: the call windows the last call offer named (UTC ms, two at most), so «1», «второе» or «во вторник в 10» picks one. */
+  offeredSlots?: number[];
+  /** P-03: the window the visitor picked (UTC ms). It travels into the lead (`slot`) and becomes a booking; an anonymous visitor keeps it here until he signs in. */
+  slot?: number;
 }
 
 export const newQ = (): QState => ({ turns: 0, offered: { builder: 0, call: 0, telegram: 0 } });
@@ -142,6 +148,37 @@ export function insistsOnTelegram(t: string): boolean {
 }
 const wantsBuilder = (t: string): boolean => /собрать|сборк|конструктор|builder|build (it|a project|my)/i.test(t);
 const SUPPORT_WORDS = /мой проект|наш проект|договор|счёт|счет|оплат|этап|статус|акт(?![\p{L}])|my project|invoice|contract|stage|payment|status of/iu;
+
+const ORDINAL: [RegExp, number][] = [
+  [/^\s*(?:№\s*)?1\s*[.)]?\s*$|(?<![\p{L}])(перв(ое|ый|ая|ую|ого)|first)(?![\p{L}])/iu, 0],
+  [/^\s*(?:№\s*)?2\s*[.)]?\s*$|(?<![\p{L}])(втор(ое|ой|ая|ую|ого)|second)(?![\p{L}])/iu, 1],
+];
+const WEEKDAY: [RegExp, number][] = [
+  [/(?<![\p{L}])(пн|понедельник\p{L}*|monday|mon)(?![\p{L}])/iu, 1], [/(?<![\p{L}])(вт|вторник\p{L}*|tuesday|tue)(?![\p{L}])/iu, 2],
+  [/(?<![\p{L}])(ср|сред[ау]|wednesday|wed)(?![\p{L}])/iu, 3], [/(?<![\p{L}])(чт|четверг\p{L}*|thursday|thu)(?![\p{L}])/iu, 4],
+  [/(?<![\p{L}])(пт|пятниц[ау]|friday|fri)(?![\p{L}])/iu, 5],
+];
+
+/**
+ * P-03: the call window the visitor picked among the ones offered: «1» / «2», «первое» / «второе», or a weekday and/or an hour that fits exactly one of them
+ * («во вторник», «в 10:00», «давайте в 15»). Null when nothing or more than one fits (the conversation goes on as usual).
+ */
+export function pickSlot(text: string, offered: number[], tz: string): number | null {
+  if (!offered.length || text.length > 120) return null;
+  for (const [re, i] of ORDINAL) if (re.test(text) && offered[i] !== undefined) return offered[i]!;
+  const day = WEEKDAY.find(([re]) => re.test(text))?.[1];
+  // an hour only with a colon («10:00») or after «в», «к», «at» («в 15»): a bare number («5 сотрудников») is not a time
+  const plain = text.replace(/\b\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?\b/g, ' ');
+  const hm = /(?<![\d:])([01]?\d|2[0-3]):([0-5]\d)(?![\d:])/.exec(plain) ?? /(?<![\p{L}])(?:в|во|к|at)\s+([01]?\d|2[0-3])(?![\d:])/iu.exec(plain);
+  const hour = hm ? Number(hm[1]) : undefined;
+  const minute = hm?.[2] !== undefined ? Number(hm[2]) : undefined;
+  if (day === undefined && hour === undefined) return null;
+  const fits = offered.filter((ms) => {
+    const p = zonedParts(ms, tz);
+    return (day === undefined || p.dow === day) && (hour === undefined || p.h === hour) && (minute === undefined || p.mi === minute);
+  });
+  return fits.length === 1 ? fits[0]! : null;
+}
 
 // ---- state ----
 const goalsOf = (xs: string[] | undefined): BuildGoal[] => [...new Set((xs ?? []).filter((x): x is BuildGoal => (BUILD_GOALS as readonly string[]).includes(x)))];
@@ -325,7 +362,7 @@ export interface Cta {
 /** The offers as text: the builder link first, the call second, Telegram only when asked for. */
 /** `linkState`: the builder link is shown for the first time (the full paragraph), changed since it was shown (one line, «обновил»), or the same (one short line). */
 export type LinkState = 'first' | 'changed' | 'same';
-export function ctaText(lang: Lang, o: { linkState?: LinkState; link: string; slots: number[]; tz: string; cta: Cta; channel?: 'web' | 'telegram' }): string {
+export function ctaText(lang: Lang, o: { linkState?: LinkState; link: string; slots: number[]; tz: string; cta: Cta; channel?: 'web' | 'telegram'; signedIn?: boolean; loginUrl?: string }): string {
   const out: string[] = [];
   // Telegram asked for: the link to the bot, then one line that pulls back to the builder (the price is visible there at once)
   const pull = o.cta.telegram && o.cta.builder;
@@ -348,9 +385,17 @@ export function ctaText(lang: Lang, o: { linkState?: LinkState; link: string; sl
     const when = o.slots.slice(0, 2).map((s) => formatSlot(s, o.tz, lang));
     // in Telegram the person is already reachable: the time is all that is missing
     const tg = o.channel === 'telegram';
+    // P-03: on the website a contact is never asked for (the site takes a request only from a signed-in visitor): the visitor picks a window, and an anonymous
+    // one is pointed to the sign-in, where the builder and the booking live
+    const anon = !tg && o.signedIn !== true;
+    const login = o.loginUrl ?? `${SITE_ORIGIN}/${lang}/cabinet/login`;
     out.push(lang === 'ru'
-      ? (when.length ? `Если проще обсудить голосом, ближайшие окна для созвона: ${when.join('; ')}. ${tg ? 'Напишите, какое подходит' : 'Оставьте контакт'}, менеджер подтвердит время.` : tg ? 'Если проще обсудить голосом, напишите «созвон» и удобное время, менеджер подтвердит.' : 'Если проще обсудить голосом, предложу время для созвона: оставьте контакт (@username, телефон или email).')
-      : (when.length ? `If a call is easier, the nearest slots are ${when.join('; ')}. ${tg ? 'Tell me which suits you' : 'Leave a contact'} and a manager will confirm the time.` : tg ? 'If a call is easier, write “call” and a convenient time, and a manager will confirm.' : 'If a call is easier, I will suggest a time: leave a contact (@username, phone or email).'));
+      ? (when.length
+        ? `Если проще обсудить голосом, ближайшие окна для созвона: ${when.join('; ')}. ${tg ? 'Напишите, какое подходит, менеджер подтвердит время.' : `Напишите номер окна (1 или 2), и я запишу${anon ? `; записаться можно после входа в кабинет: ${login}` : ''}.`}`
+        : tg ? 'Если проще обсудить голосом, напишите «созвон» и удобное время, менеджер подтвердит.' : anon ? `Если проще обсудить голосом, войдите в кабинет (${login}) и напишите здесь удобное время для созвона, менеджер подтвердит.` : 'Если проще обсудить голосом, напишите удобное время, менеджер подтвердит.')
+      : (when.length
+        ? `If a call is easier, the nearest slots are ${when.join('; ')}. ${tg ? 'Tell me which suits you and a manager will confirm the time.' : `Write the slot number (1 or 2) and I will book it${anon ? `; booking works once you sign in to your cabinet: ${login}` : ''}.`}`
+        : tg ? 'If a call is easier, write “call” and a convenient time, and a manager will confirm.' : anon ? `If a call is easier, sign in to your cabinet (${login}) and write a convenient time for the call here, a manager will confirm.` : 'If a call is easier, write a convenient time and a manager will confirm.'));
   }
   if (o.cta.telegram && !pull) {
     out.push(lang === 'ru' ? `Если удобнее в Telegram, пишите ${BOT_LINK}, там отвечает та же команда.` : `If Telegram is easier, write to ${BOT_LINK}, the same team answers there.`);
@@ -364,14 +409,30 @@ export const HANDOFF = {
     upset: 'Понял, давайте я позову человека из команды. Оставьте контакт (Telegram @username, телефон или email), и менеджер ответит вам первым.',
     done: 'Передал менеджеру, он напишет по этому контакту. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.',
     client: 'Передал в вашу переписку с командой. Ответ придёт в кабинет, раздел «Сообщения», и на почту.',
+    /** P-03: the website takes no contact from a visitor who is not signed in, so he is sent to the sign-in instead (`{login}`). */
+    signIn: 'Передаю разговор человеку из команды. Чтобы менеджер ответил вам, войдите в кабинет ({login}) и напишите здесь ещё раз: ответ придёт в кабинет и на почту.',
+    signInUpset: 'Понял, давайте я позову человека из команды. Чтобы менеджер ответил вам, войдите в кабинет ({login}) и напишите здесь ещё раз: ответ придёт в кабинет и на почту.',
   },
   en: {
     ask: 'I am passing this to a person on the team. Leave a contact (Telegram @username, phone or email) and a manager will reply first.',
     upset: 'Understood, let me call a person from the team. Leave a contact (Telegram @username, phone or email) and a manager will reply first.',
     done: 'Passed to a manager, who will write to that contact. First reply within 5 minutes, around the clock; prices and timing are confirmed by the founder.',
     client: 'Passed to your conversation with the team. The answer will come to your cabinet, Messages, and by email.',
+    signIn: 'I am passing this to a person on the team. For a manager to reply, sign in to your cabinet ({login}) and write here again: the answer will come to your cabinet and by email.',
+    signInUpset: 'Understood, let me call a person from the team. For a manager to reply, sign in to your cabinet ({login}) and write here again: the answer will come to your cabinet and by email.',
   },
 } as const;
+
+/** P-03: the window the visitor picked: booked for a signed-in client (the lead follows), kept until the sign-in for anyone else. */
+export function slotPickedText(lang: Lang, at: number, tz: string, o: { signedIn: boolean; loginUrl: string; channel?: 'web' | 'telegram' }): string {
+  const when = formatSlot(at, tz, lang);
+  if (o.signedIn || o.channel === 'telegram') {
+    return lang === 'ru' ? `Записал созвон: ${when}. Менеджер подтвердит время, напоминание придёт за сутки и за час.` : `Call booked: ${when}. A manager will confirm the time; a reminder comes a day and an hour before.`;
+  }
+  return lang === 'ru'
+    ? `Хорошо, ${when}. Чтобы закрепить это время, войдите в кабинет: ${o.loginUrl}. Потом вернитесь в этот чат и напишите «да», я запишу созвон.`
+    : `Good, ${when}. To keep this time, sign in to your cabinet: ${o.loginUrl}. Then come back to this chat and write “yes”, and I will book the call.`;
+}
 
 export const LEAD_DONE = {
   ru: (night: boolean) => `Записал, менеджер напишет вам по этому контакту. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.${night ? ' Сейчас у нас ночь, поэтому ответ придёт утром.' : ''}`,
@@ -455,7 +516,7 @@ export interface ReceptionistIn {
 
 export type ReceptionistOut =
   /** The answer, the new state and the offers that went into it. */
-  | { kind: 'reply'; text: string; q: QState; cta: Cta; link?: string; contact?: string; callAsked?: boolean; /** The model asked for the team (the `[[team]]` mark): the question needs a person's decision. */ team?: boolean; rewritten?: boolean; removed: number }
+  | { kind: 'reply'; text: string; q: QState; cta: Cta; link?: string; contact?: string; callAsked?: boolean; /** The model asked for the team (the `[[team]]` mark): the question needs a person's decision. */ team?: boolean; rewritten?: boolean; removed: number; /** P-03: the call window the visitor picked now (UTC ms, also `q.slot`). */ picked?: number }
   /** A person is asked for (or the visitor is upset); the engine collects a contact or routes to the thread. */
   | { kind: 'handoff'; q: QState; why: 'ask' | 'upset' }
   /** A signed-in client asked about their own project: route it to their thread. */
@@ -536,6 +597,13 @@ export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): 
     return { kind: 'handoff', q, why: person };
   }
   if (i.client && SUPPORT_WORDS.test(text)) return { kind: 'client', q };
+  // P-03: the visitor picks one of the call windows offered last: kept in the state (and the lead); the words come from the code
+  const picked = q.offeredSlots?.length ? pickSlot(text, q.offeredSlots, d.tz()) : null;
+  if (picked !== null && picked > d.now()) {
+    q.slot = picked;
+    const textOut = slotPickedText(i.lang, picked, d.tz(), { signedIn: i.client !== undefined, loginUrl: loginUrlOf(d.siteOrigin ?? SITE_ORIGIN, i.lang), channel: i.channel ?? 'web' });
+    return { kind: 'reply', text: textOut, q, cta: { builder: false, call: false, telegram: false }, picked, removed: 0 };
+  }
 
   // what the visitor's words already settle (the need table, «не хочу сайт»): the state is updated before anything is answered, so every link carries it
   const wasLink = q.link;
@@ -563,7 +631,9 @@ export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): 
     }
     if (cta.call) q.offered.call += 1;
     if (cta.telegram) q.offered.telegram += 1;
-    const tail = ctaText(i.lang, { linkState, link, slots: cta.call ? await slots() : [], tz: d.tz(), cta, channel: i.channel ?? 'web' });
+    const free = cta.call ? await slots() : [];
+    if (free.length) q.offeredSlots = free.slice(0, 2);
+    const tail = ctaText(i.lang, { linkState, link, slots: free, tz: d.tz(), cta, channel: i.channel ?? 'web', signedIn: i.client !== undefined, loginUrl: loginUrlOf(origin, i.lang) });
     return { kind: 'reply', text: [head, tail].filter(Boolean).join('\n\n'), q, cta, ...(cta.builder ? { link } : {}), ...(contact ? { contact } : {}), ...(callAsked ? { callAsked: true } : {}), removed: 0 };
   };
 

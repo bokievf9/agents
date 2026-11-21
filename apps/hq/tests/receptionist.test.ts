@@ -110,8 +110,9 @@ describe('qualification: from the first words to the builder link', () => {
     expect(b.reply.indexOf('/ru/builder')).toBeGreaterThan(-1);
     expect(b.reply.indexOf('/ru/builder')).toBeLessThan(b.reply.indexOf('созвон'));
     expect(b.reply).not.toMatch(/t\.me|Telegram|телеграм/i);
-    expect(b.reply).toMatch(/@username/);
-    expect(b.reply).toMatch(/предложу время для созвона/);
+    // P-03: the site takes no contact from a visitor who is not signed in: the call offer points to the sign-in, never «оставьте контакт»
+    expect(b.reply).not.toMatch(/@username|оставьте контакт/i);
+    expect(b.reply).toMatch(/войдите в кабинет \(https:\/\/firtech\.pro\/ru\/cabinet\/login\) и напишите здесь удобное время для созвона/);
     // the text the model wrote is first, the offers follow
     expect(b.reply.startsWith('Ясно, заявки приходят в Instagram')).toBe(true);
     // the model saw the qualification rules, the slots known so far and the question number
@@ -334,7 +335,7 @@ describe('a call: the site\'s slots when reachable, «предложу врем�
     expect(r.reply).toMatch(/ближайшие окна для созвона: [^.]*23[^.]*; [^.]*24/);
     const bad = world({ turns: salonModel, slots: () => Promise.reject(new Error('site down')) });
     await bad.say('У меня салон красоты');
-    expect((await bad.say('Заявки в Instagram теряются')).reply).toMatch(/предложу время для созвона/);
+    expect((await bad.say('Заявки в Instagram теряются')).reply).toMatch(/удобное время для созвона/);
   });
 
   it('«давайте созвонимся» is answered with the offers at once, the model is not called', async () => {

@@ -6,7 +6,7 @@ import { asksCatalogue } from './needs.js';
 import { clip, GREETING, intakeRecord, TurnHistory } from './shared.js';
 import { DemoChat, isPersona, PERSONAS } from './persona.js';
 import { isPriceQuestion } from '@fir/worker-lead-intake';
-import { enrichmentOf, findContact, HANDOFF, LEAD_DONE, merge, newQ, productNamesOf, receptionistTurn, wantsPerson, type Cta, type QState } from './receptionist.js';
+import { enrichmentOf, findContact, HANDOFF, LEAD_DONE, loginUrlOf, merge, newQ, productNamesOf, receptionistTurn, SITE_ORIGIN, slotPickedText, wantsPerson, type Cta, type QState } from './receptionist.js';
 import { parseRefSlug, RefStore, type Draft } from './store.js';
 import { BUDGETS, DEADLINES, NEEDS, SERVICE, T, type Budget, type Deadline, type Lang, type Need } from './texts.js';
 import { WebSessionStore, type WebSession, type WebState } from './web-store.js';
@@ -103,6 +103,8 @@ export function parseContact(raw: string): string | null {
 }
 
 const wantsPersonFlag = (text: string): boolean => wantsPerson(text) !== null;
+/** «Да», «ок», «записывайте»: the visitor confirms the window he picked before the sign-in. */
+const AFFIRM = /^(да|ага|ок|окей|хорошо|давайте|подтверждаю|записывайте|запишите|yes|yep|ok|okay|sure|confirm|book it)(?![\p{L}])/iu;
 const isPriceQuestionText = (text: string): boolean => isPriceQuestion(text);
 const ctaList = (c: Cta): ('builder' | 'call' | 'telegram')[] => [...(c.builder ? ['builder' as const] : []), ...(c.call ? ['call' as const] : []), ...(c.telegram ? ['telegram' as const] : [])];
 const apiState = (s: WebState): ChatApiState => (s === 'idle' || s === 'ask' ? 'chat' : s === 'contact' ? 'contact' : 'intake');
@@ -411,6 +413,8 @@ export class WebChatEngine {
       const q = merge(q0, { reply: '' }, text);
       return this.leadFromQ(s, lang, q, contact, wantsPersonFlag(text));
     }
+    // P-03: the window picked before the sign-in: the visitor is back signed in and says yes, the lead with the window is made now (once)
+    if (s.draft.identity && q0.slot !== undefined && q0.slot > this.d.now() && !q0.leadMade && AFFIRM.test(text)) return this.leadFromQ(s, lang, q0, s.draft.identity.email, false);
     const out = await receptionistTurn(
       {
         llm: this.d.llm, instructions: this.d.instructions, now: this.d.now, tz: this.d.tz, slots: this.d.slots, siteOrigin: this.d.siteOrigin,
@@ -440,8 +444,10 @@ export class WebChatEngine {
         return { reply: s.llmAnswers >= cap ? w.cap : w.fallback, buttons: intakeButton(lang) };
       default:
     }
-    // a signed-in client asks for a call: the account is the contact, the lead is linked to it (once)
-    if (out.callAsked && s.draft.identity && !out.q.leadMade) return this.leadFromQ(s, lang, out.q, s.draft.identity.email, false);
+    // P-03: a call window picked: a signed-in client gets the lead with it at once (the account is the contact); anyone else keeps it in the session until the sign-in
+    if (out.picked !== undefined && s.draft.identity && !out.q.leadMade) return this.leadFromQ(s, lang, out.q, s.draft.identity.email, false);
+    // a signed-in client asks for a call: the account is the contact, the lead is linked to it (once); when windows were offered he picks one first (P-03)
+    if (out.callAsked && s.draft.identity && !out.q.leadMade && !out.q.offeredSlots?.length) return this.leadFromQ(s, lang, out.q, s.draft.identity.email, false);
     this.saveQ(s.id, out.q);
     this.history.remember(s.id, 'user', text);
     this.history.remember(s.id, 'assistant', out.text);
@@ -470,7 +476,8 @@ export class WebChatEngine {
     if (s.draft.identity) return this.routeClient(s, lang, q, text, true);
     this.setState(s, 'contact', { ...s.draft, q, pending: 'handoff' });
     log('info', 'web chat handoff', { sessionId: s.id, why });
-    return { reply: HANDOFF[lang][why], handoff: true };
+    // P-03: the site takes no contact from a visitor who is not signed in: he is pointed to the sign-in (a contact typed anyway still makes the lead)
+    return { reply: HANDOFF[lang][why === 'upset' ? 'signInUpset' : 'signIn'].replace('{login}', loginUrlOf(this.d.siteOrigin ?? SITE_ORIGIN, lang)), handoff: true };
   }
 
   /** The lead of a conversation: what the receptionist learned, the summary, the product family, the niche, the intent score and the link it proposed ride along. */
@@ -495,7 +502,8 @@ export class WebChatEngine {
     ].join('\n');
     const lead = {
       name: id?.name || 'Посетитель веб-чата', contact: clip(contact, 120), service: SERVICE[state.products?.[0] ?? 'other'], product, budget: clip(state.budget ?? '', 40), message: clip(message, 2000), estimate: '',
-      locale: lang, slot: '', source: ref ? `ref:${ref}` : 'web', page, sessionId: s.id, enrichment, ...(handoff ? { handoff: true } : {}),
+      // P-03/P-04: the window the visitor picked rides with the lead; the Sales head books it (the site's `POST /api/slots`, else a «подтвердить созвон» task)
+      locale: lang, slot: state.slot !== undefined && state.slot > this.d.now() ? new Date(state.slot).toISOString() : '', source: ref ? `ref:${ref}` : 'web', page, sessionId: s.id, enrichment, ...(handoff ? { handoff: true } : {}),
       ...(id ? { clientEmail: id.email, ...(id.cabinetId ? { cabinetId: id.cabinetId } : {}), ...(id.name ? { clientName: id.name } : {}) } : {}),
     };
     try {
@@ -507,6 +515,7 @@ export class WebChatEngine {
       this.setState(s, 'idle', this.fresh(s));
       this.store.update(s.id, { summary: 'заявка из разговора не создана (в журнале потерянных)' });
     }
+    if (!handoff && lead.slot && state.slot !== undefined) return { reply: slotPickedText(lang, state.slot, this.d.tz(), { signedIn: true, loginUrl: '' }), created: true };
     return { reply: handoff ? `${HANDOFF[lang].done}${night ? (lang === 'ru' ? ' Сейчас у нас ночь, поэтому ответ придёт утром.' : ' It is night here now, so the answer will come in the morning.') : ''}` : LEAD_DONE[lang](night), created: true, ...(handoff ? { handoff: true } : {}) };
   }
 }

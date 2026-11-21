@@ -212,9 +212,11 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const counter = { get: (k: string) => hq.setting(k) || undefined, set: (k: string, v: string) => hq.setSetting(k, v) };
   const gatewayDown = gatewayGate(() => state.down, t);
   const chatGate = new RateLimiter(1, 300, t, () => hq.tz, counter);
+  // the site's call windows (`GET /api/slots`) as the receptionist sees them; tests put free windows here (UTC ms)
+  const site = { slots: [] as number[] };
   const webChat = new WebChatEngine({
     db, now: t, tz: () => hq.tz, llm: llm as any, instructions: FALLBACK_INSTRUCTIONS, quietHours: '22:00-08:00', gate: chatGate,
-    onLost: (s: any, r: any, i: any) => lost.record(s, r, i), gatewayDown,
+    onLost: (s: any, r: any, i: any) => lost.record(s, r, i), gatewayDown, slots: () => Promise.resolve(site.slots.filter((x) => x > t())),
   } as any);
   webChat.connect(clientSinks({ hq, sales, support, invoicePrefix: 'FT' }));
   const reloads = { n: 0, fail: false };
@@ -297,7 +299,7 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const close = () => new Promise<void>((res) => (url ? webhook.close(() => res()) : res()));
   return {
     bot, api, press, say, settle, clock, db, tg, hq, queue, channel, llm, calls, state, director, marketing, support, sales, production, backoffice, drill, billing, payWatch, chain, chainGets, admin, webhook, url, http, adm,
-    cabinet, emails, emailFail, heartbeat, beat, decide, cmd, alerts, posted, lost, webChat, reloads, toWeb, toClient, tools, fetched, rendersDir, dataDir, sleeps, outbox, ownerSaw, close, startRoutines: () => startRoutines(hq),
+    cabinet, emails, emailFail, site, heartbeat, beat, decide, cmd, alerts, posted, lost, webChat, reloads, toWeb, toClient, tools, fetched, rendersDir, dataDir, sleeps, outbox, ownerSaw, close, startRoutines: () => startRoutines(hq),
   };
 }
 export type DrillWorld = Awaited<ReturnType<typeof drillWorld>>;
