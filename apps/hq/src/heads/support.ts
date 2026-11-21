@@ -8,6 +8,7 @@ import { FinanceWorker } from '@fir/worker-finance';
 import { MonitoringWorker, WORKER_ID as MONITORING_WORKER_ID, type MonEvent } from '@fir/worker-monitoring';
 import { OnboardingWorker, obStoreFor, parseOnboardArgs } from '@fir/worker-onboarding';
 import type { Cron } from 'croner';
+import type { CabDocs } from '../cab-docs.js';
 import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
 import type { Reporter } from '../reporter.js';
 import { toolsFor, type AppTools } from '../tools.js';
@@ -112,6 +113,8 @@ export class SupportHead {
    * referral payout; the returned lines are added to the owner's answer. Only a FIRST payment of a new project starts anything.
    */
   onPaid: ((invoice: Invoice) => Promise<string[]>) | null = null;
+  /** Cabinet v3: set by the app. An approved invoice of a cabinet lead goes to the client's cabinet and email with the pay button (no «send it yourself»). */
+  cabinet: CabDocs | null = null;
   private readonly cs: CustomerSupportWorker;
   private readonly billing: BillingWorker;
   private readonly onboarding: OnboardingWorker;
@@ -127,7 +130,14 @@ export class SupportHead {
       ownerText: `Тикет #${x.ticketId}: ответ утверждён, отправьте клиенту ${x.contact || x.name}${x.contact ? ` (${x.name})` : ''}:\n\n${x.text}`,
     });
     for (const [k, spec] of Object.entries(this.cs.kindSpecs(base, ticketDelivery))) d.hq.registerKind(k, spec);
-    for (const [k, spec] of Object.entries(this.billing.kindSpecs(base, (x) => toOwner(`${x.kind === 'billing_invoice' ? 'Счёт утверждён' : 'Напоминание утверждено'}, отправьте клиенту ${x.name}:\n\n${x.text}`)))) d.hq.registerKind(k, spec);
+    const billingDelivery = async (x: { kind: string; invoiceId: number; name: string; text: string }): Promise<void> => {
+      if (x.kind === 'billing_invoice' && this.cabinet) {
+        const sent = await this.cabinet.onInvoiceApproved(x.invoiceId, x.text).catch((e) => { log('warn', 'cabinet invoice delivery failed', { invoice: x.invoiceId, err: errMsg(e) }); return false; });
+        if (sent) return void (await toOwner(`Счёт утверждён и отправлен клиенту ${x.name} в кабинет и на почту (кнопка оплаты там). Отправлять самому не нужно.`));
+      }
+      await toOwner(`${x.kind === 'billing_invoice' ? 'Счёт утверждён' : 'Напоминание утверждено'}, отправьте клиенту ${x.name}:\n\n${x.text}`);
+    };
+    for (const [k, spec] of Object.entries(this.billing.kindSpecs(base, billingDelivery))) d.hq.registerKind(k, spec);
     for (const [k, spec] of Object.entries(this.onboarding.kindSpecs((x) => toOwner(`Инструкция для ${x.name} утверждена, отправьте клиенту:\n\n${x.text}`)))) d.hq.registerKind(k, spec);
   }
 

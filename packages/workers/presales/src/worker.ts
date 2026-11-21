@@ -124,14 +124,31 @@ export class PresalesWorker implements Worker {
       ...(brief.hasDomain != null ? { hasDomain: brief.hasDomain } : {}), ...(brief.hasHosting != null ? { hasHosting: brief.hasHosting } : {}),
     };
     const who = brief.leadId ? `лид #${brief.leadId} ${brief.client}` : 'по запросу владельца';
+    // a lead from a signed-in cabinet gets the КП in his cabinet when the owner approves it (Cabinet v3); the card says so
+    let cabinet = false;
+    if (brief.leadId !== null) {
+      try {
+        cabinet = (ctx.db.prepare('SELECT client_id FROM li_leads WHERE id = ?').get(brief.leadId) as { client_id: number | null } | undefined)?.client_id != null;
+      } catch {
+        /* an older table without the column: no cabinet */
+      }
+    }
     // the client's own builder total is only compared, never used as a price: the lead form is public
     const seen = builderTotal(brief.estimate ?? '');
     const mismatch = seen !== null && seen !== quote.totalUsd ? ` Внимание: в конструкторе клиент видел итог ${usd(seen)}, в КП ${usd(quote.totalUsd)}: сверьте состав.` : '';
     const summary = [
       `${DOC_RU.kp}, смета и черновик договора #${packId}: ${who}`,
       `Направление: ${offer.title}, цена ${exactLabel(quote)}${quote.lines.length > 1 ? ` (${quote.lines.map((l) => l.label).join(' + ')})` : ''}. Оплата по этапам (${stages.map((x) => `${x.no}: ${usd(x.amountUsd)}`).join(', ')}), каждый до его начала. КП действует ${this.validDays} дн.${mismatch}`,
-      'Тексты длинные: «Скопировать документы» пришлёт их сообщениями. «Утвердить» отмечает документы утверждёнными, отправляете клиенту сами.',
-      `Дальше после «Утвердить»: договор и счёт на первый этап (${usd(prepayUsd)}) придут отдельными карточками, проект стартует после оплаты первого этапа, каждый следующий счёт после приёмки предыдущего этапа.`,
+      'Тексты длинные: «Скопировать документы» пришлёт их сообщениями.',
+      ...(cabinet
+        ? [
+          '«Утвердить» отправляет КП и смету клиенту в кабинет и на почту (отправлять самому не нужно).',
+          `Дальше: договор придёт карточкой, когда клиент примет КП; счёт на первый этап (${usd(prepayUsd)}), когда клиент подпишет договор; проект стартует после оплаты первого этапа, каждый следующий счёт после приёмки предыдущего этапа.`,
+        ]
+        : [
+          '«Утвердить» отмечает документы утверждёнными, отправляете клиенту сами.',
+          `Дальше после «Утвердить»: договор и счёт на первый этап (${usd(prepayUsd)}) придут отдельными карточками, проект стартует после оплаты первого этапа, каждый следующий счёт после приёмки предыдущего этапа.`,
+        ]),
     ].join('\n');
     await ctx.requestApproval(KIND_PACK, payload, summary);
     log('info', 'presales pack', { packId, lead: brief.leadId, direction: offer.id });

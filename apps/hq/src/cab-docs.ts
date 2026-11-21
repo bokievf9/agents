@@ -1,0 +1,544 @@
+import { createHash } from 'node:crypto';
+import { inflateSync } from 'node:zlib';
+import { errMsg, log, markdownToPdfDoc, zonedParts, type Db, type Tools } from '@fir/core';
+import type { Hq } from '@fir/hq';
+import type { BillingWorker } from '@fir/worker-billing';
+import { z } from 'zod';
+import { ensureCabinetTables, postFromFirTech } from './cabinet.js';
+
+/**
+ * Cabinet v3 documents (2026-11-22): what the client sees of the papers and what he does with them. The owner's approval of a quote, a contract or an
+ * invoice IS the sending: it writes a `cab_documents` row, emails the client a link to the cabinet (never the PDF) and posts a line into his thread.
+ * The client accepts the quote and signs the contract in the cabinet; each step proposes the next paper to the owner. Contract: `docs/admin-crm-api.md`,
+ * «Кабинет v3 (2026-11-22)».
+ */
+export const DOC_KINDS = ['quote', 'contract', 'invoice', 'act', 'other'] as const;
+export type DocKind = (typeof DOC_KINDS)[number];
+export const DOC_STATES = ['awaiting_client', 'accepted', 'awaiting_signature', 'signed', 'issued', 'paid', 'void'] as const;
+export type DocState = (typeof DOC_STATES)[number];
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS cab_documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  number TEXT NOT NULL DEFAULT '',
+  lead_id INTEGER,
+  project_id INTEGER,
+  pack_id INTEGER,
+  state TEXT NOT NULL,
+  src TEXT NOT NULL DEFAULT '',
+  src_id INTEGER,
+  amount_usd REAL,
+  stage_no INTEGER,
+  body TEXT NOT NULL DEFAULT '',
+  pdf_rel TEXT,
+  pdf_sha256 TEXT,
+  signed_pdf_rel TEXT,
+  meta TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  delivered_at INTEGER,
+  accepted_at INTEGER,
+  signed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS cab_documents_client ON cab_documents (client_id, id);
+CREATE INDEX IF NOT EXISTS cab_documents_lead ON cab_documents (lead_id);
+CREATE INDEX IF NOT EXISTS cab_documents_project ON cab_documents (project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS cab_documents_src ON cab_documents (src, src_id) WHERE src_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS bo_signatures (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  doc_id INTEGER NOT NULL,
+  signature_png BLOB NOT NULL,
+  name TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  ip TEXT NOT NULL DEFAULT '',
+  ua TEXT NOT NULL DEFAULT '',
+  sha256 TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bo_signatures_doc ON bo_signatures (doc_id);
+`;
+
+const ready = new WeakSet<object>();
+export function ensureDocTables(db: Db): void {
+  if (ready.has(db)) return;
+  ensureCabinetTables(db);
+  db.exec(SCHEMA);
+  ready.add(db);
+}
+
+export interface DocRow {
+  id: number; client_id: number; kind: DocKind; title: string; number: string; lead_id: number | null; project_id: number | null; pack_id: number | null; state: DocState;
+  src: string; src_id: number | null; amount_usd: number | null; stage_no: number | null; body: string; pdf_rel: string | null; pdf_sha256: string | null; signed_pdf_rel: string | null;
+  meta: string; created_at: number; delivered_at: number | null; accepted_at: number | null; signed_at: number | null;
+}
+
+/** What the client does next (the same words for a lead and for a project). `wait`: nothing, we are working. */
+export interface NextAction {
+  kind: 'accept_quote' | 'sign_contract' | 'pay_stage' | 'accept_stage' | 'wait';
+  docId?: number;
+  stageNo?: number;
+  payUrl?: string;
+}
+
+/** The stage fields `clientNextAction` reads (the cabinet's milestone view). */
+export interface StageLike {
+  stageNo: number | null;
+  state: 'awaiting_payment' | 'in_progress' | 'awaiting_acceptance' | 'accepted' | null;
+  payUrl: string | null;
+  invoiceNumber: string | null;
+}
+
+const hasTable = (db: Db, t: string) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t) !== undefined;
+
+/** The documents of one lead and/or project, oldest first; empty when the cabinet documents were never used. */
+export function docsOf(db: Db, o: { leadId?: number | null; projectId?: number | null }): DocRow[] {
+  if (!hasTable(db, 'cab_documents')) return [];
+  const where: string[] = [];
+  const params: number[] = [];
+  if (o.leadId) { where.push('lead_id = ?'); params.push(o.leadId); }
+  if (o.projectId) { where.push('project_id = ?'); params.push(o.projectId); }
+  if (!where.length) return [];
+  return db.prepare(`SELECT * FROM cab_documents WHERE ${where.join(' OR ')} ORDER BY id`).all(...params) as DocRow[];
+}
+
+/**
+ * The one thing the client does next. Order: a quote to accept, a contract to sign, the stage to pay (the pay link of the issued invoice), the
+ * finished stage to accept; otherwise `wait`. Documents win over stages: a client never pays before he signed.
+ */
+export function clientNextAction(docs: DocRow[], stages: StageLike[]): NextAction {
+  const quote = docs.find((d) => d.kind === 'quote' && d.state === 'awaiting_client');
+  if (quote) return { kind: 'accept_quote', docId: quote.id };
+  const contract = docs.find((d) => d.kind === 'contract' && d.state === 'awaiting_signature');
+  if (contract) return { kind: 'sign_contract', docId: contract.id };
+  for (const s of stages) {
+    if (s.stageNo === null || s.state === 'accepted') continue;
+    if (s.state === 'awaiting_acceptance') return { kind: 'accept_stage', stageNo: s.stageNo };
+    if (s.state === 'awaiting_payment' && s.payUrl) {
+      const inv = docs.find((d) => d.kind === 'invoice' && d.number === s.invoiceNumber);
+      return { kind: 'pay_stage', stageNo: s.stageNo, payUrl: s.payUrl, ...(inv ? { docId: inv.id } : {}) };
+    }
+    break; // the stage runs, or its invoice is not issued yet
+  }
+  return { kind: 'wait' };
+}
+
+/** The project state the client sees: preparing until the first stage is paid, then in progress, paused, done. */
+export function projectStateOf(status: string, stages: Pick<StageLike, 'state'>[]): 'preparing' | 'in_progress' | 'paused' | 'done' {
+  if (status === 'done') return 'done';
+  if (status === 'paused') return 'paused';
+  if (status === 'active') return 'in_progress';
+  return stages.some((s) => s.state !== null && s.state !== 'awaiting_payment') ? 'in_progress' : 'preparing';
+}
+
+/** One sentence for the lead's `nextStep` when the documents flow is on for the lead (`null`: the old stage sentence stays). */
+export function docNextStep(docs: DocRow[], action: NextAction, lang: string | null | undefined): string | null {
+  if (!docs.some((d) => d.kind === 'quote')) return null;
+  const en = lang === 'en';
+  if (action.kind === 'accept_quote') return en ? 'Read the proposal in Documents and press «Accept»' : 'Прочитайте КП в разделе «Документы» и нажмите «Принять КП»';
+  if (action.kind === 'sign_contract') return en ? 'Sign the contract in Documents' : 'Подпишите договор в разделе «Документы»';
+  const quote = docs.find((d) => d.kind === 'quote')!;
+  const contract = docs.find((d) => d.kind === 'contract');
+  if (quote.state === 'accepted' && !contract) return en ? 'Proposal accepted, we are preparing the contract' : 'КП принято, готовим договор';
+  if (contract?.state === 'signed' && !docs.some((d) => d.kind === 'invoice')) return en ? 'Contract signed, we are preparing the invoice for the first stage' : 'Договор подписан, готовим счёт на первый этап';
+  return null;
+}
+
+/** A drawn signature as the cabinet sends it: `data:image/png;base64,...`, a real PNG of a sensible size with something drawn on it. */
+export const SIGNATURE_MAX_CHARS = 200 * 1024;
+
+/** Concatenated, inflated IDAT of a PNG, or null when the file is not a well-formed PNG. */
+function pngPixels(buf: Buffer): { width: number; height: number; raw: Buffer } | null {
+  if (buf.length < 45 || buf.readUInt32BE(0) !== 0x89504e47 || buf.readUInt32BE(4) !== 0x0d0a1a0a) return null;
+  let off = 8;
+  let width = 0;
+  let height = 0;
+  const idat: Buffer[] = [];
+  while (off + 12 <= buf.length) {
+    const len = buf.readUInt32BE(off);
+    const type = buf.toString('latin1', off + 4, off + 8);
+    if (off + 12 + len > buf.length) return null;
+    if (type === 'IHDR') {
+      width = buf.readUInt32BE(off + 8);
+      height = buf.readUInt32BE(off + 12);
+    } else if (type === 'IDAT') idat.push(buf.subarray(off + 8, off + 8 + len));
+    else if (type === 'IEND') break;
+    off += 12 + len;
+  }
+  if (!width || !height || !idat.length) return null;
+  try {
+    return { width, height, raw: inflateSync(Buffer.concat(idat), { maxOutputLength: 64 * 1024 * 1024 }) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The PNG bytes of a signature data URL, or the reason it is refused. Refused: not a PNG data URL, over 200 KB, not a decodable PNG, a tiny or huge
+ * picture, a blank canvas (all pixels transparent, or one flat colour: nothing was drawn).
+ */
+export function parseSignature(dataUrl: string): { ok: true; png: Buffer } | { ok: false; reason: string } {
+  if (dataUrl.length > SIGNATURE_MAX_CHARS) return { ok: false, reason: 'too_large' };
+  const m = /^data:image\/png;base64,([A-Za-z0-9+/]+={0,2})$/.exec(dataUrl);
+  if (!m) return { ok: false, reason: 'not_png' };
+  const png = Buffer.from(m[1]!, 'base64');
+  const px = pngPixels(png);
+  if (!px) return { ok: false, reason: 'not_png' };
+  if (px.width < 20 || px.height < 10 || px.width > 4000 || px.height > 2000) return { ok: false, reason: 'bad_size' };
+  // a filter byte starts each row: what is left is the pixel data; a drawn stroke makes at least two distinct values beyond the filter bytes
+  const seen = new Set<number>();
+  for (let i = 0; i < px.raw.length && seen.size < 3; i++) seen.add(px.raw[i]!);
+  const zeros = px.raw.reduce((n, b) => n + (b === 0 ? 1 : 0), 0);
+  if (seen.size === 1 || (seen.size === 2 && seen.has(0) && seen.has(255) && zeros <= px.height)) return { ok: false, reason: 'blank' };
+  return { ok: true, png };
+}
+
+const signBody = z.object({
+  signaturePng: z.string().min(1).max(400_000),
+  name: z.string().trim().min(2).max(120),
+  consent: z.literal(true),
+  ip: z.string().trim().max(64).default(''),
+  userAgent: z.string().trim().max(300).default(''),
+});
+
+export interface CabDocsDeps {
+  hq: Hq;
+  now: () => number;
+  /** The Back Office toolbox (`media.pdf`, `files.put`, `files.url`, `email.send`): one per call, `docs/tools.md`. */
+  tools: () => Tools;
+  billing: BillingWorker;
+  siteUrl: string;
+  /** A line for the owner's inbox (no approval). */
+  notifyOwner: (text: string) => void;
+}
+
+/** What the Sales head hands over when the owner approved a КП whose lead has a cabinet. */
+export interface QuoteApproval {
+  clientId: number;
+  leadId: number;
+  projectId: number;
+  packId: number;
+  client: string;
+  totalUsd: number;
+  kpText: string;
+  estimateText: string;
+  /** The task metas of the next two steps (the contract, the invoice of stage 1): made after the client accepts and signs. */
+  contractMeta: Record<string, unknown>;
+  invoiceMeta: Record<string, unknown>;
+}
+
+interface ClientRow { id: number; email: string; name: string; locale: string }
+const SEVEN_DAYS = 7 * 86_400_000;
+const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
+const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
+
+export type DocReply = { status: number; body: Record<string, unknown> };
+const okR = (body: Record<string, unknown> = {}): DocReply => ({ status: 200, body: { ok: true, ...body } });
+const failR = (status: number, error: string, extra: Record<string, unknown> = {}): DocReply => ({ status, body: { ok: false, error, ...extra } });
+
+export class CabDocs {
+  private readonly pending = new Set<Promise<unknown>>();
+
+  constructor(private readonly d: CabDocsDeps) {
+    ensureDocTables(d.hq.db);
+  }
+
+  private get db(): Db {
+    return this.d.hq.db;
+  }
+
+  /** Waits for the background work started by the owner's decisions (the PDF and the email of a quote); tests and shutdown. */
+  async idle(): Promise<void> {
+    while (this.pending.size) await Promise.allSettled([...this.pending]);
+  }
+
+  private track(p: Promise<unknown>): void {
+    const q = p.catch((e) => log('warn', 'cabinet document step failed', { err: errMsg(e) })).finally(() => this.pending.delete(q));
+    this.pending.add(q);
+  }
+
+  private client(id: number): ClientRow | undefined {
+    return this.db.prepare('SELECT id, email, name, locale FROM cab_clients WHERE id = ?').get(id) as ClientRow | undefined;
+  }
+
+  /** The cabinet account of a lead, or null (a lead from the Telegram bot has none: its papers go the old way, through the owner). */
+  clientOfLead(leadId: number | null | undefined): number | null {
+    if (!leadId || !hasTable(this.db, 'li_leads')) return null;
+    const r = this.db.prepare('SELECT client_id FROM li_leads WHERE id = ?').get(leadId) as { client_id: number | null } | undefined;
+    return r?.client_id ?? null;
+  }
+
+  private row(id: number): DocRow | undefined {
+    return this.db.prepare('SELECT * FROM cab_documents WHERE id = ?').get(id) as DocRow | undefined;
+  }
+
+  private insert(r: Partial<DocRow> & Pick<DocRow, 'client_id' | 'kind' | 'title' | 'state'>): DocRow {
+    const t = this.d.now();
+    const id = Number(
+      this.db.prepare(
+        `INSERT INTO cab_documents (client_id, kind, title, number, lead_id, project_id, pack_id, state, src, src_id, amount_usd, stage_no, body, meta, created_at, delivered_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        r.client_id, r.kind, r.title, r.number ?? '', r.lead_id ?? null, r.project_id ?? null, r.pack_id ?? null, r.state, r.src ?? '', r.src_id ?? null, r.amount_usd ?? null,
+        r.stage_no ?? null, r.body ?? '', r.meta ?? '{}', t, t,
+      ).lastInsertRowid,
+    );
+    return this.row(id)!;
+  }
+
+  private cabinetUrl(c: ClientRow): string {
+    return `${this.d.siteUrl}/${c.locale === 'en' ? 'en' : 'ru'}/cabinet`;
+  }
+
+  // ---- rendering ----
+  private stamp(ms: number): string {
+    const p = zonedParts(ms, this.d.hq.tz);
+    const two = (n: number) => String(n).padStart(2, '0');
+    return `${two(p.d)}.${two(p.mo)}.${p.y} ${two(p.h)}:${two(p.mi)}`;
+  }
+
+  /** The PDF of a row; `sign` makes the signed contract. Returns the stored path and the file's sha256, or null when it could not be made (no fonts or folder). */
+  private async render(row: DocRow, sign?: { png: Buffer; name: string; at: number }): Promise<{ rel: string; sha256: string } | null> {
+    const tools = this.d.tools();
+    if (!tools.can('media.pdf') || !tools.can('files.put')) return null;
+    let body = row.body;
+    const parties: { role: string; name: string; details?: string[]; date?: string; signature?: Uint8Array }[] = [];
+    if (row.kind === 'contract') {
+      const cut = body.search(/^##\s+Подписи сторон/m);
+      if (cut >= 0) body = body.slice(0, cut);
+      const c = this.client(row.client_id);
+      const when = this.stamp(sign?.at ?? row.created_at);
+      parties.push(
+        { role: 'Исполнитель', name: 'Fir Tech', details: ['hello@firtech.pro'], date: when },
+        sign
+          ? { role: 'Заказчик', name: sign.name, details: ['Простая электронная подпись в кабинете firtech.pro'], date: when, signature: sign.png }
+          : { role: 'Заказчик', name: c?.name || c?.email || '____________', details: ['Подпись ставится в кабинете firtech.pro'] },
+      );
+    }
+    const doc = { ...markdownToPdfDoc(body, { title: row.title, footer: 'Fir Tech · firtech.pro' }), ...(parties.length ? { parties } : {}) };
+    if (row.kind !== 'contract') doc.title = row.number ? `${row.title} ${row.number}` : row.title;
+    const pdf = await tools.media.pdf(doc);
+    if (!pdf.ok) {
+      log('warn', 'cabinet pdf not rendered', { doc: row.id, err: pdf.error });
+      return null;
+    }
+    const name = `${row.kind}-${row.id}${sign ? '-signed' : ''}.pdf`;
+    const file = await tools.files.put(`cabinet/c${row.client_id}`, name, pdf.value.bytes);
+    if (!file.ok) {
+      log('warn', 'cabinet pdf not saved', { doc: row.id, err: file.error });
+      return null;
+    }
+    return { rel: file.value.path, sha256: sha(pdf.value.bytes) };
+  }
+
+  /** The PDF link: a signed `/media/` URL valid for 7 days, made fresh on every read; null without a stored file or without the public base. */
+  private async pdfUrl(row: DocRow): Promise<string | null> {
+    const rel = row.signed_pdf_rel ?? row.pdf_rel;
+    if (!rel) return null;
+    const u = await this.d.tools().files.url(rel, { ttlMs: SEVEN_DAYS });
+    return u.ok ? u.value : null;
+  }
+
+  /** Renders the unsigned PDF of a freshly delivered row and keeps the path and the hash on it (best effort). */
+  private async attachPdf(row: DocRow): Promise<void> {
+    const r = await this.render(row);
+    if (r) this.db.prepare('UPDATE cab_documents SET pdf_rel = ?, pdf_sha256 = ? WHERE id = ?').run(r.rel, r.sha256, row.id);
+  }
+
+  // ---- delivery: the owner's approval is the sending ----
+  /** The email (a link to the cabinet, never the PDF) and the line in the thread; the outcome goes to the journal without any text. */
+  private async notifyClient(row: DocRow, what: { ru: string; en: string; ruMail: string; enMail: string }): Promise<void> {
+    const c = this.client(row.client_id);
+    if (!c) return;
+    const en = c.locale === 'en';
+    const url = this.cabinetUrl(c);
+    postFromFirTech(this.db, this.d.now(), c.id, row.lead_id, en ? what.en : what.ru);
+    const tools = this.d.tools();
+    let how = 'journal';
+    if (tools.can('email.send')) {
+      const hello = en ? `Hello${c.name ? `, ${c.name}` : ''}!` : `Здравствуйте${c.name ? `, ${c.name}` : ''}!`;
+      const sent = await tools.email.send({
+        to: c.email, subject: en ? what.enMail : what.ruMail,
+        text: `${hello}\n\n${en ? what.en : what.ru}\n\n${en ? 'Open your cabinet' : 'Откройте личный кабинет'}: ${url}\n\nFir Tech\nhello@firtech.pro`,
+      });
+      how = sent.ok ? 'email' : `email_failed:${sent.error}`;
+    }
+    this.d.hq.log('documents', 'doc_delivered', 'document', String(row.id), `${row.kind} ${how}`);
+  }
+
+  /**
+   * The owner approved a КП of a cabinet lead: the quote and its estimate go to the client (`awaiting_client`), nothing else is made yet. The rows and the
+   * thread line are written here (sync part of the owner's decision); the PDF and the email follow in the background (`idle()`).
+   */
+  onQuoteApproved(q: QuoteApproval): { quoteId: number } {
+    const dup = this.db.prepare("SELECT * FROM cab_documents WHERE kind = 'quote' AND pack_id = ?").get(q.packId) as DocRow | undefined;
+    if (dup) return { quoteId: dup.id };
+    const quote = this.insert({
+      client_id: q.clientId, kind: 'quote', title: 'Коммерческое предложение', number: `КП-${q.packId}`, lead_id: q.leadId, project_id: q.projectId, pack_id: q.packId, state: 'awaiting_client',
+      src: 'ps_quote', src_id: q.packId, amount_usd: q.totalUsd, body: q.kpText, meta: JSON.stringify({ contract: q.contractMeta, invoice: q.invoiceMeta, client: q.client }),
+    });
+    const est = this.insert({
+      client_id: q.clientId, kind: 'other', title: 'Смета', number: `КП-${q.packId}`, lead_id: q.leadId, project_id: q.projectId, pack_id: q.packId, state: 'issued', src: 'ps_estimate', src_id: q.packId,
+      amount_usd: q.totalUsd, body: q.estimateText,
+    });
+    this.track((async () => {
+      await this.attachPdf(this.row(quote.id)!);
+      await this.attachPdf(this.row(est.id)!);
+      await this.notifyClient(quote, {
+        ru: 'Коммерческое предложение готово. Откройте раздел «Документы», прочитайте его и нажмите «Принять КП» или задайте вопрос в сообщениях.',
+        en: 'Your commercial proposal is ready. Open Documents, read it and press «Accept», or ask a question in Messages.',
+        ruMail: 'Ваше коммерческое предложение Fir Tech', enMail: 'Your Fir Tech commercial proposal',
+      });
+    })());
+    return { quoteId: quote.id };
+  }
+
+  /**
+   * An approved Back Office document: a contract (or an act) of a cabinet lead goes to the client. Returns true when it did (the owner then needs no
+   * «send it yourself» text), false for a document without a cabinet client (a manual /doc, a Telegram lead).
+   */
+  async onDocApproved(doc: { id: number; type: string; client: string; version: number; text: string; taskId: number | null }): Promise<boolean> {
+    if (doc.type !== 'contract' && doc.type !== 'act') return false;
+    const task = doc.taskId !== null ? this.d.hq.task(doc.taskId) : undefined;
+    const leadId = Number(task?.meta.leadId) || null;
+    const clientId = this.clientOfLead(leadId);
+    if (clientId === null) return false;
+    const exists = this.db.prepare("SELECT id FROM cab_documents WHERE src = 'bo' AND src_id = ?").get(doc.id) as { id: number } | undefined;
+    if (exists) return true;
+    const isContract = doc.type === 'contract';
+    const number = /№\s*(\S+)/.exec(doc.text)?.[1] ?? `${doc.id}`;
+    const row = this.insert({
+      client_id: clientId, kind: isContract ? 'contract' : 'act', title: isContract ? 'Договор оказания услуг' : 'Акт сдачи', number, lead_id: leadId, project_id: Number(task?.meta.projectId) || null,
+      pack_id: Number(task?.meta.packId) || null, state: isContract ? 'awaiting_signature' : 'issued', src: 'bo', src_id: doc.id, body: doc.text,
+    });
+    await this.attachPdf(row);
+    await this.notifyClient(row, isContract
+      ? {
+        ru: 'Договор готов. Откройте раздел «Документы», прочитайте его и подпишите, нарисовав подпись мышью.',
+        en: 'The contract is ready. Open Documents, read it and sign it by drawing your signature with the mouse.',
+        ruMail: 'Договор Fir Tech готов к подписанию', enMail: 'Your Fir Tech contract is ready to sign',
+      }
+      : { ru: 'Акт сдачи работ готов, он в разделе «Документы».', en: 'The completion certificate is ready in Documents.', ruMail: 'Акт сдачи работ Fir Tech', enMail: 'Your Fir Tech completion certificate' });
+    return true;
+  }
+
+  /** An approved invoice of a cabinet lead: the row, the email and the line with the pay button. Returns true when delivered through the cabinet. */
+  async onInvoiceApproved(invoiceId: number, text: string): Promise<boolean> {
+    if (!hasTable(this.db, 'bl_invoices')) return false;
+    const inv = this.db.prepare('SELECT id, number, lead_id, project_id, pack_id, amount_usd, stage_no, what FROM bl_invoices WHERE id = ?').get(invoiceId) as
+      | { id: number; number: string; lead_id: number | null; project_id: number | null; pack_id: number | null; amount_usd: number; stage_no: number | null; what: string } | undefined;
+    const clientId = this.clientOfLead(inv?.lead_id);
+    if (!inv || clientId === null) return false;
+    if (this.db.prepare("SELECT 1 FROM cab_documents WHERE src = 'bl' AND src_id = ?").get(inv.id)) return true;
+    const row = this.insert({
+      client_id: clientId, kind: 'invoice', title: inv.stage_no ? `Счёт, этап ${inv.stage_no}` : 'Счёт', number: inv.number, lead_id: inv.lead_id, project_id: inv.project_id, pack_id: inv.pack_id,
+      state: 'issued', src: 'bl', src_id: inv.id, amount_usd: inv.amount_usd, stage_no: inv.stage_no, body: text,
+    });
+    await this.attachPdf(row);
+    const stage = inv.stage_no ? ` (этап ${inv.stage_no})` : '';
+    const stageEn = inv.stage_no ? ` (stage ${inv.stage_no})` : '';
+    await this.notifyClient(row, {
+      ru: `Счёт ${inv.number}${stage} на $${inv.amount_usd} выставлен. Оплатить можно кнопкой «Оплатить» в разделе «Документы» или в проекте.`,
+      en: `Invoice ${inv.number}${stageEn} for $${inv.amount_usd} has been issued. Pay with the «Pay» button in Documents or in your project.`,
+      ruMail: `Счёт ${inv.number} от Fir Tech`, enMail: `Invoice ${inv.number} from Fir Tech`,
+    });
+    return true;
+  }
+
+  /** An invoice was paid (`/paid`, the watcher, the Пульт): one line in the client's thread. The document state follows the invoice on every read. */
+  onPaid(inv: { id: number; number: string; leadId: number | null; stageNo: number | null }): void {
+    const doc = this.db.prepare("SELECT client_id, lead_id FROM cab_documents WHERE src = 'bl' AND src_id = ?").get(inv.id) as { client_id: number; lead_id: number | null } | undefined;
+    if (!doc) return;
+    const c = this.client(doc.client_id);
+    const en = c?.locale === 'en';
+    postFromFirTech(this.db, this.d.now(), doc.client_id, doc.lead_id,
+      en ? `Payment received for invoice ${inv.number}${inv.stageNo ? ` (stage ${inv.stageNo})` : ''}. Thank you!` : `Оплата по счёту ${inv.number}${inv.stageNo ? ` (этап ${inv.stageNo})` : ''} получена. Спасибо!`);
+  }
+
+  // ---- the API ----
+  /** The invoice state follows `bl_invoices` (paid, voided); the other states are the row's own. */
+  private liveState(r: DocRow): DocState {
+    if (r.kind !== 'invoice' || r.src !== 'bl' || r.src_id === null) return r.state;
+    const s = (this.db.prepare('SELECT status FROM bl_invoices WHERE id = ?').get(r.src_id) as { status: string } | undefined)?.status;
+    return s === 'paid' ? 'paid' : s === 'void' ? 'void' : 'issued';
+  }
+
+  private payUrlOf(r: DocRow): string | null {
+    if (r.kind !== 'invoice' || r.src_id === null || this.liveState(r) !== 'issued') return null;
+    const inv = this.db.prepare('SELECT number, pay_key, locale FROM bl_invoices WHERE id = ?').get(r.src_id) as { number: string; pay_key: string | null; locale: string | null } | undefined;
+    return inv ? this.d.billing.payUrl({ number: inv.number, payKey: inv.pay_key, locale: inv.locale === 'en' ? 'en' : 'ru' }) : null;
+  }
+
+  private async view(r: DocRow): Promise<Record<string, unknown>> {
+    const pay = this.payUrlOf(r);
+    return {
+      id: r.id, kind: r.kind, title: r.title, number: r.number || null, leadId: r.lead_id, projectId: r.project_id, state: this.liveState(r),
+      createdAt: iso(r.created_at), deliveredAt: iso(r.delivered_at), acceptedAt: iso(r.accepted_at), signedAt: iso(r.signed_at), pdfUrl: await this.pdfUrl(r),
+      ...(r.amount_usd !== null ? { amountUsd: r.amount_usd } : {}), ...(r.stage_no !== null ? { stageNo: r.stage_no } : {}), ...(pay ? { payUrl: pay } : {}),
+    };
+  }
+
+  /** `GET /admin/clients/:id/documents`: the client's papers, newest first. */
+  async list(clientId: number): Promise<DocReply> {
+    if (!this.client(clientId)) return failR(404, 'not_found');
+    const rows = this.db.prepare('SELECT * FROM cab_documents WHERE client_id = ? ORDER BY id DESC').all(clientId) as DocRow[];
+    return okR({ items: await Promise.all(rows.map((r) => this.view(r))) });
+  }
+
+  /** `POST /admin/clients/:id/documents/:docId/accept`: the client accepts the quote; HQ drafts the contract for the owner. */
+  accept(clientId: number, docId: number): DocReply {
+    const c = this.client(clientId);
+    const r = this.row(docId);
+    if (!c || !r || r.client_id !== clientId) return failR(404, 'not_found');
+    if (r.kind !== 'quote' || r.state !== 'awaiting_client') return failR(409, 'not_awaiting', { state: this.liveState(r) });
+    const t = this.d.now();
+    if (this.db.prepare("UPDATE cab_documents SET state = 'accepted', accepted_at = ? WHERE id = ? AND state = 'awaiting_client'").run(t, r.id).changes !== 1) return failR(409, 'not_awaiting');
+    const meta = JSON.parse(r.meta || '{}') as { contract?: Record<string, unknown>; client?: string };
+    const hq = this.d.hq;
+    if (meta.contract) {
+      hq.createTask({ title: `Договор: ${meta.client ?? c.name ?? c.email}`, dept: 'backoffice', creator: 'head', priority: 1, meta: meta.contract });
+      hq.wake('backoffice-head', 'task');
+    }
+    hq.log('client', 'quote_accepted', 'document', String(r.id));
+    postFromFirTech(this.db, t, c.id, r.lead_id, c.locale === 'en' ? 'Proposal accepted, thank you! We are preparing the contract.' : 'КП принято, спасибо! Готовим договор.');
+    this.d.notifyOwner(`${c.name || c.email} принял КП ${r.number}: договор готовится, придёт карточкой на одобрение.`);
+    return okR({ next: 'contract' });
+  }
+
+  /** `POST /admin/clients/:id/documents/:docId/sign`: the simple electronic signature; the signed PDF is rendered and the stage-1 invoice is proposed. */
+  async sign(clientId: number, docId: number, body: unknown): Promise<DocReply> {
+    const c = this.client(clientId);
+    const r = this.row(docId);
+    if (!c || !r || r.client_id !== clientId) return failR(404, 'not_found');
+    const parsed = signBody.safeParse(body ?? {});
+    if (!parsed.success) return failR(400, 'invalid');
+    if (r.kind !== 'contract' || r.state !== 'awaiting_signature') return failR(409, 'not_awaiting', { state: this.liveState(r) });
+    const sig = parseSignature(parsed.data.signaturePng);
+    if (!sig.ok) return failR(422, 'bad_signature', { reason: sig.reason });
+    const t = this.d.now();
+    // a second request in flight signs nothing: the state flips first, once
+    if (this.db.prepare("UPDATE cab_documents SET state = 'signed', signed_at = ? WHERE id = ? AND state = 'awaiting_signature'").run(t, r.id).changes !== 1) return failR(409, 'not_awaiting');
+    const unsignedSha = r.pdf_sha256 ?? sha(r.body);
+    this.db.prepare('INSERT INTO bo_signatures (doc_id, signature_png, name, at, ip, ua, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)').run(r.id, sig.png, parsed.data.name, t, parsed.data.ip, parsed.data.userAgent, unsignedSha);
+    let rendered: { rel: string; sha256: string } | null = null;
+    try {
+      rendered = await this.render(this.row(r.id)!, { png: sig.png, name: parsed.data.name, at: t });
+    } catch (e) {
+      log('warn', 'signed pdf failed', { doc: r.id, err: errMsg(e) });
+    }
+    if (rendered) this.db.prepare('UPDATE cab_documents SET signed_pdf_rel = ? WHERE id = ?').run(rendered.rel, r.id);
+    const hq = this.d.hq;
+    hq.log('client', 'contract_signed', 'document', String(r.id), rendered ? 'pdf' : 'no_pdf');
+    // the owner's next card: the invoice of stage 1 (what the old chain made together with the contract)
+    const quote = this.db.prepare("SELECT meta FROM cab_documents WHERE kind = 'quote' AND pack_id IS ? AND client_id = ? ORDER BY id DESC LIMIT 1").get(r.pack_id, clientId) as { meta: string } | undefined;
+    const invoice = (JSON.parse(quote?.meta || '{}') as { invoice?: Record<string, unknown>; client?: string });
+    if (invoice.invoice && !this.db.prepare("SELECT 1 FROM tasks WHERE json_extract(meta, '$.action') = 'kp_invoice' AND json_extract(meta, '$.packId') IS ? AND json_extract(meta, '$.stageNo') = 1").get(r.pack_id)) {
+      hq.createTask({ title: `Счёт этапа 1: ${invoice.client ?? c.name ?? c.email}`, dept: 'support', creator: 'head', priority: 1, meta: invoice.invoice });
+      hq.wake('support-head', 'task');
+    }
+    postFromFirTech(this.db, t, c.id, r.lead_id,
+      c.locale === 'en' ? 'Contract signed, thank you! The signed copy is in Documents. We are preparing the invoice for the first stage.' : 'Договор подписан, спасибо! Подписанный экземпляр в разделе «Документы». Готовим счёт на первый этап.');
+    this.d.notifyOwner(`${c.name || c.email} подписал договор ${r.number}: счёт этапа 1 придёт карточкой на одобрение.`);
+    return okR({ pdfUrl: rendered ? await this.pdfUrl(this.row(r.id)!) : null });
+  }
+}

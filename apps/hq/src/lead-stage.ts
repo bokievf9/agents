@@ -57,7 +57,12 @@ export class StageContext {
     const has = (t: string) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t) !== undefined;
     const ids = (sql: string) => new Set((db.prepare(sql).all() as { v: number }[]).map((r) => r.v));
     const kp = has('ps_documents') ? ids("SELECT DISTINCT lead_id v FROM ps_documents WHERE kind = 'kp' AND status = 'approved' AND lead_id IS NOT NULL") : new Set<number>();
-    const contractLeads = has('ps_documents') ? ids("SELECT DISTINCT lead_id v FROM ps_documents WHERE kind = 'contract' AND status = 'approved' AND lead_id IS NOT NULL") : new Set<number>();
+    // Cabinet v3: for a lead whose quote went to the client's cabinet the contract of the approved КП pack is only a draft inside the pack; the contract stage
+    // starts when the contract itself is delivered to the client (`cab_documents`)
+    const flowLeads = has('cab_documents') ? ids("SELECT DISTINCT lead_id v FROM cab_documents WHERE kind = 'quote' AND lead_id IS NOT NULL") : new Set<number>();
+    const cabContracts = has('cab_documents') ? ids("SELECT DISTINCT lead_id v FROM cab_documents WHERE kind = 'contract' AND lead_id IS NOT NULL") : new Set<number>();
+    const contractLeads = new Set<number>(cabContracts);
+    if (has('ps_documents')) for (const id of ids("SELECT DISTINCT lead_id v FROM ps_documents WHERE kind = 'contract' AND status = 'approved' AND lead_id IS NOT NULL")) if (!flowLeads.has(id)) contractLeads.add(id);
     const contractClients = has('bo_documents')
       ? new Set((db.prepare("SELECT DISTINCT client FROM bo_documents WHERE type = 'contract' AND status != 'rejected'").all() as { client: string }[]).map((r) => r.client.trim().toLowerCase()))
       : new Set<string>();

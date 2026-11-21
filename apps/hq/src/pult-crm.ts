@@ -146,6 +146,8 @@ export function createPultCrm(d: PultCrmDeps) {
     dueDate: inv.dueDate, issuedAt: iso(inv.issuedAt), paidAt: iso(inv.paidAt), paidVia: inv.paidVia, txId: inv.txId,
     payUrl: d.billing ? d.billing.payUrl(inv) : null, remindedAt: iso(inv.remindedAt), leadId: inv.leadId, projectId: inv.projectId,
     stageNo: inv.stageNo, stage: stageOfInvoice(inv),
+    // Cabinet v3: the client's copy of this invoice (his documents list), null when it was not sent through the cabinet
+    documentId: (db.prepare("SELECT id FROM cab_documents WHERE src = 'bl' AND src_id = ?").get(inv.id) as { id: number } | undefined)?.id ?? null,
   });
 
   function invoicesList(query: URLSearchParams): AdminReply {

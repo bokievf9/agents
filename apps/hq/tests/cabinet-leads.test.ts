@@ -124,7 +124,7 @@ describe('GET /admin/clients/by-email: leads', () => {
     expect(r.json.leads).toHaveLength(1);
     expect(r.json.leads[0]).toEqual({
       id: l.leadId, createdAt: at(0), service: 'site', summary: 'Нужен сайт для салона', estimateUsd: 1200, hasDomain: true, hasHosting: false,
-      stage: 'project', nextStep: 'Проект в работе, этапы ниже',
+      stage: 'project', nextStep: 'Проект в работе, этапы ниже', nextAction: { kind: 'wait' },
       timeline: [
         { at: at(0), kind: 'lead', title: 'Заявка получена' },
         { at: new Date(t0 + 30_000).toISOString(), kind: 'stage', title: 'Заявка квалифицирована' },

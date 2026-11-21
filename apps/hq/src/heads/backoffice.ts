@@ -7,6 +7,7 @@ import { exportPlan, KbStore, KnowledgeWorker, parseLesson, playbookTitles, sear
 import { fmtDate, PmStore } from '@fir/worker-project-manager';
 import type { Reporter } from '../reporter.js';
 import { makeBackup, MAX_SEND_BYTES } from '../backup.js';
+import type { CabDocs } from '../cab-docs.js';
 import { cleanRenders } from '../housekeeping.js';
 import { createReach } from '../reach.js';
 import { toolsFor, type AppTools } from '../tools.js';
@@ -75,6 +76,8 @@ const oneLine = (s: string, n: number) => s.replace(/\s+/g, ' ').trim().slice(0,
 export class BackofficeHead {
   readonly documents: Worker;
   readonly knowledge = new KnowledgeWorker();
+  /** Cabinet v3: set by the app. An approved contract or act of a cabinet lead goes to the client's cabinet and email (no «send it yourself» for the owner). */
+  cabinet: CabDocs | null = null;
 
   constructor(private readonly d: BackofficeDeps) {
     this.documents = d.documents ?? new DocumentsWorker({ lookup: (client) => this.lookup(client) });
@@ -82,6 +85,11 @@ export class BackofficeHead {
     for (const [kind, spec] of Object.entries(
       docKinds(base, {
         deliver: async (doc) => {
+          const taskId = new DocStore(d.hq.db, d.hq.now).get(doc.id)?.taskId ?? null;
+          if (this.cabinet && (await this.cabinet.onDocApproved({ ...doc, taskId }).catch((e) => { log('warn', 'cabinet document delivery failed', { doc: doc.id, err: errMsg(e) }); return false; }))) {
+            await d.messenger.send(d.ownerId, `${DOC_RU[doc.type]}, ${doc.client}, версия ${doc.version}: утверждён и отправлен клиенту в кабинет и на почту. Отправлять самому не нужно.`);
+            return;
+          }
           await d.messenger.send(d.ownerId, `${DOC_RU[doc.type]}, ${doc.client}, версия ${doc.version}: утверждён. Отправьте клиенту сами:\n\n${doc.text}`);
           await this.sendPdf(doc);
         },

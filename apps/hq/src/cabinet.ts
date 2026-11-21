@@ -1,5 +1,5 @@
 import type { Db } from '@fir/core';
-import { CAB_MESSAGES_SCHEMA } from '@fir/worker-customer-support';
+import { CAB_MESSAGES_SCHEMA, CAB_TMSGS_SCHEMA } from '@fir/worker-customer-support';
 import { LeadStore, type Lang } from '@fir/worker-lead-intake';
 import type { Stage } from './lead-stage.js';
 
@@ -22,6 +22,24 @@ const CAB_CLIENTS_SCHEMA = `CREATE TABLE IF NOT EXISTS cab_clients (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS cab_clients_slug ON cab_clients (ref_slug);`;
 
+/** Files a client uploaded (`DATA_DIR/uploads/<client>/<id>.<ext>`) and the read marks of the cabinet threads (client side). */
+const CAB_FILES_SCHEMA = `CREATE TABLE IF NOT EXISTS cab_uploads (
+  id TEXT PRIMARY KEY,
+  client_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  rel TEXT NOT NULL,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cab_uploads_client ON cab_uploads (client_id);
+CREATE TABLE IF NOT EXISTS cab_reads (
+  client_id INTEGER NOT NULL,
+  thread TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  PRIMARY KEY (client_id, thread)
+);`;
+
 export const MESSAGE_CAP = 2000;
 export type MessageFrom = 'manager' | 'client';
 
@@ -33,6 +51,12 @@ export function ensureCabinetTables(db: Db): void {
   db.exec(CAB_MESSAGES_SCHEMA);
   // who wrote a manager line: the owner himself (his own reply, no approval) or HQ (an approved draft); the chats of the review center show the difference
   if (!hasColumn(db, 'cab_messages', 'author')) db.exec("ALTER TABLE cab_messages ADD COLUMN author TEXT NOT NULL DEFAULT 'hq'");
+  // Cabinet v3 (2026-11-22): attachments of a lead thread's message (JSON list of upload ids); the other threads live in cab_tmsgs
+  if (!hasColumn(db, 'cab_messages', 'attachments')) db.exec("ALTER TABLE cab_messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'");
+  db.exec(CAB_TMSGS_SCHEMA);
+  db.exec(CAB_FILES_SCHEMA);
+  // the profile of the cabinet (2026-11-22): phone and company next to the name, the Telegram handle and the language
+  for (const c of ['phone', 'company']) if (!hasColumn(db, 'cab_clients', c)) db.exec(`ALTER TABLE cab_clients ADD COLUMN ${c} TEXT NOT NULL DEFAULT ''`);
   ready.add(db);
 }
 
@@ -56,6 +80,26 @@ export function recordManagerReply(db: Db, now: number, leadId: number, text: st
     addCabMessage(db, now, { clientId: r.client_id, leadId, from: 'manager', text, by });
   } catch {
     /* the thread is a convenience for the client: a failure here never breaks the reply itself */
+  }
+}
+
+/** Stores one message of a project, support or agent thread (`thread`: `project-<id>`, `support`, `agent-<id>`). */
+export function addThreadMessage(
+  db: Db, now: number, m: { clientId: number; thread: string; from: 'client' | 'manager' | 'agent'; text: string; attachments?: string[]; ticketId?: number; by?: 'owner' | 'hq' },
+): number {
+  ensureCabinetTables(db);
+  return Number(db.prepare('INSERT INTO cab_tmsgs (client_id, thread, "from", text, attachments, at, ticket_id, author) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+    m.clientId, m.thread, m.from, m.text.trim().slice(0, MESSAGE_CAP), JSON.stringify(m.attachments ?? []), now, m.ticketId ?? null, m.by ?? 'hq',
+  ).lastInsertRowid);
+}
+
+/** A line from Fir Tech in the client's lead thread when the lead is known, else in the support thread (documents, payments, status). */
+export function postFromFirTech(db: Db, now: number, clientId: number, leadId: number | null, text: string): void {
+  try {
+    if (leadId !== null) addCabMessage(db, now, { clientId, leadId, from: 'manager', text });
+    else addThreadMessage(db, now, { clientId, thread: 'support', from: 'manager', text });
+  } catch {
+    /* the thread is a convenience for the client: a failure never breaks the step that wrote to it */
   }
 }
 
@@ -122,10 +166,10 @@ const NEXT_STEP: Record<Lang, Record<Stage, string>> = {
 };
 export const nextStepOf = (stage: Stage, lang: string | null | undefined): string => NEXT_STEP[lang === 'en' ? 'en' : 'ru'][stage];
 
-export type TimelineKind = 'lead' | 'reply' | 'kp' | 'contract' | 'invoice' | 'paid' | 'project' | 'stage';
+export type TimelineKind = 'lead' | 'reply' | 'kp' | 'kp_accepted' | 'contract' | 'contract_signed' | 'invoice' | 'paid' | 'project' | 'stage';
 const TITLES: Record<Lang, Record<Exclude<TimelineKind, 'stage'>, string>> = {
-  ru: { lead: 'Заявка получена', reply: 'Менеджер ответил', kp: 'Коммерческое предложение утверждено', contract: 'Договор подготовлен', invoice: 'Счёт выставлен', paid: 'Оплата получена', project: 'Проект запущен' },
-  en: { lead: 'Request received', reply: 'A manager replied', kp: 'Commercial proposal approved', contract: 'Contract prepared', invoice: 'Invoice issued', paid: 'Payment received', project: 'Project started' },
+  ru: { lead: 'Заявка получена', reply: 'Менеджер ответил', kp: 'Коммерческое предложение утверждено', kp_accepted: 'КП принято вами', contract: 'Договор подготовлен', contract_signed: 'Договор подписан', invoice: 'Счёт выставлен', paid: 'Оплата получена', project: 'Проект запущен' },
+  en: { lead: 'Request received', reply: 'A manager replied', kp: 'Commercial proposal approved', kp_accepted: 'Proposal accepted by you', contract: 'Contract prepared', contract_signed: 'Contract signed', invoice: 'Invoice issued', paid: 'Payment received', project: 'Project started' },
 };
 const STAGE_MOVE: Record<Lang, Record<Stage, string>> = {
   ru: { new: 'Заявка возвращена на первичный разбор', qualified: 'Заявка квалифицирована', proposal: 'Этап: коммерческое предложение', contract: 'Этап: договор', paid: 'Этап: оплачено', project: 'Этап: проект', lost: 'Заявка закрыта' },
