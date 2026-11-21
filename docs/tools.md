@@ -54,10 +54,10 @@
 | `web.getBytes(url, {hosts})` | картинка или маленький файл: байты как есть, `contentType`, редиректы 3, каждый шаг проверяется | marketing, director | 8 с, 3 МБ, 2 на хост | ничего |
 | `cache.get(key)` / `cache.set(key, value, ttlMs)` / `cache.del(key)` | KV-кэш в SQLite (`tool_cache`), своё пространство ключей | все | 64 КБ значение, TTL до 30 дней | ничего (без базы: память) |
 | `files.put(dir, name, bytes)` / `files.get(path)` / `files.list(dir)` | файлы в `DATA_DIR/renders/<dir>/`: безопасные имена, атомарная запись, без `..` и симлинков наружу | marketing, sales, backoffice | 50 МБ | `DATA_DIR` |
-| `files.url(path)` | подписанный публичный URL `/media/<sig>/<path>` (png, jpg, mp4) | marketing, backoffice | | `MEDIA_SECRET` (или `WEB_CHAT_TOKEN`) и `IG_PUBLIC_BASE` |
+| `files.url(path, {ttlMs?})` | подписанный публичный URL `/media/<sig>/<path>` (png, jpg, mp4, pdf); с `ttlMs` (до 30 дней) ссылка с `?e=<unix-секунды>`, подпись покрывает срок: PDF кабинета живут 7 дней | marketing, backoffice | | `MEDIA_SECRET` (или `WEB_CHAT_TOKEN`) и `IG_PUBLIC_BASE` |
 | `media.png(frame)` | PNG из кадра: адаптер `renderPng`, который приложение берёт из `content-maker/render` | marketing | 1080×1350, 1080×1920, 2560×1440 | адаптер (в HQ всегда) |
 | `media.qr(text)` | QR в SVG, свой кодировщик (byte mode, L/M/Q/H, версии 1-40) | sales, support, backoffice | до 1000 байт | ничего |
-| `media.pdf(doc)` | A4 PDF: заголовок, строки сведений, разделы с абзацами и таблицей, подписи, нижний колонтитул «стр. N из M» | sales, backoffice | `pdfkit`, Onest из `packages/core/assets/fonts`, 5 МБ | шрифты в образе |
+| `media.pdf(doc)` | A4 PDF: заголовок, строки сведений, разделы с абзацами и таблицей, подписи, блок двух сторон `parties` (роль, имя, дата, нарисованная подпись PNG клиента), нижний колонтитул «стр. N из M» | sales, backoffice | `pdfkit`, Onest из `packages/core/assets/fonts`, 5 МБ | шрифты в образе |
 | `llm.json(req, schema)` / `llm.text(req)` | обёртки `tryJson`/`tryComplete` с учётом расходов задачи | все | как в `llm.ts` | `LLM_API_KEY` или `ANTHROPIC_API_KEY` |
 | `prices.get()` | прайс-лист сайта (`getPrices`) | все | | ничего |
 | `playbook.excerpt(role)` | выдержка плейбука для промпта | все | 2500 знаков | ничего |
@@ -70,7 +70,7 @@
 | `google.trends({geo, q?})` | Google Trends: суточные тренды региона из публичного RSS | marketing, director | кэш 1 ч, 25 строк | ничего |
 | `google.searchConsole({days})` | Search Console: топ запросов и страниц (JWT сервисного аккаунта на `node:crypto`) | marketing, director | кэш на день | `GSC_SERVICE_ACCOUNT_JSON` + `GSC_SITE_URL` |
 | `telegram.send(text)` / `telegram.sendDocument(path)` / `telegram.sendPhotos(paths)` | сообщение и файлы **владельцу** через мессенджер головы (`OutboxMessenger`: пауза 1,1 с, повтор на 429) | все (фото: marketing, production, director) | без повторов сверх Outbox | бот головы |
-| `email.send({to, subject, text})` | письмо через Resend; действие наружу, звать только из одобренного шага | support, sales, backoffice | 100 в день на компанию | `RESEND_API_KEY` + `RESEND_FROM` |
+| `email.send({to, subject, text})` | письмо через Resend; действие наружу, звать только из одобренного шага (Кабинет v3: одобрение КП, договора и счёта и есть отправка, письмо со ссылкой на кабинет, без файла) | support, sales, backoffice | 100 в день на компанию | `RESEND_API_KEY` + `RESEND_FROM` |
 | `mac.poster.enqueue(itemId, platform)` | очередь публикатора на Маке (`mac_queue`), Мак читает `GET /admin/content?queued=1` | marketing | один открытый ряд на материал и площадку | база |
 | `reach.youtube.read({target})` | название, канал, дата, описание видео; ответ сразу: `{ state: 'queued', jobId }` или кэш `done` за 24 ч (`rc_jobs`) | marketing (и Аналитик) | 200 заданий в день на компанию, не ждёт Мак | база |
 | `reach.youtube.search({query, limit?})` | поиск видео; ответ сразу: `{ state: 'queued', jobId }` или кэш `done` за 24 ч (`rc_jobs`) | marketing | 200 заданий в день на компанию, не ждёт Мак | база |
