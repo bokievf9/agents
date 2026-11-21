@@ -327,3 +327,4 @@ Not covered by the drill: see the `untested` rows (Instagram Graph and YouTube u
 | # | name | where | trigger | must do | how verified | status | note |
 |---|---|---|---|---|---|---|---|
 | 1 | P-28 unhandled rejection guard | apps/hq/src/process-guard.ts `installRejectionGuard`, index.ts | any promise nobody caught | `error` log line (message and count only), one owner alert per 10 minutes with the count, no exit | apps/hq/tests/process-guard.test.ts | pass | |
+| 2 | P-05 client bot polling restarts | apps/hq/src/process-guard.ts `keepPolling`, index.ts | the long poll of @firtech_bot crashes | start again after 15/30/45 s (3 times in a row; a run of 10+ minutes resets the count), then one alert and `exit(1)` so the container restarts | apps/hq/tests/process-guard.test.ts | pass | the real grammy network is still not drilled (row 7.13) |

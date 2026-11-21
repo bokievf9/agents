@@ -50,7 +50,7 @@ import { COMMAND_NAMES, routedTo } from './commands.js';
 import { installOwnerGlue } from './glue.js';
 import { createReach } from './reach.js';
 import { appTools, toolsFor } from './tools.js';
-import { installRejectionGuard } from './process-guard.js';
+import { installRejectionGuard, keepPolling } from './process-guard.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
@@ -392,12 +392,21 @@ process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
 
 log('info', 'hq starting', { tz: hq.tz, departments: hq.departments(), group: cfg.groupId !== undefined, marketingBot: Boolean(cfg.marketingBotToken), supportBot: Boolean(cfg.supportBotToken), salesBot: Boolean(cfg.salesBotToken), clientBot: Boolean(clientBot) });
-// The client bot polls on its own; if it stops, HQ keeps working (the Director stays the owner's interface).
-clientBot?.start().catch((e) => {
-  log('error', 'client bot stopped', { err: errMsg(e) });
-  // The main sales channel is down: the owner hears about it at once (the monitoring check turns `down` too).
-  void hq.alert('Клиентский бот @firtech_bot остановился: поллинг упал. Заявки из Telegram не принимаются, пока HQ не перезапущен. Подробности в логе hq.');
-});
+// The client bot polls on its own (P-05): a crashed poll starts again after a pause, three times in a row; then HQ exits and the container
+// restarts (compose `restart: unless-stopped`), so Telegram leads never wait for a manual restart.
+if (clientBot) {
+  const bot = clientBot;
+  void keepPolling(() => bot.start(), {
+    attempts: 3, pauseMs: 15_000, now: Date.now,
+    onRestart: (attempt, e) => log('warn', 'client bot polling restarts', { attempt, err: errMsg(e) }),
+    onGiveUp: async (e) => {
+      log('error', 'client bot stopped', { err: errMsg(e) });
+      // The main sales channel is down: the owner hears about it at once (the monitoring check turns `down` too).
+      await hq.alert('Клиентский бот @firtech_bot: поллинг упал 4 раза подряд, перезапускаю HQ (контейнер поднимется сам). Подробности в логе hq.').catch(() => undefined);
+      process.exit(1);
+    },
+  });
+}
 if (!clientBot) log('info', 'CLIENT_BOT_TOKEN is not set, the public client bot is off');
 startPolling(bot).catch((e) => {
   log('error', 'bot stopped', { err: errMsg(e) });
