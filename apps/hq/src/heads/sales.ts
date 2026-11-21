@@ -65,6 +65,8 @@ export interface SalesDeps {
   client?: ClientChannel;
   /** A lead that fails before the owner sees it is written down here (kind `lost_lead`) and summed up in an hourly alert. */
   lost?: LostLeads;
+  /** P-06: the free call windows (the site's `GET /api/slots` minus the ones HQ holds): the first reply offers the two nearest. Absent or empty: `slotHours`. */
+  freeSlots?: () => Promise<number[]>;
 }
 
 type Action = 'lead' | 'batch' | 'followups' | 'reply' | 'stats' | 'kp' | 'referral_reminders' | 'kp_declined' | 'call_confirm' | 'none';
@@ -160,7 +162,9 @@ export class SalesHead implements ApprovalEditor {
 
   constructor(private readonly d: SalesDeps) {
     this.prospector = d.prospector ?? new ProspectorWorker({ ...(d.batchSize !== undefined ? { batchSize: d.batchSize } : {}) });
-    this.leads = d.leads ?? new LeadIntakeWorker({ ...(d.slotHours ? { slotHours: d.slotHours } : {}), ...(d.replyLevel !== undefined ? { replyLevel: d.replyLevel } : {}) });
+    this.leads = d.leads ?? new LeadIntakeWorker({
+      ...(d.slotHours ? { slotHours: d.slotHours } : {}), ...(d.replyLevel !== undefined ? { replyLevel: d.replyLevel } : {}), ...(d.freeSlots ? { freeSlots: d.freeSlots } : {}),
+    });
     this.presales = d.presales ?? new PresalesWorker({
       ...(d.kpValidDays !== undefined ? { validDays: d.kpValidDays } : {}),
     });

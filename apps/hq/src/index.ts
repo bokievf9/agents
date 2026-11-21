@@ -184,7 +184,7 @@ const siteFree = siteSlots(cfg.siteUrl);
 const callsRef: { current: Calls | null } = { current: null };
 const freeSlots = async (): Promise<number[]> => (callsRef.current ? callsRef.current.freeOf(await siteFree()) : siteFree());
 const sales = new SalesHead({
-  hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel,
+  hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel, freeSlots,
   referralReward: cfg.referralReward, kpValidDays: cfg.kpValidDays,
   ...(clientBot ? { client: clientBot } : {}), lost,
 });

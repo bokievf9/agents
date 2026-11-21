@@ -226,3 +226,31 @@ describe('P-04: a lead from the website chat with a picked window books it on th
   }, 60_000);
 });
 
+describe('P-06: the first reply offers the two nearest free windows of the site', () => {
+  it('free windows of the site (minus the held ones) go into the first reply; without them the own hours stay', async () => {
+    w = await drillWorld({ flow: true });
+    w.site.slots = [SLOT_A, Date.UTC(2026, 10, 19, 9, 0), SLOT_B];
+    // one window is held by another lead already
+    await w.http('POST', '/lead', { ...LEAD, clientEmail: 'other.lead@example.com', cabinetId: 'sb-other', slot: new Date(SLOT_A).toISOString() }, { 'x-lead-token': TOKENS.lead });
+    await w.http('POST', '/lead', LEAD, { 'x-lead-token': TOKENS.lead });
+    await w.beat();
+    await w.beat();
+    const lead = w.db.prepare('SELECT id, slots FROM li_leads WHERE chosen_slot IS NULL').get() as { id: number; slots: string };
+    expect(JSON.parse(lead.slots)).toEqual([Date.UTC(2026, 10, 19, 9, 0), SLOT_B]);
+    const reply = w.db.prepare("SELECT payload FROM approvals WHERE kind = 'lead_reply' AND json_extract(payload, '$.leadId') = ?").get(lead.id) as { payload: string };
+    const text = JSON.parse(reply.payload).text as string;
+    expect(text).toMatch(/четверг, 19 ноября[^\n]*14:00/);
+    expect(text).toMatch(/пятница, 20 ноября[^\n]*14:00/);
+    expect(text).not.toMatch(/10:00/);
+  }, 60_000);
+
+  it('the site gives fewer than two windows: the own hours of the next working days', async () => {
+    w = await drillWorld({ flow: true });
+    w.site.slots = [SLOT_B];
+    await w.http('POST', '/lead', LEAD, { 'x-lead-token': TOKENS.lead });
+    await w.beat();
+    const lead = w.db.prepare('SELECT slots FROM li_leads').get() as { slots: string };
+    expect(JSON.parse(lead.slots)).toEqual([Date.UTC(2026, 10, 19, 5, 0), Date.UTC(2026, 10, 20, 9, 0)]);
+  }, 60_000);
+});
+

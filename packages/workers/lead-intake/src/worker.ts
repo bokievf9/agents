@@ -58,6 +58,11 @@ export interface LeadIntakeOptions {
   slotHours?: [string, string];
   /** Initial trust level of the first reply. Prices are always locked at 0. */
   replyLevel?: 0 | 1;
+  /**
+   * P-06 (2026-11-22): the free call windows (UTC ms) the app knows (the site's `GET /api/slots` minus the windows already held): the first reply, which goes
+   * out by itself at level 1, offers the two nearest of them. Fewer than two, unreachable or absent: the two `slotHours` of the next working days, as before.
+   */
+  freeSlots?: () => Promise<number[]>;
 }
 
 /** What `deliver` receives when the owner approved (or level 1 auto-approved) a reply. */
@@ -134,10 +139,26 @@ export class LeadIntakeWorker implements Worker {
   readonly id = 'lead-intake';
   private readonly slotHours: [string, string];
   private readonly replyLevel: 0 | 1;
+  private readonly freeSlots: (() => Promise<number[]>) | undefined;
 
   constructor(opts: LeadIntakeOptions = {}) {
     this.slotHours = opts.slotHours ?? ['11:00', '15:00'];
     this.replyLevel = opts.replyLevel ?? 1;
+    this.freeSlots = opts.freeSlots;
+  }
+
+  /** The two windows of the first reply: the two nearest free ones of the site, else the own hours of the next two working days. */
+  private async offerSlots(ctx: WorkerCtx): Promise<[number, number]> {
+    if (this.freeSlots) {
+      try {
+        const free = [...new Set(await this.freeSlots())].filter((x) => Number.isFinite(x) && x > ctx.now()).sort((a, b) => a - b);
+        if (free.length >= 2) return [free[0]!, free[1]!];
+        log('info', 'lead intake: fewer than two free site slots, own hours used', { free: free.length });
+      } catch (e) {
+        log('warn', 'lead intake: site slots unavailable, own hours used', { err: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    return nextSlots(ctx.now(), ctx.tz, this.slotHours);
   }
 
   /** The approval kinds to register in the HQ; `deliver` hands the approved text to the owner for sending. */
@@ -230,7 +251,7 @@ export class LeadIntakeWorker implements Worker {
     const priceAsked = isPriceQuestion(`${w.message} ${w.estimate}`);
     const picked = Date.parse(w.slot);
     const chosenSlot = Number.isNaN(picked) ? null : picked;
-    const slots = chosenSlot ? [chosenSlot] : nextSlots(ctx.now(), ctx.tz, this.slotHours);
+    const slots = chosenSlot ? [chosenSlot] : await this.offerSlots(ctx);
     const base = { name: clip(w.name, 80), contact: clip(w.contact, 120), service: w.service, ...c, budget: clip(w.budget, 40), origin: w.source, lang, slots, chosenSlot, priceAsked };
     const temperature = scoreLead({ ...base }, { estimate: Boolean(w.estimate) });
     // domain and hosting: the explicit answer wins, otherwise what the site's summary or the person's words say, otherwise unknown
