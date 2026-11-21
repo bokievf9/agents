@@ -265,7 +265,7 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   callBook.client = { send: (chatId: number, text: string) => { toClient.push({ chatId, text }); return Promise.resolve(); } };
   const commandNames = COMMAND_NAMES;
   const admin = createAdmin({
-    hq, queue, director, channel, ownerId: OWNER, now: t, commandNames, drill: (a) => drill.command(a),
+    hq, queue, director, channel, ownerId: OWNER, now: t, commandNames, drill: (a) => drill.command(a), drillStatus: () => drill.status(),
     cabinetTicket: (x: any) => support.cabinetTicket(x.id, x.name, x.text, x.telegram, x.leadId),
     reloadPrices: () => { reloads.n++; return reloads.fail ? Promise.reject(new Error('site down')) : Promise.resolve({ source: 'fetched' as const, updatedAt: '2026-11-21' }); },
     acceptStage: (pid, no) => Promise.resolve(production.acceptStage(pid, no, 'client')),
