@@ -126,12 +126,14 @@ describe('the estimate the site sends: summary text and JSON', () => {
     expect(parseEstimateJson('Итого: $820')).toBeNull();
   });
 
-  it('builderEstimate: the estimate first, the link as the fallback, a differing link is reported; nothing at all is null', () => {
-    expect(builderEstimate({ estimate: SUMMARY_RU })).toMatchObject({ source: 'text', linkTotalUsd: null });
+  it('builderEstimate: the link wins (it cannot be forged), the estimate only without a link, a differing estimate is reported; nothing at all is null', () => {
+    expect(builderEstimate({ estimate: SUMMARY_RU })).toMatchObject({ source: 'text', estimateTotalUsd: null });
+    // the same estimate with its own link: the link prices it, equal totals give no warning
+    expect(builderEstimate({ estimate: SUMMARY_RU, link: `?b=${CODE}` })).toMatchObject({ source: 'link', quote: { totalUsd: 820 }, estimateTotalUsd: null });
     // a cut summary (the site's 1500 limit) falls back to the link in the estimate, the client's words or the link field
     expect(builderEstimate({ estimate: 'Сайты и лендинги: Сайт компании ($350', request: `см. /ru/builder?b=${CODE}` })).toMatchObject({ source: 'link', quote: { totalUsd: 820 } });
     expect(builderEstimate({ estimate: '', link: `/ru/builder?b=${CODE}&step=8` })!.quote.totalUsd).toBe(820);
-    expect(builderEstimate({ estimate: SUMMARY_RU.replace(/\$910 -> \$820/, '$900 -> $810').replace('Итого: $820', 'Итого: $810').replace('$510', '$500'), link: `?b=${CODE}` })).toMatchObject({ source: 'text', quote: { totalUsd: 810 }, linkTotalUsd: 820 });
+    expect(builderEstimate({ estimate: SUMMARY_RU.replace(/\$910 -> \$820/, '$900 -> $810').replace('Итого: $820', 'Итого: $810').replace('$510', '$500'), link: `?b=${CODE}` })).toMatchObject({ source: 'link', quote: { totalUsd: 820 }, estimateTotalUsd: 810 });
     expect(builderEstimate({ estimate: 'Нужен сайт', request: 'и бот' })).toBeNull();
     expect(builderEstimate({})).toBeNull();
   });
@@ -187,11 +189,11 @@ describe('the КП of a lead with a builder estimate', () => {
     expect(r.staged[0]!.summary).toContain('по ссылке сборки');
   });
 
-  it('a link that prices differently from the estimate is a warning on the card, the estimate stays the price', async () => {
+  it('a link that prices differently from the estimate wins; the card warns that the estimate said otherwise', async () => {
     const r = rig();
     await r.run(r.lead(SUMMARY_RU.replace('$910 -> $820', '$900 -> $810').replace('Итого: $820', 'Итого: $810').replace('$510', '$500'), `/ru/builder?b=${CODE}`).id);
-    expect(r.staged[0]!.payload.totalUsd).toBe(810);
-    expect(r.staged[0]!.summary).toContain('по ссылке сборки каталог даёт $820, в смете клиента $810');
+    expect(r.staged[0]!.payload.totalUsd).toBe(820);
+    expect(r.staged[0]!.summary).toContain('в смете клиента $810, по ссылке сборки $820, берём ссылку');
   });
 
   it('without any estimate the price is the old one direction', async () => {

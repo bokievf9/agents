@@ -12,7 +12,7 @@ import type { PackageLine, PackageQuote } from './package.js';
  *     `quote()` of the site does (`firtech/src/lib/builder.ts`): a part is its variant plus add-ons, an extra is its price, a build with two or more lines gets the bundle discount,
  *     the monthly support stays apart.
  * A text or JSON that does not add up (the lines do not give the total, a cut text) is ignored, the next input is tried, and without any the old single-direction price stays.
- * The lead form is public: the owner still approves every КП (locked, level 0), and when the link prices differently from the estimate the card says so.
+ * The lead form is public, so the link (it cannot be forged) wins over the estimate; the estimate prices the КП only when there is no link, and a differing estimate is a warning on the card. The owner approves every КП (locked, level 0).
  */
 export interface BuilderEstimate {
   quote: PackageQuote;
@@ -21,8 +21,8 @@ export interface BuilderEstimate {
   directions: DirectionId[];
   /** Products of the build the site shows «по смете» (no price): not in the sum, the owner prices them apart. */
   onRequest: string[];
-  /** The total of the builder link at the price list in force, when the link is there and the estimate it was taken from priced differently. */
-  linkTotalUsd: number | null;
+  /** The total of the client's own estimate (JSON or text), when a builder link is there and prices differently: the link wins, this is only for the warning. */
+  estimateTotalUsd: number | null;
 }
 
 const num = (s: string): number => Number(s.replace(/[\s,]/g, ''));
@@ -61,7 +61,7 @@ function finish(c: Collected, source: BuilderEstimate['source']): BuilderEstimat
   const stageIds = [ranked[0]?.kind.stage ?? 'site'];
   return {
     quote: { totalUsd: c.totalUsd, monthlyUsd: c.monthlyUsd, lines: all, stageIds },
-    source, directions, onRequest: c.onRequest, linkTotalUsd: null,
+    source, directions, onRequest: c.onRequest, estimateTotalUsd: null,
   };
 }
 
@@ -245,6 +245,7 @@ export function builderEstimate(input: { estimate?: string | undefined; request?
   const code = builderCodeIn(estimate) ?? builderCodeIn(input.request ?? '') ?? builderCodeIn(input.link ?? '');
   const own = parseEstimateJson(estimate) ?? parseEstimateText(estimate);
   const linked = code ? priceBuilderCode(code, p) : null;
-  if (own) return { ...own, linkTotalUsd: linked && linked.quote.totalUsd !== own.quote.totalUsd ? linked.quote.totalUsd : null };
-  return linked;
+  // the link cannot be forged, so it wins; the estimate is used only when there is no link (or it prices nothing)
+  if (linked) return { ...linked, estimateTotalUsd: own && own.quote.totalUsd !== linked.quote.totalUsd ? own.quote.totalUsd : null };
+  return own;
 }

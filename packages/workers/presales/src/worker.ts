@@ -144,7 +144,7 @@ export class PresalesWorker implements Worker {
     const mismatch = seen !== null && seen !== quote.totalUsd ? ` Внимание: в конструкторе клиент видел итог ${usd(seen)}, в КП ${usd(quote.totalUsd)}: сверьте состав.` : '';
     const priced = built
       ? ` Цена взята из сметы конструктора (${built.source === 'link' ? 'по ссылке сборки, цены каталога сайта' : 'присланная сметой клиента'}).`
-        + `${built.linkTotalUsd !== null ? ` Внимание: по ссылке сборки каталог даёт ${usd(built.linkTotalUsd)}, в смете клиента ${usd(quote.totalUsd)}: сверьте состав.` : ''}`
+        + `${built.estimateTotalUsd !== null ? ` Внимание: в смете клиента ${usd(built.estimateTotalUsd)}, по ссылке сборки ${usd(quote.totalUsd)}, берём ссылку: сверьте состав.` : ''}`
         + `${built.onRequest.length ? ` По смете, без цены (в сумму не входит): ${built.onRequest.join(', ')}.` : ''}`
       : '';
     const summary = [
