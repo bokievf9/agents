@@ -209,3 +209,60 @@ describe('P-14: the owner marks a stage ready', () => {
     expect(await w.production.command('mready', 'x')).toContain('Формат: /mready');
   }, 120_000);
 });
+
+describe('P-11: the client declines or does not answer the КП', () => {
+  it('«Отклонить / обсудить» with a reason: declined, his words in the thread, a Sales task and a line for the owner, no contract', async () => {
+    const { cid, leadId } = await leadWithQuote();
+    const quote = (await docs(cid)).find((d) => d.kind === 'quote');
+    const rej = (b: unknown) => w.adm('POST', `/admin/clients/${cid}/documents/${quote.id}/reject`, b);
+    expect((await rej({})).status).toBe(400);
+    expect((await rej({ reason: 'x', mode: 'later' })).status).toBe(400);
+    expect((await w.adm('POST', `/admin/clients/9999/documents/${quote.id}/reject`, { reason: 'x' })).status).toBe(404);
+    const r = await rej({ reason: 'Дорого, хочу без сайта', mode: 'discuss' });
+    expect(r.status, r.text).toBe(200);
+    expect(r.json).toMatchObject({ ok: true, state: 'declined' });
+    expect((await rej({ reason: 'ещё раз' })).status).toBe(409);
+    expect((await w.adm('POST', `/admin/clients/${cid}/documents/${quote.id}/accept`)).status).toBe(409);
+    expect((await docs(cid)).find((d) => d.id === quote.id).state).toBe('declined');
+    const msgs = (await w.adm('GET', `/admin/clients/${cid}/threads/lead-${leadId}/messages`)).json.items as any[];
+    expect(msgs.some((m) => m.from === 'client' && /Хочу обсудить КП.*Дорого, хочу без сайта/.test(m.text))).toBe(true);
+    const cab = (await w.adm('GET', `/admin/clients/by-email?email=${encodeURIComponent(EMAIL)}`)).json;
+    expect(cab.leads[0].nextStep).toBe('Ваш ответ по КП у менеджера: он ответит в сообщениях');
+    await w.beat();
+    const task = w.hq.tasks({ dept: 'sales', limit: 200 }).find((t) => t.meta.action === 'kp_declined')!;
+    expect(task.status).toBe('done');
+    expect(w.ownerSaw()).toContain('хочет обсудить КП');
+    expect(w.ownerSaw()).toContain(`/kp ${leadId}`);
+    await w.director.sendApprovalBatch(false);
+    expect(await review('bo_document')).toEqual([]);
+    // the client's words never reach the log
+    expect(g.leaks(['Дорого, хочу без сайта'])).toEqual([]);
+  }, 60_000);
+
+  it('a КП without an answer: the owner hears a day before, then it expires (one line to the client, one alert); a revision revives it', async () => {
+    const { cid } = await leadWithQuote();
+    const quote = (await docs(cid)).find((d) => d.kind === 'quote');
+    const tick = () => w.cabinet!.docs.expiryTick();
+    expect(await tick()).toBe(0);
+    expect(w.alerts.filter((a) => a.includes('истекает завтра'))).toEqual([]);
+    w.clock.t += 13 * 86_400_000 + 3_600_000;
+    expect(await tick()).toBe(0);
+    expect(await tick()).toBe(0);
+    expect(w.alerts.filter((a) => a.includes(`КП ${quote.number}`) && a.includes('истекает завтра'))).toHaveLength(1);
+    w.clock.t += 86_400_000;
+    expect(await tick()).toBe(1);
+    expect(await tick()).toBe(0);
+    expect(w.alerts.filter((a) => a.includes(`КП ${quote.number}`) && a.includes('истекло'))).toHaveLength(1);
+    expect((await docs(cid)).find((d) => d.id === quote.id).state).toBe('expired');
+    expect((await w.adm('POST', `/admin/clients/${cid}/documents/${quote.id}/accept`)).status).toBe(409);
+    const cab = (await w.adm('GET', `/admin/clients/by-email?email=${encodeURIComponent(EMAIL)}`)).json;
+    expect(cab.leads[0].nextStep).toBe('Срок КП истёк: напишите в сообщениях, обновим предложение');
+    // the owner revises it: it stands again for the full term
+    const docsApi = w.cabinet!.docs;
+    const pack = w.db.prepare("SELECT src_id FROM cab_documents WHERE id = ?").get(quote.id) as { src_id: number };
+    expect(docsApi.revisable('ps_quote', pack.src_id)).toBe(true);
+    expect(await docsApi.reviseDelivered('ps_quote', pack.src_id, 'Обновлённое КП')).toBe('revised');
+    expect((await docs(cid)).find((d) => d.id === quote.id).state).toBe('awaiting_client');
+    expect(await tick()).toBe(0);
+  }, 60_000);
+});

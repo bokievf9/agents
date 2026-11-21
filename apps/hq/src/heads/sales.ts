@@ -66,8 +66,8 @@ export interface SalesDeps {
   lost?: LostLeads;
 }
 
-type Action = 'lead' | 'batch' | 'followups' | 'reply' | 'stats' | 'kp' | 'referral_reminders' | 'none';
-const ACTIONS: Action[] = ['lead', 'batch', 'followups', 'reply', 'stats', 'kp', 'referral_reminders'];
+type Action = 'lead' | 'batch' | 'followups' | 'reply' | 'stats' | 'kp' | 'referral_reminders' | 'kp_declined' | 'none';
+const ACTIONS: Action[] = ['lead', 'batch', 'followups', 'reply', 'stats', 'kp', 'referral_reminders', 'kp_declined'];
 const splitSchema = z.object({ action: z.enum(['batch', 'followups', 'stats', 'none']) });
 const reviewSchema = z.object({ ok: z.boolean(), issues: z.array(z.string()).max(10).default([]) });
 
@@ -447,6 +447,16 @@ export class SalesHead implements ApprovalEditor {
       const text = statsText(this.pstore());
       this.hq.complete(task.id, HEAD_ID, text);
       return void (await this.report(task.id, text));
+    }
+    if (action === 'kp_declined') {
+      // P-11: the client declined the КП or wants to discuss it (cabinet). The owner answers in the lead's thread; a new КП is `/kp <lead>` or a revision
+      const discuss = task.meta.mode === 'discuss';
+      const leadId = Number(task.meta.leadId) || null;
+      const text = `${String(task.meta.client ?? 'Клиент')} ${discuss ? 'хочет обсудить' : 'отклонил'} КП ${String(task.meta.number ?? '')}${leadId ? ` (лид #${leadId})` : ''}. Причина: ${oneLine(task.body, 600)}\n`
+        + `Ответить: тред заявки в Пульте (чаты)${leadId ? `; новое КП: /kp ${leadId}` : ''}. Договор по этому КП не готовится.`;
+      this.hq.complete(task.id, HEAD_ID, text);
+      await this.d.messenger.send(this.d.ownerId, text);
+      return void (await this.d.reporter.post(SALES, `КП ${String(task.meta.number ?? '')}: клиент ${discuss ? 'хочет обсудить' : 'отклонил'} (задача #${task.id}).`));
     }
     if (action === 'referral_reminders') {
       const res = await this.runOnce(task.id, this.referral, REFERRAL_ID, []);

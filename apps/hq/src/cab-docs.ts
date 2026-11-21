@@ -5,7 +5,7 @@ import type { Hq } from '@fir/hq';
 import type { BillingWorker } from '@fir/worker-billing';
 import { fillTemplate, loadTemplate } from '@fir/worker-documents';
 import { z } from 'zod';
-import { addThreadMessage, ensureCabinetTables, postFromFirTech } from './cabinet.js';
+import { addCabMessage, addThreadMessage, ensureCabinetTables, postFromFirTech } from './cabinet.js';
 import type { Playground } from './playground.js';
 import { parseBuilderPlan, wantsPlayground } from './builder-plan.js';
 import { EmailFailures, type EmailKind } from './email-failures.js';
@@ -18,7 +18,7 @@ import { EmailFailures, type EmailKind } from './email-failures.js';
  */
 export const DOC_KINDS = ['quote', 'contract', 'invoice', 'act', 'other'] as const;
 export type DocKind = (typeof DOC_KINDS)[number];
-export const DOC_STATES = ['awaiting_client', 'accepted', 'awaiting_signature', 'signed', 'issued', 'paid', 'void'] as const;
+export const DOC_STATES = ['awaiting_client', 'accepted', 'declined', 'expired', 'awaiting_signature', 'signed', 'issued', 'paid', 'void'] as const;
 export type DocState = (typeof DOC_STATES)[number];
 
 const SCHEMA = `
@@ -183,6 +183,9 @@ export function docNextStep(docs: DocRow[], action: NextAction, lang: string | n
   if (action.kind === 'sign_contract') return en ? 'Sign the contract in Documents' : 'Подпишите договор в разделе «Документы»';
   const quote = docs.find((d) => d.kind === 'quote')!;
   const contract = docs.find((d) => d.kind === 'contract');
+  const last = [...docs].reverse().find((d) => d.kind === 'quote')!;
+  if (last.state === 'declined') return en ? 'You sent your answer on the proposal: the manager replies in Messages' : 'Ваш ответ по КП у менеджера: он ответит в сообщениях';
+  if (last.state === 'expired') return en ? 'The proposal has expired: write in Messages and we will update it' : 'Срок КП истёк: напишите в сообщениях, обновим предложение';
   if (quote.state === 'accepted' && !contract) return en ? 'Proposal accepted, we are preparing the contract' : 'КП принято, готовим договор';
   if (contract?.state === 'signed' && !docs.some((d) => d.kind === 'invoice')) return en ? 'Contract signed, we are preparing the invoice for the first stage' : 'Договор подписан, готовим счёт на первый этап';
   return null;
@@ -237,6 +240,13 @@ export function parseSignature(dataUrl: string): { ok: true; png: Buffer } | { o
   return { ok: true, png };
 }
 
+const rejectBody = z.object({
+  reason: z.string().trim().min(1).max(1000),
+  /** `decline`: the client says no; `discuss`: he wants to change something first. Both close this КП; the owner answers in the thread. */
+  mode: z.enum(['decline', 'discuss']).default('decline'),
+});
+const DAY = 86_400_000;
+
 const signBody = z.object({
   signaturePng: z.string().min(1).max(400_000),
   name: z.string().trim().min(2).max(120),
@@ -254,6 +264,8 @@ export interface CabDocsDeps {
   siteUrl: string;
   /** A line for the owner's inbox (no approval). */
   notifyOwner: (text: string) => void;
+  /** How long a КП stands (`KP_VALID_DAYS`, the same number the КП text names); default 14. */
+  kpValidDays?: number;
 }
 
 /** What the Sales head hands over when the owner approved a КП whose lead has a cabinet. */
@@ -825,7 +837,7 @@ export class CabDocs {
   /** True while a delivered document can still be revised by the owner (no cabinet row at all counts as open: only the text is replaced). */
   revisable(src: 'ps_quote' | 'ps_estimate' | 'bo', srcId: number): boolean {
     const row = this.db.prepare('SELECT kind, state FROM cab_documents WHERE src = ? AND src_id = ?').get(src, srcId) as { kind: string; state: string } | undefined;
-    return !row || row.state === (row.kind === 'quote' ? 'awaiting_client' : row.kind === 'contract' ? 'awaiting_signature' : 'issued');
+    return !row || row.state === (row.kind === 'quote' ? 'awaiting_client' : row.kind === 'contract' ? 'awaiting_signature' : 'issued') || (row.kind === 'quote' && row.state === 'expired');
   }
 
   /**
@@ -838,8 +850,15 @@ export class CabDocs {
     const row = this.db.prepare('SELECT * FROM cab_documents WHERE src = ? AND src_id = ?').get(src, srcId) as DocRow | undefined;
     if (!row) return 'none';
     const open = row.kind === 'quote' ? 'awaiting_client' : row.kind === 'contract' ? 'awaiting_signature' : 'issued';
-    if (row.state !== open) return 'locked';
+    // an expired КП revised by the owner stands again from now (P-11): it waits for the client with a fresh term
+    const revive = row.kind === 'quote' && row.state === 'expired';
+    if (row.state !== open && !revive) return 'locked';
     this.db.prepare('UPDATE cab_documents SET body = ?, src_id = ?, pdf_rel = NULL, pdf_sha256 = NULL WHERE id = ?').run(body, newSrcId ?? row.src_id, row.id);
+    if (revive) {
+      const meta = JSON.parse(row.meta || '{}') as Record<string, unknown>;
+      delete meta.expiryWarned;
+      this.db.prepare("UPDATE cab_documents SET state = 'awaiting_client', delivered_at = ?, meta = ? WHERE id = ?").run(this.d.now(), JSON.stringify(meta), row.id);
+    }
     await this.attachPdf(this.row(row.id)!);
     const c = this.client(row.client_id);
     postFromFirTech(this.db, this.d.now(), row.client_id, row.lead_id,
@@ -899,6 +918,72 @@ export class CabDocs {
     this.d.notifyOwner(`${c.name || c.email} принял КП ${r.number}: договор готовится, придёт карточкой на одобрение.`);
     this.autoAgent(c, r);
     return okR({ next: 'contract' });
+  }
+
+  /**
+   * P-11 `POST /admin/clients/:id/documents/:docId/reject` `{ reason, mode? }`: the client declines the КП or wants to discuss it. The quote is `declined` (no contract
+   * is drafted), his words go into the lead thread, the owner gets a Sales task and an inbox line. 404, 400 `invalid`, 409 `not_awaiting` like `accept`.
+   */
+  reject(clientId: number, docId: number, body: unknown): DocReply {
+    const c = this.client(clientId);
+    const r = this.row(docId);
+    if (!c || !r || r.client_id !== clientId) return failR(404, 'not_found');
+    const parsed = rejectBody.safeParse(body ?? {});
+    if (!parsed.success) return failR(400, 'invalid');
+    if (r.kind !== 'quote' || r.state !== 'awaiting_client') return failR(409, 'not_awaiting', { state: this.liveState(r) });
+    const t = this.d.now();
+    const { reason, mode } = parsed.data;
+    const meta = { ...(JSON.parse(r.meta || '{}') as Record<string, unknown>), declined: { at: t, mode } };
+    if (this.db.prepare("UPDATE cab_documents SET state = 'declined', meta = ? WHERE id = ? AND state = 'awaiting_client'").run(JSON.stringify(meta), r.id).changes !== 1) return failR(409, 'not_awaiting');
+    const en = c.locale === 'en';
+    const discuss = mode === 'discuss';
+    if (r.lead_id !== null) {
+      try {
+        addCabMessage(this.db, t, { clientId: c.id, leadId: r.lead_id, from: 'client', text: `${discuss ? (en ? 'I would like to discuss the proposal' : 'Хочу обсудить КП') : (en ? 'I decline the proposal' : 'Отклоняю КП')} ${r.number}: ${reason}` });
+      } catch (e) {
+        log('warn', 'quote reject thread line failed', { doc: r.id, err: errMsg(e) });
+      }
+    }
+    postFromFirTech(this.db, t, c.id, r.lead_id, en ? 'Thank you, your answer is with the manager: he replies here in Messages.' : 'Спасибо, ваш ответ у менеджера: он ответит здесь, в сообщениях.');
+    const hq = this.d.hq;
+    const who = c.name || c.email;
+    hq.createTask({
+      title: `КП ${r.number}: ${who} ${discuss ? 'хочет обсудить' : 'отклонил'}`, body: reason, dept: 'sales', creator: 'head', priority: 1,
+      meta: { action: 'kp_declined', leadId: r.lead_id, docId: r.id, packId: r.pack_id, mode, number: r.number, client: who },
+    });
+    hq.wake('sales-head', 'task');
+    hq.log('client', 'quote_declined', 'document', String(r.id), mode);
+    this.d.notifyOwner(`${who} ${discuss ? 'хочет обсудить' : 'отклонил'} КП ${r.number}: причина в задаче продаж и в треде заявки.`);
+    return okR({ state: 'declined' });
+  }
+
+  /**
+   * P-11, from the due ticker: a КП that waits for the client longer than it stands (`kpValidDays` from its delivery) is `expired`; the owner hears a day before
+   * and when it happens, the client gets one line. Returns how many quotes expired now.
+   */
+  async expiryTick(): Promise<number> {
+    const days = this.d.kpValidDays ?? 14;
+    const now = this.d.now();
+    let expired = 0;
+    const rows = this.db.prepare("SELECT d.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale FROM cab_documents d JOIN cab_clients c ON c.id = d.client_id WHERE d.kind = 'quote' AND d.state = 'awaiting_client'").all() as (DocRow & { client_name: string; client_email: string; client_locale: string })[];
+    for (const r of rows) {
+      const until = (r.delivered_at ?? r.created_at) + days * DAY;
+      const who = r.client_name || r.client_email;
+      const meta = JSON.parse(r.meta || '{}') as Record<string, unknown>;
+      if (now >= until) {
+        if (this.db.prepare("UPDATE cab_documents SET state = 'expired' WHERE id = ? AND state = 'awaiting_client'").run(r.id).changes !== 1) continue;
+        expired++;
+        postFromFirTech(this.db, now, r.client_id, r.lead_id, r.client_locale === 'en'
+          ? `The proposal ${r.number} has expired. If it is still relevant, write here and we will update it.`
+          : `Срок КП ${r.number} истёк. Если предложение ещё актуально, напишите здесь, мы его обновим.`);
+        this.d.hq.log('documents', 'quote_expired', 'document', String(r.id));
+        await this.d.hq.alert(`КП ${r.number} (${who}) истекло: клиент не ответил за ${days} дн. Продлить: правка КП в ревью-центре (уйдёт клиенту заново) или новое КП.`);
+      } else if (now >= until - DAY && meta.expiryWarned !== true) {
+        this.db.prepare('UPDATE cab_documents SET meta = ? WHERE id = ?').run(JSON.stringify({ ...meta, expiryWarned: true }), r.id);
+        await this.d.hq.alert(`КП ${r.number} (${who}) истекает завтра, клиент его не принял. Напомнить можно в треде заявки (Пульт, чаты).`);
+      }
+    }
+    return expired;
   }
 
   /** `POST /admin/clients/:id/documents/:docId/sign`: the simple electronic signature; the signed PDF is rendered and the stage-1 invoice is proposed. */

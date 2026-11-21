@@ -190,7 +190,7 @@ const backoffice = new BackofficeHead({
 // Cabinet v3 (2026-11-22): the client's documents (accept, sign), threads and uploads, the playground of agents. The heads hand the owner's approvals to it.
 const chatGateForAgents = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
 const cabinet = buildCabinet({
-  hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents,
+  hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents, kpValidDays: cfg.kpValidDays,
   tools: () => toolsFor(hq, tools, { agentId: 'documents', dept: BACKOFFICE, messenger, ownerId: cfg.ownerId }),
 });
 sales.cabinet = cabinet.docs;
@@ -282,7 +282,9 @@ const dueTick = async () => {
     await lost.flush();
   } catch (e) {
     log('warn', 'lost leads watch failed', { err: errMsg(e) });
-  }  // P-07: emails to clients that did not go (КП, contract, invoice, act, stage notices, clarifying questions): one alert an hour
+  }  // P-11: a КП the client never answered expires after KP_VALID_DAYS (the owner hears a day before and when it happens)
+  await cabinet.docs.expiryTick().catch((e) => log('warn', 'quote expiry tick failed', { err: errMsg(e) }));
+  // P-07: emails to clients that did not go (КП, contract, invoice, act, stage notices, clarifying questions): one alert an hour
   await emailFailures.flush().catch((e) => log('warn', 'email failures flush failed', { err: errMsg(e) }));
 };
 void dueTick();

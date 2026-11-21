@@ -38,6 +38,8 @@ export interface CabinetDeps {
   /** The key for agents' Telegram tokens at rest (`PG_SECRET`, else the media secret). */
   secret?: string | undefined;
   gate?: { llmAllowed(): boolean; llmUsed(): void } | undefined;
+  /** How long a КП stands (`KP_VALID_DAYS`): the quote expires after it (P-11). */
+  kpValidDays?: number | undefined;
 }
 
 /** Builds the three modules of the cabinet and the dispatcher; the heads get `docs` (`sales.cabinet = cabinet.docs`, ...). */
@@ -46,7 +48,7 @@ export function buildCabinet(o: CabinetDeps): CabinetApi {
   const now = o.hq.now;
   const notifyOwner = (t: string) => hooks.notifyOwner?.(t);
   const cabinetTicket = (t: { id: number; name: string; text: string; telegram: string; leadId?: number }) => hooks.cabinetTicket?.(t);
-  const docs = new CabDocs({ hq: o.hq, now, tools: o.tools, billing: o.billing, siteUrl: o.siteUrl, notifyOwner });
+  const docs = new CabDocs({ hq: o.hq, now, tools: o.tools, billing: o.billing, siteUrl: o.siteUrl, notifyOwner, ...(o.kpValidDays !== undefined ? { kpValidDays: o.kpValidDays } : {}) });
   const ref: { pg?: Playground } = {};
   const threads = new CabThreads({
     db: o.hq.db, now, dataDir: o.dataDir, mediaSecret: o.mediaSecret, mediaBase: o.mediaBase, cabinetTicket, notifyOwner, leadJournal: (id, t) => hooks.leadJournal?.(id, t),
@@ -80,6 +82,7 @@ export function createCabinetApi(m: { docs: CabDocs; threads: CabThreads; playgr
           if (get && seg.length === 2) return docs.list(cid);
           if (post && seg.length === 4 && num(a) !== null && b === 'accept') return Promise.resolve(docs.accept(cid, num(a)!));
           if (post && seg.length === 4 && num(a) !== null && b === 'sign') return docs.sign(cid, num(a)!, body);
+          if (post && seg.length === 4 && num(a) !== null && b === 'reject') return Promise.resolve(docs.reject(cid, num(a)!, body));
           return null;
         case 'threads':
           if (get && seg.length === 2) return Promise.resolve(threads.list(cid));
