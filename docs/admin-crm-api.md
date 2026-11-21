@@ -454,7 +454,7 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 - `id` треда: `c<номер клиента кабинета>`, иначе `l<номер лида>`, иначе `t<номер тикета>`, иначе `w<сессия сайта>`, иначе `g<chat id бота>`. Когда треды склеиваются, id может смениться, поэтому `GET`/`POST` принимают любой псевдоним (`l12` открывает тред `c3`, если лид 12 принадлежит клиенту 3).
 - `client`: `{ id (кабинета или null), name, email|null, contact }`; без имени `"Посетитель сайта"`, у бота без лида `@ник`. `channels`: `web|telegram|cabinet`. `unread`: сообщения клиента после последнего сообщения владельца или HQ. `preview`: последнее сообщение, у треда без текстов маскированная сводка. `leadId`: новейший лид, `ticketId`: новейший тикет. `textsStored: false` у треда без сообщений (см. выше).
 
-`GET /admin/chats/:id` → `{ ok, thread, messages: [ { id, at, from: "client"|"hq"|"owner", channel: "web"|"telegram"|"cabinet", thread: "lead"|"support"|"project-<id>", text, attachments: [] } ] }` (`thread` как строка списка, сообщения по возрастанию времени). Неизвестный 404. `id` сообщения: `cab_<n>` (кабинет), `lead_<n>` (первое обращение лида), `tk_<n>_q`/`tk_<n>_a` (вопрос и ответ тикета), `rp_<n>` (одобренный ответ на лид), `ow_<n>` (ответ владельца без кабинета). Вложений HQ пока не хранит: `attachments` всегда `[]`. **`thread` сообщения (2026-11-22)**: тред кабинета, в который оно написано: `support` или `project-<id>` для сообщений `ct_<n>` (как они лежат в `cab_tmsgs`), `lead` для всего остального (`cab_<n>`, `lead_<n>`, тикеты, ответы на лид, Telegram, чат сайта, реплики владельца без кабинета). Тред агента (`agent-<id>`) в чатах владельца не показывается, поэтому значения `agent-*` здесь не бывает. Тред ответа по умолчанию это `thread` последнего сообщения клиента (`from: "client"`): так же выбирает его `POST .../reply` без `thread` и `replyTo`. Реплика владельца в треде клиента кабинета показывается с `channel: "cabinet"` (так она лежит в треде).
+`GET /admin/chats/:id` → `{ ok, thread, messages: [ { id, at, from: "client"|"hq"|"owner", channel: "web"|"telegram"|"cabinet", thread: "lead"|"support"|"project-<id>", text, attachments: [] } ] }` (`thread` как строка списка, сообщения по возрастанию времени). Неизвестный 404. `id` сообщения: `cab_<n>` (кабинет), `lead_<n>` (первое обращение лида), `tk_<n>_q`/`tk_<n>_a` (вопрос и ответ тикета), `rp_<n>` (одобренный ответ на лид), `ow_<n>` (ответ владельца без кабинета), `tg_<n>` (слова клиента из @firtech_bot после «позвать человека», см. «Клиентский бот через HQ» ниже). Вложений HQ пока не хранит: `attachments` всегда `[]`. **`thread` сообщения (2026-11-22)**: тред кабинета, в который оно написано: `support` или `project-<id>` для сообщений `ct_<n>` (как они лежат в `cab_tmsgs`), `lead` для всего остального (`cab_<n>`, `lead_<n>`, тикеты, ответы на лид, Telegram, чат сайта, реплики владельца без кабинета). Тред агента (`agent-<id>`) в чатах владельца не показывается, поэтому значения `agent-*` здесь не бывает. Тред ответа по умолчанию это `thread` последнего сообщения клиента (`from: "client"`): так же выбирает его `POST .../reply` без `thread` и `replyTo`. Реплика владельца в треде клиента кабинета показывается с `channel: "cabinet"` (так она лежит в треде).
 
 `POST /admin/chats/:id/unread` (без тела, 2026-11-22) → `{ ok: true, thread }` (`thread` как строка списка). Владелец помечает клиента непрочитанным снова: у треда, где все сообщения клиента уже отвечены, `unread` становится 1 (отметка в таблице `ch_unread`, хранится на псевдонимы треда); у треда, где непрочитанное уже есть, ничего не меняется; отметка исчезает, когда владелец или HQ отвечает в треде (последний ответ новее отметки). Новое сообщение клиента считается как обычно. Неизвестный `id` 404, другой метод 404.
 
@@ -719,3 +719,57 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 не создаёт агента заново: черновик лида переиспользуется (и переходит к аккаунту клиента), оплата этапа 1 включает его как раньше.
 
 **Нужно от сайта:** страница `/<locale>/demo/<publicId>` с чатом, которая шлёт `demoKey` из `?k=` в `POST /agent/:publicId/chat`.
+
+## Клиентский бот через HQ (2026-11-22)
+«Позвать человека» в @firtech_bot больше не пишет владельцу из клиентского бота и не ждёт `/reply` в его чате (команды `/chats`, `/reply`, `/mute`, `/resume` в клиентском боте убраны; владельцу в нём отвечает одна строка «ответы в Пульте»). Всё идёт через HQ и Пульт:
+- Клиент нажал «Позвать человека» (или бот передал разговор), бот замолчал в этом чате; в тред клиента (`/admin/chats`, склейка по `chatId` Telegram как раньше) ложится строка `from: "client"`, `channel: "telegram"`, id `tg_<n>`, текст «Просит позвать человека». Любое следующее сообщение клиента, пока бот молчит, и вопросы без ответа бота (нужен человек, цена, сбой модели) тоже строки треда (до 2000 знаков, хранятся 90 дней, таблица `ch_inbound`). Обычная беседа бота по-прежнему текстов не хранит.
+- HQ-бот напоминает владельцу одной строкой со ссылкой на чат: «Клиент просит человека: Анвар, Telegram.» (тип напоминания `human`, сразу, тихие часы действуют) и «Клиент написал в Telegram: Анвар.» (тип `chat`, группируется как остальные). Текста клиента и @ника в Telegram нет. Ссылка: `/admin/chats?thread=g<chatId>` (псевдоним треда `g<chatId>` понимают `GET /admin/chats/:id`, `reply`, `resume`).
+- В строке списка и в `thread` ответа `GET /admin/chats/:id` появилось поле `botMuted` (boolean): клиентский бот молчит в чате этого клиента, владелец на связи.
+- Ответ владельца `POST /admin/chats/:id/reply` уходит клиенту в бот (`ClientChannel`) и оставляет бот молчащим (как раньше делал `/reply`). Вернуть клиента сценарию бота: **`POST /admin/chats/:id/resume`** (без тела) → `{ ok: true, thread }` (`botMuted: false`); тред без чата бота: 409 `no_bot_chat`; неизвестный 404.
+- Тихие часы и лимиты клиентского бота не менялись.
+
+## Настройки (2026-11-22)
+Экран «Компания → Настройки» (`office?panel=company&tab=settings`). Всё под `x-admin-token`, код `apps/hq/src/settings.ts`. Значение env остаётся умолчанием, пока владелец не менял настройку; сохранённое значение сильнее env. Применение без рестарта там, где значение читается на лету; флаги службы читаются при старте, и `GET` говорит об этом (`restartRequired`, `restartKeys`).
+
+`GET /admin/settings` → `{ ok: true, settings, usage, restartRequired, restartKeys }`:
+```json
+{ "ok": true,
+  "settings": {
+    "schedule": { "summaryTime": "08:00", "approvalTime": "09:00", "digestDay": 1, "digestTime": "08:30",
+                  "quietHours": { "from": "23:00", "to": "08:00" }, "ownerTz": "Asia/Kuala_Lumpur", "tz": "Asia/Dushanbe" },
+    "notices": { "types": { "client": true, "lead": true, "approval": true, "payment": true, "stage": true, "signed": true, "call": true, "chat": true, "human": true },
+                 "alerts": { "lost_lead": true, "email_failed": true, "llm": true, "budget": true, "service": true },
+                 "groupWindowMin": 5, "skipWhileDesk": true },
+    "trust": { "defaultThreshold": 20,
+               "kinds": [ { "kind": "lead_reply", "level": 1, "locked": false, "streak": 3, "approvals": 24, "threshold": 20, "custom": false } ] },
+    "limits": { "deptBudgetUsd": { "marketing": 25, "sales": 20, "support": 15, "production": 15, "backoffice": 10, "director": 5 }, "clientLlmDailyCap": 300 },
+    "calls": { "slotHours": ["11:00", "15:00"], "durationMin": 30, "bufferMin": 0 },
+    "kp": { "validDays": 14, "defaultLang": "ru" },
+    "playground": { "draftMsgsPerDay": 50, "liveMsgsPerDay": 500 },
+    "service": { "tgApprovalCards": false, "tgGroupReports": false } },
+  "usage": { "deptMonthUsd": { "marketing": 4.2, "sales": 1.1, "support": 0, "production": 0, "backoffice": 0, "director": 0.6 }, "clientLlmToday": 41, "monthStartedAt": "2026-10-31T19:00:00.000Z" },
+  "restartRequired": false, "restartKeys": [] }
+```
+- `schedule`: время `HH:mm` на часах владельца (`ownerTz`), `digestDay` 0 (воскресенье) .. 6, `quietHours` `{ from, to }` или `null` (тихих часов нет), `tz` часы рынка (клиентский бот, слоты, сроки), `ownerTz` часы владельца. Любое изменение пересоздаёт крон Директора и рутины (`director.start`, `onTimingChange`).
+- `notices.types`: включено ли напоминание HQ-бота этого типа (`stage` это «этап готов» и «этап принят», `human` и `chat` это клиентский бот, см. выше); выключенный тип пишется в базу как `muted` и не отправляется, и не повторится при включении. `alerts`: виды алертов, идущих в Telegram короткой строкой. `groupWindowMin` окно группировки, 0..120 минут (0: каждое напоминание отдельно), `skipWhileDesk` не слать, пока Пульт открыт. Сводки и дайджест отключить нельзя.
+- `trust.kinds`: таблица видов действий с уровнем (0: ждёт кнопку, 1: делает сам), `locked` (деньги, цены: поднимает только владелец), `streak` одобрений подряд, `approvals` всего, `threshold` сколько нужно подряд для уровня 1 (`custom`: задан для вида, иначе `defaultThreshold`, иначе `TRUST_THRESHOLD`).
+- `limits.deptBudgetUsd`: **ключ лимитов отделов, USD в месяц** (0 = без лимита), пишется в `agents.budget_usd_month` головы отдела (для `director`: самого Директора и его ассистента), его читает `overBudget`; применяется сразу, алерты 80% и 100% остаются. `usage.deptMonthUsd` расход месяца рядом (`director` это отдел `hq`). `clientLlmDailyCap` дневной потолок ответов модели клиентского бота и чата сайта (0: только шаблоны), `usage.clientLlmToday` сколько израсходовано сегодня.
+- `calls`: `slotHours` два окна по умолчанию (когда сайт не отдал свои), `durationMin` 5..240 и `bufferMin` 0..240: занятый созвон закрывает окна ближе, чем длительность плюс буфер. `kp.validDays` 1..90, `kp.defaultLang` `ru|en` (язык документов по умолчанию, сохраняется; документы клиентов с языком кабинета идут на его языке). `playground`: лимит сообщений в сутки у агента площадки без своего лимита, 1..2000.
+- `service`: флаги `TG_APPROVAL_CARDS` и `TG_GROUP_REPORTS`; смена читается при старте HQ, поэтому после неё `restartRequired: true` и `restartKeys: ["service.tgApprovalCards"]`.
+
+`PATCH /admin/settings`: тело — любое подмножество тех же групп, лишние поля 400 `invalid` (`fields` перечисляет пути), всё или ничего:
+```json
+{ "schedule": { "summaryTime": "09:30", "digestDay": 3, "quietHours": { "from": "22:00", "to": "07:00" } },
+  "notices": { "types": { "lead": false }, "alerts": { "budget": false }, "groupWindowMin": 10, "skipWhileDesk": true },
+  "trust": { "defaultThreshold": 10, "thresholds": { "lead_reply": 5, "content_item": null }, "levels": { "lead_reply": 1 } },
+  "limits": { "deptBudgetUsd": { "sales": 30 }, "clientLlmDailyCap": 200 },
+  "calls": { "slotHours": ["10:00", "16:30"], "durationMin": 45, "bufferMin": 15 },
+  "kp": { "validDays": 30, "defaultLang": "en" },
+  "playground": { "draftMsgsPerDay": 20, "liveMsgsPerDay": 800 },
+  "service": { "tgApprovalCards": true } }
+```
+Ответ `200 { ok: true, changed: ["schedule.summaryTime", ...], settings, usage, restartRequired, restartKeys }` (то же, что `GET`, плюс `changed`: только ключи, значение которых действительно поменялось). Ошибки: 400 `invalid` (формат, диапазон, неизвестный ключ, часовой пояс не IANA), 422 `unknown_kind` + `kinds` (вид действия не существует; `thresholds: { вид: null }` сбрасывает порог вида), 422 `unknown_department` + `department` (у отдела нет головы), 503 `unavailable` (нет объекта настроек). `levels` это тот же код, что `POST /admin/company/trust/:kind` и `/level`.
+
+Журнал: таблица `settings_log` (`at`, `key`, `old`, `new`, `source`): ключ в той же записи, что в `changed` (`schedule.summaryTime`, `limits.deptBudgetUsd.sales`, `trust.levels.lead_reply`...), `source` `owner` или `seed 2026-11-23`; значения только настроек, текстов клиентов нет. Первичные лимиты (marketing 25, sales 20, support 15, production 15, backoffice 10, director 5, USD в месяц, бюджет API 100 USD) пишутся один раз при старте, если у всех голов 0 (метка `limits_seeded`: лимит, который владелец позже вернул в 0, остаётся 0).
+
+Ассистент HQ-бота: «какие настройки?» читает эти же значения (инструмент `company_settings`, только чтение), «поставь сводку на 9:30» не меняет ничего и отвечает ссылкой `…/admin/office?panel=company&tab=settings`.
