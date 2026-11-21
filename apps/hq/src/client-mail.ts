@@ -90,7 +90,7 @@ export class ClientMail {
     if (!tools.can('email.send')) return 'off';
     const en = c.locale === 'en';
     const hello = en ? `Hello${c.name ? `, ${c.name}` : ''}!` : `Здравствуйте${c.name ? `, ${c.name}` : ''}!`;
-    let why = '';
+    let why: string;
     try {
       const sent = await tools.email.send({
         to: c.email, subject: en ? n.subject.en : n.subject.ru,
