@@ -33,6 +33,58 @@ export interface LlmResult {
   usage?: LlmUsage;
 }
 
+// ---- native tool use (2026-11-22, for the Fira agent core) ----
+
+/** Tiers of a tool conversation: the two of `complete` plus Opus for hard consultations (direct mode only; through the gateway it is the smart alias). */
+export type ChatTier = Tier | 'opus';
+export const CLAUDE_OPUS = 'claude-opus-5-5';
+
+/** A tool the model may call: the Messages `tools` entry (JSON Schema of the input). */
+export interface LlmToolDef {
+  name: string;
+  description: string;
+  input_schema: { type: 'object'; properties?: Record<string, unknown>; required?: string[]; [k: string]: unknown };
+}
+
+export type LlmTextBlock = { type: 'text'; text: string };
+export type LlmToolUseBlock = { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> };
+export type LlmToolResultBlock = { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+export type LlmBlock = LlmTextBlock | LlmToolUseBlock | LlmToolResultBlock;
+
+export interface LlmChatMessage {
+  role: 'user' | 'assistant';
+  content: string | LlmBlock[];
+}
+
+/** One part of the system prompt; `cache: true` marks the end of the stable prefix (prompt cache, direct mode only). */
+export interface LlmSystemBlock {
+  text: string;
+  cache?: boolean;
+}
+
+export type LlmToolChoice = { type: 'auto' } | { type: 'any' } | { type: 'none' } | { type: 'tool'; name: string };
+
+export interface LlmChatRequest {
+  tier: ChatTier;
+  system: string | LlmSystemBlock[];
+  messages: LlmChatMessage[];
+  tools?: LlmToolDef[];
+  toolChoice?: LlmToolChoice;
+  maxTokens?: number;
+}
+
+/** What the model answered in one call: text and tool calls, why it stopped, and the usage when reported. */
+export interface LlmTurn {
+  content: (LlmTextBlock | LlmToolUseBlock)[];
+  stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'other';
+  usage?: LlmUsage;
+}
+
+/** The text blocks of a turn joined (what a visitor would read). */
+export const turnText = (t: LlmTurn): string => t.content.map((b) => (b.type === 'text' ? b.text : '')).join('').trim();
+/** The tool calls of a turn, in order. */
+export const turnToolUses = (t: LlmTurn): LlmToolUseBlock[] => t.content.filter((b): b is LlmToolUseBlock => b.type === 'tool_use');
+
 /** The only door to a language model. Agents depend on this, never on the SDK. */
 export interface LlmClient {
   /** False when there is no key: callers must fall back to templates and heuristics. */
@@ -41,6 +93,8 @@ export interface LlmClient {
   complete(req: LlmRequest): Promise<string>;
   /** Same call with real usage, for cost accounting. Optional: clients without it are metered by estimate. */
   completeDetailed?(req: LlmRequest): Promise<LlmResult>;
+  /** Native tool use (one model call). Optional: clients without it cannot run a Fira agent and the caller falls back. */
+  chat?(req: LlmChatRequest): Promise<LlmTurn>;
 }
 
 /** Usage from a response (`usage` in Anthropic or OpenAI format, and the `model` that really answered). Null when missing. */
@@ -67,6 +121,26 @@ export class OffLlm implements LlmClient {
   completeDetailed(): Promise<LlmResult> {
     return Promise.reject(new Error('LLM off'));
   }
+  chat(): Promise<LlmTurn> {
+    return Promise.reject(new Error('LLM off'));
+  }
+}
+
+const STOP: Record<string, LlmTurn['stopReason']> = { end_turn: 'end_turn', tool_use: 'tool_use', max_tokens: 'max_tokens', stop_sequence: 'end_turn' };
+
+/** The content blocks of an SDK response that a turn keeps (text and tool calls; thinking and server blocks are dropped). */
+export function turnOf(res: { content: readonly unknown[]; stop_reason?: string | null }, usage: LlmUsage | null): LlmTurn {
+  const content: LlmTurn['content'] = [];
+  for (const raw of res.content) {
+    const b = raw as { type?: unknown; text?: unknown; id?: unknown; name?: unknown; input?: unknown };
+    if (b.type === 'text' && typeof b.text === 'string') content.push({ type: 'text', text: b.text });
+    else if (b.type === 'tool_use' && typeof b.id === 'string' && typeof b.name === 'string') {
+      const input = typeof b.input === 'object' && b.input !== null && !Array.isArray(b.input) ? (b.input as Record<string, unknown>) : {};
+      content.push({ type: 'tool_use', id: b.id, name: b.name, input });
+    }
+  }
+  const stopReason = STOP[res.stop_reason ?? ''] ?? 'other';
+  return usage ? { content, stopReason, usage } : { content, stopReason };
 }
 
 /**
@@ -121,6 +195,32 @@ export class AnthropicLlm implements LlmClient {
     const text = res.content.map((b) => (b.type === 'text' ? b.text : '')).join('').trim();
     const usage = parseUsage(res, params.model);
     return usage ? { text, usage } : { text };
+  }
+
+  /**
+   * Native tool use. Through the gateway: plain parameters only (system as one string, no cache marks, Opus is the smart alias).
+   * Direct: the system as blocks with `cache_control` on the stable prefix, low effort, Opus as `claude-opus-5-5`.
+   */
+  async chat(req: LlmChatRequest): Promise<LlmTurn> {
+    const model = req.tier === 'opus' ? (this.gateway ? this.models.sonnet : CLAUDE_OPUS) : this.models[req.tier];
+    const blocks = typeof req.system === 'string' ? [{ text: req.system }] : req.system;
+    const system = this.gateway
+      ? blocks.map((b) => b.text).join('\n\n')
+      : blocks.map((b) => ({ type: 'text' as const, text: b.text, ...(b.cache ? { cache_control: { type: 'ephemeral' as const } } : {}) }));
+    const choice = req.toolChoice;
+    const params = {
+      model,
+      max_tokens: req.maxTokens ?? 1024,
+      system,
+      messages: req.messages,
+      ...(req.tools?.length ? { tools: req.tools } : {}),
+      ...(req.tools?.length && choice ? { tool_choice: choice } : {}),
+    };
+    const res = this.gateway
+      ? await this.client.messages.create(params as Parameters<Anthropic['messages']['create']>[0] & { stream?: false })
+      : await this.client.messages.create({ ...params, output_config: { effort: 'low' } } as Parameters<Anthropic['messages']['create']>[0] & { stream?: false });
+    if (res.stop_reason === 'refusal') throw new Error('LLM refused');
+    return turnOf(res, parseUsage(res, model));
   }
 }
 
@@ -205,5 +305,54 @@ export class MockLlm implements LlmClient {
   async complete(req: LlmRequest): Promise<string> {
     this.calls.push(req);
     return this.handler(req, this.calls.length);
+  }
+}
+
+/** Calls the model with tools but never throws: null means "fall back" (off, no `chat`, error, refusal). */
+export async function tryChat(llm: LlmClient, req: LlmChatRequest): Promise<LlmTurn | null> {
+  if (!llm.enabled || !llm.chat) return null;
+  try {
+    return await llm.chat(req);
+  } catch (e) {
+    log('warn', 'LLM tool call failed, falling back', { err: errMsg(e) });
+    return null;
+  }
+}
+
+/** A scripted model turn for `MockChatLlm`: a reply text, tool calls, or both. */
+export interface ScriptedTurn {
+  text?: string;
+  tools?: { name: string; input?: Record<string, unknown> }[];
+}
+
+/**
+ * Test double for tool use: each `chat` call returns the next scripted turn (or what the handler builds), records the request. `complete`
+ * answers from the same script with its text, so code that mixes both works in tests. Ids of tool calls are `tu_<call>_<index>`.
+ */
+export class MockChatLlm implements LlmClient {
+  readonly enabled = true;
+  readonly chats: LlmChatRequest[] = [];
+  readonly calls: LlmRequest[] = [];
+  private readonly next: (req: LlmChatRequest, n: number) => ScriptedTurn | Promise<ScriptedTurn>;
+
+  constructor(script: ScriptedTurn[] | ((req: LlmChatRequest, n: number) => ScriptedTurn | Promise<ScriptedTurn>), private readonly usage?: LlmUsage) {
+    this.next = Array.isArray(script) ? (_r, n) => script[Math.min(n, script.length) - 1] ?? { text: '' } : script;
+  }
+
+  async chat(req: LlmChatRequest): Promise<LlmTurn> {
+    this.chats.push(req);
+    const n = this.chats.length;
+    const s = await this.next(req, n);
+    const content: LlmTurn['content'] = [];
+    if (s.text) content.push({ type: 'text', text: s.text });
+    (s.tools ?? []).forEach((t, i) => content.push({ type: 'tool_use', id: `tu_${n}_${i}`, name: t.name, input: t.input ?? {} }));
+    const turn: LlmTurn = { content, stopReason: s.tools?.length ? 'tool_use' : 'end_turn' };
+    return this.usage ? { ...turn, usage: this.usage } : turn;
+  }
+
+  async complete(req: LlmRequest): Promise<string> {
+    this.calls.push(req);
+    const s = await this.next({ tier: req.tier, system: req.system, messages: req.messages }, this.calls.length + this.chats.length);
+    return s.text ?? '';
   }
 }

@@ -1,5 +1,5 @@
 import { errMsg, log } from './log.js';
-import type { LlmClient, LlmRequest, LlmResult } from './llm.js';
+import type { LlmChatRequest, LlmClient, LlmRequest, LlmResult, LlmTurn } from './llm.js';
 
 /** Is this error the gateway being away (connection, timeout, 5xx, 429) rather than a bad request or a refusal? */
 export function isOutage(e: unknown): boolean {
@@ -32,11 +32,13 @@ export class GatewayWatch implements LlmClient {
   private readonly thresholdMs: number;
   private readonly now: () => number;
   readonly completeDetailed?: (req: LlmRequest) => Promise<LlmResult>;
+  readonly chat?: (req: LlmChatRequest) => Promise<LlmTurn>;
 
   constructor(private readonly inner: LlmClient, private readonly o: GatewayWatchOptions) {
     this.thresholdMs = o.thresholdMs ?? 60_000;
     this.now = o.now ?? Date.now;
     if (inner.completeDetailed) this.completeDetailed = (req) => this.watch(() => inner.completeDetailed!(req));
+    if (inner.chat) this.chat = (req) => this.watch(() => inner.chat!(req));
   }
 
   get enabled(): boolean {
