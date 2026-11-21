@@ -190,6 +190,7 @@ const cabinet = buildCabinet({
 sales.cabinet = cabinet.docs;
 backoffice.cabinet = cabinet.docs;
 support.cabinet = cabinet.docs;
+production.cabinet = cabinet.docs;
 // The first payment of a КП starts the project (reserved by the approved КП) and asks the referral payout; `/paid` and later the on-chain check land here.
 support.onPaid = async (inv) => {
   cabinet.docs.onPaid(inv);

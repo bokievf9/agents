@@ -38,8 +38,16 @@ export type ChatChannel = 'web' | 'telegram' | 'cabinet';
 export type ChatFrom = 'client' | 'hq' | 'owner';
 interface Message { id: string; at: number; from: ChatFrom; channel: ChatChannel; text: string; attachments: unknown[] }
 
-/** `thread`: answer in the client's project or support thread (a message he wrote there); without it the reply goes to the lead thread as before. */
-const replyBody = z.object({ text: z.string().trim().min(1).max(2000), thread: z.string().regex(/^(support|project-\d{1,9})$/).optional() }).strict();
+/**
+ * `thread`: the cabinet thread the answer goes to (`lead` = the request thread, `support`, `project-<id>`). `replyTo`: the id of the message the owner answers
+ * (`cab_12`, `ct_7`, ...). Without `thread` the thread is taken from `replyTo`, else from the client's last message; only when a client with several threads gives
+ * nothing to go by is it `422 thread_required`.
+ */
+const replyBody = z.object({
+  text: z.string().trim().min(1).max(2000),
+  thread: z.string().regex(/^(lead|support|project-\d{1,9})$/).optional(),
+  replyTo: z.string().regex(/^[a-z]{1,4}_\d{1,12}(_[qa])?$/).optional(),
+}).strict();
 const iso = (ms: number) => new Date(ms).toISOString();
 const oneLine = (s: string, n = 120) => {
   const one = s.replace(/\s+/g, ' ').trim();
@@ -296,6 +304,41 @@ export function createChats(d: ChatsDeps) {
     return ok({ thread: threadView(t), messages: t.messages.map((m) => ({ id: m.id, at: iso(m.at), from: m.from, channel: m.channel, text: m.text, attachments: m.attachments })) });
   }
 
+  /** The cabinet thread a message id belongs to: `lead` (a request-thread message), a `cab_tmsgs` thread name, or null when it is not a cabinet message. */
+  function threadOfMessage(mid: string): string | null {
+    const m = /^(cab|ct)_(\d+)$/.exec(mid);
+    if (!m) return null;
+    if (m[1] === 'cab') return 'lead';
+    const r = db.prepare('SELECT thread FROM cab_tmsgs WHERE id = ?').get(Number(m[2])) as { thread: string } | undefined;
+    return r && !r.thread.startsWith('agent-') ? r.thread : null;
+  }
+
+  /** The cabinet threads the client has: the request thread (when a lead is linked) and every project or support thread with messages. */
+  function threadsOf(t: Thread, hasCabinet: boolean): string[] {
+    const set = new Set<string>();
+    if (hasCabinet) set.add('lead');
+    for (const m of t.messages) {
+      const th = threadOfMessage(m.id);
+      if (th) set.add(th);
+    }
+    return [...set];
+  }
+
+  /** `lead`, a thread name, `ambiguous` (several threads and nothing to go by) or `undefined` (the old routing: one thread or none). */
+  function resolveThread(t: Thread, thread: string | undefined, replyTo: string | undefined, hasCabinet: boolean): string | undefined {
+    if (thread !== undefined) return t.clientId === null && thread !== 'lead' ? undefined : thread;
+    const all = threadsOf(t, hasCabinet);
+    if (replyTo !== undefined) {
+      const th = threadOfMessage(replyTo);
+      if (th) return th;
+    }
+    if (all.length <= 1) return all[0] !== undefined && all[0] !== 'lead' && t.clientId !== null ? all[0] : undefined;
+    // several threads: the one the client wrote in last (a message that came by Telegram or the site chat is the request thread's: the old routing)
+    const last = [...t.messages].reverse().find((m) => m.from === 'client');
+    if (!last) return 'ambiguous';
+    return threadOfMessage(last.id) ?? 'lead';
+  }
+
   async function reply(id: string, body: unknown): Promise<AdminReply> {
     const t = find(id);
     if (!t) return fail(404, 'not_found');
@@ -307,11 +350,15 @@ export function createChats(d: ChatsDeps) {
     const chatId = t.chatIds[0] ?? (typeof meta?.chatId === 'number' ? meta.chatId : undefined);
     const sessionId = t.sessionIds[0] ?? (typeof meta?.sessionId === 'string' ? meta.sessionId : undefined);
     const hasCabinet = t.clientId !== null && lead !== undefined;
+    // the cabinet thread of the answer: asked for, else the one of the message answered, else the one the client wrote in last (`lead` = the request thread, `undefined` = the old routing)
+    const asked = resolveThread(t, parsed.data.thread, parsed.data.replyTo, hasCabinet);
+    if (asked === 'ambiguous') return fail(422, 'thread_required', { threads: threadsOf(t, hasCabinet) });
+    const target = asked === 'lead' ? undefined : asked;
     // the client's last channel first (where he wrote last), then the others that have an address
     const lastIn = [...t.messages].reverse().find((m) => m.from === 'client')?.channel;
     const order = [...new Set<ChatChannel>([...(lastIn ? [lastIn] : []), 'telegram', 'web', 'cabinet'])];
     let via: ChatChannel | 'none' = 'none';
-    for (const ch of parsed.data.thread === undefined ? order : []) {
+    for (const ch of target === undefined ? order : []) {
       try {
         if (ch === 'telegram' && chatId !== undefined && d.client) {
           await d.client.send(chatId, text);
@@ -325,10 +372,10 @@ export function createChats(d: ChatsDeps) {
     }
     // the cabinet thread keeps every reply to a cabinet client (his own channel); without a cabinet the reply is kept here
     let stored: Message;
-    if (parsed.data.thread !== undefined && t.clientId !== null) {
+    if (target !== undefined && t.clientId !== null) {
       // an answer in the thread the client wrote in (project or support): his own channel, so the cabinet is where it lands
       const at = now();
-      const id = addThreadMessage(db, at, { clientId: t.clientId, thread: parsed.data.thread, from: 'manager', text, by: 'owner' });
+      const id = addThreadMessage(db, at, { clientId: t.clientId, thread: target, from: 'manager', text, by: 'owner' });
       via = 'cabinet';
       stored = { id: `ct_${id}`, at, from: 'owner', channel: 'cabinet', text, attachments: [] };
     } else if (hasCabinet) {

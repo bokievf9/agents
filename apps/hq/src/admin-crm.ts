@@ -1,4 +1,4 @@
-import type { Db } from '@fir/core';
+import { errMsg, log, type Db } from '@fir/core';
 import { ProspectStore, STATUSES as PROSPECT_STATUSES, TRANSITIONS as PROSPECT_TRANSITIONS, type Status as ProspectStatus } from '@fir/worker-prospector';
 import { CsStore } from '@fir/worker-customer-support';
 import { parseEnrichment } from '@fir/worker-lead-intake';
@@ -468,6 +468,15 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     return one<{ n: number }>('SELECT COUNT(*) n FROM li_leads WHERE client_id = ?', c.id)?.n ?? 0;
   }
 
+  /** Papers the owner sent by hand to a lead before he had an account (the Telegram bot, the old chain) join the account when it is linked. */
+  function attachLegacyDocs(clientId: number): void {
+    try {
+      hooks.cabinet?.docs.attachLegacy(clientId);
+    } catch (e) {
+      log('warn', 'legacy documents not attached', { err: errMsg(e) });
+    }
+  }
+
   function clientCreate(body: unknown): CrmReply {
     const parsed = clientPost.safeParse(body ?? {});
     if (!parsed.success) return fail(400, 'invalid');
@@ -481,6 +490,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     ).run(d.email, d.name, d.telegram, d.locale, d.supabaseId, d.marketingConsent ? 1 : 0, t, t);
     const c = one<CabRow>('SELECT * FROM cab_clients WHERE email = ?', d.email)!;
     const linked = linkLeads(c);
+    attachLegacyDocs(c.id);
     if (!existed) hooks.notifyOwner?.(`Новый аккаунт в кабинете: ${c.name || c.email}, лидов привязано ${linked}`);
     return ok({ client: { id: c.id, email: c.email, name: c.name, telegram: c.telegram, locale: c.locale, createdAt: iso(c.created_at) }, linkedLeads: linked });
   }
@@ -495,6 +505,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     const t = now();
     db.prepare('UPDATE cab_clients SET last_seen_at = ? WHERE id = ?').run(t, c.id);
     linkLeads(c);
+    attachLegacyDocs(c.id);
     const handle = handleKey(c.telegram);
     const lead = has('li_leads') ? all<{ id: number; name: string }>('SELECT id, name FROM li_leads WHERE client_id = ?', c.id) : [];
     const leadIds = new Set(lead.map((l) => l.id));

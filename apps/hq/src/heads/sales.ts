@@ -680,6 +680,9 @@ export class SalesHead implements ApprovalEditor {
     const row = this.d.queue.get(approvalId);
     if (row?.kind === KIND_PACK && (row.status === 'pending' || row.status === 'editing')) {
       for (const m of packMessages(row.payload)) await this.d.messenger.send(this.d.ownerId, m);
+      // a lead without a cabinet gets the sign-up link (with his email) under the papers the owner sends by hand
+      const invite = this.cabinet?.inviteLine(Number(row.payload.leadId) || null, row.payload.lang === 'en' ? 'en' : 'ru') ?? '';
+      if (invite) await this.d.messenger.send(this.d.ownerId, invite);
       return 'Документы ниже';
     }
     if (!row || !(PROSPECT_KINDS as readonly string[]).includes(row.kind) || (row.status !== 'pending' && row.status !== 'editing') || typeof row.payload.text !== 'string') return 'Уже обработано';

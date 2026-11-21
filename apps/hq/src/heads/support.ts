@@ -135,7 +135,9 @@ export class SupportHead {
         const sent = await this.cabinet.onInvoiceApproved(x.invoiceId, x.text).catch((e) => { log('warn', 'cabinet invoice delivery failed', { invoice: x.invoiceId, err: errMsg(e) }); return false; });
         if (sent) return void (await toOwner(`Счёт утверждён и отправлен клиенту ${x.name} в кабинет и на почту (кнопка оплаты там). Отправлять самому не нужно.`));
       }
-      await toOwner(`${x.kind === 'billing_invoice' ? 'Счёт утверждён' : 'Напоминание утверждено'}, отправьте клиенту ${x.name}:\n\n${x.text}`);
+      const leadId = x.kind === 'billing_invoice' ? (d.hq.db.prepare('SELECT lead_id FROM bl_invoices WHERE id = ?').get(x.invoiceId) as { lead_id: number | null } | undefined)?.lead_id ?? null : null;
+      const invite = this.cabinet?.inviteLine(leadId) ?? '';
+      await toOwner(`${x.kind === 'billing_invoice' ? 'Счёт утверждён' : 'Напоминание утверждено'}, отправьте клиенту ${x.name}:\n\n${x.text}${invite ? `\n\n${invite}` : ''}`);
     };
     for (const [k, spec] of Object.entries(this.billing.kindSpecs(base, billingDelivery))) d.hq.registerKind(k, spec);
     for (const [k, spec] of Object.entries(this.onboarding.kindSpecs((x) => toOwner(`Инструкция для ${x.name} утверждена, отправьте клиенту:\n\n${x.text}`)))) d.hq.registerKind(k, spec);

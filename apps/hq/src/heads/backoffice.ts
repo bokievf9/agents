@@ -90,7 +90,9 @@ export class BackofficeHead {
             await d.messenger.send(d.ownerId, `${DOC_RU[doc.type]}, ${doc.client}, версия ${doc.version}: утверждён и отправлен клиенту в кабинет и на почту. Отправлять самому не нужно.`);
             return;
           }
-          await d.messenger.send(d.ownerId, `${DOC_RU[doc.type]}, ${doc.client}, версия ${doc.version}: утверждён. Отправьте клиенту сами:\n\n${doc.text}`);
+          // a lead with no cabinet yet: the text carries where to sign up (the same email), so the papers find him there
+          const invite = this.cabinet?.inviteLine(Number(d.hq.task(taskId ?? 0)?.meta.leadId) || null) ?? '';
+          await d.messenger.send(d.ownerId, `${DOC_RU[doc.type]}, ${doc.client}, версия ${doc.version}: утверждён. Отправьте клиенту сами:\n\n${doc.text}${invite ? `\n\n${invite}` : ''}`);
           await this.sendPdf(doc);
         },
       }),

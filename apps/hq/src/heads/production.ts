@@ -6,6 +6,7 @@ import {
   fmtDate, kindSpecs as pmKinds, MILESTONE_KINDS, PmStore, ProjectManagerWorker, stageDueAt, stageTitleRu, type Milestone, type MilestoneKind, type Project,
 } from '@fir/worker-project-manager';
 import { branchRef, REVIEW_LABEL, ReviewerWorker, reviewRequest } from '@fir/worker-reviewer';
+import type { CabDocs } from '../cab-docs.js';
 import type { Reporter } from '../reporter.js';
 import { toolsFor, type AppTools } from '../tools.js';
 
@@ -79,6 +80,8 @@ export class ProductionHead {
   readonly pm: Worker;
   readonly reviewer = new ReviewerWorker();
   readonly deployer = new DeployerWorker();
+  /** Set by the app: what the client of a cabinet project sees of the stages (a line in the project thread, an email, the act). Without it nothing goes to the client. */
+  cabinet: CabDocs | null = null;
 
   constructor(private readonly d: ProductionDeps) {
     this.pm = d.pm ?? new ProjectManagerWorker();
@@ -206,13 +209,19 @@ export class ProductionHead {
     const all = store.stageMilestones(p.id);
     const next = all.find((x) => x.stageNo === stageNo + 1);
     const lines = [`Проект #${p.id} «${p.client}»: этап ${stageNo} «${stageTitle(m)}» принят${by === 'client' ? ' клиентом' : ''}.`];
+    const cabinetClient = this.cabinet?.clientOfLead(p.leadId) != null;
     if (next) {
       lines.push(this.proposeStageInvoice(p, next, all));
       if (next.stageNo === all.length && all.length > 1) this.holdHandover(p, store.stageMilestone(p.id, next.stageNo!)!.invoiceNumber);
     } else {
       store.setStatus(p.id, 'done');
-      lines.push(`Проект закрыт. Запишите урок: /lesson ${p.client}: <что узнали>. Акт сдачи: /doc акт ${p.client}.`);
+      lines.push(`Проект закрыт. Запишите урок: /lesson ${p.client}: <что узнали>. ${cabinetClient ? 'Акт сдачи уже ушёл клиенту в кабинет.' : `Акт сдачи: /doc акт ${p.client}.`}`);
     }
+    // the client sees the step in his cabinet (the project thread, an email, the act of the last stage)
+    this.cabinet?.onStageAccepted(
+      p, { stageNo, title: stageTitle(m), titleEn: m.titleEn }, next ? { stageNo: next.stageNo!, title: stageTitle(next), titleEn: next.titleEn } : null,
+      all.filter((x) => x.stageNo !== null).map((x) => ({ stageNo: x.stageNo!, title: stageTitle(x), amountUsd: x.amountUsd })),
+    );
     return { status: 'accepted', text: lines.join(' ') };
   }
 
@@ -447,6 +456,7 @@ export class ProductionHead {
     const p = store.project(projectId)!;
     if (m.stageNo !== null) {
       // payment by stages: finished work waits for the client's acceptance (cabinet) or the owner's /mdone; only that proposes the next invoice
+      this.cabinet?.onStageReady(p, { stageNo: m.stageNo, title: stageTitle(m), titleEn: m.titleEn });
       return `Проект #${p.id} «${p.client}»: ${m.title} готов, ждёт приёмки: клиент принимает в кабинете или вы командой /mdone ${p.id} ${m.stageNo}.`;
     }
     const lines = [`Проект #${p.id} «${p.client}»: этап «${m.title}» закрыт.`];

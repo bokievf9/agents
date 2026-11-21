@@ -167,6 +167,7 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
     sales.cabinet = cabinet.docs;
     backoffice.cabinet = cabinet.docs;
     support.cabinet = cabinet.docs;
+    production.cabinet = cabinet.docs;
     support.onPaid = async (inv) => {
       cabinet.docs.onPaid(inv);
       return [...production.onInvoicePaid(inv), ...(await sales.onInvoicePaid(inv))];

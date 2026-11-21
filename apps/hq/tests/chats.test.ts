@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies of the API under test */
 import { describe, expect, it } from 'vitest';
-import { addCabMessage, ensureCabinetTables, registerCabinetLead } from '../src/cabinet.js';
+import { addCabMessage, addThreadMessage, ensureCabinetTables, registerCabinetLead } from '../src/cabinet.js';
 import { contactKey } from '../src/chats.js';
 import { ChatStore } from '../src/client/store.js';
 import { WebSessionStore } from '../src/client/web-store.js';
@@ -238,5 +238,87 @@ describe('POST /admin/chats/:id/reply: the owner writes himself, no approval', (
     expect((await p.call('POST', '/admin/chats/zzz/reply', { text: 'x' })).status).toBe(404);
     for (const bad of [{}, { text: '  ' }, { text: 'x'.repeat(2001) }, { text: 'x', extra: 1 }]) expect((await p.call('POST', `/admin/chats/l${lead.id}/reply`, bad)).status, JSON.stringify(bad)).toBe(400);
     expect((await p.call('GET', `/admin/chats/l${lead.id}`)).json.messages).toEqual([]);
+  });
+});
+
+describe('POST /admin/chats/:id/reply: which cabinet thread the answer lands in', () => {
+  const lastIn = (p: ReviewWorld, table: 'cab_messages' | 'cab_tmsgs') => p.w.db.prepare(`SELECT * FROM ${table} WHERE "from" = 'manager' AND author = 'owner' ORDER BY id DESC LIMIT 1`).get() as any;
+  /** A client with a request thread and a support thread, the client wrote in `lastWrote` last. */
+  function twoThreads(p: ReviewWorld, lastWrote: 'lead' | 'support') {
+    const a = cabinetLead(p, 'anna@example.com', 'Анна');
+    p.w.clock.t += 1000;
+    const leadMsg = addCabMessage(p.w.db, p.t(), { clientId: a.clientId, leadId: a.leadId, from: 'client', text: 'Вопрос по заявке' });
+    p.w.clock.t += 1000;
+    const supMsg = addThreadMessage(p.w.db, p.t(), { clientId: a.clientId, thread: 'support', from: 'client', text: 'Не открывается кабинет' });
+    if (lastWrote === 'lead') {
+      p.w.clock.t += 1000;
+      addCabMessage(p.w.db, p.t(), { clientId: a.clientId, leadId: a.leadId, from: 'client', text: 'И ещё про заявку' });
+    }
+    p.w.clock.t += 1000;
+    return { ...a, leadMsg, supMsg };
+  }
+
+  it('without `thread` it goes where the client wrote last (support here), not into the request thread', async () => {
+    const p = reviewWorld();
+    const a = twoThreads(p, 'support');
+    const r = await p.call('POST', `/admin/chats/c${a.clientId}/reply`, { text: 'Починили, попробуйте ещё раз.' });
+    expect(r.json).toMatchObject({ ok: true, sent: true, via: 'cabinet', message: { id: expect.stringMatching(/^ct_/), from: 'owner' } });
+    expect(lastIn(p, 'cab_tmsgs')).toMatchObject({ thread: 'support', text: 'Починили, попробуйте ещё раз.', client_id: a.clientId });
+    expect(lastIn(p, 'cab_messages')).toBeUndefined();
+  });
+
+  it('`replyTo` wins over the last message: an answer to the request message goes to the request thread, an answer to the support one to support', async () => {
+    const p = reviewWorld();
+    const a = twoThreads(p, 'support');
+    await p.call('POST', `/admin/chats/c${a.clientId}/reply`, { text: 'По заявке: да.', replyTo: `cab_${a.leadMsg}` });
+    expect(lastIn(p, 'cab_messages')).toMatchObject({ lead_id: a.leadId, text: 'По заявке: да.' });
+    expect(lastIn(p, 'cab_tmsgs')).toBeUndefined();
+    await p.call('POST', `/admin/chats/c${a.clientId}/reply`, { text: 'По кабинету: ок.', replyTo: `ct_${a.supMsg}` });
+    expect(lastIn(p, 'cab_tmsgs')).toMatchObject({ thread: 'support', text: 'По кабинету: ок.' });
+  });
+
+  it('an explicit `thread` is used as given (project-<id>, support, lead); the last message is the lead thread when the client wrote there last', async () => {
+    const p = reviewWorld();
+    const a = twoThreads(p, 'lead');
+    await p.call('POST', `/admin/chats/c${a.clientId}/reply`, { text: 'Без thread: в заявку.' });
+    expect(lastIn(p, 'cab_messages')).toMatchObject({ text: 'Без thread: в заявку.' });
+    await p.call('POST', `/admin/chats/c${a.clientId}/reply`, { text: 'В проект.', thread: 'project-5' });
+    expect(lastIn(p, 'cab_tmsgs')).toMatchObject({ thread: 'project-5', text: 'В проект.' });
+    await p.call('POST', `/admin/chats/c${a.clientId}/reply`, { text: 'В поддержку.', thread: 'support' });
+    expect(lastIn(p, 'cab_tmsgs')).toMatchObject({ thread: 'support', text: 'В поддержку.' });
+    await p.call('POST', `/admin/chats/c${a.clientId}/reply`, { text: 'Явно в заявку.', thread: 'lead' });
+    expect(lastIn(p, 'cab_messages')).toMatchObject({ text: 'Явно в заявку.' });
+    for (const bad of [{ thread: 'agent-1' }, { thread: 'project-x' }, { replyTo: 'nope' }]) expect((await p.call('POST', `/admin/chats/c${a.clientId}/reply`, { text: 'x', ...bad })).status, JSON.stringify(bad)).toBe(400);
+  });
+
+  it('several threads and nothing to go by (the client wrote nowhere): 422 thread_required with the choices, nothing stored', async () => {
+    const p = reviewWorld();
+    const a = cabinetLead(p, 'anna@example.com', 'Анна');
+    p.w.db.prepare("UPDATE li_leads SET task = '' WHERE id = ?").run(a.leadId); // the request has no text of its own: the client wrote nothing anywhere
+    p.w.clock.t += 1000;
+    addCabMessage(p.w.db, p.t(), { clientId: a.clientId, leadId: a.leadId, from: 'manager', text: 'Здравствуйте', by: 'hq' });
+    addThreadMessage(p.w.db, p.t(), { clientId: a.clientId, thread: 'support', from: 'manager', text: 'Чем помочь?' });
+    const r = await p.call('POST', `/admin/chats/c${a.clientId}/reply`, { text: 'Куда?' });
+    expect(r.status).toBe(422);
+    expect(r.json).toMatchObject({ ok: false, error: 'thread_required', threads: expect.arrayContaining(['lead', 'support']) });
+    expect(p.w.db.prepare("SELECT COUNT(*) n FROM cab_messages WHERE author = 'owner'").get()).toEqual({ n: 0 });
+    expect(p.w.db.prepare("SELECT COUNT(*) n FROM cab_tmsgs WHERE author = 'owner'").get()).toEqual({ n: 0 });
+    // with `thread` it works
+    expect((await p.call('POST', `/admin/chats/c${a.clientId}/reply`, { text: 'Сюда.', thread: 'support' })).status).toBe(200);
+  });
+
+  it('a client with only the request thread keeps the old behaviour; one with only a support thread (no lead) gets the answer there instead of a note nobody sees', async () => {
+    const p = reviewWorld();
+    const a = cabinetLead(p, 'anna@example.com', 'Анна');
+    expect((await p.call('POST', `/admin/chats/c${a.clientId}/reply`, { text: 'Привет' })).status).toBe(200);
+    expect(lastIn(p, 'cab_messages')).toMatchObject({ text: 'Привет' });
+    // a client with no lead at all: only a support message
+    p.w.db.prepare("INSERT INTO cab_clients (email, name, created_at, updated_at) VALUES ('solo@example.com', 'Соло', 1, 1)").run();
+    const solo = (p.w.db.prepare("SELECT id FROM cab_clients WHERE email = 'solo@example.com'").get() as { id: number }).id;
+    addThreadMessage(p.w.db, p.t(), { clientId: solo, thread: 'support', from: 'client', text: 'Помогите' });
+    const r = await p.call('POST', `/admin/chats/c${solo}/reply`, { text: 'Помогаем.' });
+    expect(r.json).toMatchObject({ ok: true, sent: true, via: 'cabinet' });
+    expect(lastIn(p, 'cab_tmsgs')).toMatchObject({ client_id: solo, thread: 'support', text: 'Помогаем.' });
+    expect(p.w.db.prepare('SELECT COUNT(*) n FROM ch_messages').get()).toEqual({ n: 0 });
   });
 });

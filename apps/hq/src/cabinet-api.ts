@@ -58,6 +58,7 @@ export function buildCabinet(o: CabinetDeps): CabinetApi {
     journal: (agent, action, detail) => o.hq.log(agent, action, 'agent', detail),
   });
   ref.pg = playground;
+  docs.attachPlayground(playground);
   const api = createCabinetApi({ docs, threads, playground });
   return { ...api, bind: (h) => void Object.assign(hooks, h) };
 }

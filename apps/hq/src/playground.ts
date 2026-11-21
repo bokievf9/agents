@@ -369,7 +369,7 @@ export class Playground {
     return {
       id: a.id, publicId: a.public_id, name: a.name, company: a.company, niche: a.niche, goals: json<string[]>(a.goals, []), tone: a.tone, languages: json<string[]>(a.languages, ['ru']),
       persona: a.persona, tools: json<string[]>(a.tools, []), channels: { web: true, telegram: { connected: Boolean(ch.telegram) }, siteWidget: ch.siteWidget ?? null },
-      limits: { msgsPerDay: limits.msgsPerDay ?? DEFAULT_LIMITS[a.state === 'live' ? 'live' : 'draft'] }, state: a.state, usageToday: { messages: this.usedToday(a.id) },
+      limits: { msgsPerDay: limits.msgsPerDay ?? DEFAULT_LIMITS[a.state === 'live' ? 'live' : 'draft'] }, state: a.state, mode: a.state === 'live' ? 'live' : 'demo', usageToday: { messages: this.usedToday(a.id) },
       leadId: a.lead_id, projectId: a.project_id, chatPath: `/agent/${a.public_id}/chat`, createdAt: iso(a.created_at), updatedAt: iso(a.updated_at), ...extra,
     };
   }
@@ -417,6 +417,45 @@ export class Playground {
     );
     this.d.journal?.('playground', 'agent_created', String(id));
     return okR({ item: this.view(this.agent(id)!), token });
+  }
+
+  /**
+   * The sale includes the playground (the client accepted a КП whose build lists it): his agent is made at once in DEMO mode (`state: 'draft'`, shown as
+   * `mode: 'demo'`: the persona of his niche, the demo's day cap, no public route) so the «Ваш агент» tab appears and he can try it; the token is not shown
+   * (he rotates it when he needs it). Once per lead. Returns the agent id, or null when it could not be made (no persona data, the client's limit).
+   */
+  autoCreateForLead(clientId: number, leadId: number, en = false): { id: number; created: boolean } | null {
+    const have = this.db.prepare('SELECT id FROM pg_agents WHERE client_id = ? AND lead_id = ? ORDER BY id LIMIT 1').get(clientId, leadId) as { id: number } | undefined;
+    if (have) return { id: have.id, created: false };
+    const r = this.create(clientId, { leadId });
+    const id = Number((r.body.item as { id?: number } | undefined)?.id);
+    if (!r.body.ok || !Number.isInteger(id)) return null;
+    this.d.journal?.('playground', 'agent_auto_created', String(id));
+    addThreadMessage(this.db, this.d.now(), {
+      clientId, thread: `agent-${id}`, from: 'agent',
+      text: en
+        ? 'Your agent is ready in demo mode. Talk to it here, add questions and answers in its knowledge, change its name and tone in the settings. It works for you alone for now: it goes live for your customers after the first stage is paid.'
+        : 'Ваш агент готов в демо-режиме. Поговорите с ним здесь, добавьте вопросы и ответы в его базу знаний, поменяйте имя и тон в настройках. Пока он работает только для вас: для ваших клиентов он включится после оплаты первого этапа.',
+    });
+    this.d.notifyOwner?.(`Клиенту ${clientId} создан демо-агент #${id} (КП принято, в сборке есть площадка).`);
+    return { id, created: true };
+  }
+
+  /** The first stage is paid: the lead's demo agents go `live` (no demo cap, the public route opens). Once per agent; a line in its thread. Returns the agent ids switched. */
+  goLiveForLead(clientId: number, leadId: number, en = false): number[] {
+    const rows = this.db.prepare("SELECT id FROM pg_agents WHERE client_id = ? AND lead_id = ? AND state = 'draft'").all(clientId, leadId) as { id: number }[];
+    for (const a of rows) {
+      this.db.prepare("UPDATE pg_agents SET state = 'live', updated_at = ? WHERE id = ? AND state = 'draft'").run(this.d.now(), a.id);
+      this.d.journal?.('playground', 'agent_live', String(a.id));
+      addThreadMessage(this.db, this.d.now(), {
+        clientId, thread: `agent-${a.id}`, from: 'agent',
+        text: en
+          ? 'The first stage is paid: your agent is live. The demo cap is gone, and it can answer your customers from your website once the widget is connected.'
+          : 'Первый этап оплачен: ваш агент включён в рабочий режим. Лимит демо снят, ваши клиенты смогут общаться с ним, когда подключим виджет на сайте.',
+      });
+      this.d.notifyOwner?.(`Агент #${a.id} клиента ${clientId} переведён в рабочий режим (оплачен этап 1).`);
+    }
+    return rows.map((r) => r.id);
   }
 
   list(clientId: number): PgReply {

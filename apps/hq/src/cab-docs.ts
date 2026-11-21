@@ -3,8 +3,11 @@ import { inflateSync } from 'node:zlib';
 import { errMsg, log, markdownToPdfDoc, zonedParts, type Db, type Tools } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import type { BillingWorker } from '@fir/worker-billing';
+import { fillTemplate, loadTemplate } from '@fir/worker-documents';
 import { z } from 'zod';
-import { ensureCabinetTables, postFromFirTech } from './cabinet.js';
+import { addThreadMessage, ensureCabinetTables, postFromFirTech } from './cabinet.js';
+import type { Playground } from './playground.js';
+import { parseBuilderPlan, wantsPlayground } from './builder-plan.js';
 
 /**
  * Cabinet v3 documents (2026-11-22): what the client sees of the papers and what he does with them. The owner's approval of a quote, a contract or an
@@ -238,6 +241,12 @@ const failR = (status: number, error: string, extra: Record<string, unknown> = {
 
 export class CabDocs {
   private readonly pending = new Set<Promise<unknown>>();
+  /** The playground of agents (set by `buildCabinet`): a КП with the playground in it makes the client's demo agent, the first payment turns it live. */
+  private playground: Playground | null = null;
+
+  attachPlayground(pg: Playground): void {
+    this.playground = pg;
+  }
 
   constructor(private readonly d: CabDocsDeps) {
     ensureDocTables(d.hq.db);
@@ -346,23 +355,25 @@ export class CabDocs {
   }
 
   // ---- delivery: the owner's approval is the sending ----
+  /** The email half of a notice (a link to the cabinet, never a PDF); returns what happened for the journal: `email`, `email_failed:<why>` or `journal` (no Resend). */
+  private async mail(c: ClientRow, what: { ru: string; en: string; ruMail: string; enMail: string }): Promise<string> {
+    const en = c.locale === 'en';
+    const tools = this.d.tools();
+    if (!tools.can('email.send')) return 'journal';
+    const hello = en ? `Hello${c.name ? `, ${c.name}` : ''}!` : `Здравствуйте${c.name ? `, ${c.name}` : ''}!`;
+    const sent = await tools.email.send({
+      to: c.email, subject: en ? what.enMail : what.ruMail,
+      text: `${hello}\n\n${en ? what.en : what.ru}\n\n${en ? 'Open your cabinet' : 'Откройте личный кабинет'}: ${this.cabinetUrl(c)}\n\nFir Tech\nhello@firtech.pro`,
+    });
+    return sent.ok ? 'email' : `email_failed:${sent.error}`;
+  }
+
   /** The email (a link to the cabinet, never the PDF) and the line in the thread; the outcome goes to the journal without any text. */
   private async notifyClient(row: DocRow, what: { ru: string; en: string; ruMail: string; enMail: string }): Promise<void> {
     const c = this.client(row.client_id);
     if (!c) return;
-    const en = c.locale === 'en';
-    const url = this.cabinetUrl(c);
-    postFromFirTech(this.db, this.d.now(), c.id, row.lead_id, en ? what.en : what.ru);
-    const tools = this.d.tools();
-    let how = 'journal';
-    if (tools.can('email.send')) {
-      const hello = en ? `Hello${c.name ? `, ${c.name}` : ''}!` : `Здравствуйте${c.name ? `, ${c.name}` : ''}!`;
-      const sent = await tools.email.send({
-        to: c.email, subject: en ? what.enMail : what.ruMail,
-        text: `${hello}\n\n${en ? what.en : what.ru}\n\n${en ? 'Open your cabinet' : 'Откройте личный кабинет'}: ${url}\n\nFir Tech\nhello@firtech.pro`,
-      });
-      how = sent.ok ? 'email' : `email_failed:${sent.error}`;
-    }
+    postFromFirTech(this.db, this.d.now(), c.id, row.lead_id, c.locale === 'en' ? what.en : what.ru);
+    const how = await this.mail(c, what);
     this.d.hq.log('documents', 'doc_delivered', 'document', String(row.id), `${row.kind} ${how}`);
   }
 
@@ -405,6 +416,9 @@ export class CabDocs {
     if (clientId === null) return false;
     const exists = this.db.prepare("SELECT id FROM cab_documents WHERE src = 'bo' AND src_id = ?").get(doc.id) as { id: number } | undefined;
     if (exists) return true;
+    // the act of a closed project is made by HQ itself on the last acceptance: a manual one for the same project is not made twice
+    const projectId = Number(task?.meta.projectId) || null;
+    if (doc.type === 'act' && projectId !== null && this.db.prepare("SELECT 1 FROM cab_documents WHERE kind = 'act' AND project_id = ?").get(projectId)) return true;
     const isContract = doc.type === 'contract';
     const number = /№\s*(\S+)/.exec(doc.text)?.[1] ?? `${doc.id}`;
     const row = this.insert({
@@ -453,6 +467,176 @@ export class CabDocs {
     const en = c?.locale === 'en';
     postFromFirTech(this.db, this.d.now(), doc.client_id, doc.lead_id,
       en ? `Payment received for invoice ${inv.number}${inv.stageNo ? ` (stage ${inv.stageNo})` : ''}. Thank you!` : `Оплата по счёту ${inv.number}${inv.stageNo ? ` (этап ${inv.stageNo})` : ''} получена. Спасибо!`);
+    // the first payment of the sale makes the client's playground agent live (an invoice outside the stage plan counts as the first one)
+    if ((inv.stageNo === null || inv.stageNo === 1) && doc.lead_id !== null) {
+      try {
+        this.playground?.goLiveForLead(doc.client_id, doc.lead_id, en);
+      } catch (e) {
+        log('warn', 'agent go live failed', { err: errMsg(e) });
+      }
+    }
+  }
+
+  /** The accepted КП lists the playground (or is an agent without a site): the client's demo agent is made now, so the «Ваш агент» tab is there at once. */
+  private autoAgent(c: ClientRow, quote: DocRow): void {
+    try {
+      if (!this.playground || quote.lead_id === null || !hasTable(this.db, 'li_leads')) return;
+      const lead = this.db.prepare('SELECT estimate, task FROM li_leads WHERE id = ?').get(quote.lead_id) as { estimate: string | null; task: string } | undefined;
+      if (!lead) return;
+      const direction = quote.pack_id !== null && hasTable(this.db, 'ps_documents')
+        ? (this.db.prepare('SELECT direction FROM ps_documents WHERE pack_id = ? ORDER BY id LIMIT 1').get(quote.pack_id) as { direction: string } | undefined)?.direction
+        : undefined;
+      if (!wantsPlayground(parseBuilderPlan(lead.estimate ?? '', lead.task), direction)) return;
+      this.playground.autoCreateForLead(c.id, quote.lead_id, c.locale === 'en');
+    } catch (e) {
+      log('warn', 'auto agent failed', { err: errMsg(e) });
+    }
+  }
+
+  // ---- the stages of the project: the client sees every step (2026-11-22) ----
+  /** The cabinet client of a project (through its lead), or null (a project without a cabinet account: the owner tells the client himself). */
+  private projectClient(p: { leadId: number | null }): ClientRow | null {
+    const id = this.clientOfLead(p.leadId);
+    return id === null ? null : this.client(id) ?? null;
+  }
+
+  /** A line from Fir Tech in the project thread (`project-<id>`: the unread flag of the tab follows) and the email; the email runs in the background (`idle()`). */
+  private tellProject(c: ClientRow, projectId: number, what: { ru: string; en: string; ruMail: string; enMail: string }, journal: string): void {
+    try {
+      addThreadMessage(this.db, this.d.now(), { clientId: c.id, thread: `project-${projectId}`, from: 'manager', text: c.locale === 'en' ? what.en : what.ru });
+    } catch (e) {
+      log('warn', 'project thread line failed', { err: errMsg(e) });
+    }
+    this.track(this.mail(c, what).then((how) => this.d.hq.log('documents', journal, 'project', String(projectId), how)));
+  }
+
+  /** A stage is finished and waits for the client: a line in the project thread and an email. */
+  onStageReady(p: { id: number; leadId: number | null }, m: { stageNo: number; title: string; titleEn?: string | null }): void {
+    const c = this.projectClient(p);
+    if (!c) return;
+    const en = m.titleEn || m.title;
+    this.tellProject(c, p.id, {
+      ru: `Этап ${m.stageNo} «${m.title}» готов к приёмке: откройте вкладку «Проекты» и нажмите «Принять этап».`,
+      en: `Stage ${m.stageNo} «${en}» is ready for your acceptance: open the Projects tab and press «Accept stage».`,
+      ruMail: `Этап ${m.stageNo} готов к приёмке`, enMail: `Stage ${m.stageNo} is ready for acceptance`,
+    }, 'stage_ready_notified');
+  }
+
+  /**
+   * A stage was accepted (by the client or the owner): a line with the next stage, or, for the last one, the project close with the act. The invoice of the next
+   * stage is only PROPOSED here: it reaches the client when the owner approves it (`onInvoiceApproved`: its own line and email), so the line promises it, not claims it.
+   */
+  onStageAccepted(p: { id: number; leadId: number | null; client: string; what: string; packId: number | null }, m: { stageNo: number; title: string; titleEn?: string | null },
+    next: { stageNo: number; title: string; titleEn?: string | null } | null, stages: { stageNo: number; title: string; amountUsd: number | null }[]): void {
+    const c = this.projectClient(p);
+    if (!c) return;
+    const t = (x: { title: string; titleEn?: string | null }) => x.titleEn || x.title;
+    if (next) {
+      this.tellProject(c, p.id, {
+        ru: `Этап ${m.stageNo} принят. Следующий этап: ${next.stageNo} «${next.title}». Счёт на него готовим, он придёт в раздел «Документы» и на почту.`,
+        en: `Stage ${m.stageNo} accepted. Next stage: ${next.stageNo} «${t(next)}». We are preparing its invoice, it will arrive in Documents and by email.`,
+        ruMail: `Этап ${m.stageNo} принят`, enMail: `Stage ${m.stageNo} accepted`,
+      }, 'stage_accepted_notified');
+      return;
+    }
+    const act = this.makeAct(c, p, stages);
+    const ruAct = act ? ' Акт сдачи-приёмки в разделе «Документы».' : '';
+    const enAct = act ? ' The completion certificate is in Documents.' : '';
+    this.tellProject(c, p.id, {
+      ru: `Этап ${m.stageNo} принят. Проект завершён, спасибо!${ruAct}`,
+      en: `Stage ${m.stageNo} accepted. The project is complete, thank you!${enAct}`,
+      ruMail: 'Проект завершён', enMail: 'Your project is complete',
+    }, 'project_closed_notified');
+  }
+
+  /** The act of the closed project (a simple completion certificate): made from the template, accepted by the client's own last acceptance, once per project; the PDF follows in the background. */
+  private makeAct(c: ClientRow, p: { id: number; leadId: number | null; client: string; what: string; packId: number | null }, stages: { stageNo: number; title: string; amountUsd: number | null }[]): DocRow | null {
+    try {
+      const have = this.db.prepare("SELECT * FROM cab_documents WHERE kind = 'act' AND project_id = ? ORDER BY id LIMIT 1").get(p.id) as DocRow | undefined;
+      if (have) return have;
+      const t = this.d.now();
+      const parts = zonedParts(t, this.d.hq.tz);
+      const two = (n: number) => String(n).padStart(2, '0');
+      const date = `${two(parts.d)}.${two(parts.mo)}.${parts.y}`;
+      const total = stages.reduce((a, x) => a + (x.amountUsd ?? 0), 0);
+      const number = `АКТ-${p.id}`;
+      const text = fillTemplate(loadTemplate('act'), {
+        client: p.client || c.name || c.email, what: p.what, date, number, price: total > 0 ? `$${total}` : '',
+        milestones: stages.map((x) => `- Этап ${x.stageNo}: ${x.title}${x.amountUsd !== null ? `, $${x.amountUsd}` : ''}`),
+      })
+        .replace(/\[заполнить: замечания или «нет»\]/, 'нет')
+        .replace(/Заказчик: ____________/, `Заказчик: принято в кабинете firtech.pro, ${date}`);
+      const row = this.insert({
+        client_id: c.id, kind: 'act', title: 'Акт сдачи-приёмки', number, lead_id: p.leadId, project_id: p.id, pack_id: p.packId, state: 'issued', src: 'auto_act', src_id: p.id, body: text,
+        amount_usd: total > 0 ? total : null,
+      });
+      this.db.prepare('UPDATE cab_documents SET accepted_at = ? WHERE id = ?').run(t, row.id);
+      this.track(this.attachPdf(this.row(row.id)!));
+      this.d.hq.log('documents', 'act_issued', 'document', String(row.id), 'auto');
+      return row;
+    } catch (e) {
+      log('warn', 'act failed', { err: errMsg(e) });
+      return null;
+    }
+  }
+
+  // ---- leads without a cabinet at first (the Telegram bot, the old chain) ----
+  /** The line for the owner to put under a document he sends by hand to a lead with no cabinet account: where to sign up, with the same email. Empty for a lead that has one. */
+  inviteLine(leadId: number | null | undefined, lang: 'ru' | 'en' = 'ru'): string {
+    if (!leadId || !hasTable(this.db, 'li_leads') || this.clientOfLead(leadId) !== null) return '';
+    const lead = this.db.prepare('SELECT contact FROM li_leads WHERE id = ?').get(leadId) as { contact: string } | undefined;
+    const email = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(lead?.contact.trim() ?? '') ? lead!.contact.trim().toLowerCase() : '';
+    const url = `${this.d.siteUrl}/${lang}/cabinet/login${email ? `?email=${encodeURIComponent(email)}` : ''}`;
+    return lang === 'en'
+      ? `Your personal cabinet (documents, invoices, project stages, chat with the manager): ${url}${email ? `\nSign up with the same email, ${email}: your papers will be there at once.` : '\nSign up with the email you gave us: your papers will be there at once.'}`
+      : `Личный кабинет (документы, счета, этапы проекта, чат с менеджером): ${url}${email ? `\nЗарегистрируйтесь с той же почтой, ${email}: документы появятся там сразу.` : '\nЗарегистрируйтесь с почтой, которую вы нам называли: документы появятся там сразу.'}`;
+  }
+
+  /**
+   * A client's leads came without a cabinet (the old chain: the papers went by hand) and the account is linked now (sign-up with the same email): the papers
+   * the owner already approved or issued are attached to the account as cabinet documents so the «Документы» tab is not empty (`issued`: the paper is
+   * already with the client, nothing to accept or sign here). Idempotent by source row; a lead whose quote went through the cabinet is left alone.
+   */
+  attachLegacy(clientId: number): number {
+    if (!hasTable(this.db, 'li_leads')) return 0;
+    let made = 0;
+    const leads = this.db.prepare('SELECT id, name FROM li_leads WHERE client_id = ?').all(clientId) as { id: number; name: string }[];
+    for (const l of leads) {
+      if (this.db.prepare("SELECT 1 FROM cab_documents WHERE lead_id = ? AND src = 'ps_quote'").get(l.id)) continue;
+      const projectId = hasTable(this.db, 'pm_projects')
+        ? (this.db.prepare('SELECT id FROM pm_projects WHERE lead_id = ? ORDER BY id DESC LIMIT 1').get(l.id) as { id: number } | undefined)?.id ?? null
+        : null;
+      const add = (r: Parameters<CabDocs['insert']>[0]): void => {
+        if (this.db.prepare('SELECT 1 FROM cab_documents WHERE src = ? AND src_id = ?').get(r.src, r.src_id)) return;
+        const row = this.insert({ ...r, client_id: clientId, lead_id: l.id, project_id: projectId });
+        this.track(this.attachPdf(this.row(row.id)!));
+        made++;
+      };
+      if (hasTable(this.db, 'ps_documents')) {
+        for (const d of this.db.prepare("SELECT id, pack_id, kind, body FROM ps_documents WHERE lead_id = ? AND status = 'approved' AND kind IN ('kp', 'estimate') ORDER BY id").all(l.id) as { id: number; pack_id: number; kind: string; body: string }[]) {
+          add({ client_id: clientId, kind: d.kind === 'kp' ? 'quote' : 'other', title: d.kind === 'kp' ? 'Коммерческое предложение' : 'Смета', number: `КП-${d.pack_id}`, pack_id: d.pack_id, state: 'issued', src: 'ps', src_id: d.id, body: d.body });
+        }
+      }
+      if (hasTable(this.db, 'bo_documents')) {
+        const mine = (this.db.prepare("SELECT id, type, client, version, text, task_id FROM bo_documents WHERE status = 'approved' AND type IN ('contract', 'act') ORDER BY id").all() as { id: number; type: string; client: string; version: number; text: string; task_id: number | null }[])
+          .filter((d) => {
+            const taskLead = d.task_id !== null ? Number(this.d.hq.task(d.task_id)?.meta.leadId) || null : null;
+            return taskLead !== null ? taskLead === l.id : d.client.trim().toLowerCase() === l.name.trim().toLowerCase();
+          });
+        for (const d of mine) {
+          add({ client_id: clientId, kind: d.type === 'contract' ? 'contract' : 'act', title: d.type === 'contract' ? 'Договор оказания услуг' : 'Акт сдачи', number: /№\s*(\S+)/.exec(d.text)?.[1] ?? `${d.id}`, state: 'issued', src: 'bo', src_id: d.id, body: d.text });
+        }
+      }
+      if (hasTable(this.db, 'bl_invoices')) {
+        for (const i of this.db.prepare("SELECT id, number, amount_usd, stage_no, project_id, pack_id, what FROM bl_invoices WHERE lead_id = ? AND status IN ('issued', 'paid') ORDER BY id").all(l.id) as { id: number; number: string; amount_usd: number; stage_no: number | null; project_id: number | null; pack_id: number | null; what: string }[]) {
+          add({
+            client_id: clientId, kind: 'invoice', title: i.stage_no ? `Счёт, этап ${i.stage_no}` : 'Счёт', number: i.number, project_id: i.project_id ?? projectId, pack_id: i.pack_id, state: 'issued', src: 'bl', src_id: i.id,
+            amount_usd: i.amount_usd, stage_no: i.stage_no, body: i.what,
+          });
+        }
+      }
+    }
+    return made;
   }
 
   // ---- the API ----
@@ -481,6 +665,7 @@ export class CabDocs {
   /** `GET /admin/clients/:id/documents`: the client's papers, newest first. */
   async list(clientId: number): Promise<DocReply> {
     if (!this.client(clientId)) return failR(404, 'not_found');
+    this.attachLegacy(clientId);
     const rows = this.db.prepare('SELECT * FROM cab_documents WHERE client_id = ? ORDER BY id DESC').all(clientId) as DocRow[];
     return okR({ items: await Promise.all(rows.map((r) => this.view(r))) });
   }
@@ -502,6 +687,7 @@ export class CabDocs {
     hq.log('client', 'quote_accepted', 'document', String(r.id));
     postFromFirTech(this.db, t, c.id, r.lead_id, c.locale === 'en' ? 'Proposal accepted, thank you! We are preparing the contract.' : 'КП принято, спасибо! Готовим договор.');
     this.d.notifyOwner(`${c.name || c.email} принял КП ${r.number}: договор готовится, придёт карточкой на одобрение.`);
+    this.autoAgent(c, r);
     return okR({ next: 'contract' });
   }
 
