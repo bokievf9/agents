@@ -4,7 +4,7 @@ import { errMsg, log, parseStages, stagesFor, tryJson, type ApprovalQueue, type 
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import { billingStoreFor, type Invoice } from '@fir/worker-billing';
 import { csStoreFor } from '@fir/worker-customer-support';
-import { LeadIntakeWorker, leadStoreFor, TEMP_RU, type Delivery, type Lead } from '@fir/worker-lead-intake';
+import { guessNiche, KIND_REPLY, LeadIntakeWorker, leadStoreFor, TEMP_RU, type Delivery, type Lead } from '@fir/worker-lead-intake';
 import { planStageDates, PmStore, type Product } from '@fir/worker-project-manager';
 import {
   COPY_PREFIX, kindSpecs as prospectKinds, markReplied, onDecision as onProspectDecision, ProspectorWorker, PROSPECT_KINDS, statsText, storeFor as prospectStoreFor,
@@ -20,7 +20,8 @@ import {
 } from '@fir/worker-presales';
 import { z } from 'zod';
 import type { CabDocs } from '../cab-docs.js';
-import { recordManagerReply } from '../cabinet.js';
+import { assumptionsFor, CLARIFY_WAIT_MS, ClarifyStore, gapsOf, isBlocking, questionsFor, questionsMessage, type Clarification } from '../clarify.js';
+import { ensureCabinetTables, recordManagerReply } from '../cabinet.js';
 import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
 import type { ApprovalEditor } from '../editor.js';
 import type { LostLeads } from '../lost-leads.js';
@@ -291,6 +292,7 @@ export class SalesHead implements ApprovalEditor {
 
   /** The approved reply to a lead: into the client's bot chat when the lead came from there, else to the owner to send himself. */
   private async deliver(x: Delivery): Promise<void> {
+    if (x.clarify) return this.deliverClarify(x);
     // a cabinet client reads the approved answer in the lead's thread as well (no-op for leads without a cabinet)
     if (Number.isInteger(x.leadId)) recordManagerReply(this.hq.db, this.hq.now(), x.leadId, x.text);
     await deliverOrHandOff({
@@ -299,9 +301,99 @@ export class SalesHead implements ApprovalEditor {
     });
   }
 
+  // ---- clarifying questions before the КП (cabinet leads) ----
+  private clarifyStore(): ClarifyStore {
+    return new ClarifyStore(this.hq.db, this.hq.now);
+  }
+
+  /** The questions go to the client's thread and by email (Resend, when configured); the owner sees them as a `lead_reply` item that needs no approval. */
+  private async deliverClarify(x: Delivery): Promise<void> {
+    recordManagerReply(this.hq.db, this.hq.now(), x.leadId, x.text);
+    let how = 'thread';
+    try {
+      ensureCabinetTables(this.hq.db);
+      const c = this.hq.db.prepare('SELECT c.email, c.locale FROM li_leads l JOIN cab_clients c ON c.id = l.client_id WHERE l.id = ?').get(x.leadId) as { email: string; locale: string } | undefined;
+      const tools = toolsFor(this.hq, this.d.tools, { agentId: LEADS_ID, dept: SALES });
+      if (c && tools.can('email.send')) {
+        const en = c.locale === 'en';
+        const sent = await tools.email.send({ to: c.email, subject: en ? 'A few questions about your request to Fir Tech' : 'Несколько вопросов по вашей заявке в Fir Tech', text: `${x.text}\n\nFir Tech\nhello@firtech.pro` });
+        how = sent.ok ? 'thread+email' : `thread, email_failed:${sent.error}`;
+      }
+    } catch (e) {
+      how = `thread, email_failed:${errMsg(e)}`;
+    }
+    this.hq.log(LEADS_ID, 'clarify_sent', 'lead', String(x.leadId), how);
+  }
+
+  /**
+   * A cabinet lead with blocking gaps (scope unclear, or neither niche nor goal) gets one round of at most three questions before any КП. Returns true when the КП
+   * waits for the answers (the lead is not proposed now); false for a lead that can go on at once.
+   */
+  private async clarifyIfNeeded(taskId: number, lead: Lead): Promise<boolean> {
+    const task = this.hq.task(taskId);
+    if (!task || task.tags.includes('drill') || lead.clientId == null) return false;
+    const store = this.clarifyStore();
+    if (store.byLead(lead.id)) return true;
+    const raw = (task.meta.lead ?? {}) as Record<string, unknown>;
+    const gaps = gapsOf(lead, raw);
+    if (!isBlocking(gaps)) return false;
+    const lang = lead.lang === 'en' ? 'en' : 'ru';
+    const questions = questionsFor(gaps, lang);
+    const text = questionsMessage(lang, lead.name.split(/\s+/)[0] ?? '', questions);
+    if (!store.ask(lead.id, taskId, gaps, questions)) return true;
+    await this.hq.requestApproval(
+      taskId, LEADS_ID, KIND_REPLY,
+      { text, leadId: lead.id, contact: lead.contact, name: lead.name, clarify: true, questions },
+      `Лид #${lead.id}: уточняющие вопросы клиенту перед КП (${questions.length}). Это ответ уровня 1: отправляется сам, в тред кабинета и на почту, одобрение не нужно. КП будет после ответа или через сутки с допущениями.\n\n${text}`,
+    );
+    await this.report(taskId, `Лид #${lead.id}: перед КП задал клиенту вопросов: ${questions.length} (${gaps.slice(0, questions.length).join(', ')}). КП после ответа клиента или через сутки с допущениями.`);
+    return true;
+  }
+
+  /** Answers (the client's messages in the lead thread after the questions) or 24 hours without them: the КП is proposed. Runs on every heartbeat and from the app's 30 s tick. */
+  async clarifyTick(): Promise<number> {
+    const store = this.clarifyStore();
+    let moved = 0;
+    for (const c of store.open()) {
+      const msgs = (this.hq.db.prepare("SELECT text FROM cab_messages WHERE lead_id = ? AND \"from\" = 'client' AND at > ? ORDER BY id").all(c.leadId, c.askedAt) as { text: string }[]).map((m) => m.text);
+      if (msgs.length === 0 && this.hq.now() - c.askedAt < CLARIFY_WAIT_MS) continue;
+      await this.finishClarify(c, msgs.length ? msgs.join('\n') : null);
+      moved++;
+    }
+    return moved;
+  }
+
+  private async finishClarify(c: Clarification, answers: string | null): Promise<void> {
+    const base = { db: this.hq.db, now: this.hq.now };
+    const leads = leadStoreFor(base);
+    const lead = leads.get(c.leadId);
+    const store = this.clarifyStore();
+    if (!lead) return void store.close(c.leadId, answers ? 'answered' : 'assumed', answers ?? '');
+    const assumptions = answers === null ? assumptionsFor(c.gaps) : [];
+    if (answers !== null) {
+      leads.appendBrief(lead.id, `Уточнения клиента: ${answers.replace(/\s+/g, ' ').trim().slice(0, 1500)}`);
+      if (!lead.niche) {
+        const niche = guessNiche(answers);
+        if (niche) leads.setNiche(lead.id, niche);
+      }
+    } else leads.appendBrief(lead.id, `Допущения (клиент не ответил за 24 часа): ${assumptions.join('; ')}`);
+    store.close(c.leadId, answers === null ? 'assumed' : 'answered', answers ?? '');
+    const open = presalesStoreFor(base).byLead(lead.id).some((x) => x.status === 'draft' || x.status === 'approved') || this.hq.tasks({ dept: SALES, open: true, limit: 500 }).some((t) => t.meta.action === 'kp' && t.meta.leadId === lead.id);
+    if (open) return;
+    const kp = this.hq.createTask({
+      title: `КП для лида #${lead.id} ${oneLine(lead.name, 60)}`, dept: SALES, creator: 'head', priority: 1,
+      meta: { action: 'kp', leadId: lead.id, auto: true, clarified: answers === null ? 'assumptions' : 'answers', ...(assumptions.length ? { assumptions } : {}) },
+    });
+    this.hq.wake(HEAD_ID, 'task');
+    await this.report(c.taskId, answers === null
+      ? `Лид #${lead.id}: клиент не ответил на вопросы за 24 часа. КП готовится с допущениями (${assumptions.join('; ')}), они будут перечислены в КП и смете (задача #${kp.id}).`
+      : `Лид #${lead.id}: клиент ответил на вопросы, ответ учтён в КП (задача #${kp.id}).`);
+  }
+
   // ---- heartbeat ----
   async onHeartbeat(): Promise<void> {
     if (this.agent().status !== 'active') return;
+    await this.clarifyTick().catch((e) => log('warn', 'clarify tick failed', { err: errMsg(e) }));
     for (const t of [...this.hq.tasks({ dept: SALES, status: 'inbox' }), ...this.hq.tasks({ dept: SALES, status: 'assigned', assigneeId: HEAD_ID })]) {
       await this.handle(t).catch((e) => this.crash(t, e));
     }
@@ -465,6 +557,8 @@ export class SalesHead implements ApprovalEditor {
       if (created) await this.report(taskId, `Рекомендация ${describeReferral(referral)}, выплата после первой оплаты клиента (10% сметы, USDT). Счёт отмечается: /paid <номер счёта>.`);
     }
     if (lead.temperature === 'hot') await this.hq.alert(`Горячий лид #${lead.id} (${lead.niche || 'ниша не ясна'}). Карточка с контактом в пачке на одобрение, /approve.`);
+    // a cabinet lead with gaps is asked first; its КП follows the answers (or 24 hours)
+    if (await this.clarifyIfNeeded(taskId, lead)) return;
     await this.startKpFor(taskId, lead);
   }
 

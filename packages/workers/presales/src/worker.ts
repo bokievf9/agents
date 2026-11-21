@@ -100,6 +100,8 @@ export class PresalesWorker implements Worker {
       const lead = leadStoreFor(ctx).get(leadId);
       if (!lead) return { ok: false, result: '', error: `Лид ${leadId} не найден` };
       brief = briefFromLead(lead);
+      const assumed = Array.isArray(task.meta.assumptions) ? task.meta.assumptions.filter((x): x is string => typeof x === 'string' && x.trim() !== '').slice(0, 6) : [];
+      if (assumed.length) brief.assumptions = assumed;
       source = lead.origin;
       service = lead.service;
     } else {

@@ -164,7 +164,7 @@ export function createReview(d: ReviewDeps) {
     const c = views.one<{ client_id: number | null }>('SELECT client_id FROM li_leads WHERE id = ?', leadId);
     const cab = c?.client_id != null && has('cab_clients') ? views.one<{ id: number; email: string }>('SELECT id, email FROM cab_clients WHERE id = ?', c.client_id) : undefined;
     return {
-      lead: { id: v.id, name: v.name, contact: v.contact, service: v.service, budget: v.budget, stage: v.stage, source: v.source, temperature: v.temperature, taskId: v.taskId, callAt: v.callAt, cabinet: v.cabinet },
+      lead: { id: v.id, name: v.name, contact: v.contact, service: v.service, budget: v.budget, stage: v.stage, source: v.source, temperature: v.temperature, taskId: v.taskId, callAt: v.callAt, cabinet: v.cabinet, enrichment: v.enrichment },
       client: cab ? { id: cab.id, email: cab.email, cabinet: true } : { id: null, email: null, cabinet: false },
     };
   }
@@ -317,7 +317,11 @@ export function createReview(d: ReviewDeps) {
         const leadId = num(payload.leadId);
         const f = leadFacts(leadId);
         return generic(l, payload, `${l.kind === 'lead_price' ? 'Цена и сроки' : 'Ответ лиду'}: ${str(payload.name) || str((f.lead as Json | null)?.name) || `лид #${leadId ?? '?'}`}`, {
-          meta: { lead: f.lead, client: f.client, delivery: payload.chatId !== undefined ? 'telegram' : 'owner' }, leadId, sendable: true,
+          meta: {
+            lead: f.lead, client: f.client, delivery: payload.chatId !== undefined ? 'telegram' : 'owner',
+            // a clarifying question of the Sales head (level 1, already sent): the questions and how many went out
+            ...(payload.clarify === true ? { clarify: { questions: Array.isArray(payload.questions) ? payload.questions : [], sent: true } } : {}),
+          }, leadId, sendable: true,
         });
       }
       case 'support_answer':

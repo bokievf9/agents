@@ -1,6 +1,7 @@
 import { MockLlm } from '@fir/core';
 import { describe, expect, it } from 'vitest';
-import { detectLang, guessDeadline, guessNiche, hasMoney, isPriceQuestion, scoreLead } from '../src/text.js';
+import { builderLinkIn, deriveEnrichment, detectLang, enrichmentLines, guessDeadline, guessNiche, hasMoney, isPriceQuestion, scoreLead } from '../src/text.js';
+import { parseEnrichment } from '../src/store.js';
 import { KIND_PRICE, KIND_REPLY, leadStoreFor, nextSlots, webLeadSchema } from '../src/worker.js';
 import { NOW, setup, webLead } from './helpers.js';
 
@@ -199,5 +200,47 @@ describe('what the client already has: domain and hosting', () => {
     leadStoreFor(r.ctx);
     const cols = (r.ctx.db.prepare('PRAGMA table_info(li_leads)').all() as { name: string }[]).map((c) => c.name);
     expect(cols).toEqual(expect.arrayContaining(['estimate', 'has_domain', 'has_hosting']));
+  });
+});
+
+describe('enrichment of a lead (ИИ-менеджер заявок 2.0)', () => {
+  const own = { summary: ['Бизнес: салон красоты; задача: вечерние заявки.', 'Подходит: Бот-администратор; каналы: instagram.', 'Предложено: сборку по ссылке.'], productFamily: 'admin', niche: 'салон красоты', intentScore: 64, builderLink: '/ru/builder?b=k.salon~p.adminbot' };
+
+  it('the conversation\'s own enrichment is kept on the lead and printed on the card', async () => {
+    const r = setup();
+    const res = await r.run(r.task(webLead({ enrichment: own, handoff: true })));
+    const lead = leadStoreFor(r.ctx).byTask(1)!;
+    expect(lead.enrichment).toEqual(own);
+    expect(res.result).toContain('Разговор:\n  Бизнес: салон красоты; задача: вечерние заявки.');
+    expect(res.result).toContain('Семейство продукта: admin');
+    expect(res.result).toContain('Намерение: 64/100');
+    expect(res.result).toContain('Сборка, которую предложил приёмщик: /ru/builder?b=k.salon~p.adminbot');
+    expect(String(r.staged[0]!.summary)).toContain('Намерение: 64/100');
+  });
+
+  it('a lead without one gets it derived: its first lines, the service as the family, the niche, an intent from the temperature, the link of its estimate', async () => {
+    const r = setup();
+    await r.run(r.task(webLead({ service: 'bots', message: 'Нужен бот для салона, срочно', estimate: 'Пакет: Бот\nСборка: https://firtech.pro/en/builder?b=k.salon~p.adminbot\nИтого: $300' })));
+    const e = leadStoreFor(r.ctx).byTask(1)!.enrichment!;
+    expect(e.summary).toEqual(['Нужен бот для салона, срочно', 'Пакет: Бот', 'Итого: $300']);
+    expect(e).toMatchObject({ productFamily: 'bot', niche: 'салон красоты / барбершоп', builderLink: '/en/builder?b=k.salon~p.adminbot' });
+    expect(e.intentScore).toBeGreaterThan(0);
+    expect(deriveEnrichment({ message: '', estimate: '', service: 'unknown', product: '', niche: '', temperature: 'cold' })).toEqual({ summary: [], productFamily: '', niche: '', intentScore: 25, builderLink: '' });
+    expect(builderLinkIn('see /ru/builder/estimate?b=k.cafe now')).toBe('/ru/builder/estimate?b=k.cafe');
+    expect(enrichmentLines(null)).toEqual([]);
+  });
+
+  it('the schema bounds the enrichment; an older row without the column reads as null', () => {
+    expect(webLeadSchema.safeParse({ name: 'A', contact: '@abcde', enrichment: { ...own, intentScore: 140 } }).success).toBe(false);
+    expect(webLeadSchema.parse({ name: 'A', contact: '@abcde', enrichment: { intentScore: 5 } }).enrichment).toEqual({ summary: [], productFamily: '', niche: '', intentScore: 5, builderLink: '' });
+    expect(parseEnrichment(null)).toBeNull();
+    expect(parseEnrichment('not json')).toBeNull();
+    expect(parseEnrichment(JSON.stringify({ intentScore: 500, summary: ['a', 'b', 'c', 'd'] }))).toMatchObject({ intentScore: 100, summary: ['a', 'b', 'c'] });
+  });
+
+  it('a clarifying question is a delivery that says so', async () => {
+    const r = setup();
+    await r.specs[KIND_REPLY]!.execute({ text: 'Вопрос 1', leadId: 1, contact: '@x', name: 'X', clarify: true }, {} as never);
+    expect(r.delivered[0]).toMatchObject({ clarify: true, text: 'Вопрос 1' });
   });
 });

@@ -1,6 +1,7 @@
 import type { Db } from '@fir/core';
 import { ProspectStore, STATUSES as PROSPECT_STATUSES, TRANSITIONS as PROSPECT_TRANSITIONS, type Status as ProspectStatus } from '@fir/worker-prospector';
 import { CsStore } from '@fir/worker-customer-support';
+import { parseEnrichment } from '@fir/worker-lead-intake';
 import { builderTotal } from '@fir/worker-presales';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
@@ -169,7 +170,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
   interface LeadRow {
     id: number; task_id: number; name: string; contact: string; service: string; niche: string; task: string; deadline: string; budget: string;
     origin: string; temperature: string; lang: string; chosen_slot: number | null; price_asked: number; price_approved: number; created_at: number;
-    estimate?: string | null; stage_override?: string | null; client_id?: number | null; slots?: string;
+    estimate?: string | null; stage_override?: string | null; client_id?: number | null; slots?: string; enrichment?: string | null;
   }
   const leadStatus = (taskId: number) => one<{ status: string }>('SELECT status FROM tasks WHERE id = ?', taskId)?.status ?? null;
   const leadView = (l: LeadRow, stages: StageContext) => {
@@ -178,7 +179,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       id: l.id, kind: 'lead', taskId: l.task_id, status: leadStatus(l.task_id), name: l.name, contact: l.contact, service: l.service, niche: l.niche,
       task: cap(l.task), deadline: l.deadline, budget: l.budget, source: l.origin, temperature: l.temperature, lang: l.lang,
       priceAsked: l.price_asked === 1, priceApproved: l.price_approved === 1, createdAt: iso(l.created_at), callAt: iso(l.chosen_slot),
-      cabinet: l.client_id != null, stage, nextAction: nextActionOf(stage), note: note('lead', l.id), lostReason: stage === 'lost' ? note('lead_lost', l.id) : '',
+      cabinet: l.client_id != null, enrichment: parseEnrichment(l.enrichment ?? null), stage, nextAction: nextActionOf(stage), note: note('lead', l.id), lostReason: stage === 'lost' ? note('lead_lost', l.id) : '',
     };
   };
   function leads(query: URLSearchParams): CrmReply {

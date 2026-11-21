@@ -77,7 +77,7 @@ interface Row {
   price_asked: number; price_approved: number; created_at: number; estimate: string; has_domain: number | null; has_hosting: number | null; client_id?: number | null; enrichment?: string | null;
 }
 
-function parseEnrichment(raw: string | null | undefined): Enrichment | null {
+export function parseEnrichment(raw: string | null | undefined): Enrichment | null {
   if (!raw) return null;
   try {
     const e = JSON.parse(raw) as Partial<Enrichment>;

@@ -41,6 +41,7 @@ import { BuilderBridge, RestGithubClient } from './bridge.js';
 import { ClientBot } from './client/bot.js';
 import { RateLimiter } from './client/sanitize.js';
 import { WebChatEngine } from './client/web.js';
+import { siteSlots } from './client/site-slots.js';
 import { FALLBACK_INSTRUCTIONS } from './client/prompt.js';
 import { clientSinks } from './client/sinks.js';
 import { gatewayGate } from './client/shared.js';
@@ -266,6 +267,8 @@ drill.start();
 const dueTick = async () => {
   await clientBot?.engine.demo.tick().catch((e) => log('warn', 'demo reminders failed', { err: errMsg(e) }));
   await marketing.auditWatch().catch((e) => log('warn', 'audit watch failed', { err: errMsg(e) }));
+  // clarifying questions of the Sales head: the client's answers, or 24 hours without them, release the КП
+  await sales.clarifyTick().catch((e) => log('warn', 'clarify tick failed', { err: errMsg(e) }));
   // leads nobody took for 15 minutes are recorded, and the lost requests of the last hour become one alert
   try {
     lost.watchStale();
@@ -290,7 +293,7 @@ const chatGate = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDa
 const webChat = cfg.webChatToken
   ? new WebChatEngine({
       db, now: hq.now, tz: () => hq.tz, llm: clientLlm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate,
-      onLost: (source, reason, info) => lost.record(source, reason, info), gatewayDown,
+      onLost: (source, reason, info) => lost.record(source, reason, info), gatewayDown, siteOrigin: cfg.siteUrl, slots: siteSlots(cfg.siteUrl),
     })
   : null;
 webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix }));

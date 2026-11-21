@@ -93,7 +93,7 @@ const INTENT_OF: Record<Temperature, number> = { hot: 80, warm: 55, cold: 25 };
  * of its service or chosen product, its niche, an intent score from its temperature and the builder link of its estimate. Pure.
  */
 export function deriveEnrichment(l: { message: string; estimate: string; service: string; product: string; niche: string; temperature: Temperature }): Enrichment {
-  const lines = `${l.message}\n${l.estimate}`.split('\n').map((x) => x.replace(/\s+/g, ' ').trim()).filter((x) => x.length > 2 && !/^https?:|^\/(ru|en)\//.test(x));
+  const lines = `${l.message}\n${l.estimate}`.split('\n').map((x) => x.replace(/\s+/g, ' ').trim()).filter((x) => x.length > 2 && !/https?:\/\/|\/(?:ru|en)\/builder/.test(x));
   const family = l.product || FAMILY_OF_SERVICE[l.service.toLowerCase()] || (l.service && l.service !== 'unknown' && l.service !== 'other' ? l.service : '');
   return {
     summary: lines.slice(0, 3).map((x) => (x.length > 160 ? `${x.slice(0, 159)}…` : x)),

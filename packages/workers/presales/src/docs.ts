@@ -24,6 +24,8 @@ export interface Brief {
   /** What the client already has: true or false when known, null or absent when nobody asked (the КП then says both are paid by the client). */
   hasDomain?: boolean | null;
   hasHosting?: boolean | null;
+  /** The Sales head asked clarifying questions and the client did not answer in time: what the КП assumes. Listed in the КП and the estimate (not the contract). */
+  assumptions?: string[];
 }
 
 const Wording = z.object({
@@ -109,14 +111,15 @@ export function buildDocs(tpl: Templates, o: Offer, q: PackageQuote, b: Brief, w
   const fill = (s: string) => fillMarks(s, o, q);
   const scope = w.scope.map(fill);
   const conditions = costsLine({ hasDomain: b.hasDomain ?? null, hasHosting: b.hasHosting ?? null });
+  const assumed = b.assumptions?.length ? `\n\nДопущения (клиент не ответил на уточняющие вопросы, подтвердим их до договора):\n${b.assumptions.map((a) => `- ${a}`).join('\n')}` : '';
   const kp = render(tpl.kp, {
     client, date, valid_until: validUntil, valid_days: String(terms.validDays), title: o.title,
     context: fill(w.context), problem: fill(w.problem), solution: fill(w.solution), scope: bullets(scope),
-    timeline: o.timeline, price_table: priceTable(q), stage_table: stageTable(stages), payment_terms: paymentTerms(stages), conditions,
+    timeline: o.timeline, price_table: priceTable(q), stage_table: stageTable(stages), payment_terms: paymentTerms(stages), conditions: `${conditions}${assumed}`,
     support: `После запуска можно подключить сопровождение: ${usd(supportMonthlyUsd())} в месяц (правки, мониторинг, помощь). Решение вы принимаете после запуска.`,
   });
   const estimate = render(tpl.estimate, {
-    client, title: o.title, date, valid_until: validUntil, conditions, stage_table: stageTable(stages), payment_terms: paymentLine(stages),
+    client, title: o.title, date, valid_until: validUntil, conditions: `${conditions}${assumed}`, stage_table: stageTable(stages), payment_terms: paymentLine(stages),
     line_items: ['| № | Позиция | Стоимость |', '|---|---|---|', ...scope.map((s, i) => `| ${i + 1} | ${s} | входит |`)].join('\n'),
     totals: [
       '| Позиция | USD |', '|---|---|',

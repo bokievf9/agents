@@ -106,7 +106,24 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const reporter = new Reporter(-1001, { marketing: 1, sales: 2, support: 3, production: 4, backoffice: 5, general: 6 }, new Map(['marketing', 'sales', 'support', 'production', 'backoffice', 'general'].map((d) => [d, mk(d)])));
   const director = new Director({ hq, llm: llm as any, messenger: channel, queue, ownerId: OWNER, reporter });
   const fetched: string[] = [];
-  const tools = { config: {}, fetch: ((url: string) => { fetched.push(url); return Promise.resolve(new Response('<html><head><title>t</title></head><body>ok</body></html>', { headers: { 'content-type': 'text/html' } })); }) as any, lookup: () => Promise.resolve(['93.184.216.34']), sleep: () => Promise.resolve() };
+  // Resend, as the heads see it: every email goes into `emails` (the cabinet documents and the clarifying questions of the Sales head)
+  const emails: { to: string; subject: string; text: string }[] = [];
+  const emailFail = { on: false };
+  const resend = (init: RequestInit): Promise<Response> => {
+    if (emailFail.on) return Promise.resolve(new Response('boom', { status: 500 }));
+    const b = JSON.parse(String(init.body)) as { to: string[]; subject: string; text: string };
+    emails.push({ to: b.to[0]!, subject: b.subject, text: b.text });
+    return Promise.resolve(Response.json({ id: `em_${emails.length}` }));
+  };
+  const tools = {
+    config: { resendApiKey: 'RSKEY', emailFrom: 'Fir Tech <hello@firtech.pro>' },
+    fetch: ((url: string, init: RequestInit) => {
+      if (url.startsWith('https://api.resend.com/emails')) return resend(init);
+      fetched.push(url);
+      return Promise.resolve(new Response('<html><head><title>t</title></head><body>ok</body></html>', { headers: { 'content-type': 'text/html' } }));
+    }) as any,
+    lookup: () => Promise.resolve(['93.184.216.34']), sleep: () => Promise.resolve(),
+  };
   const rendersDir = mkdtempSync(join(tmpdir(), 'drill-renders-'));
   const dataDir = mkdtempSync(join(tmpdir(), 'drill-data-'));
   const marketing = new MarketingHead({
@@ -135,19 +152,9 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   support.onPaid = async (inv) => [...production.onInvoicePaid(inv), ...(await sales.onInvoicePaid(inv))];
   const backoffice = new BackofficeHead({ hq, tools, llm: llm as any, queue, messenger: channel, ownerId: OWNER, reporter, knowledgeDir: join(process.cwd(), '..', '..', 'knowledge'), ops: { dataDir, rendersDir, ageRecipient: undefined } } as any);
   // Cabinet v3 (opt-in): the same wiring as index.ts
-  const emails: { to: string; subject: string; text: string }[] = [];
-  const emailFail = { on: false };
   const cabTools: AppTools = {
     config: { dataDir, rendersDir, mediaSecret: MEDIA_SECRET, mediaBase: MEDIA_BASE, resendApiKey: 'RSKEY', emailFrom: 'Fir Tech <hello@firtech.pro>' },
-    fetch: ((url: string, init: RequestInit) => {
-      if (url.startsWith('https://api.resend.com/emails')) {
-        if (emailFail.on) return Promise.resolve(new Response('boom', { status: 500 }));
-        const b = JSON.parse(String(init.body)) as { to: string[]; subject: string; text: string };
-        emails.push({ to: b.to[0]!, subject: b.subject, text: b.text });
-        return Promise.resolve(Response.json({ id: `em_${emails.length}` }));
-      }
-      return Promise.resolve(new Response('nf', { status: 404 }));
-    }) as any,
+    fetch: ((url: string, init: RequestInit) => (url.startsWith('https://api.resend.com/emails') ? resend(init) : Promise.resolve(new Response('nf', { status: 404 })))) as any,
     sleep: () => Promise.resolve(),
   };
   const cabinet = o.flow
