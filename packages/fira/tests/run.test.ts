@@ -59,6 +59,27 @@ describe('run(): native tool use', () => {
   });
 });
 
+describe('run(): the app\'s own rules around the model', () => {
+  it('`before` answers by code without a model call (a person asked for); `after` adds the offers after the guards', async () => {
+    const llm = new MockChatLlm([{ text: 'не должен звучать' }]);
+    const d = deps(llm);
+    const out = await run(spec, conv({ text: 'позовите человека' }), {
+      ...d,
+      before: (c) => Promise.resolve(/человек/.test(c.text) ? { reply: 'Передаю разговор человеку из команды.', handoff: 'ask' } : null),
+    });
+    expect(llm.chats).toHaveLength(0);
+    expect(out.reply).toBe('Передаю разговор человеку из команды.');
+    expect(out.outcome.handoff).toBe('ask');
+    expect(out.fallback).toBe(false);
+    expect(d.journal.entries[0]!.tier).toBe('none');
+    const withCta = await run(spec, conv({ text: 'У меня салон' }), {
+      ...deps(new MockChatLlm([{ text: 'Для этого подойдёт «ИИ-администратор».' }])),
+      after: (r) => Promise.resolve(`${r}\n\nСоберите проект сами: https://firtech.pro/ru/builder?b=k.salon~p.adminbot`),
+    });
+    expect(withCta.reply).toBe('Для этого подойдёт «ИИ-администратор».\n\nСоберите проект сами: https://firtech.pro/ru/builder?b=k.salon~p.adminbot');
+  });
+});
+
 describe('run(): guards', () => {
   it('an invented price and a date promise are cut and replaced by the honest line; markdown is stripped', async () => {
     const out = await run(spec, conv({ text: 'А быстро?' }), deps(new MockChatLlm([{ text: '**Сделаем** за 3 дня за $99. Чем занимается ваш бизнес?' }])));

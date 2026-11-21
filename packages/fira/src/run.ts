@@ -37,6 +37,13 @@ export interface RunDeps {
   spentUsd?: () => Promise<number>;
   /** Turns of history sent to the model. */
   historyTurns?: number;
+  /**
+   * Deterministic rules of the app that run before the model (the receptionist's code paths: a person asked for, a price question answered from
+   * the price list). A non-null answer is the reply of the turn: no model call, still guards, memory and journal.
+   */
+  before?: (conv: Conversation, ctx: ToolCtx) => Promise<{ reply: string; handoff?: string } | null>;
+  /** Code the app adds after the words (the offers in their order, a link); runs after the guards, so its own prices and links are not cut. */
+  after?: (reply: string, outcome: Outcome, conv: Conversation) => Promise<string>;
 }
 
 export interface RunOut {
@@ -99,7 +106,12 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
   let fallback = false;
   let inputTokens = 0;
   let outputTokens = 0;
-  if (tier && deps.llm.enabled) {
+  const ruled = deps.before ? await deps.before(conv, ctx) : null;
+  if (ruled) {
+    reply = ruled.reply;
+    if (ruled.handoff) outcome.handoff = ruled.handoff;
+    tier = null;
+  } else if (tier && deps.llm.enabled) {
     for (; rounds < spec.model.maxRounds; ) {
       const turn = await tryChat(deps.llm, { tier, system, messages, tools: c.tools, toolChoice: { type: 'auto' }, maxTokens: c.model.maxTokens });
       rounds++;
@@ -137,7 +149,8 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
     fallback = true;
     outcome.handoff ??= 'ответ снят охранниками';
   }
-  const text = g.text || fb(conv.lang).handoff;
+  const guarded = g.text || fb(conv.lang).handoff;
+  const text = deps.after ? (await deps.after(guarded, outcome, conv)).trim() || guarded : guarded;
 
   // memory: live keeps texts liveDays, anon anonHours (a captured contact promotes it), demo nothing
   try {
