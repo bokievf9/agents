@@ -20,7 +20,8 @@ describe('POST /chat, the site contract', () => {
     const r = await chat({ text: 'Сколько стоит бот-администратор?' });
     expect(r.status).toBe(200);
     expect(r.json).toMatchObject({ ok: true, state: 'chat', cta: ['builder', 'call'] });
-    expect(r.json.builderLink).toMatch(/^https:\/\/firtech\.pro\/ru\/builder$/);
+    // «администратор» is the booking need: the link carries the ИИ-администратор
+    expect(r.json.builderLink).toBe('https://firtech.pro/ru/builder?b=p.adminbot');
     expect(r.json.reply).toMatch(/Оплата по этапам/);
     expect(w.calls.length).toBe(calls);
     expect((await chat({ sessionId: 'drill-visitor-0002', locale: 'en', message: 'How much does it cost?' })).json.reply).toMatch(/Payment is by stages/);

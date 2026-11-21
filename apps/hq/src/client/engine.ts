@@ -2,6 +2,7 @@ import { errMsg, formatSlot, log, type Button, type Db, type LlmClient } from '@
 import { ClientBlockedError, type ClientChannel } from './channel.js';
 import { inWindow, linksOnly, RateLimiter, type CounterStore } from './sanitize.js';
 import { isPriceQuestion } from '@fir/worker-lead-intake';
+import { asksCatalogue } from './needs.js';
 import { clip, GREETING, intakeRecord, TurnHistory } from './shared.js';
 import { enrichmentOf, newQ, receptionistTurn, type EnrichmentOut } from './receptionist.js';
 import { ChatStore, maskUsername, RefStore, refFromStartArg, textHash, type Chat, type Draft } from './store.js';
@@ -194,9 +195,11 @@ export class ClientEngine implements ClientChannel {
     }
     const text = raw.trim().slice(0, 2000);
     // A new person who just writes: the welcome first; a bare greeting needs nothing more.
+    // (a first message that already names a need gets the short greeting: the product list is only for «что вы делаете»)
     if (first.fresh) {
-      await this.welcome(chat, from);
-      if (GREETING.test(text)) return;
+      const bare = GREETING.test(text);
+      await this.welcome(chat, from, !bare && !asksCatalogue(text));
+      if (bare) return;
     }
     chat = this.store.get(chat.chatId)!;
     switch (chat.state) {
@@ -298,9 +301,9 @@ export class ClientEngine implements ClientChannel {
     return { ...this.store.touch(from.chatId, from.username ?? '', lang), fresh: !existing };
   }
 
-  private async welcome(chat: Chat, from: From): Promise<void> {
+  private async welcome(chat: Chat, from: From, short = false): Promise<void> {
     await this.dropCard(chat);
-    const id = await this.say(chat.chatId, T[chat.lang].welcome(from.firstName ?? ''), menuButtons(chat.lang));
+    const id = await this.say(chat.chatId, short ? T[chat.lang].welcomeShort(from.firstName ?? '') : T[chat.lang].welcome(from.firstName ?? ''), menuButtons(chat.lang));
     this.store.update(chat.chatId, { state: 'idle', draft: {}, card: id });
   }
 

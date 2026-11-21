@@ -14,6 +14,8 @@ export interface WebButton {
 
 interface WebTexts {
   welcome: string;
+  /** The greeting in front of the answer to a first message that already names a need: no product list (it is on «что вы делаете» only). */
+  welcomeShort: string;
   /** The scripted demo description with the bot's deep link. */
   demo: string;
   menu: Record<'intake' | 'products' | 'client' | 'ask', string>;
@@ -39,6 +41,9 @@ const RU: WebTexts = {
   },
   get welcome() {
     return `Здравствуйте. Я ${productName('intake', 'ru')} Fir Tech: так же я могу принимать клиентов вашего бизнеса. Что мы делаем: ${productList('ru')}. Чем помочь?`;
+  },
+  get welcomeShort() {
+    return `Здравствуйте. Я ${productName('intake', 'ru')} Fir Tech.`;
   },
   productsIntro: 'Наши продукты. Выберите, расскажу, для кого это и что внутри.',
   discuss: 'Обсудить',
@@ -66,6 +71,9 @@ const EN: WebTexts = {
   },
   get welcome() {
     return `Hello. I am the Fir Tech ${productName('intake', 'en')}: I can receive your business’s clients the same way. What we do: ${productList('en')}. How can we help?`;
+  },
+  get welcomeShort() {
+    return `Hello. I am the Fir Tech ${productName('intake', 'en')}.`;
   },
   productsIntro: 'Our products. Pick one and I will tell you who it is for and what is inside.',
   discuss: 'Discuss',

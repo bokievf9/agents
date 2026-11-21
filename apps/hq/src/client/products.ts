@@ -146,16 +146,16 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
       return productNames('agent');
     },
     benefit: {
-      ru: 'Персональный ассистент в Telegram: Dono ведёт учёбу студента, Polly учит языкам. Под вашу задачу сделаем такого же.',
-      en: 'A personal assistant in Telegram: Dono runs a student’s studies, Polly teaches languages. We can build one for your task.',
+      ru: 'Персональный ассистент в Telegram: ведёт задания и сроки, почту, календарь и напоминания. Под вашу задачу сделаем такого же.',
+      en: 'A personal assistant in Telegram: runs assignments and deadlines, mail, calendar and reminders. We can build one for your task.',
     },
     kinds: ['student', 'school'],
     inside: {
-      ru: ['Dono: задания, дедлайны, почта и календарь в одном плане', 'Polly: короткие уроки, повторение слов, разговорная практика', 'Свой агент под ваши задачи по запросу'],
-      en: ['Dono: assignments, deadlines, mail and calendar in one plan', 'Polly: short lessons, spaced repetition, speaking practice', 'Your own agent for your tasks on request'],
+      ru: ['Задания, дедлайны, почта и календарь в одном плане', 'Короткие уроки, повторение, разговорная практика', 'Свой агент под ваши задачи по запросу'],
+      en: ['Assignments, deadlines, mail and calendar in one plan', 'Short lessons, spaced repetition, speaking practice', 'Your own agent for your tasks on request'],
     },
     pairs: ['ai'],
-    demo: { ru: 'Dono и Polly работают у нас каждый день, покажем вживую.', en: 'Dono and Polly run for us every day, we can show them live.' },
+    demo: { ru: 'Такие ассистенты работают у нас каждый день, покажем вживую.', en: 'Such assistants run for us every day, we can show them live.' },
   },
   ai: {
     id: 'ai', emoji: '🏢',
@@ -253,11 +253,12 @@ export function publicPrices(lang: PLang): string {
   return `Dono: ${usd(d.setup)} + ${usd(d.monthly)}${month}. Polly: ${usd(p.setup)} + ${usd(p.monthly)}${month}.`;
 }
 
-/** One line with the starting price of every product: for the answer to a direct question about prices. */
+/** One line with the starting price of every product that is for sale (not the personal agents): for the answer to a direct question about prices. */
 export function startingPrices(lang: PLang): string {
   const ids: CatalogueId[] = [...PRODUCT_IDS, ...CLASSIC_IDS].filter((i) => i !== 'agent');
   const list = ids.map((id) => `${PRODUCTS[id].name[lang]} ${priceOf(id, lang)}`).join('; ');
-  return lang === 'ru' ? `Цены на сайте, в долларах: ${list}; ${publicPrices(lang)}` : `Prices as on the site, in USD: ${list}; ${publicPrices(lang)}`;
+  // no personal products (Dono, Polly) in a public list, and no closing full stop: the callers add theirs
+  return lang === 'ru' ? `Цены на сайте, в долларах: ${list}` : `Prices as on the site, in USD: ${list}`;
 }
 
 /** Business niche the visitor mentions, the product that usually fits it, and the words for the hint. */

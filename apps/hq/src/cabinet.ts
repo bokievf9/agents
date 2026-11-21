@@ -121,7 +121,7 @@ export interface CabinetLeadInput {
 
 /**
  * A lead sent from a signed-in cabinet: upserts the account by email (like `POST /admin/clients`), makes the lead row right away
- * (the Приёмщик fills the rest when the task runs: one task, one lead) and links it to the account. Returns both ids.
+ * (the lead-intake worker fills the rest when the task runs: one task, one lead) and links it to the account. Returns both ids.
  */
 export function registerCabinetLead(db: Db, now: () => number, taskId: number, l: CabinetLeadInput): { clientId: number; leadId: number } {
   ensureCabinetTables(db);

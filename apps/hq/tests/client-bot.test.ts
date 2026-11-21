@@ -169,7 +169,9 @@ describe('welcome and language', () => {
     await w.engine.onText(other, 'Вы делаете ботов для салонов?');
     const msgs = w.transport.to(CLIENT + 1);
     expect(msgs).toHaveLength(2);
-    expect(msgs[0]!.html).toContain('Чем помочь?');
+    // a first message that names a need: the short greeting, the product list only on «что вы делаете»
+    expect(msgs[0]!.html).toContain('Я ИИ-менеджер заявок Fir Tech.');
+    expect(msgs[0]!.html).not.toContain('Что мы делаем');
     expect(msgs[1]!.html).toContain('делаем Telegram-ботов');
   });
 

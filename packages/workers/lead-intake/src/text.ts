@@ -111,6 +111,6 @@ export function enrichmentLines(e: Enrichment | null | undefined): string[] {
     ...(e.summary.length ? ['Разговор:', ...e.summary.map((x) => `  ${x}`)] : []),
     ...(e.productFamily ? [`Семейство продукта: ${e.productFamily}`] : []),
     `Намерение: ${e.intentScore}/100`,
-    ...(e.builderLink ? [`Сборка, которую предложил приёмщик: ${e.builderLink}`] : []),
+    ...(e.builderLink ? [`Сборка, которую предложил ИИ-менеджер заявок: ${e.builderLink}`] : []),
   ];
 }

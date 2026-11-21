@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { MockLlm, OffLlm, openDb, smallProjectMaxUsd, type LlmClient, type LlmRequest } from '@fir/core';
+import { MockLlm, OffLlm, openDb, productList, smallProjectMaxUsd, type LlmClient, type LlmRequest } from '@fir/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { decodeBuild } from '../src/client/builder-link.js';
 import { DEMO_TURNS, personaSystem } from '../src/client/persona.js';
 import {
   enrichmentOf, findContact, intentScore, MAX_QUALIFY_TURNS, newQ, nextSlot, parseModel, summaryLines, wantsPerson, type QState,
 } from '../src/client/receptionist.js';
+import { PRODUCT_IDS, PRODUCTS } from '../src/client/products.js';
 import { RateLimiter } from '../src/client/sanitize.js';
 import type { ClientSinks } from '../src/client/engine.js';
 import { chatSchema, WebChatEngine, type ChatReply, type ChatRequest } from '../src/client/web.js';
@@ -112,14 +113,15 @@ describe('qualification: from the first words to the builder link', () => {
     if (process.env.SHOW_TRANSCRIPT) process.stderr.write(`\n${transcript.join('\n')}\n`);
   });
 
-  it('five turns at most: the fifth turn does not ask, it proposes with whatever is known', async () => {
+  it('three questions at most: the fourth turn does not ask, it proposes with whatever is known', async () => {
     const w = world({ turns: () => json({ reply: 'Понял. А что ещё для вас важно?' }) });
-    for (let i = 1; i < MAX_QUALIFY_TURNS; i++) {
+    expect(MAX_QUALIFY_TURNS).toBe(3);
+    for (let i = 1; i <= MAX_QUALIFY_TURNS; i++) {
       const r = await w.say(`ответ ${i}`);
       expect(r.cta).toBeUndefined();
     }
     const last = await w.say('ответ последний');
-    expect(w.receptionistCalls().map((c) => /это вопрос номер/.test(c.system))).toEqual([true, true, true, true, false]);
+    expect(w.receptionistCalls().map((c) => /это вопрос номер/.test(c.system))).toEqual([true, true, true, false]);
     expect(w.receptionistCalls().at(-1)!.system).toMatch(/НЕ задавай вопроса/);
     expect(last.cta).toEqual(['builder', 'call']);
     // the proposal carries no trailing question
@@ -297,7 +299,11 @@ describe('Telegram only when the visitor insists', () => {
     const tg = await w.say('Давайте лучше в Telegram');
     expect(tg.cta).toContain('telegram');
     expect(tg.reply).toContain('https://t.me/firtech_bot');
-    expect(tg.reply.indexOf('/builder')).toBeLessThan(tg.reply.indexOf('t.me'));
+    // the t.me link is allowed, but one line pulls back to the builder: always the builder offer with the link in the text
+    expect(tg.cta).toContain('builder');
+    expect(tg.reply.indexOf('t.me')).toBeLessThan(tg.reply.indexOf('/builder'));
+    expect(tg.reply).toMatch(/Если хотите, за минуту соберу проект, чтобы в Telegram говорить уже с ценой: https:\/\/firtech\.pro\/ru\/builder/);
+    expect(tg.builderLink).toMatch(/\/ru\/builder\?b=/);
     expect(w.receptionistCalls()).toHaveLength(2);
   });
 });
@@ -465,3 +471,81 @@ describe('limits and fallbacks', () => {
 });
 
 afterEach(() => vi.restoreAllMocks());
+
+describe('receptionist gaps (owner remarks 2026-11-21): need first, right link, one question, honest prices', () => {
+  const dump = (): string => `Мы делаем: ${productList('ru')}. Что вас интересует?`;
+
+  it('a named need is answered with its product and ONE question, never the list of all products; the list comes on «что вы делаете»', async () => {
+    const w = world({ turns: (_req, n) => (n === 1 ? json({ reply: dump(), extract: { product: 'bot', kind: 'salon' } }) : json({ reply: dump() })) });
+    const first = await w.say('хочу бота для салона');
+    expect(PRODUCT_IDS.filter((id) => first.reply.split('\n\n')[1]!.includes(PRODUCTS[id].name.ru)).length).toBeLessThanOrEqual(1);
+    // the greeting in front of it is the short one: no list of the seven products on a first message that names a need
+    expect(first.reply).toMatch(/^Здравствуйте\. Я ИИ-менеджер заявок Fir Tech\.\n\n/);
+    expect(first.reply).toContain('ИИ-администратор');
+    expect(first.reply.match(/\?/g)).toHaveLength(1);
+    expect(first.cta).toBeUndefined();
+    // «что вы делаете»: here the list is wanted
+    const all = await w.say('а что вы делаете вообще?');
+    // a fresh visitor who asks that gets the whole welcome with the list
+    const asked = await world({ turns: () => json({ reply: 'Расскажу.' }) }).say('Что вы делаете?', { sessionId: 'visitor-9200-abcd' });
+    expect(PRODUCT_IDS.filter((id) => asked.reply.includes(PRODUCTS[id].name.ru))).toHaveLength(PRODUCT_IDS.length);
+    expect(PRODUCT_IDS.filter((id) => all.reply.includes(PRODUCTS[id].name.ru)).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('a salon\'s «бот» is the ИИ-администратор in the link (k.salon~p.adminbot), never p.bot, even when the model says bot', async () => {
+    const w = world({
+      turns: (_req, n) => (n === 1
+        ? json({ reply: 'Понял, салон. Что сейчас теряется?', extract: { product: 'bot', kind: 'salon', niche: 'салон' } })
+        : json({ reply: 'Ясно, вечерние заявки теряются.', ready: true, extract: { pain: 'заявки вечером', product: 'bot' } })),
+    });
+    await w.say('хочу бота для салона');
+    const r = await w.say('вечером заявки теряются');
+    expect(r.cta).toContain('builder');
+    expect(r.builderLink).toBe('https://firtech.pro/ru/builder?b=k.salon~p.adminbot');
+    expect(decodeBuild(new URL(r.builderLink!).searchParams.get('b'))).toMatchObject({ kind: 'salon', products: ['adminbot'] });
+  });
+
+  it('«не хочу сайт, только агент» after the proposal: the link is regenerated with l.playground and z.no and always sent as the builder offer, no model call', async () => {
+    const w = world({ turns: salonModel });
+    await w.say('У меня салон красоты');
+    const prop = await w.say('Заявки в Instagram теряются');
+    expect(prop.builderLink).not.toMatch(/z\.no/);
+    const calls = w.receptionistCalls().length;
+    const r = await w.say('не хочу сайт, только агент');
+    expect(r.cta).toEqual(['builder']);
+    expect(r.builderLink).toMatch(/~l\.playground~z\.no/);
+    expect(r.reply).toContain(r.builderLink);
+    expect(decodeBuild(new URL(r.builderLink!).searchParams.get('b'))).toMatchObject({ delivery: ['playground'], siteNeed: 'no' });
+    expect(w.receptionistCalls()).toHaveLength(calls);
+  });
+
+  it('the price answer names the 1-3 products that fit, no Dono or Polly, no double period, and points to the builder for the rest', async () => {
+    const w = world({ turns: salonModel });
+    await w.say('У меня салон красоты');
+    await w.say('Заявки в Instagram теряются');
+    const r = await w.say('сколько стоит?');
+    expect(r.reply).not.toMatch(/Dono|Polly/);
+    expect(r.reply).not.toMatch(/\.\./);
+    expect(r.reply).toMatch(/Остальное и точную сумму под вас считает сборка проекта/);
+    const named = PRODUCT_IDS.filter((id) => r.reply.split('\n\n')[0]!.includes(PRODUCTS[id].name.ru));
+    expect(named.length).toBeGreaterThanOrEqual(1);
+    expect(named.length).toBeLessThanOrEqual(3);
+    expect(r.reply).toContain('ИИ-администратор от $');
+    expect(r.builderLink).toMatch(/p\.adminbot/);
+    // a visitor with no known need gets a default of three, still without the personal agents
+    const cold = await world({ turns: salonModel }).say('Сколько стоит?', { sessionId: 'visitor-9100-abcd' });
+    expect(cold.reply).not.toMatch(/Dono|Polly|Персональный ИИ-ассистент/);
+    expect(cold.reply).not.toMatch(/\.\./);
+  });
+
+  it('the demo takes no contact: the persona prompt offers a time to book and closes politely; no «приёмщик» anywhere in it', () => {
+    for (const persona of ['salon', 'clinic', 'shop', 'cafe', 'service', 'courses'] as const) {
+      const system = personaSystem(persona, 'ru', NOW, 'Asia/Dushanbe');
+      expect(system, persona).toContain('На какое время вас записать?');
+      expect(system, persona).toMatch(/НЕ спрашивай и не проси оставить/);
+      expect(system, persona).not.toMatch(/собирать (заказы и )?контакты|сбор контактов/);
+      expect(system, persona).not.toMatch(/приём?щик/iu);
+    }
+    expect(DEMO_TURNS).toBeGreaterThan(0);
+  });
+});

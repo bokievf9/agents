@@ -27,12 +27,17 @@ export type BuilderProduct = (typeof BUILDER_PRODUCTS)[number];
 export const BUILD_EXTRAS = ['support', 'seo', 'design'] as const;
 export const BUILD_GOALS = ['leads', 'sales', 'booking', 'routine', 'brand'] as const;
 export const BUILD_CHANNELS = ['instagram', 'telegram', 'search', 'word'] as const;
+/** Where an agent lives (`l.` chunk) and whether it gets a site (`z.` chunk): the builder's `deliveryChannels` and `siteNeeds`. */
+export const DELIVERY_CHANNELS = ['telegram', 'widget', 'whatsapp', 'playground'] as const;
+export const SITE_NEEDS = ['need', 'no', 'have'] as const;
 export const DETAIL_LANGS = ['ru', 'en', 'tj', 'uz'] as const;
 export const DETAIL_ASSETS = ['logo', 'texts', 'photos', 'domain', 'hosting'] as const;
 export const DETAIL_DEADLINES = ['asap', 'month', 'relaxed'] as const;
 export const PAGES_RANGE = { min: 1, max: 20 } as const;
 export const TEXT_LIMITS = { wish: 300, example: 100, examples: 2 } as const;
 
+export type DeliveryChannel = (typeof DELIVERY_CHANNELS)[number];
+export type SiteNeed = (typeof SITE_NEEDS)[number];
 export type BuildGoal = (typeof BUILD_GOALS)[number];
 export type BuildChannel = (typeof BUILD_CHANNELS)[number];
 export type DetailLang = (typeof DETAIL_LANGS)[number];
@@ -54,6 +59,10 @@ export interface Build {
   extras: (typeof BUILD_EXTRAS)[number][];
   goals?: BuildGoal[];
   channels?: BuildChannel[];
+  /** Where the agent lives: `l.playground`. An empty list is a choice too (`l.none`). */
+  delivery?: DeliveryChannel[];
+  /** Does the agent get a site: `z.no`. */
+  siteNeed?: SiteNeed;
   details?: BuildDetails;
 }
 
@@ -108,6 +117,8 @@ export function encodeBuild(build: Build): string {
   if (build.products?.length) parts.push(`p.${build.products.join('-')}`);
   if (build.goals?.length) parts.push(`g.${build.goals.join('-')}`);
   if (build.channels?.length) parts.push(`c.${build.channels.join('-')}`);
+  if (build.delivery) parts.push(`l.${build.delivery.length ? build.delivery.join('-') : 'none'}`);
+  if (build.siteNeed) parts.push(`z.${build.siteNeed}`);
   const d = build.details;
   if (d && (d.pages || d.langs?.length || d.has?.length || d.deadline)) {
     parts.push(`d.${[d.pages ? String(d.pages) : '_', list(d.langs), list(d.has), d.deadline ?? '_'].join('.')}`);
@@ -138,6 +149,12 @@ export function decodeBuild(value: string | null | undefined): Build | null {
     } else if (head === 'c') {
       const channels = keepKnown(second, BUILD_CHANNELS);
       if (channels.length) build.channels = channels;
+    } else if (head === 'l') {
+      const delivery = keepKnown(second, DELIVERY_CHANNELS);
+      if (delivery.length || second === 'none') build.delivery = delivery;
+    } else if (head === 'z') {
+      const need = oneOf(second, SITE_NEEDS);
+      if (need) build.siteNeed = need;
     } else if (head === 'd') {
       const pages = clampPages(Number(second));
       if (pages) details.pages = pages;
@@ -160,7 +177,7 @@ export function decodeBuild(value: string | null | undefined): Build | null {
     }
   }
   if (Object.keys(details).length) build.details = details;
-  const has = build.extras.length > 0 || build.kind || build.products || build.goals || build.channels || build.details;
+  const has = build.extras.length > 0 || build.kind || build.products || build.goals || build.channels || build.delivery || build.siteNeed || build.details;
   return has ? build : null;
 }
 
@@ -174,6 +191,8 @@ export function cleanBuild(b: Build): Build {
   if (goals.length) out.goals = goals;
   const channels = keepKnown((b.channels ?? []).join('-'), BUILD_CHANNELS);
   if (channels.length) out.channels = channels;
+  if (b.delivery) out.delivery = keepKnown(b.delivery.join('-'), DELIVERY_CHANNELS);
+  if (b.siteNeed && (SITE_NEEDS as readonly string[]).includes(b.siteNeed)) out.siteNeed = b.siteNeed;
   const d = b.details;
   if (d) {
     const det: BuildDetails = {};

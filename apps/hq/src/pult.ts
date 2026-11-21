@@ -9,6 +9,7 @@ import type { OwnerChannel } from './presence.js';
 import type { MarketingHead } from './heads/marketing.js';
 import { createCompany } from './pult-company.js';
 import type { AppTools } from './tools.js';
+import type { CabDocs } from './cab-docs.js';
 import { createPultContent } from './pult-content.js';
 import { createMetrics, SiteEvents } from './pult-events.js';
 import { createHub } from './pult-hub.js';
@@ -42,6 +43,8 @@ export interface PultDeps {
   onRoutinesChange?: (() => void) | undefined;
   /** The agents' toolbox adapters and keys (the `tools` list of `GET /admin/company`). */
   tools?: AppTools | undefined;
+  /** The cabinet's documents: a КП, a смета or a contract already sent to the client is revised in place (`review.ts`). */
+  cabinet?: Pick<CabDocs, 'reviseDelivered' | 'revisable'> | undefined;
 }
 
 export function createPult(d: PultDeps) {
@@ -51,7 +54,7 @@ export function createPult(d: PultDeps) {
   const metrics = createMetrics(d.hq.db, d.now, () => d.hq.tz, new SiteEvents(d.hq.db, d.now, () => d.hq.tz));
   const company = createCompany(d);
   const review = createReview({
-    hq: d.hq, queue: d.queue, director: d.director, channel: d.channel, now: d.now, crm: d.crm, marketing: d.marketing, rendersDir: d.rendersDir, decide: d.decide,
+    hq: d.hq, queue: d.queue, director: d.director, channel: d.channel, now: d.now, crm: d.crm, marketing: d.marketing, rendersDir: d.rendersDir, decide: d.decide, ...(d.cabinet ? { cabinet: d.cabinet } : {}),
     callLead: (leadId, at) => crm.handle('POST', ['leads', String(leadId), 'call'], new URLSearchParams(), { at }),
   });
   const chats = createChats({ hq: d.hq, now: d.now, client: d.client, webReply: d.webReply });

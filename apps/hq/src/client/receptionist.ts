@@ -2,21 +2,23 @@ import { detectText, errMsg, formatSlot, log, productList, productName, smallPro
 import { isPriceQuestion } from '@fir/worker-lead-intake';
 import { z } from 'zod';
 import {
-  BUILD_CHANNELS, BUILD_GOALS, BUILDER_KINDS, BUILDER_PRODUCT_OF, builderPath, DETAIL_DEADLINES, kindFromText, type Build, type BuildChannel, type BuildGoal, type BuilderKind, type DetailDeadline,
+  BUILD_CHANNELS, BUILD_GOALS, BUILDER_KINDS, BUILDER_PRODUCT_OF, builderPath, DETAIL_DEADLINES, kindFromText, type Build, type BuildChannel, type BuildGoal, type BuilderKind, type DeliveryChannel, type DetailDeadline, type SiteNeed,
 } from './builder-link.js';
-import { catalogueText, detectKind, isCatalogueId, PRODUCT_IDS, CLASSIC_IDS, PRODUCTS, startingPrices, type CatalogueId } from './products.js';
+import { asksCatalogue, NO_SITE_DELIVERY, productOfBot, productOfNeed, siteNeedOf } from './needs.js';
+import { catalogueText, detectKind, isCatalogueId, PRODUCT_IDS, CLASSIC_IDS, PRODUCTS, priceOf, type CatalogueId } from './products.js';
 import { sanitizeAnswer } from './sanitize.js';
 import type { Turn } from './shared.js';
 import { TEAM_MARK } from './prompt.js';
 import { T, type Lang } from './texts.js';
 
 /**
- * ИИ-менеджер заявок 2.0 (2026-11-22): the brain of the receptionist for the website chat and the client bot. It qualifies in at most five turns (what business,
- * what hurts, which product family fits, channels, timeline, a budget bracket only when it comes by itself), then proposes the builder with a prefilled link as the FIRST
+ * ИИ-менеджер заявок 2.0 (2026-11-22): the brain of the receptionist for the website chat and the client bot. It asks at most three questions (what business,
+ * what hurts, which product family fits, channels, timeline, a budget bracket only when it comes by itself), the fourth turn proposes, then proposes the builder with a prefilled link as the FIRST
  * call to action, a call as the second, Telegram only when the visitor insists. Prices come only from `getPrices()` with the stage rule. A person is called on request or
  * frustration. The model writes the words and reports what it heard (strict JSON); the code owns the state, the links, the numbers and the order of the offers.
  */
-export const MAX_QUALIFY_TURNS = 5;
+/** Clarifying questions before the proposal (owner 2026-11-21: three, not five); the turn after the last question proposes the builder. */
+export const MAX_QUALIFY_TURNS = 3;
 export const SITE_ORIGIN = 'https://firtech.pro';
 export const BOT_LINK = 'https://t.me/firtech_bot';
 
@@ -34,6 +36,9 @@ export interface QState {
   goals?: BuildGoal[];
   timeline?: Timeline;
   budget?: string;
+  /** «Не хочу сайт, только агент» (`z.no`) and where the agent then lives (`l.playground`): both travel in the builder link. */
+  siteNeed?: SiteNeed;
+  delivery?: DeliveryChannel[];
   /** How many times each offer went out. */
   offered: { builder: number; call: number; telegram: number };
   /** The last builder link proposed (a site path). */
@@ -135,8 +140,22 @@ export function merge(q: QState, m: Model, visitorText: string): QState {
   else if (!next.kind) next.kind = kindFromText(`${e.niche ?? ''} ${visitorText}`) ?? next.kind;
   if (e.niche?.trim() && !next.niche) next.niche = clip(e.niche, 80);
   if (e.pain?.trim()) next.pain = clip(e.pain, 200);
-  if (e.product && isCatalogueId(e.product)) next.product = e.product;
-  else if (!next.product) next.product = detectKind(`${e.niche ?? ''} ${visitorText}`)?.product ?? next.product;
+  // the product: an explicit need in the visitor's own words (the table in `needs.ts`) beats the model, the model beats what was known, the generic «бот» is resolved
+  // by the kind of business (a salon's «бот» is the ИИ-администратор), the niche's usual product only fills what is still empty
+  const need = productOfNeed(visitorText, next.kind);
+  if (need?.explicit) next.product = need.product;
+  else if (e.product && isCatalogueId(e.product) && e.product !== 'bot') next.product = e.product;
+  else if (need && (!next.product || next.product === 'bot')) next.product = need.product;
+  if (next.product === 'bot') next.product = productOfBot(next.kind);
+  if (!next.product) next.product = detectKind(`${e.niche ?? ''} ${visitorText}`)?.product ?? next.product;
+  const site = siteNeedOf(visitorText);
+  if (site) {
+    next.siteNeed = site;
+    if (site === 'no') {
+      next.delivery = [...NO_SITE_DELIVERY];
+      if (next.product === 'site') delete next.product;
+    }
+  }
   const channels = channelsOf(e.channels);
   if (channels.length) next.channels = [...new Set([...(next.channels ?? []), ...channels])];
   const goals = goalsOf(e.goals);
@@ -168,6 +187,8 @@ export function buildOf(q: QState): Build {
     ...(q.product ? { products: [BUILDER_PRODUCT_OF[q.product]!] } : {}),
     ...(q.goals?.length ? { goals: q.goals } : {}),
     ...(q.channels?.length ? { channels: q.channels } : {}),
+    ...(q.delivery ? { delivery: q.delivery } : {}),
+    ...(q.siteNeed ? { siteNeed: q.siteNeed } : {}),
     ...(q.timeline ? { details: { deadline: q.timeline } } : {}),
   };
 }
@@ -230,9 +251,22 @@ export function stageRule(lang: Lang): string {
     : `Payment is by stages: each stage before it starts, the last one before handover; a project up to ${rub(small)} is two stages, 50 and 50. We name the exact price and timing before the start, in the estimate.`;
 }
 
-/** The answer to a price question: the list of `getPrices()` and the stage rule. Nothing here comes from the model. */
-export function priceAnswer(lang: Lang): string {
-  return `${startingPrices(lang)}.\n\n${stageRule(lang)}`;
+/** The products a price answer names: the one that fits the need and its usual companions, three at most; never the personal agents (Dono, Polly). */
+export function priceProducts(q: Pick<QState, 'product'>): CatalogueId[] {
+  const first: CatalogueId = q.product && q.product !== 'agent' ? q.product : 'admin';
+  const rest: CatalogueId[] = [...PRODUCTS[first].pairs, 'receptionist', 'automation', 'site'];
+  return [...new Set<CatalogueId>([first, ...rest.filter((x) => x !== 'agent')])].slice(0, 3);
+}
+
+/**
+ * The answer to a price question: the prices of the 1-3 products that fit the need (`getPrices()`), the stage rule and a pointer to the builder for the rest. Nothing
+ * here comes from the model. No personal products (Dono, Polly) and one full stop at the end of the list.
+ */
+export function priceAnswer(lang: Lang, q: Pick<QState, 'product'> = {}): string {
+  const list = priceProducts(q).map((id) => `${PRODUCTS[id].name[lang]} ${priceOf(id, lang)}`).join('; ');
+  const head = lang === 'ru' ? `Цены на сайте, в долларах: ${list}.` : `Prices as on the site, in USD: ${list}.`;
+  const rest = lang === 'ru' ? 'Остальное и точную сумму под вас считает сборка проекта.' : 'The rest, and the exact sum for you, comes from the project builder.';
+  return `${head} ${rest}\n\n${stageRule(lang)}`;
 }
 
 export interface Cta {
@@ -244,7 +278,14 @@ export interface Cta {
 /** The offers as text: the builder link first, the call second, Telegram only when asked for. */
 export function ctaText(lang: Lang, o: { link: string; slots: number[]; tz: string; cta: Cta; channel?: 'web' | 'telegram' }): string {
   const out: string[] = [];
-  if (o.cta.builder) {
+  // Telegram asked for: the link to the bot, then one line that pulls back to the builder (the price is visible there at once)
+  const pull = o.cta.telegram && o.cta.builder;
+  if (pull) {
+    out.push(lang === 'ru' ? `Если удобнее в Telegram, пишите ${BOT_LINK}, там отвечает та же команда.` : `If Telegram is easier, write to ${BOT_LINK}, the same team answers there.`);
+    out.push(lang === 'ru'
+      ? `Если хотите, за минуту соберу проект, чтобы в Telegram говорить уже с ценой: ${o.link}`
+      : `If you like, I can put the project together in a minute, so that in Telegram we already talk with a price: ${o.link}`);
+  } else if (o.cta.builder) {
     out.push(lang === 'ru'
       ? `Соберите проект сами: я заполнил то, что вы рассказали. Цену и этапы оплаты видно сразу.\n${o.link}`
       : `You can put the project together yourself: I filled in what you told me. The price and payment stages show right away.\n${o.link}`);
@@ -257,7 +298,7 @@ export function ctaText(lang: Lang, o: { link: string; slots: number[]; tz: stri
       ? (when.length ? `Если проще обсудить голосом, ближайшие окна для созвона: ${when.join('; ')}. ${tg ? 'Напишите, какое подходит' : 'Оставьте контакт'}, менеджер подтвердит время.` : tg ? 'Если проще обсудить голосом, напишите «созвон» и удобное время, менеджер подтвердит.' : 'Если проще обсудить голосом, предложу время для созвона: оставьте контакт (@username, телефон или email).')
       : (when.length ? `If a call is easier, the nearest slots are ${when.join('; ')}. ${tg ? 'Tell me which suits you' : 'Leave a contact'} and a manager will confirm the time.` : tg ? 'If a call is easier, write “call” and a convenient time, and a manager will confirm.' : 'If a call is easier, I will suggest a time: leave a contact (@username, phone or email).'));
   }
-  if (o.cta.telegram) {
+  if (o.cta.telegram && !pull) {
     out.push(lang === 'ru' ? `Если удобнее в Telegram, пишите ${BOT_LINK}, там отвечает та же команда.` : `If Telegram is easier, write to ${BOT_LINK}, the same team answers there.`);
   }
   return out.join('\n\n');
@@ -288,7 +329,7 @@ const SLOT_ASK: Record<NonNullable<ReturnType<typeof nextSlot>>, string> = {
   niche: 'какой у собеседника бизнес и чем он занимается',
   pain: 'что сейчас мешает или теряется (заявки, запись, ответы ночью, рутина, повторяющиеся вопросы)',
   get product() {
-    return `какой формат ему ближе: ${productList('ru')}`;
+    return `какой формат ему ближе (назови один-два подходящих продукта по сказанному, не весь список: ${productList('ru')})`;
   },
   channels: 'где его клиенты пишут сейчас (Instagram, Telegram, сайт, звонки, сарафанное радио)',
   timeline: 'к какому сроку это нужно (срочно, в течение месяца, без спешки)',
@@ -304,7 +345,7 @@ const slotsKnown = (q: QState): string =>
 export function receptionistPrompt(instructions: string, lang: Lang, q: QState, mode: 'ask' | 'propose' | 'answer', o: { client?: { name: string } | undefined } = {}): string {
   const language = lang === 'en' ? 'English' : 'русский';
   const slot = nextSlot(q);
-  const last = q.turns + 1 >= MAX_QUALIFY_TURNS;
+  const last = q.turns >= MAX_QUALIFY_TURNS;
   return [
     instructions.trim(),
     '',
@@ -314,6 +355,7 @@ export function receptionistPrompt(instructions: string, lang: Lang, q: QState, 
     `- Язык ответа: ${language}. Тон студии: спокойно, на «вы», предметно, коротко.`,
     `- Ты «${productName('intake', lang)} Fir Tech»: реальный рабочий менеджер по заявкам, а не демо. Если спросят, кто ты, так и называйся: «${productName('intake', lang)} Fir Tech». Не выдавай себя за человека, но и не начинай с этого.`,
     '- Продукты называй только их именами из списка выше, слово «бот» в названии ИИ-продукта не используй.',
+    '- Не перечисляй все продукты. Если собеседник уже назвал нужду, ответь по ней одним подходящим продуктом и задай ОДИН вопрос. Весь список называй только на вопрос «что вы делаете» или «какие продукты».',
     '- Обычный текст без markdown, списков, эмодзи и длинных тире; не длиннее 500 символов, 1-3 предложения. Без оборотов «не X, а Y», без перечислений «без A, без B», без стоковых фраз.',
     `- Уже известно: ${slotsKnown(q)}.`,
     mode === 'answer'
@@ -387,6 +429,30 @@ export function lintReply(text: string, lang: Lang): { flagged: boolean; find: s
   return { flagged: d.verdict === 'flagged' || d.slop.length > 0 || d.structures.some((x) => x.id !== 'uniform-length'), find };
 }
 
+/** How many of the catalogue's products a text names (by their names in this language). */
+export function productsNamed(text: string, lang: Lang): number {
+  const t = text.toLowerCase();
+  return PRODUCT_IDS.filter((id) => t.includes(PRODUCTS[id].name[lang].toLowerCase())).length;
+}
+
+const SLOT_QUESTION: Record<NonNullable<ReturnType<typeof nextSlot>>, Record<Lang, string>> = {
+  niche: { ru: 'Чем занимается ваш бизнес?', en: 'What does your business do?' },
+  pain: { ru: 'Что сейчас мешает или теряется: заявки, запись, ответы ночью?', en: 'What gets in the way or is lost now: requests, booking, answers at night?' },
+  product: { ru: 'Что для вас важнее всего получить?', en: 'What matters most for you to get?' },
+  channels: { ru: 'Где вам сейчас пишут клиенты?', en: 'Where do your clients write to you now?' },
+  timeline: { ru: 'К какому сроку это нужно?', en: 'By when do you need it?' },
+  budget: { ru: 'На какой бюджет вы ориентируетесь?', en: 'What budget do you have in mind?' },
+};
+
+/** The code's own answer to a named need: the one product that fits and ONE question (no question when the proposal follows). Used when the model dumped the list. */
+export function needReply(q: QState, lang: Lang, proposing: boolean): string {
+  const product = q.product && q.product !== 'agent' ? PRODUCTS[q.product] : undefined;
+  const slot = nextSlot(q) ?? 'pain';
+  const ask = proposing ? '' : ` ${SLOT_QUESTION[slot][lang]}`;
+  if (!product) return lang === 'ru' ? `Понял вас.${ask || ' Сейчас предложу, как это собрать.'}` : `Understood.${ask || ' Let me suggest how to put it together.'}`;
+  return lang === 'ru' ? `Для этого подойдёт «${product.name.ru}»: ${product.benefit.ru}${ask}` : `“${product.name.en}” fits this: ${product.benefit.en}${ask}`;
+}
+
 /** The sentence with the question dropped when the turn is a proposal (the model asked one anyway). */
 function withoutTrailingQuestion(text: string): string {
   const parts = text.split(/(?<=[.!?])\s+/);
@@ -412,6 +478,9 @@ export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): 
   }
   if (i.client && SUPPORT_WORDS.test(text)) return { kind: 'client', q };
 
+  // what the visitor's words already settle (the need table, «не хочу сайт»): the state is updated before anything is answered, so every link carries it
+  const wasLink = q.link;
+  q = merge(q, { reply: '' }, text);
   const origin = d.siteOrigin ?? SITE_ORIGIN;
   const tgChannel = i.channel === 'telegram';
   const wantsTg = !tgChannel && insistsOnTelegram(text);
@@ -438,22 +507,27 @@ export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): 
     return { kind: 'reply', text: [head, tail].filter(Boolean).join('\n\n'), q, cta, ...(cta.builder ? { link } : {}), ...(contact ? { contact } : {}), ...(callAsked ? { callAsked: true } : {}), removed: 0 };
   };
 
-  // a price question: the price list and the stage rule from the code, then the builder
+  // a price question: the prices of the products that fit and the stage rule from the code, then the builder
   if (isPriceQuestion(text)) {
     q.askedPrice = true;
-    return compose(priceAnswer(i.lang), { builder: true, call: q.offered.call === 0, telegram: wantsTg });
+    return compose(priceAnswer(i.lang, q), { builder: true, call: q.offered.call === 0, telegram: wantsTg });
   }
   // the visitor asks for the builder, a call, or says Telegram is easier: the offers go out in their order, no model needed
   if (wantsBuilder(text) || callAsked || wantsTg) {
     const head = i.lang === 'ru' ? (wantsTg ? 'Хорошо, в Telegram тоже можно.' : 'Хорошо.') : wantsTg ? 'Sure, Telegram works too.' : 'Sure.';
-    return compose(head, { builder: !wantsTg || q.offered.builder === 0, call: callAsked || q.offered.call === 0, telegram: wantsTg });
+    // the builder link always goes out (after Telegram it is the pull back: the price is visible in the builder at once)
+    return compose(head, { builder: true, call: callAsked || q.offered.call === 0, telegram: wantsTg });
+  }
+  // the builder was proposed and the visitor's words changed it («не хочу сайт, только агент»): the link is regenerated and sent again, always as the builder offer
+  if (wasLink !== undefined && q.offered.builder > 0 && builderPath(i.lang, buildOf(q)) !== wasLink) {
+    return compose(i.lang === 'ru' ? 'Понял, обновил сборку под это.' : 'Got it, I updated the build for that.', { builder: true, call: false, telegram: false });
   }
 
   if (!d.llm.enabled || !d.gate.llmAllowed()) return { kind: 'fallback', q };
   if (d.gatewayDown?.()) return { kind: 'fallback', q, down: true };
 
   const offeredAlready = q.offered.builder > 0;
-  const propose = isEnough(q) || q.turns + 1 >= MAX_QUALIFY_TURNS;
+  const propose = isEnough(q) || q.turns >= MAX_QUALIFY_TURNS;
   const system = receptionistPrompt(d.instructions, i.lang, q, offeredAlready ? 'answer' : propose ? 'propose' : 'ask', { client: i.client ? { name: i.client.name } : undefined });
   d.gate.llmUsed();
   const raw = await withTimeout(tryComplete(d.llm, { tier: 'sonnet', maxTokens: 500, system, messages: [...i.turns, { role: 'user', content: text }] }), d.timeoutMs ?? 20_000);
@@ -498,6 +572,8 @@ export async function receptionistTurn(d: ReceptionistDeps, i: ReceptionistIn): 
       }
     }
   }
+  // the whole product list answers only «что вы делаете»; a visitor who named a need gets the need answered and one question
+  if (reply && !asksCatalogue(text) && productsNamed(reply, i.lang) >= 4) reply = needReply(q, i.lang, ready);
   if (!reply) reply = i.lang === 'ru' ? 'Понял вас. Расскажите, чем занимается ваш бизнес?' : 'Got it. What does your business do?';
 
   if (ready) {
