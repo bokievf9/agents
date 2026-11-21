@@ -3,12 +3,14 @@ import { isAbsolute, join, relative } from 'node:path';
 import type { ApprovalQueue, Payload } from '@fir/core';
 import type { Hq, Task, TaskApproval } from '@fir/hq';
 import { BillingStore } from '@fir/worker-billing';
+import { DocStore } from '@fir/worker-documents';
 import { captionOf } from '@fir/worker-publisher';
 import { RenderQueue, SIZES, parseReel, replacePart, splitKit, splitPlatforms, storeFor, type ContentStore, type Item, type ItemType, type Platform, type ReadyRow } from '@fir/worker-content-maker';
 import { analysisText, LinkStore } from '@fir/worker-trend-scout';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import type { createCrm } from './admin-crm.js';
+import type { CabDocs } from './cab-docs.js';
 import type { Director } from './director.js';
 import type { MarketingHead } from './heads/marketing.js';
 import type { OwnerChannel } from './presence.js';
@@ -36,6 +38,8 @@ export interface ReviewDeps {
   decide: (approvalId: number, action: 'approve' | 'reject') => Promise<unknown>;
   /** The lead call slot (`POST /admin/crm/leads/:id/call`). */
   callLead: (leadId: number, at: string) => Promise<AdminReply | null>;
+  /** The cabinet's documents: a КП, смета or contract that already went to the client is revised in place. Without it the texts are replaced, nothing is re-rendered. */
+  cabinet?: Pick<CabDocs, 'reviseDelivered' | 'revisable'> | undefined;
 }
 
 export const REVIEW_DEPTS = ['marketing', 'sales', 'support', 'production', 'backoffice', 'director'] as const;
@@ -55,7 +59,9 @@ interface Part {
   media: Media[];
   meta: Json;
   /** How the owner can replace the text: `content` (parts of an item), `draft` (the whole `payload.text`), or not at all. */
-  edit: 'content' | 'draft' | null;
+  edit: 'content' | 'draft' | 'pack' | null;
+  /** The edit is also open after the approval (a КП, смета or contract the client has not acted on yet): a new version, the client sees the latest. */
+  editApproved?: boolean;
   /** The kind has its own «Правки» to a worker. */
   revise: boolean;
   publishable: boolean;
@@ -75,9 +81,13 @@ const textBody = z.object({
   hashtags: z.array(z.string().trim().min(1).max(60)).max(40).optional(),
   captions: z.object({ instagram: z.string().max(4000).optional(), tiktok: z.string().max(4000).optional(), shorts: z.string().max(4000).optional() }).strict().optional(),
 }).strict();
+const DOC_KEYS = ['kp', 'estimate', 'contract'] as const;
 const postBody = z.object({
   action: z.enum(REVIEW_ACTIONS),
-  text: textBody.optional(),
+  /** A plain string is the same as `{draft: string}`. */
+  text: z.preprocess((v) => (typeof v === 'string' ? { draft: v } : v), textBody).optional(),
+  /** Which document of a КП pack the text replaces (`presales_pack` only). */
+  doc: z.enum(DOC_KEYS).optional(),
   note: z.string().trim().min(1).max(4000).optional(),
   slot: z.string().trim().min(1).max(40).optional(),
   platform: z.enum(['instagram', 'tiktok', 'shorts', 'youtube']).optional(),
@@ -164,7 +174,7 @@ export function createReview(d: ReviewDeps) {
     const c = views.one<{ client_id: number | null }>('SELECT client_id FROM li_leads WHERE id = ?', leadId);
     const cab = c?.client_id != null && has('cab_clients') ? views.one<{ id: number; email: string }>('SELECT id, email FROM cab_clients WHERE id = ?', c.client_id) : undefined;
     return {
-      lead: { id: v.id, name: v.name, contact: v.contact, service: v.service, budget: v.budget, stage: v.stage, source: v.source, temperature: v.temperature, taskId: v.taskId, callAt: v.callAt, cabinet: v.cabinet, enrichment: v.enrichment },
+      lead: { id: v.id, name: v.name, contact: v.contact, service: v.service, budget: v.budget, stage: v.stage, source: v.source, temperature: v.temperature, taskId: v.taskId, callAt: v.callAt, cabinet: v.cabinet, enrichment: v.enrichment, message: v.message, estimate: v.estimate, builderUrl: v.builderUrl },
       client: cab ? { id: cab.id, email: cab.email, cabinet: true } : { id: null, email: null, cabinet: false },
     };
   }
@@ -288,12 +298,77 @@ export function createReview(d: ReviewDeps) {
     };
   }
 
+  // ---- documents: a КП pack and a Back Office document can be edited, before and after the approval ----
+  /** A КП pack after its approval: the КП and the смета can be changed until the client acted on them (no cabinet row counts as open). */
+  const packRevisable = (payload: Payload): boolean => {
+    const packId = num(payload.packId);
+    return packId !== null && (d.cabinet?.revisable('ps_quote', packId) ?? true) && (d.cabinet?.revisable('ps_estimate', packId) ?? true);
+  };
+  /** An approved Back Office document: new versions until the client signed it. */
+  const docRevisable = (docId: number): boolean => d.cabinet?.revisable('bo', docId) ?? true;
+  const draftOf = (b: z.output<typeof postBody>): string => (b.text?.draft ?? b.text?.body ?? '').trim();
+
+  /** `presales_pack`: `doc` names the document (`kp`, `estimate`, `contract`); pending: the proposal's payload and the stored draft change, the card stays open; approved: КП and смета go to the client's cabinet again. */
+  async function editPack(l: TaskApproval, b: z.output<typeof postBody>): Promise<AdminReply> {
+    if (!b.doc) return fail(400, 'invalid', { hint: 'doc is required for a КП pack: kp, estimate or contract' });
+    const next = draftOf(b);
+    if (!next) return fail(400, 'invalid', { hint: 'text.draft is required' });
+    const key = rid(l.id);
+    const before = build(l);
+    const payload = payloadOf(l);
+    if (next === str(payload[b.doc]).trim()) return fail(409, 'not_applied', { reason: 'текст не изменился' });
+    const packId = num(payload.packId);
+    const approved = baseStatus(l) === 'approved';
+    const base = { text: before.text as Json, media: [] as unknown[], note: '', at: l.createdAt };
+    if (approved) {
+      // the contract of an approved pack is already a Back Office document of its own (a card, then the client's signature): it is edited there
+      if (b.doc === 'contract') return fail(409, 'not_applicable', { reason: 'договор после одобрения КП правится карточкой документа (bo_document)' });
+      if (packId === null || !packRevisable(payload)) return fail(409, 'locked', { reason: 'клиент уже принял КП' });
+      if (l.approvalId === null) return fail(409, 'not_pending', { status: baseStatus(l) });
+      await d.cabinet?.reviseDelivered(b.doc === 'kp' ? 'ps_quote' : 'ps_estimate', packId, next);
+      queue.amendPayload(l.approvalId, { [b.doc]: next });
+    } else {
+      const core = openApproval(l);
+      if (core === null) return fail(409, 'not_pending', { status: baseStatus(l) });
+      const { result } = await d.channel.capture(() => queue.applyPatch(core, { [b.doc!]: next }));
+      if (!result) return fail(409, 'not_applied', { status: queue.get(core)?.status ?? baseStatus(l) });
+      await queue.settleCard(core).catch(() => false);
+    }
+    // the stored document follows (the cabinet and the chain read the payload; the archive reads the table)
+    if (packId !== null && has('ps_documents')) db.prepare('UPDATE ps_documents SET body = ? WHERE pack_id = ? AND kind = ? AND status IN (\'draft\', \'approved\')').run(next, packId, b.doc);
+    const after = build(hq.approvalLink(l.id)!);
+    versions.add(key, { text: after.text as Json, media: [], note: `${b.note ? `владелец: ${b.note}` : 'владелец'} (${b.doc})`, author: 'owner' }, { ...base, note: baseNote(l, describe(l, payload, 'pending')) });
+    return ok({ item: view(l) });
+  }
+
+  /** An approved Back Office document: a new version row (the client's cabinet row follows it and its PDF is rendered again) until the client signed. */
+  async function reviseApprovedDoc(l: TaskApproval, b: z.output<typeof postBody>): Promise<AdminReply> {
+    if (l.kind !== 'bo_document' || l.approvalId === null) return fail(409, 'not_applicable', { status: baseStatus(l) });
+    const next = draftOf(b);
+    if (!next) return fail(400, 'invalid', { hint: 'text.draft is required' });
+    const payload = payloadOf(l);
+    const docs = new DocStore(db, now);
+    const old = docs.get(Number(payload.docId));
+    if (!old) return fail(404, 'not_found', { reason: 'документ не найден' });
+    if (next === old.text.trim()) return fail(409, 'not_applied', { reason: 'текст не изменился' });
+    if (!docRevisable(old.id)) return fail(409, 'locked', { reason: 'клиент уже подписал документ' });
+    const key = rid(l.id);
+    const before = build(l);
+    const row = docs.add({ type: old.type, client: old.client, projectId: old.projectId, text: next, taskId: old.taskId });
+    docs.setStatus(row.id, 'approved', next);
+    await d.cabinet?.reviseDelivered('bo', old.id, next, row.id);
+    queue.amendPayload(l.approvalId, { text: next, docId: row.id });
+    const after = build(hq.approvalLink(l.id)!);
+    versions.add(key, { text: after.text as Json, media: [], note: b.note ? `владелец: ${b.note}` : `владелец (версия ${row.version})`, author: 'owner' }, { text: before.text as Json, media: [], note: '', at: l.createdAt });
+    return ok({ item: view(l) });
+  }
+
   // ---- other kinds ----
-  function generic(l: TaskApproval, payload: Payload, title: string, extra: { meta?: Json; text?: Json; leadId?: number | null; sendable?: boolean; edit?: 'draft' | null } = {}): Part {
+  function generic(l: TaskApproval, payload: Payload, title: string, extra: { meta?: Json; text?: Json; leadId?: number | null; sendable?: boolean; edit?: 'draft' | 'pack' | null; editApproved?: boolean } = {}): Part {
     const draft = typeof payload.text === 'string' ? payload.text : null;
     return {
       title: oneLine(title, 140), summary: oneLine(stripPrefix(l.summary).split('\n')[0] ?? ''), text: { ...(draft !== null ? { draft, body: draft } : { body: stripPrefix(l.summary) }), ...(extra.text ?? {}) },
-      media: [], meta: extra.meta ?? {}, edit: extra.edit === undefined ? (draft !== null ? 'draft' : null) : extra.edit, revise: false, publishable: false, leadId: extra.leadId ?? null,
+      media: [], meta: extra.meta ?? {}, edit: extra.edit === undefined ? (draft !== null ? 'draft' : null) : extra.edit, revise: false, publishable: false, leadId: extra.leadId ?? null, ...(extra.editApproved ? { editApproved: true } : {}),
       sendable: extra.sendable ?? false, error: null, published: false,
     };
   }
@@ -339,7 +414,7 @@ export function createReview(d: ReviewDeps) {
           { key: 'kp', title: 'Коммерческое предложение', body: str(payload.kp) }, { key: 'estimate', title: 'Смета', body: str(payload.estimate) }, { key: 'contract', title: 'Договор (черновик)', body: str(payload.contract) },
         ].filter((x) => x.body);
         return generic(l, payload, `КП: ${str(payload.client) || f.lead?.name || 'клиент'}, ${str(payload.what)}`, {
-          text: { body: str(payload.kp), documents: docs }, edit: null, leadId,
+          text: { body: str(payload.kp), documents: docs }, edit: 'pack', editApproved: status === 'approved' && packRevisable(payload), leadId,
           meta: {
             lead: f.lead, client: f.client,
             pack: { id: num(payload.packId), direction: str(payload.direction), totalUsd: num(payload.totalUsd), prepayUsd: num(payload.prepayUsd), prepayPercent: num(payload.prepayPercent), stages: Array.isArray(payload.stages) ? payload.stages : null, timeline: str(payload.timeline) || null },
@@ -348,7 +423,7 @@ export function createReview(d: ReviewDeps) {
       }
       case 'bo_document': {
         const doc = has('bo_documents') ? views.one<{ id: number; type: string; client: string; version: number; project_id: number | null }>('SELECT id, type, client, version, project_id FROM bo_documents WHERE id = ?', Number(payload.docId)) : undefined;
-        return generic(l, payload, doc ? `Документ ${doc.type}: ${doc.client}, версия ${doc.version}` : 'Документ', { meta: { document: doc ? { id: doc.id, type: doc.type, client: doc.client, version: doc.version, projectId: doc.project_id } : { id: num(payload.docId) } } });
+        return generic(l, payload, doc ? `Документ ${doc.type}: ${doc.client}, версия ${doc.version}` : 'Документ', { ...(status === 'approved' && doc && docRevisable(doc.id) ? { editApproved: true } : {}), meta: { document: doc ? { id: doc.id, type: doc.type, client: doc.client, version: doc.version, projectId: doc.project_id } : { id: num(payload.docId) } } });
       }
       case 'billing_invoice':
       case 'billing_reminder': {
@@ -447,7 +522,7 @@ export function createReview(d: ReviewDeps) {
     const out: ReviewAction[] = [];
     const pending = status === 'pending';
     if (pending) out.push('approve');
-    if (pending && part.edit) out.push('edit');
+    if (part.edit && (pending || (status === 'approved' && part.editApproved))) out.push('edit');
     if (pending && part.revise && d.marketing) out.push('revise');
     if (pending) out.push('reject');
     // «Выложить сейчас»: an article is published by its approval; a post, carousel or story is approved and sent in one go; a reel needs its video first
@@ -581,7 +656,7 @@ export function createReview(d: ReviewDeps) {
     if (b.action === 'approve' && (status === 'approved' || status === 'published')) return ok({ item: answer() });
     if (b.action === 'reject' && status === 'rejected') return ok({ item: answer() });
     if ((b.action === 'approve' || b.action === 'reject') && status !== 'pending') return fail(409, status === 'failed' ? 'not_pending' : 'already_decided', { status });
-    if (['edit', 'revise', 'send'].includes(b.action) && status !== 'pending') return fail(409, 'not_pending', { status });
+    if (['edit', 'revise', 'send'].includes(b.action) && status !== 'pending' && !(b.action === 'edit' && status === 'approved' && actions.includes('edit'))) return fail(409, 'not_pending', { status });
     if (!actions.includes(b.action)) return fail(409, 'not_applicable', { status, actions });
 
     switch (b.action) {
@@ -622,6 +697,8 @@ export function createReview(d: ReviewDeps) {
 
   async function editRoute(l: TaskApproval, b: z.output<typeof postBody>): Promise<AdminReply> {
     if (!b.text) return fail(400, 'invalid', { hint: 'text is required' });
+    if (l.kind === 'presales_pack') return editPack(l, b);
+    if (baseStatus(l) === 'approved') return reviseApprovedDoc(l, b);
     const key = rid(l.id);
     const before = build(l);
     const payload = payloadOf(l);

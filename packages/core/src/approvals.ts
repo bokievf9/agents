@@ -407,9 +407,17 @@ export class ApprovalQueue {
    * e.g. one platform part swapped), resets the streak, journals "edit" and asks again.
    */
   async applyEdit(id: number, text: string): Promise<boolean> {
+    return this.applyPatch(id, { text });
+  }
+
+  /**
+   * Like `applyEdit`, for a proposal whose text lives in several payload fields (a КП pack: `kp`, `estimate`, `contract`): the fields of `patch`
+   * replace the same ones of the payload, the rest stays.
+   */
+  async applyPatch(id: number, patch: Payload): Promise<boolean> {
     const row = this.get(id);
     if (!row || (row.status !== 'pending' && row.status !== 'editing')) return false;
-    const payload: Payload = { ...row.payload, text };
+    const payload: Payload = { ...row.payload, ...patch };
     this.db.prepare("UPDATE approvals SET payload = ?, edited = 1, status = 'pending' WHERE id = ?").run(JSON.stringify(payload), id);
     this.bump(row.kind, 'reset');
     this.journal(id, row.kind, 'edit');
@@ -419,6 +427,14 @@ export class ApprovalQueue {
       await this.messenger.edit(old.chatId, old.messageId, view.text, { html: true }).catch((e) => log('warn', 'card settle failed', { approvalId: id, err: errMsg(e) }));
     }
     await this.ask(id);
+    return true;
+  }
+
+  /** Changes the payload of a decided proposal (a document revised after its approval): no status, streak or journal change. false: no such row. */
+  amendPayload(id: number, patch: Payload): boolean {
+    const row = this.get(id);
+    if (!row) return false;
+    this.db.prepare('UPDATE approvals SET payload = ? WHERE id = ?').run(JSON.stringify({ ...row.payload, ...patch }), id);
     return true;
   }
 

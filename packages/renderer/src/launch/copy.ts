@@ -45,7 +45,7 @@ export const COPY: Record<Lang, LaunchCopy> = {
       hook: 'ИИ-агенты вместо сотрудника.',
       problem: 'Заявка ночью. Ответа нет. Клиент ушёл.',
       bot: 'Бот записывает клиентов.',
-      intake: 'Приёмщик собирает заявки.',
+      intake: 'Заявки ведёт ИИ-менеджер.',
       automation: 'Автоматизация берёт рутину.',
       content: 'Контент на автопилоте.',
       miniapp: 'Mini App в Telegram.',

@@ -214,7 +214,7 @@ describe('enrichment of a lead (ИИ-менеджер заявок 2.0)', () => 
     expect(res.result).toContain('Разговор:\n  Бизнес: салон красоты; задача: вечерние заявки.');
     expect(res.result).toContain('Семейство продукта: admin');
     expect(res.result).toContain('Намерение: 64/100');
-    expect(res.result).toContain('Сборка, которую предложил приёмщик: /ru/builder?b=k.salon~p.adminbot');
+    expect(res.result).toContain('Сборка, которую предложил ИИ-менеджер заявок: /ru/builder?b=k.salon~p.adminbot');
     expect(String(r.staged[0]!.summary)).toContain('Намерение: 64/100');
   });
 

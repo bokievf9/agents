@@ -28,6 +28,18 @@ export const TICKET_STATUSES = ['open', 'answered'] as const;
 
 const iso = (ms: number | null | undefined) => (ms === null || ms === undefined ? null : new Date(ms).toISOString());
 const cap = (s: string | null | undefined) => (s ?? '').slice(0, TEXT_CAP);
+/** The breakdown block of the site reads these in full (the site trims them again to 2000 characters). */
+const BREAKDOWN_CAP = 4000;
+const BUILDER_URL = /https?:\/\/(?:www\.)?firtech\.pro\/[^\s<>"')\]]*builder[^\s<>"')\]]*[?&]b=[^\s<>"')\]]+/i;
+/** The builder link of a lead: the one the receptionist stored in the enrichment, else the first firtech.pro builder link in the lead's text or estimate. */
+export function builderUrlOf(enrichment: { builderLink?: string } | null, ...texts: (string | null | undefined)[]): string | null {
+  if (enrichment?.builderLink) return enrichment.builderLink.slice(0, 2000);
+  for (const t of texts) {
+    const m = t ? BUILDER_URL.exec(t) : null;
+    if (m) return m[0].replace(/[.,;:!?]+$/, '').slice(0, 2000);
+  }
+  return null;
+}
 const ok = (body: Record<string, unknown>): CrmReply => ({ status: 200, body: { ok: true, ...body } });
 const fail = (status: number, error: string, extra: Record<string, unknown> = {}): CrmReply => ({ status, body: { ok: false, error, ...extra } });
 const likeEsc = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
@@ -177,7 +189,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     const stage = stages.stageOf(l);
     return {
       id: l.id, kind: 'lead', taskId: l.task_id, status: leadStatus(l.task_id), name: l.name, contact: l.contact, service: l.service, niche: l.niche,
-      task: cap(l.task), deadline: l.deadline, budget: l.budget, source: l.origin, temperature: l.temperature, lang: l.lang,
+      task: cap(l.task), message: (l.task ?? '').slice(0, BREAKDOWN_CAP), estimate: (l.estimate ?? '').slice(0, BREAKDOWN_CAP), builderUrl: builderUrlOf(parseEnrichment(l.enrichment ?? null), l.task, l.estimate), deadline: l.deadline, budget: l.budget, source: l.origin, temperature: l.temperature, lang: l.lang,
       priceAsked: l.price_asked === 1, priceApproved: l.price_approved === 1, createdAt: iso(l.created_at), callAt: iso(l.chosen_slot),
       cabinet: l.client_id != null, enrichment: parseEnrichment(l.enrichment ?? null), stage, nextAction: nextActionOf(stage), note: note('lead', l.id), lostReason: stage === 'lost' ? note('lead_lost', l.id) : '',
     };

@@ -2,6 +2,7 @@ import { errMsg, log, type Db, type LlmClient } from '@fir/core';
 import { z } from 'zod';
 import type { ClientSinks } from './engine.js';
 import { inWindow, linksOnly, RateLimiter } from './sanitize.js';
+import { asksCatalogue } from './needs.js';
 import { clip, GREETING, intakeRecord, TurnHistory } from './shared.js';
 import { DemoChat, isPersona, PERSONAS } from './persona.js';
 import { isPriceQuestion } from '@fir/worker-lead-intake';
@@ -212,7 +213,7 @@ export class WebChatEngine {
     else if (s.state !== 'contact' && linksOnly(text)) step = { reply: W[lang].ask };
     else step = await this.text(s, lang, text.slice(0, 1000));
     // A new visitor who starts with a real question: the greeting first, then the answer to it.
-    if (fresh) step = { ...step, reply: `${W[lang].welcome}\n\n${step.reply}`, buttons: menuButtons(lang) };
+    if (fresh) step = { ...step, reply: `${asksCatalogue(text) ? W[lang].welcome : W[lang].welcomeShort}\n\n${step.reply}`, buttons: menuButtons(lang) };
     const after = this.store.get(s.id)!;
     return {
       ok: true, reply: step.reply, ...(step.buttons?.length ? { buttons: step.buttons } : {}),

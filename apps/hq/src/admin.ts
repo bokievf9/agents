@@ -103,7 +103,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));
   const pult = createPult({
     hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply,
-    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange, tools: d.tools,
+    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange, tools: d.tools, ...(d.cabinet ? { cabinet: d.cabinet.docs } : {}),
   });
 
   const maxTaskId = () => (hq.db.prepare('SELECT COALESCE(MAX(id), 0) m FROM tasks').get() as { m: number }).m;

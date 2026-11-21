@@ -65,6 +65,22 @@ describe('product names: one map, no «бот» in the name of an AI product', (
     expect(hits).toEqual([]);
   });
 
+  it('the bare word «приёмщик» is in no client-facing text: the receptionist is «ИИ-менеджер заявок» (owner remark 2026-11-21)', () => {
+    // the modules whose words reach a visitor, a client or the owner's lead card; the internal role title of the worker (`sales.ts`) and the READMEs may keep it
+    const FACING = ['apps/hq/src/client', 'apps/hq/instructions/client-bot.md', 'packages/renderer/src/launch', 'packages/renderer/scripts', 'packages/workers/lead-intake/src/text.ts', 'packages/workers/presales/templates', 'packages/workers/presales/prompts', 'packages/workers/documents/templates', 'knowledge'];
+    const hits: string[] = [];
+    let scanned = 0;
+    for (const entry of FACING) {
+      const abs = join(ROOT, entry);
+      for (const f of statSync(abs).isDirectory() ? files(abs) : [abs]) {
+        scanned++;
+        if (/приём?щик/iu.test(readFileSync(f, 'utf8'))) hits.push(relative(ROOT, f));
+      }
+    }
+    expect(scanned).toBeGreaterThan(20);
+    expect(hits).toEqual([]);
+  });
+
   it('the scan really sees the dirs it is told about (a template, an instruction, a playbook)', () => {
     const seen = SCAN.flatMap((p) => expand(p)).map((d) => relative(ROOT, d));
     expect(seen).toEqual(expect.arrayContaining(['apps/hq/src', 'apps/hq/instructions', 'knowledge', 'packages/workers/presales/templates', 'packages/workers/documents/templates']));

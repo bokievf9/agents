@@ -61,6 +61,8 @@ export const productOf = (need: Need | undefined): string => (need && isCatalogu
 
 interface Texts {
   welcome(name: string): string;
+  /** The greeting in front of the answer to a first message that names a need: no product list. */
+  welcomeShort(name: string): string;
   menu: { discuss: string; products: string; client: string; human: string; lang: string; demo: string };
   productsTitle: string;
   productsIntro: string;
@@ -109,6 +111,7 @@ const RU: Texts = {
   welcome: (name) =>
     `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Я ${productName('intake', 'ru')} Fir Tech. Что мы делаем: ${productList('ru')}.\n\n` +
     `Наши собственные ассистенты работают каждый день: Dono ведёт учёбу студента, Polly учит языкам. Этот чат тоже наша работа: так выглядит ${productName('intake', 'ru')}.\n\nЧем помочь?`,
+  welcomeShort: (name) => `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Я ${productName('intake', 'ru')} Fir Tech.`,
   menu: { discuss: '💬 Обсудить проект', products: '🧩 Продукты', client: '🧾 Я уже клиент', human: '👤 Позвать человека', lang: '🇬🇧 English', demo: '🧪 Попробовать демо' },
   productsTitle: '<b>Продукты Fir Tech</b>',
   productsIntro: 'Выберите, что интересно: расскажу, для кого это и что внутри.',
@@ -154,6 +157,7 @@ const EN: Texts = {
   welcome: (name) =>
     `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. I am the Fir Tech ${productName('intake', 'en')}. What we do: ${productList('en')}.\n\n` +
     `Our own assistants work every day: Dono runs a student’s studies, Polly teaches languages. This chat is our work too: this is what an ${productName('intake', 'en')} looks like.\n\nHow can we help?`,
+  welcomeShort: (name) => `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. I am the Fir Tech ${productName('intake', 'en')}.`,
   menu: { discuss: '💬 Discuss a project', products: '🧩 Products', client: '🧾 I am a client', human: '👤 Talk to a person', lang: '🇷🇺 Русский', demo: '🧪 Try the demo' },
   productsTitle: '<b>Fir Tech products</b>',
   productsIntro: 'Pick what interests you: I will tell you who it is for and what is inside.',

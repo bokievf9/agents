@@ -158,7 +158,7 @@ describe('lead enrichment on the cards', () => {
     // the card text of the approval carries the same lines
     const card = (w.db.prepare("SELECT summary FROM task_approvals WHERE kind = 'lead_reply' ORDER BY id").get() as { summary: string }).summary;
     expect(card).toMatch(/Намерение: \d+\/100/);
-    expect(card).toContain(`Сборка, которую предложил приёмщик: ${link}`);
+    expect(card).toContain(`Сборка, которую предложил ИИ-менеджер заявок: ${link}`);
   });
 
   it('a lead from the chat brings its own enrichment: the three lines, the family, the niche, the score, the link of the conversation', async () => {

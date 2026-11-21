@@ -639,6 +639,32 @@ export class CabDocs {
     return made;
   }
 
+  /** True while a delivered document can still be revised by the owner (no cabinet row at all counts as open: only the text is replaced). */
+  revisable(src: 'ps_quote' | 'ps_estimate' | 'bo', srcId: number): boolean {
+    const row = this.db.prepare('SELECT kind, state FROM cab_documents WHERE src = ? AND src_id = ?').get(src, srcId) as { kind: string; state: string } | undefined;
+    return !row || row.state === (row.kind === 'quote' ? 'awaiting_client' : row.kind === 'contract' ? 'awaiting_signature' : 'issued');
+  }
+
+  /**
+   * The owner revised a delivered document (review center, «Правка»): the text of the row is replaced, its PDF is rendered again (the old link stops being
+   * the latest at once) and the client gets a line in his thread. Allowed only until the client acted: a quote while it awaits him, a contract while it
+   * awaits the signature; a signed or accepted one is refused (`locked`). `none`: the lead has no cabinet row (the owner sends the text himself).
+   * `newSrcId`: the row now stands for the new version of a Back Office document.
+   */
+  async reviseDelivered(src: 'ps_quote' | 'ps_estimate' | 'bo', srcId: number, body: string, newSrcId?: number): Promise<'revised' | 'none' | 'locked'> {
+    const row = this.db.prepare('SELECT * FROM cab_documents WHERE src = ? AND src_id = ?').get(src, srcId) as DocRow | undefined;
+    if (!row) return 'none';
+    const open = row.kind === 'quote' ? 'awaiting_client' : row.kind === 'contract' ? 'awaiting_signature' : 'issued';
+    if (row.state !== open) return 'locked';
+    this.db.prepare('UPDATE cab_documents SET body = ?, src_id = ?, pdf_rel = NULL, pdf_sha256 = NULL WHERE id = ?').run(body, newSrcId ?? row.src_id, row.id);
+    await this.attachPdf(this.row(row.id)!);
+    const c = this.client(row.client_id);
+    postFromFirTech(this.db, this.d.now(), row.client_id, row.lead_id,
+      c?.locale === 'en' ? `The document «${row.title}» was updated. Please open Documents to see the latest version.` : `Документ «${row.title}» обновлён. Откройте раздел «Документы», там актуальная версия.`);
+    this.d.hq.log('documents', 'doc_revised', 'document', String(row.id), row.kind);
+    return 'revised';
+  }
+
   // ---- the API ----
   /** The invoice state follows `bl_invoices` (paid, voided); the other states are the row's own. */
   private liveState(r: DocRow): DocState {
