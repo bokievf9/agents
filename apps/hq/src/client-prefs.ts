@@ -11,7 +11,7 @@ export const NOTIFY_CHANNELS = ['email', 'telegram', 'both'] as const;
 export type NotifyChannel = (typeof NOTIFY_CHANNELS)[number];
 
 /** A free-text profile field: trimmed, capped, no control characters (a field sent empty clears it). */
-const text = (max: number) => z.string().trim().max(max).refine((v) => !/[\u0000-\u001f\u007f]/.test(v), 'control');
+const text = (max: number) => z.string().trim().max(max).refine((v) => ![...v].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127), 'control');
 const url = z.string().trim().max(200).refine((v) => v === '' || /^https?:\/\/[^\s/$.?#][^\s]*$/i.test(v), 'url');
 
 /** The new profile fields (all optional; the first group is also accepted by the registration). */

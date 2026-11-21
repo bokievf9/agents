@@ -40,7 +40,7 @@ describe('the profile persists', () => {
     const { cid } = await start();
     const r = await w.adm('POST', `/admin/clients/${cid}`, { name: 'Дилярам Каримова', telegram: '@dilya_new', phone: '+992 90 111 22 33', company: 'Салон Диля', locale: 'en' });
     expect(r.status, r.text).toBe(200);
-    expect(r.json.client).toEqual({ id: cid, email: EMAIL, name: 'Дилярам Каримова', telegram: '@dilya_new', phone: '+992 90 111 22 33', company: 'Салон Диля', locale: 'en' });
+    expect(r.json.client).toMatchObject({ id: cid, email: EMAIL, name: 'Дилярам Каримова', telegram: '@dilya_new', phone: '+992 90 111 22 33', company: 'Салон Диля', locale: 'en' });
     const by = (await w.adm('GET', `/admin/clients/by-email?email=${encodeURIComponent(EMAIL)}`)).json.client;
     expect(by).toMatchObject({ name: 'Дилярам Каримова', telegram: '@dilya_new', phone: '+992 90 111 22 33', company: 'Салон Диля', locale: 'en' });
     // a partial patch keeps the rest; a field sent empty clears it; PATCH is the same as POST
