@@ -62,17 +62,17 @@ function firaTurn(o: EvalOptions, set: EvalSet): TurnFn {
     const mocks = { ...set.mocks, ...c.mocks };
     const tools: ToolRegistry = { ...o.tools, ...(Object.keys(mocks).length ? mockTools(mocks) : {}) };
     return run(o.spec, { id: `eval-${c.id}`, text: c.user, mode: c.mode, lang: c.lang, ...(c.task ? { task: c.task } : {}) }, {
-      llm: o.live ?? new MockChatLlm(c.script ?? []), ...stores, now: () => now, guard, tools,
+      llm: o.live ?? new MockChatLlm(c.script ?? []), ...stores, now: () => now, guard, tools, ...(set.clientNames.length ? { leak: { clientNames: set.clientNames } } : {}),
     });
   };
 }
 
 /** The checks of one case on a reply; empty list: pass. */
-export function check(c: EvalCase, set: Pick<EvalSet, 'banned'>, out: Pick<RunOut, 'reply' | 'outcome' | 'fallback'>): string[] {
+export function check(c: EvalCase, set: Pick<EvalSet, 'banned'> & Partial<Pick<EvalSet, 'clientNames'>>, out: Pick<RunOut, 'reply' | 'outcome' | 'fallback'>): string[] {
   const f: string[] = [];
   const low = out.reply.toLowerCase();
   for (const w of c.expect.contains) if (!low.includes(w.toLowerCase())) f.push(`must contain «${w}»`);
-  for (const w of [...c.expect.notContains, ...set.banned]) if (low.includes(w.toLowerCase())) f.push(`must not contain «${w}»`);
+  for (const w of [...c.expect.notContains, ...set.banned, ...(set.clientNames ?? [])]) if (low.includes(w.toLowerCase())) f.push(`must not contain «${w}»`);
   if (c.expect.matches.length && !c.expect.matches.some((re) => new RegExp(re, 'iu').test(out.reply))) f.push(`must match one of ${c.expect.matches.join(' | ')}`);
   for (const t of c.expect.callsTool) if (!out.outcome.used.includes(t)) f.push(`must call ${t}`);
   for (const t of c.expect.notCallsTool) if (out.outcome.used.includes(t)) f.push(`must not call ${t}`);

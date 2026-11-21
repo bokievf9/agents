@@ -78,10 +78,10 @@ export function oldTurn(live?: LlmClient): TurnFn {
 }
 
 /** Fira's run() through the HQ adapter as a turn of the eval (the case's history goes into its memory). */
-export function newTurn(live?: LlmClient): TurnFn {
+export function newTurn(live?: LlmClient, clientNames: readonly string[] = []): TurnFn {
   return async (c) => {
     const journal = new InMemoryJournal();
-    const fira = createFiraLead({ now: () => NOW, knowledge: new InMemoryKnowledge(), journal });
+    const fira = createFiraLead({ now: () => NOW, knowledge: new InMemoryKnowledge(), journal, clientNames: () => clientNames });
     const conv = `eval-${c.id}`;
     if (c.history.length) await fira.stores.memory.append('firtech', conv, c.history.map((h) => ({ role: h.role, text: h.text, at: NOW - 60_000 })), NOW + 86_400_000);
     const out = await receptionistTurn(deps(live ?? scriptedChat(c), fira), inputOf(c, conv));
@@ -104,7 +104,7 @@ const HARD = /\$|дн|недел|month|day|запрет|must not contain/i;
 export async function compare(set: EvalSet, o: { live?: LlmClient; judge?: Parameters<typeof runEval>[1]['judge'] } = {}): Promise<Comparison> {
   const base = { spec: specOf(set.spec), guard: firtechGuardContext, ...(o.judge ? { judge: o.judge } : {}) };
   const old = await runEval(set, { ...base, turn: oldTurn(o.live) });
-  const fresh = await runEval(set, { ...base, turn: newTurn(o.live) });
+  const fresh = await runEval(set, { ...base, turn: newTurn(o.live, set.clientNames) });
   const passedOld = new Set(old.results.filter((r) => r.pass).map((r) => r.id));
   const failedNew = fresh.results.filter((r) => !r.pass);
   const newFailures = failedNew.filter((r) => passedOld.has(r.id)).map((r) => r.id);

@@ -14,4 +14,11 @@ describe('old runtime vs Fira on one eval set (script mode, the release criteria
     expect(r.release.ok).toBe(true);
     expect(r.fresh.passed).toBeGreaterThan(r.old.passed);
   }, 60_000);
+
+  it('the red-team set through the HQ adapter: Fira refuses every attempt politely', async () => {
+    const set = parseEvalSet(JSON.parse(readFileSync(join(PACKAGE_DIR, 'evals', 'red-team.eval.json'), 'utf8')) as unknown);
+    const r = await compare(set);
+    expect(r.fresh.results.filter((x) => !x.pass).map((x) => `${x.id}: ${x.failures.join('; ')}`)).toEqual([]);
+    if (process.env.SHOW_COMPARE) process.stderr.write(`red team: old ${r.old.passed}/${r.old.total}, new ${r.fresh.passed}/${r.fresh.total}\n`);
+  }, 60_000);
 });
