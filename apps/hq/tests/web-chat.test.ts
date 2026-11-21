@@ -33,6 +33,8 @@ interface Opts {
   perSessionHour?: number;
   perIpHour?: number;
   dailyCap?: number;
+  /** The menu buttons start the receptionist's conversation (ИИ-менеджер заявок 2.0); the older tests of this file describe the scripted intake. */
+  conversation?: boolean;
 }
 
 function world(o: Opts = {}) {
@@ -53,7 +55,7 @@ function world(o: Opts = {}) {
   void director;
   const gate = new RateLimiter(1, o.dailyCap ?? 300, () => clock.t, () => hq.tz);
   const engine = new WebChatEngine({
-    db, now: () => clock.t, tz: () => hq.tz, llm, gate, instructions: readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8'),
+    db, now: () => clock.t, tz: () => hq.tz, llm, gate, instructions: readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8'), conversation: o.conversation ?? false,
     ...(o.llmPerSession ? { llmPerSession: o.llmPerSession } : {}), ...(o.perSessionHour ? { perSessionHour: o.perSessionHour } : {}),
     ...(o.perIpHour ? { perIpHour: o.perIpHour } : {}),
   });
@@ -300,12 +302,15 @@ describe('free conversation', () => {
     expect(r.reply).not.toMatch(/ночь/);
   });
 
-  it('a direct price question gets the template without the LLM', async () => {
+  it('a direct price question gets the price list, the stage rule and the builder link without the LLM', async () => {
     const w = world();
     await w.say('/start');
     const r = await w.say('Сколько стоит сайт?');
     expect(w.llmCalls()).toBe(0);
-    expect(r.reply).toMatch(/три коротких вопроса/);
+    expect(r.reply).toMatch(/Цены на сайте, в долларах/);
+    expect(r.reply).toMatch(/Оплата по этапам/);
+    expect(r.builderLink).toMatch(/^https:\/\/firtech\.pro\/ru\/builder/);
+    expect(r.cta).toEqual(['builder', 'call']);
   });
 
   it('per-session cap: after N answers the intake is offered and the LLM is not called again', async () => {

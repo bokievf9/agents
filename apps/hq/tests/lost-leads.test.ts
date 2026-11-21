@@ -175,7 +175,7 @@ describe('the chat path: the visitor is told «принято», the failure is 
     };
     const engine = new WebChatEngine({
       db: c.db, now: () => c.clock.t, tz: () => c.hq.tz, llm, gate: new RateLimiter(1, 300, () => c.clock.t, () => c.hq.tz),
-      instructions: readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8'), sinks, onLost: (s, r, i) => c.lost.record(s, r, i),
+      instructions: readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8'), sinks, conversation: false, onLost: (s, r, i) => c.lost.record(s, r, i),
       ...(o.gatewayDown ? { gatewayDown: o.gatewayDown } : {}), ...(o.llmTimeoutMs ? { llmTimeoutMs: o.llmTimeoutMs } : {}),
     });
     const say = async (message: string, extra: Partial<ChatRequest> = {}) => {

@@ -214,7 +214,7 @@ export const DEMOS: Record<Niche, DemoSpec> = {
   },
 };
 
-const slotsFor = (nowMs: number, tz: string): string[] => {
+export const slotsFor = (nowMs: number, tz: string): string[] => {
   const out: string[] = [];
   for (let d = 1; d <= 3; d++) {
     const p = zonedParts(nowMs + d * 86_400_000, tz);

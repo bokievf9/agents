@@ -1,8 +1,9 @@
-import { zonedParts } from '@fir/core';
+import { errMsg, log, zonedParts } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import { billingStoreFor } from '@fir/worker-billing';
 import { csStoreFor } from '@fir/worker-customer-support';
 import { leadStoreFor } from '@fir/worker-lead-intake';
+import { addThreadMessage, ensureCabinetTables, registerCabinetLead } from '../cabinet.js';
 import type { SalesHead } from '../heads/sales.js';
 import type { SupportHead } from '../heads/support.js';
 import { AuditStore, submitAudit, type AuditGate } from '../audit-shared.js';
@@ -13,7 +14,31 @@ import type { ClientSinks } from './engine.js';
 export function clientSinks(d: { hq: Hq; sales: Pick<SalesHead, 'createLeadTask'>; support: Pick<SupportHead, 'clientTicket'>; invoicePrefix: string; audit?: { marketing: Pick<MarketingHead, 'requestAudit'>; gate: AuditGate } }): ClientSinks {
   const base = { db: d.hq.db, now: d.hq.now };
   return {
-    createLead: (lead, service) => d.sales.createLeadTask(lead, service),
+    createLead: (lead, service) => {
+      const id = d.sales.createLeadTask(lead, service);
+      // a signed-in cabinet client wrote in the web chat: the account and the lead row are linked at once (the same step as `POST /lead` with `clientEmail`)
+      const email = typeof lead.clientEmail === 'string' ? lead.clientEmail : '';
+      if (email) {
+        try {
+          const s = (k: string) => (typeof lead[k] === 'string' ? (lead[k] as string) : '');
+          registerCabinetLead(d.hq.db, d.hq.now, id, {
+            clientEmail: email, cabinetId: s('cabinetId') || undefined, clientName: s('clientName') || undefined, name: s('name') || email, contact: s('contact') || email, service: s('service'), budget: s('budget'),
+            message: s('message'), estimate: s('estimate'), locale: lead.locale === 'en' ? 'en' : 'ru', source: s('source'),
+          });
+        } catch (e) {
+          log('warn', 'chat cabinet lead not linked', { task: id, err: errMsg(e) });
+        }
+      }
+      return id;
+    },
+    clientMessage: async (client, text) => {
+      ensureCabinetTables(d.hq.db);
+      const c = d.hq.db.prepare('SELECT id, name FROM cab_clients WHERE email = ?').get(client.email.toLowerCase()) as { id: number; name: string } | undefined;
+      const name = c?.name || client.name || client.email;
+      // the client's line in his support thread (the cabinet shows it) and a Support ticket, so the answer is drafted through the usual approvals
+      if (c) addThreadMessage(d.hq.db, d.hq.now(), { clientId: c.id, thread: 'support', from: 'client', text });
+      return d.support.clientTicket(name, text);
+    },
     createTicket: (client, text, chatId) => d.support.clientTicket(client, text, chatId),
     findClient: (q) => {
       const query = q.trim();

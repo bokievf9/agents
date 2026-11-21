@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { detectInfrastructure, formatSlot, log, placeholderHold, tryComplete, tryJson, zonedParts, zonedToMs, type KindSpec, type Payload } from '@fir/core';
 import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
-import { LeadStore, type Lang, type Lead } from './store.js';
-import { guessDeadline, guessNiche, hasMoney, hasPlaceholder, isPriceQuestion, scoreLead, TEMP_RU, tpl } from './text.js';
+import { LeadStore, type Enrichment, type Lang, type Lead } from './store.js';
+import { deriveEnrichment, enrichmentLines, guessDeadline, guessNiche, hasMoney, hasPlaceholder, isPriceQuestion, scoreLead, TEMP_RU, tpl } from './text.js';
 
 /**
  * `lead_reply`: the first answer to the client. Starts at `replyLevel` (1 by the brief) and goes through the normal
@@ -14,6 +14,14 @@ export const KIND_REPLY = 'lead_reply';
 const holdOf = (text: unknown): string | null => placeholderHold([...new Set(typeof text === 'string' ? (text.match(/\[[^\]]*\]/g) ?? []) : [])]);
 
 export const KIND_PRICE = 'lead_price';
+
+export const enrichmentSchema = z.object({
+  summary: z.array(z.string().trim().max(200)).max(3).default([]),
+  productFamily: z.string().trim().max(60).default(''),
+  niche: z.string().trim().max(100).default(''),
+  intentScore: z.number().min(0).max(100).default(0),
+  builderLink: z.string().trim().max(600).default(''),
+});
 
 /** The form lead as the webhook puts it into `task.meta.lead` (same fields as the firtech.pro form). */
 export const webLeadSchema = z.object({
@@ -36,6 +44,10 @@ export const webLeadSchema = z.object({
   username: z.string().trim().max(40).optional(),
   /** The site sets it when its own Telegram bot already sent this lead to the owner: the HQ card is a copy. */
   telegramSent: z.boolean().optional(),
+  /** The conversation summary of the ИИ-менеджер заявок (chat or bot): shown on the card, kept on the lead. Absent: derived from the lead's own words. */
+  enrichment: enrichmentSchema.optional(),
+  /** The visitor asked for a person (or was upset): the card says so. */
+  handoff: z.boolean().optional(),
 });
 export type WebLead = z.output<typeof webLeadSchema>;
 
@@ -55,6 +67,8 @@ export interface Delivery {
   kind: string;
   /** The client's private chat with the public bot, when the lead came from there: the text goes back to it. */
   chatId?: number;
+  /** A clarifying question of the Sales head before the КП (cabinet leads): it goes to the client's thread and email, not to the owner to send. */
+  clarify?: boolean;
 }
 
 const ExtractSchema = z.object({ niche: z.string().default(''), task: z.string().default(''), deadline: z.string().default('') });
@@ -101,6 +115,7 @@ export function leadCard(l: Lead, tz: string, service: string, slotText: string,
     ...(l.origin ? [`Метка источника: ${l.origin}`] : []),
     ...(l.clientId != null ? ['Кабинет: да'] : []),
     ...(l.budget ? [`Бюджет: ${l.budget}`] : []),
+    ...enrichmentLines(l.enrichment),
     `Звонок: ${slotText}`,
     viaBot ? 'Клиент пишет в клиентский бот: одобренные ответы бот отправит ему сам.' : 'Клиент не писал боту: связаться вручную по контакту.',
     `(часовой пояс слотов: ${tz})`,
@@ -130,6 +145,7 @@ export class LeadIntakeWorker implements Worker {
       return {
         text: p.text, leadId: Number(p.leadId), contact: String(p.contact ?? ''), name: String(p.name ?? ''), kind,
         ...(typeof p.chatId === 'number' ? { chatId: p.chatId } : {}),
+        ...(p.clarify === true ? { clarify: true } : {}),
       };
     };
     return {
@@ -219,10 +235,13 @@ export class LeadIntakeWorker implements Worker {
     const seen = detectInfrastructure(`${w.message} ${w.estimate}`);
     const lead = store.upsert(task.id, { ...base, temperature, estimate: w.estimate, hasDomain: w.hasDomain ?? seen.hasDomain, hasHosting: w.hasHosting ?? seen.hasHosting });
 
+    // the conversation summary: the chat's own, else derived from the lead's words; it is kept on the lead and shown on the card
+    const enrichment: Enrichment = w.enrichment ?? deriveEnrichment({ message: w.message, estimate: w.estimate, service: w.service, product: w.product, niche: c.niche, temperature });
+    store.setEnrichment(lead.id, { ...enrichment, niche: enrichment.niche || c.niche });
     const t = tpl(lang);
     const slotText = chosenSlot ? formatSlot(chosenSlot, ctx.tz, 'ru') : `предложены: ${slots.map((s) => formatSlot(s, ctx.tz, 'ru')).join(' / ')}`;
     const viaBot = w.chatId !== undefined;
-    const card = leadCard(lead, ctx.tz, w.service, slotText, viaBot, w.product, w.telegramSent === true && !viaBot);
+    const card = leadCard(store.get(lead.id)!, ctx.tz, w.service, slotText, viaBot, w.product, w.telegramSent === true && !viaBot);
     const route = viaBot ? { chatId: w.chatId } : {};
     const slotLines = chosenSlot ? t.slotChosen(formatSlot(chosenSlot, ctx.tz, lang)) : slots.map((s) => formatSlot(s, ctx.tz, lang)).join('\n');
     const slotsText = chosenSlot ? slotLines : t.slots(formatSlot(slots[0]!, ctx.tz, lang), formatSlot(slots[1]!, ctx.tz, lang));

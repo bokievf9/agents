@@ -1,4 +1,4 @@
-import type { Lang, Lead, Temperature } from './store.js';
+import type { Enrichment, Lang, Lead, Temperature } from './store.js';
 
 const CYR = /[Ѐ-ӿ]/g;
 const LAT = /[A-Za-z]/g;
@@ -79,3 +79,38 @@ export const hasPlaceholder = (text: string): boolean => /\[[^\]]*\]/.test(text)
 
 /** Any amount of money: a model draft with a number in it is not allowed to name prices itself. */
 export const hasMoney = (text: string): boolean => /(\$\s?\d|\d\s?(\$|usd|долл|сум|тенге|сом|руб|₽|₸)|\d\s?(к|тыс)\b)/i.test(text);
+
+/** The site path of a builder link (`/ru/builder?b=...`, also the estimate page) found in a text, or ''. */
+export function builderLinkIn(text: string): string {
+  return /\/(?:ru|en)\/builder(?:\/estimate)?\?b=[^\s)"'<>]+/.exec(text)?.[0] ?? '';
+}
+
+const FAMILY_OF_SERVICE: Record<string, string> = { web: 'site', websites: 'site', site: 'site', bots: 'bot', bot: 'bot', app: 'app', automation: 'automation', bundle: 'bundle' };
+const INTENT_OF: Record<Temperature, number> = { hot: 80, warm: 55, cold: 25 };
+
+/**
+ * The enrichment of a lead that did not bring its own (the contact form, the builder hand-off, the cabinet): the first lines of its words, the product family
+ * of its service or chosen product, its niche, an intent score from its temperature and the builder link of its estimate. Pure.
+ */
+export function deriveEnrichment(l: { message: string; estimate: string; service: string; product: string; niche: string; temperature: Temperature }): Enrichment {
+  const lines = `${l.message}\n${l.estimate}`.split('\n').map((x) => x.replace(/\s+/g, ' ').trim()).filter((x) => x.length > 2 && !/^https?:|^\/(ru|en)\//.test(x));
+  const family = l.product || FAMILY_OF_SERVICE[l.service.toLowerCase()] || (l.service && l.service !== 'unknown' && l.service !== 'other' ? l.service : '');
+  return {
+    summary: lines.slice(0, 3).map((x) => (x.length > 160 ? `${x.slice(0, 159)}…` : x)),
+    productFamily: family,
+    niche: l.niche,
+    intentScore: INTENT_OF[l.temperature],
+    builderLink: builderLinkIn(l.estimate) || builderLinkIn(l.message),
+  };
+}
+
+/** The lines of a lead card about the conversation (empty when there is nothing to show). */
+export function enrichmentLines(e: Enrichment | null | undefined): string[] {
+  if (!e) return [];
+  return [
+    ...(e.summary.length ? ['Разговор:', ...e.summary.map((x) => `  ${x}`)] : []),
+    ...(e.productFamily ? [`Семейство продукта: ${e.productFamily}`] : []),
+    `Намерение: ${e.intentScore}/100`,
+    ...(e.builderLink ? [`Сборка, которую предложил приёмщик: ${e.builderLink}`] : []),
+  ];
+}

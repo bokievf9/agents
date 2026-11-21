@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { migrate, type Db } from '@fir/core';
+import type { QState } from './receptionist.js';
 import type { Budget, Deadline, Have, Lang, Need } from './texts.js';
 
 export type ChatState = 'idle' | 'need' | 'need_text' | 'deadline' | 'budget' | 'hosting' | 'client_name' | 'client_question';
@@ -25,7 +26,11 @@ export interface Draft {
   /** Web chat: the page the visitor wrote from. */
   page?: string;
   /** Web chat: what the contact step finishes. */
-  pending?: 'intake' | 'client';
+  pending?: 'intake' | 'client' | 'handoff';
+  /** ИИ-менеджер заявок 2.0: what the receptionist knows about the conversation (qualification, offers, intent). */
+  q?: QState;
+  /** Web chat: the signed-in cabinet account the visitor wrote from (email, id and name come from the site). */
+  identity?: { email: string; cabinetId?: string; name?: string };
   /** Where the intake started (the demo salon sets `demo_salon`): becomes the lead's `source`. */
   source?: string;
 }

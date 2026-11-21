@@ -3,6 +3,19 @@ import { migrate, type Db } from '@fir/core';
 export type Temperature = 'hot' | 'warm' | 'cold';
 export type Lang = 'ru' | 'en';
 
+/**
+ * What the owner sees on a lead card and in the review center about the conversation that made the lead (ИИ-менеджер заявок 2.0): three lines of summary,
+ * the product family the receptionist detected, the niche, an intent score 0-100 and the builder link it proposed (a site path, `/ru/builder?b=...`).
+ * Leads that did not come from the chat get a derived one (their message lines, the service, the temperature, the builder link of their estimate).
+ */
+export interface Enrichment {
+  summary: string[];
+  productFamily: string;
+  niche: string;
+  intentScore: number;
+  builderLink: string;
+}
+
 export interface Lead {
   id: number;
   /** The Sales task this lead came in with (one lead per task: a rework of the task reuses the row). */
@@ -32,6 +45,8 @@ export interface Lead {
   hasHosting: boolean | null;
   /** The cabinet account (cab_clients.id) the lead belongs to: the client sent it signed in, or registered later with the same contact. */
   clientId?: number | null;
+  /** The conversation summary, product family, niche, intent score and builder link (see `Enrichment`); null for a lead made before the field existed. */
+  enrichment?: Enrichment | null;
 }
 
 const SCHEMA = `
@@ -59,7 +74,20 @@ CREATE TABLE IF NOT EXISTS li_leads (
 interface Row {
   id: number; task_id: number; name: string; contact: string; service: string; niche: string; task: string; deadline: string;
   budget: string; origin: string; temperature: string; lang: string; slots: string; chosen_slot: number | null;
-  price_asked: number; price_approved: number; created_at: number; estimate: string; has_domain: number | null; has_hosting: number | null; client_id?: number | null;
+  price_asked: number; price_approved: number; created_at: number; estimate: string; has_domain: number | null; has_hosting: number | null; client_id?: number | null; enrichment?: string | null;
+}
+
+function parseEnrichment(raw: string | null | undefined): Enrichment | null {
+  if (!raw) return null;
+  try {
+    const e = JSON.parse(raw) as Partial<Enrichment>;
+    return {
+      summary: Array.isArray(e.summary) ? e.summary.map(String).slice(0, 3) : [], productFamily: String(e.productFamily ?? ''), niche: String(e.niche ?? ''),
+      intentScore: Math.max(0, Math.min(100, Math.round(Number(e.intentScore) || 0))), builderLink: String(e.builderLink ?? ''),
+    };
+  } catch {
+    return null;
+  }
 }
 
 const toLead = (r: Row): Lead => ({
@@ -68,6 +96,7 @@ const toLead = (r: Row): Lead => ({
   chosenSlot: r.chosen_slot, priceAsked: r.price_asked === 1, priceApproved: r.price_approved === 1, createdAt: r.created_at,
   estimate: r.estimate ?? '', hasDomain: r.has_domain === null ? null : r.has_domain === 1, hasHosting: r.has_hosting === null ? null : r.has_hosting === 1,
   clientId: r.client_id ?? null,
+  enrichment: parseEnrichment(r.enrichment),
 });
 
 export type LeadInput = Pick<Lead, 'name' | 'contact' | 'service' | 'niche' | 'task' | 'deadline' | 'budget' | 'origin' | 'temperature' | 'lang' | 'slots' | 'chosenSlot' | 'priceAsked'> & Partial<Pick<Lead, 'estimate' | 'hasDomain' | 'hasHosting'>>;
@@ -83,6 +112,7 @@ export class LeadStore {
     // the cabinet account this lead belongs to (cab_clients.id), set when the client registers on the site
     if (!cols.some((c) => c.name === 'client_id')) db.exec('ALTER TABLE li_leads ADD COLUMN client_id INTEGER');
     // a stage the owner set by hand in the workplace («Пульт v3»); the derived stage wins only when it is further along
+    if (!cols.some((c) => c.name === 'enrichment')) db.exec('ALTER TABLE li_leads ADD COLUMN enrichment TEXT');
     if (!cols.some((c) => c.name === 'stage_override')) db.exec('ALTER TABLE li_leads ADD COLUMN stage_override TEXT');
   }
 
@@ -113,6 +143,21 @@ export class LeadStore {
         estimate: l.estimate ?? '', hasDomain: l.hasDomain == null ? null : l.hasDomain ? 1 : 0, hasHosting: l.hasHosting == null ? null : l.hasHosting ? 1 : 0,
       });
     return this.byTask(taskId)!;
+  }
+
+  /** The conversation summary and the rest of `Enrichment` (written by the Приёмщик when it makes the card). */
+  setEnrichment(id: number, e: Enrichment): void {
+    this.db.prepare('UPDATE li_leads SET enrichment = ? WHERE id = ?').run(JSON.stringify(e), id);
+  }
+
+  /** Adds text to the lead's task (what the client wants): the clarifying answers or the assumptions the КП is made from. */
+  appendBrief(id: number, text: string): void {
+    const cur = (this.db.prepare('SELECT task FROM li_leads WHERE id = ?').get(id) as { task: string } | undefined)?.task ?? '';
+    this.db.prepare('UPDATE li_leads SET task = ? WHERE id = ?').run(`${cur}${cur ? '\n' : ''}${text}`.slice(0, 3000), id);
+  }
+
+  setNiche(id: number, niche: string): void {
+    this.db.prepare('UPDATE li_leads SET niche = ? WHERE id = ?').run(niche.slice(0, 100), id);
   }
 
   setPriceApproved(id: number): void {

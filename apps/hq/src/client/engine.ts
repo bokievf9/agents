@@ -1,13 +1,15 @@
 import { errMsg, formatSlot, log, type Button, type Db, type LlmClient } from '@fir/core';
 import { ClientBlockedError, type ClientChannel } from './channel.js';
 import { inWindow, linksOnly, RateLimiter, type CounterStore } from './sanitize.js';
-import { clip, freeAnswer, GREETING, intakeRecord, TurnHistory } from './shared.js';
+import { isPriceQuestion } from '@fir/worker-lead-intake';
+import { clip, GREETING, intakeRecord, TurnHistory } from './shared.js';
+import { enrichmentOf, newQ, receptionistTurn, type EnrichmentOut } from './receptionist.js';
 import { ChatStore, maskUsername, RefStore, refFromStartArg, textHash, type Chat, type Draft } from './store.js';
 import {
   BUDGETS, budgetButtons, DEADLINES, deadlineButtons, esc, haveButtons, HAVES, haveFlags, parseHave, menuButtons, NEEDS, needButtons, productCardButtons, productCardHtml, productListButtons,
-  productListHtml, T, X, type Budget, type Deadline, type Have, type Lang, type Need,
+  productListHtml, SERVICE, T, X, type Budget, type Deadline, type Have, type Lang, type Need,
 } from './texts.js';
-import { isCatalogueId, nicheHint } from './products.js';
+import { isCatalogueId, nicheHint, PRODUCTS } from './products.js';
 import { DemoSalon, DEMO_START } from './demo.js';
 import { auditInputSchema, type AuditOutcome } from '../audit-shared.js';
 import type { LostInfo, LostSource } from '../lost-leads.js';
@@ -36,6 +38,8 @@ export interface ClientSinks {
   createLead(lead: Record<string, unknown>, service: string): number;
   /** A ticket task for a known client, with the chat id. Returns the task id. */
   createTicket(client: string, text: string, chatId?: number): Promise<number>;
+  /** A message of a signed-in cabinet client (web chat): into the client's support thread and a Support ticket. */
+  clientMessage?(client: { email: string; name?: string }, text: string): Promise<number | void>;
   /** The client's name when the company name or invoice number is known to Support or billing. */
   findClient(query: string): string | null;
   /** The call slots offered to the lead of a task (for a «1» / «2» answer). */
@@ -390,7 +394,7 @@ export class ClientEngine implements ClientChannel {
   }
 
   /** The lead goes to Sales exactly like a website form lead, with the chat id so replies come back here. */
-  private async createLead(chat: Chat, from: From, x: { message: string; budget: string; service: string; product?: string; source?: string; have?: { hasDomain: boolean | null; hasHosting: boolean | null } }, masked: string): Promise<void> {
+  private async createLead(chat: Chat, from: From, x: { message: string; budget: string; service: string; product?: string; source?: string; have?: { hasDomain: boolean | null; hasHosting: boolean | null }; enrichment?: EnrichmentOut }, masked: string): Promise<void> {
     this.store.update(chat.chatId, { state: 'idle', draft: {}, card: null });
     if (!this.sinks) {
       await this.forward(chat, x.message, 'Заявка (продажи не подключены)');
@@ -403,6 +407,7 @@ export class ClientEngine implements ClientChannel {
       message: clip(x.message, 2000), estimate: '', locale: chat.lang, slot: '', source: ref ? `ref:${ref}` : (x.source ?? 'telegram'), chatId: chat.chatId, product: x.product ?? '',
       ...(from.username ? { username: from.username.slice(0, 40) } : {}),
       ...(x.have?.hasDomain != null ? { hasDomain: x.have.hasDomain } : {}), ...(x.have?.hasHosting != null ? { hasHosting: x.have.hasHosting } : {}),
+      ...(x.enrichment ? { enrichment: x.enrichment } : {}),
     };
     let taskId: number;
     try {
@@ -484,29 +489,50 @@ export class ClientEngine implements ClientChannel {
     return [[{ text: T[lang].menu.discuss, data: 'm:discuss' }, { text: T[lang].menu.human, data: 'm:human' }]];
   }
 
+  /**
+   * The free conversation is the receptionist of ИИ-менеджер заявок 2.0 (`receptionist.ts`): qualification in at most five turns, the builder link first, a call
+   * second, a person on request or frustration. A price question keeps its template. A call asked for becomes a lead with the conversation summary.
+   */
   private async answer(chat: Chat, from: From, text: string): Promise<void> {
     const t = T[chat.lang];
-    const r = await freeAnswer(
+    if (isPriceQuestion(text)) {
+      await this.say(chat.chatId, t.priceAnswer, this.discussButton(chat.lang));
+      return;
+    }
+    await this.d.transport.typing(chat.chatId).catch(() => undefined);
+    const out = await receptionistTurn(
       {
-        llm: this.d.llm, instructions: this.d.instructions, gate: this.limiter,
+        llm: this.d.llm, instructions: this.d.instructions, gate: this.limiter, now: this.d.now, tz: this.d.tz,
         ...(this.d.gatewayDown ? { gatewayDown: this.d.gatewayDown } : {}), ...(this.d.llmTimeoutMs !== undefined ? { timeoutMs: this.d.llmTimeoutMs } : {}),
       },
-      chat.lang, text, this.turns(chat.chatId),
-      () => this.d.transport.typing(chat.chatId).catch(() => undefined),
+      { lang: chat.lang, text, q: chat.draft.q ?? newQ(), turns: this.turns(chat.chatId), channel: 'telegram' },
     );
-    switch (r.kind) {
-      case 'price':
-        await this.say(chat.chatId, t.priceAnswer, this.discussButton(chat.lang));
-        return;
+    switch (out.kind) {
       case 'fallback':
-        return this.fallback(chat, from, text, r.down === true);
+        return this.fallback(chat, from, text, out.down === true);
+      case 'handoff':
+        this.store.update(chat.chatId, { draft: { ...chat.draft, q: out.q } });
+        return this.callHuman(chat);
+      case 'client':
+        return;
       default:
     }
-    await this.say(chat.chatId, esc(r.text));
+    this.store.update(chat.chatId, { draft: { ...chat.draft, q: out.q } });
+    await this.say(chat.chatId, esc(out.text));
     this.remember(chat.chatId, 'user', text);
-    this.remember(chat.chatId, 'assistant', r.text);
-    log('info', 'client bot answer', { chatId: chat.chatId, removed: r.removed, team: r.team, llmToday: this.limiter.llmToday });
-    if (r.team || r.removed > 0) await this.forward(chat, text, r.team ? 'Нужен человек (вопрос к команде)' : 'Вопрос о цене или сроках');
+    this.remember(chat.chatId, 'assistant', out.text);
+    log('info', 'client bot answer', { chatId: chat.chatId, removed: out.removed, rewritten: out.rewritten === true, turns: out.q.turns, llmToday: this.limiter.llmToday });
+    if (out.team || out.removed > 0) await this.forward(chat, text, out.team ? 'Нужен человек (вопрос к команде)' : 'Вопрос о цене или сроках');
+    // a call asked for: the lead with the conversation summary (the person is reachable in this chat)
+    if (out.callAsked && !chat.leadTask) {
+      const q = out.q;
+      const product = q.product ? PRODUCTS[q.product].name.ru : '';
+      await this.createLead(
+        chat, from,
+        { message: `Просит созвон в клиентском боте.${q.pain ? `\nЗадача (словами клиента): ${q.pain}` : ''}${product ? `\nПродукт: ${product}` : ''}`, budget: q.budget ?? '', service: SERVICE[q.product ?? 'other'], product, enrichment: enrichmentOf(q, true) },
+        `созвон, ${q.product ?? 'продукт не определён'}`,
+      );
+    }
   }
 
   private async fallback(chat: Chat, from: From, text: string, down: boolean): Promise<void> {
