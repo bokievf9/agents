@@ -154,7 +154,7 @@ export class CustomerSupportWorker {
     return list
       .map((t) => {
         const age = Math.floor((now - t.createdAt) / 3600_000);
-        return `#${t.id} ${t.status === 'open' ? `ОТКРЫТ ${age} ч` : 'отвечен'}${t.money ? ' (деньги)' : ''}: ${t.clientName}: ${clip(t.text.replace(/\s+/g, ' '), 70)}`;
+        return `#${t.id} ${t.status === 'open' ? `ОТКРЫТ ${age} ч` : t.status === 'closed' ? 'закрыт' : 'отвечен'}${t.money ? ' (деньги)' : ''}: ${t.clientName}: ${clip(t.text.replace(/\s+/g, ' '), 70)}`;
       })
       .join('\n');
   }

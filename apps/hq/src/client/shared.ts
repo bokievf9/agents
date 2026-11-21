@@ -1,4 +1,4 @@
-import { tryComplete, type LlmClient } from '@fir/core';
+import { tryComplete, type LlmChatRequest, type LlmClient, type LlmRequest } from '@fir/core';
 import { isPriceQuestion } from '@fir/worker-lead-intake';
 import { systemPrompt, TEAM_MARK } from './prompt.js';
 import { sanitizeAnswer } from './sanitize.js';
@@ -126,6 +126,35 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
 }
 
 /**
+ * P-25: the daily cap counts model CALLS, not turns: every request through the returned client calls `gate.llmUsed()` (a turn of the agents' playground
+ * is up to 4 rounds of up to 2 JSON attempts). The check before a turn stays `gate.llmAllowed()`.
+ */
+export function countCalls(llm: LlmClient, gate: { llmUsed(): void }): LlmClient {
+  const out: LlmClient = {
+    enabled: llm.enabled,
+    complete: (req: LlmRequest) => {
+      gate.llmUsed();
+      return llm.complete(req);
+    },
+  };
+  if (llm.completeDetailed) {
+    const detailed = llm.completeDetailed.bind(llm);
+    out.completeDetailed = (req: LlmRequest) => {
+      gate.llmUsed();
+      return detailed(req);
+    };
+  }
+  if (llm.chat) {
+    const chat = llm.chat.bind(llm);
+    out.chat = (req: LlmChatRequest) => {
+      gate.llmUsed();
+      return chat(req);
+    };
+  }
+  return out;
+}
+
+/**
  * One free-conversation turn: a direct price question gets the template, LLM off or the daily cap fall back, otherwise the model answers and the sanitiser cleans it (prices, dates, markdown, length).
  */
 export async function freeAnswer(d: FreeDeps, lang: Lang, text: string, turns: Turn[], beforeCall?: () => Promise<void>): Promise<FreeResult> {
@@ -133,9 +162,8 @@ export async function freeAnswer(d: FreeDeps, lang: Lang, text: string, turns: T
   if (!d.llm.enabled || !d.gate.llmAllowed()) return { kind: 'fallback' };
   if (d.gatewayDown?.()) return { kind: 'fallback', down: true };
   await beforeCall?.();
-  d.gate.llmUsed();
   const raw = await withTimeout(
-    tryComplete(d.llm, { tier: 'sonnet', maxTokens: 400, system: systemPrompt(d.instructions, lang), messages: [...turns, { role: 'user', content: text }] }),
+    tryComplete(countCalls(d.llm, d.gate), { tier: 'sonnet', maxTokens: 400, system: systemPrompt(d.instructions, lang), messages: [...turns, { role: 'user', content: text }] }),
     d.timeoutMs ?? 20_000,
   );
   if (!raw?.trim()) return { kind: 'fallback', down: true };

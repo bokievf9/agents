@@ -40,6 +40,9 @@ export function installOwnerGlue(bot: Bot, d: GlueDeps): void {
   const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'owner message failed', { cmd: name, err: errMsg(e) }));
   /** Plain text to the owner in this chat (inside the reply scope it goes to Telegram and is kept in the inbox as a reply). */
   const answer = (text: string) => channel.sendMessage(ownerId, escapeHtml(text), undefined, { html: true }).then(() => undefined);
+  /** P-17: what the owner wrote in Telegram and what HQ answered, for the site's «Поручения» (the question path is recorded by the assistant itself). */
+  const note = (role: 'owner' | 'command' | 'hq', text: string) => { try { assistant.history.add(role, text, undefined, 'telegram'); } catch (e) { log('warn', 'history write failed', { err: errMsg(e) }); } };
+  const answerNoted = async (text: string) => { note('hq', text); await answer(text); };
 
   // Group service messages: the basic group became a supergroup (new id), or a topic was created by hand.
   bot.on('message', async (ctx, next) => {
@@ -72,6 +75,8 @@ export function installOwnerGlue(bot: Bot, d: GlueDeps): void {
   bot.command('start', (ctx) => background('start', async () => {
     // the old reply keyboard (Одобрения, Задачи, Статус...) goes away with this message
     const text = assistant.help();
+    note('command', '/start');
+    note('hq', text);
     try {
       await ctx.reply(text, { reply_markup: { remove_keyboard: true }, link_preview_options: { is_disabled: true } });
       channel.record('reply', text);
@@ -79,17 +84,18 @@ export function installOwnerGlue(bot: Bot, d: GlueDeps): void {
       await answer(text);
     }
   }));
-  bot.command('pult', () => background('pult', () => answer(`Пульт: ${links.to('home')}\nОдобрения: ${links.to('review')}`)));
+  bot.command('pult', () => background('pult', async () => { note('command', '/pult'); await answerNoted(`Пульт: ${links.to('home')}\nОдобрения: ${links.to('review')}`); }));
   // Any other text is a question, answered in the background (the next update is not held). An old /command gets a short hint instead.
   bot.on('message:text', (ctx) => {
     const text = ctx.message.text;
     if (text.startsWith('/')) {
-      background('unknown', () => answer(`Команд в Telegram больше нет, управление в Пульте: ${links.to('home')}. Спросите обычным текстом, например «что висит?».`));
+      note('command', text.slice(0, 200));
+      background('unknown', () => answerNoted(`Команд в Telegram больше нет, управление в Пульте: ${links.to('home')}. Спросите обычным текстом, например «что висит?».`));
       return;
     }
     background('question', async () => {
       // with the legacy cards an «Править» waits for the owner's next text first
-      if (d.cards && (await director.consumeEdit(text))) return;
+      if (d.cards && (await director.consumeEdit(text))) { note('owner', text); return; }
       await answer(await assistant.answer(text));
     });
   });

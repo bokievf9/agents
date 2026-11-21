@@ -111,7 +111,7 @@ export class OwnerAssistant {
   readonly spec: AgentSpec = execAssistantSpec();
   readonly memory: OwnerMemory;
   private readonly llm: LlmClient;
-  private readonly history: ReturnType<typeof createDirectorHistory>;
+  readonly history: ReturnType<typeof createDirectorHistory>;
   private readonly tools: ReturnType<typeof assistantTools>;
   private readonly knowledge = new InMemoryKnowledge();
   private readonly lessons = new InMemoryLessons();
@@ -127,7 +127,7 @@ export class OwnerAssistant {
   async answer(text: string): Promise<string> {
     const q = text.trim().slice(0, 2000);
     if (!q) return this.help();
-    this.history.add('owner', q);
+    this.history.add('owner', q, undefined, 'telegram');
     let reply: string;
     try {
       reply = await this.ask(q);
@@ -135,7 +135,7 @@ export class OwnerAssistant {
       log('warn', 'assistant failed', { err: errMsg(e) });
       reply = await this.offline();
     }
-    this.history.add('hq', reply);
+    this.history.add('hq', reply, undefined, 'telegram');
     return reply;
   }
 

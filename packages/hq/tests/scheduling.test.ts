@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HeartbeatWorker, startRoutines } from '../src/index.js';
+import { catchUpRoutines, HeartbeatWorker, startRoutines } from '../src/index.js';
 import { setup } from './helpers.js';
 
 describe('routines', () => {
@@ -115,5 +115,27 @@ describe('heartbeats', () => {
     release();
     await second;
     expect(calls).toBe(2);
+  });
+});
+
+describe('P-26: routines missed while HQ was down are caught up once', () => {
+  it('fires a routine whose time passed since its last run; not one that ran after it, never ran, is off or is older than the window', () => {
+    const { hq, clock } = setup();
+    // NOW = Wed 2026-11-18 12:00 Tashkent
+    const def = { dept: 'marketing', title: 'Рутина', meta: {} };
+    hq.scheduleRoutine({ ...def, name: 'daily-0330', cron: '30 3 * * *' }); // missed at 03:30 today
+    hq.scheduleRoutine({ ...def, name: 'fresh', cron: '30 3 * * *' }); // ran after 03:30 today
+    hq.scheduleRoutine({ ...def, name: 'never', cron: '30 3 * * *' }); // never ran: not caught up
+    hq.scheduleRoutine({ ...def, name: 'off', cron: '30 3 * * *', enabled: false });
+    hq.scheduleRoutine({ ...def, name: 'monthly', cron: '0 9 1 * *' }); // last due 2026-11-01, outside the window
+    const set = (name: string, at: number) => hq.db.prepare('UPDATE routines SET last_run_at = ? WHERE name = ?').run(at, name);
+    set('daily-0330', clock.t - 30 * 3_600_000);
+    set('fresh', clock.t - 3_600_000);
+    set('off', clock.t - 30 * 3_600_000);
+    set('monthly', clock.t - 20 * 86_400_000);
+    expect(catchUpRoutines(hq)).toEqual(['daily-0330']);
+    expect(hq.tasks({ dept: 'marketing' })).toHaveLength(1);
+    // the catch-up counts as a run: a second start does nothing more
+    expect(catchUpRoutines(hq)).toEqual([]);
   });
 });
