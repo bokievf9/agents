@@ -191,8 +191,8 @@ export class ProductionHead {
   }
 
   /**
-   * A stage is accepted: by the owner (`/mdone <project> <stage>`) or by the client in the cabinet. Once only. The stage must be paid; the
-   * client can accept only a finished stage (`done`), the owner may accept a running one. Accepting proposes the invoice of the NEXT stage
+   * A stage is accepted: by the owner (`/mdone <project> <stage>`) or by the client in the cabinet. Once only. The stage must be paid and finished
+   * (`done`, the client's «awaiting acceptance»), for the owner too (P-15). Accepting proposes the invoice of the NEXT stage
    * (Support, a locked card with the pay link); the invoice of the last stage also puts the handover task on hold until it is paid;
    * accepting the last stage closes the project.
    */
@@ -203,7 +203,16 @@ export class ProductionHead {
     if (!p || !m) return { status: 'unknown', text: 'Такого этапа нет.' };
     if (m.acceptedAt !== null) return { status: 'already', text: `Этап ${stageNo} уже принят.` };
     if (m.paidAt === null) return { status: 'not_paid', text: `Этап ${stageNo} ещё не оплачен: принять его нельзя.` };
-    if (by === 'client' && m.status !== 'done') return { status: 'not_ready', text: `Этап ${stageNo} ещё в работе: принять его можно, когда он будет готов.` };
+    // P-15: nobody accepts a stage that is still running, the owner included: the client would read «Этап принят» for work he never saw.
+    // The owner first marks it ready (`/mready`, Пульт `ready_milestone`): the client gets «Принять этап»; then either of them accepts.
+    if (m.status !== 'done') {
+      return {
+        status: 'not_ready',
+        text: by === 'client'
+          ? `Этап ${stageNo} ещё в работе: принять его можно, когда он будет готов.`
+          : `Этап ${stageNo} ещё в работе (не ждёт приёмки): сначала отметьте его готовым командой /mready ${p.id} ${stageNo}, клиент получит «Принять этап».`,
+      };
+    }
     if (!store.acceptStage(m.id)) return { status: 'already', text: `Этап ${stageNo} уже принят.` };
     this.hq.log(by, 'stage_accepted', 'project', String(p.id), `stage ${stageNo}`);
     const all = store.stageMilestones(p.id);
@@ -223,6 +232,25 @@ export class ProductionHead {
       all.filter((x) => x.stageNo !== null).map((x) => ({ stageNo: x.stageNo!, title: stageTitle(x), amountUsd: x.amountUsd })),
     );
     return { status: 'accepted', text: lines.join(' ') };
+  }
+
+  /**
+   * P-14: the owner says a paid stage is finished (`/mready <project> <stage>`, Пульт `ready_milestone`) when the work was not done through the builder chain: the
+   * same steps as a builder's accepted result (`markDone` + `afterMilestone`), so the client gets «Принять этап» in the cabinet and by email. Once only;
+   * an unpaid stage cannot be ready. An older milestone (no stage number) is simply closed, as `/mdone` does.
+   */
+  readyStage(projectId: number, stageNo: number): { status: 'ready' | 'already' | 'not_paid' | 'unknown'; text: string } {
+    const store = this.store;
+    const p = store.project(projectId);
+    const m = p ? store.stageMilestone(p.id, stageNo) : undefined;
+    if (!p || !m) return { status: 'unknown', text: 'Такого этапа нет.' };
+    if (m.paidAt === null) return { status: 'not_paid', text: `Этап ${stageNo} ещё не оплачен: отметить его готовым нельзя (работа начинается после оплаты).` };
+    if (m.status === 'done' || m.acceptedAt !== null) return { status: 'already', text: `Этап ${stageNo} уже ${m.acceptedAt !== null ? 'принят' : 'готов и ждёт приёмки клиента'}.` };
+    if (!store.markDone(m.id)) return { status: 'already', text: `Этап ${stageNo} уже готов и ждёт приёмки клиента.` };
+    this.hq.log('owner', 'stage_ready', 'project', String(p.id), `stage ${stageNo}`);
+    // the builder task of the stage keeps its state (a builder result arriving later finds the stage done and changes nothing); its journal says why
+    if (m.taskId && this.hq.task(m.taskId)) this.hq.comment(m.taskId, 'owner', `Этап ${stageNo} отмечен готовым владельцем (/mready), клиент получил «Принять этап».`);
+    return { status: 'ready', text: this.afterMilestone(p.id, store.milestone(m.id)!) };
   }
 
   /** The invoice of the next stage, proposed as a Support task (`kp_invoice`, once: the accept above is atomic). */
@@ -266,6 +294,12 @@ export class ProductionHead {
         if (!p) return `Не нашёл проект «${t.ref}».`;
         new DeployStore(this.hq.db, this.hq.now).set({ projectId: p.id, kind: t.kind, location: t.location, url: t.url });
         return `Проект #${p.id} «${p.client}»: деплой на ${t.kind === 'ours' ? 'наш сервер' : 'сервер клиента'} (${t.location})${t.url ? `, адрес ${t.url}` : ''}.`;
+      }
+      case 'mready': {
+        const [ref = '', no = ''] = arg.trim().split(/\s+/);
+        const p = this.store.find(ref);
+        if (!p || !/^\d+$/.test(no)) return 'Формат: /mready <проект> <номер этапа>, например /mready 3 2';
+        return this.readyStage(p.id, Number(no)).text;
       }
       case 'mdone': {
         const [ref = '', kind = ''] = arg.trim().split(/\s+/);

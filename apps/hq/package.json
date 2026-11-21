@@ -8,7 +8,7 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && vitest run -c vitest.chaos.config.ts",
     "yt-auth": "tsx --conditions=source --env-file-if-exists=.env.local src/yt-auth.ts",
     "reload-instructions": "tsx --conditions=source --env-file-if-exists=.env.local src/reload-instructions.ts",
     "import-prospects": "tsx --conditions=source --env-file-if-exists=.env.local src/import-prospects.ts"

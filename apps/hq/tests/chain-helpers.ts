@@ -50,7 +50,7 @@ export function chainWorld() {
   const director = new Director({ hq, llm, messenger, queue, ownerId: OWNER, reporter });
   director.onSalesCommand = (name, arg) => sales.salesCommand(name, arg);
   director.onSupportCommand = (name, args) => support.onCommand(name, args);
-  for (const name of ['project', 'pstatus', 'target', 'mdone']) director.commands.set(name, { dept: 'production', run: (arg) => production.command(name, arg) });
+  for (const name of ['project', 'pstatus', 'target', 'mready', 'mdone']) director.commands.set(name, { dept: 'production', run: (arg) => production.command(name, arg) });
   for (const name of ['doc', 'lesson', 'kb']) director.commands.set(name, { dept: 'backoffice', run: (arg) => backoffice.command(name, arg) });
   const alerts: string[] = [];
   hq.onAlert((t) => void alerts.push(t));

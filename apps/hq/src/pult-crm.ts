@@ -4,6 +4,7 @@ import { BillingStore, type BillingWorker, type Invoice } from '@fir/worker-bill
 import { PmStore } from '@fir/worker-project-manager';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
+import type { CabDocs } from './cab-docs.js';
 import type { createCrm } from './admin-crm.js';
 import { recordManagerReply } from './cabinet.js';
 import type { ClientChannel } from './client/channel.js';
@@ -23,6 +24,8 @@ export interface PultCrmDeps {
   client?: Pick<ClientChannel, 'send'> | undefined;
   /** The website chat: queues the owner's text for the visitor's session (true: the session exists and the text waits for the next reply). */
   webReply?: ((sessionId: string, text: string) => boolean) | undefined;
+  /** The cabinet documents (P-07): the owner's list with the email outcome and «Отправить снова». */
+  cabinet?: Partial<Pick<CabDocs, 'resend' | 'ownerList'>> | undefined;
 }
 
 const iso = (ms: number | null | undefined) => (ms === null || ms === undefined ? null : new Date(ms).toISOString());
@@ -35,11 +38,13 @@ const callBody = z.object({ at: z.string().max(40) }).strict();
 const PROJECT_STATUSES = ['draft', 'active', 'done', 'paused'] as const;
 const projectBody = z.discriminatedUnion('action', [
   z.object({ action: z.literal('complete_milestone'), milestoneId: z.number().int().positive() }).strict(),
+  z.object({ action: z.literal('ready_milestone'), milestoneId: z.number().int().positive() }).strict(),
   z.object({ action: z.literal('set_deadline'), milestoneId: z.number().int().positive(), dueAt: z.string().max(40) }).strict(),
   z.object({ action: z.literal('set_status'), status: z.string().max(20) }).strict(),
   z.object({ action: z.literal('note'), text: z.string().trim().min(1).max(2000) }).strict(),
 ]);
 const INVOICE_ACTIONS = ['remind', 'mark_paid', 'void'] as const;
+const cabDocBody = z.object({ action: z.literal('resend') }).strict();
 const invoiceBody = z.object({ action: z.string().max(20) }).strict();
 const INVOICE_STATUSES = ['draft', 'issued', 'paid', 'void'] as const;
 
@@ -238,13 +243,26 @@ export function createPultCrm(d: PultCrmDeps) {
   async function projectPost(id: number, body: unknown): Promise<AdminReply> {
     if (!views.project(id)) return fail(404, 'not_found');
     const parsed = projectBody.safeParse(body ?? {});
-    if (!parsed.success) return fail(400, 'invalid', { allowed: ['complete_milestone', 'set_deadline', 'set_status', 'note'] });
+    if (!parsed.success) return fail(400, 'invalid', { allowed: ['complete_milestone', 'ready_milestone', 'set_deadline', 'set_status', 'note'] });
     const b = parsed.data;
     const pm = new PmStore(db, now);
-    if (b.action === 'complete_milestone' || b.action === 'set_deadline') {
+    if (b.action === 'complete_milestone' || b.action === 'set_deadline' || b.action === 'ready_milestone') {
       const m = pm.milestone(b.milestoneId);
       if (!m || m.projectId !== id) return fail(404, 'not_found');
-      if (b.action === 'complete_milestone') {
+      if (b.action === 'ready_milestone') {
+        // P-14: the stage is finished without the builder chain: the same `markDone` + `afterMilestone` (the client gets «Принять этап»), once
+        if (m.stageNo === null) {
+          if (m.status !== 'done') await d.channel.capture(() => d.director.onCommand('mdone', `${id} ${m.kind}`));
+        } else {
+          if (m.paidAt === null) return fail(409, 'not_paid', { hint: 'Этап не оплачен: работа и приёмка начинаются после оплаты.' });
+          if (m.status !== 'done') await d.channel.capture(() => d.director.onCommand('mready', `${id} ${m.stageNo}`));
+        }
+      } else if (b.action === 'complete_milestone') {
+        // P-15: a stage of the payment plan is accepted for the client only when it waits for his acceptance (paid and done)
+        if (m.stageNo !== null && m.acceptedAt === null) {
+          if (m.paidAt === null) return fail(409, 'not_paid', { hint: 'Этап не оплачен: принять его нельзя.' });
+          if (m.status !== 'done') return fail(409, 'not_ready', { hint: 'Этап ещё в работе: сначала «Этап готов» (ready_milestone), клиент получит «Принять этап».' });
+        }
         // the same path as `/mdone`: a «Сдача» starts the deploy, the last milestone closes the project (idempotent: a closed one says so);
         // a stage of the payment plan is ACCEPTED (the next invoice is proposed), done or not
         if (m.stageNo !== null ? m.acceptedAt === null : m.status !== 'done') await d.channel.capture(() => d.director.onCommand('mdone', `${id} ${m.stageNo ?? m.kind}`));
@@ -256,6 +274,16 @@ export function createPultCrm(d: PultCrmDeps) {
       }
     } else if (b.action === 'set_status') {
       if (!(PROJECT_STATUSES as readonly string[]).includes(b.status)) return fail(400, 'invalid', { allowed: PROJECT_STATUSES });
+      // P-15: a project of the payment plan closes through the acceptance of its last stage (the act, the last invoice paid), never by a status flip
+      if (b.status === 'done') {
+        const open = pm.stageMilestones(id).filter((x) => x.acceptedAt === null);
+        if (open.length) {
+          return fail(409, 'stages_open', {
+            stages: open.map((x) => x.stageNo),
+            hint: 'Проект закрывается приёмкой последнего этапа: этап готов (ready_milestone), клиент принимает (или complete_milestone), акт уходит сам. Последний этап должен быть оплачен.',
+          });
+        }
+      }
       pm.setStatus(id, b.status as (typeof PROJECT_STATUSES)[number]);
       hq.log('owner', 'project_status', 'project', String(id), b.status);
     } else {
@@ -357,6 +385,23 @@ export function createPultCrm(d: PultCrmDeps) {
       if (id === null) return fail(404, 'not_found');
       if (method === 'GET') return projectDetail(id);
       if (method === 'POST') return projectPost(id, body);
+    }
+    // P-07: the cabinet documents as the owner sees them (the email outcome, a missing PDF) and «Отправить снова»
+    if (panel === 'cabinet-docs') {
+      const docs = d.cabinet;
+      if (!docs?.ownerList || !docs.resend) return fail(404, 'not_found');
+      if (idRaw === undefined && method === 'GET') {
+        const cid = query.get('clientId');
+        const limit = Number(query.get('limit') ?? '100');
+        return ok({ items: docs.ownerList({ problem: query.get('problem') === '1', clientId: cid && /^\d+$/.test(cid) ? Number(cid) : null, limit: Number.isFinite(limit) ? limit : 100 }) });
+      }
+      const id = num(idRaw);
+      if (id !== null && seg.length === 2 && method === 'POST') {
+        const b = cabDocBody.safeParse(body ?? {});
+        if (!b.success) return fail(400, 'invalid', { allowed: ['resend'] });
+        return docs.resend(id);
+      }
+      return fail(404, 'not_found');
     }
     if (panel === 'invoices') {
       if (idRaw === undefined && method === 'GET') return invoicesList(query);

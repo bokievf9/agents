@@ -91,7 +91,8 @@ describe('Cabinet v3: lead -> КП to the client -> accept -> contract -> signat
     expect((await w.http('GET', mediaPath(quote.pdfUrl).replace(/\?e=\d+$/, ''))).status).toBe(404);
     // what he sees: the project is being prepared, the next action is the quote, the lead says the same, the contract of the pack is NOT an event of his
     let cab = (await w.adm('GET', `/admin/clients/by-email?email=${encodeURIComponent(EMAIL)}`)).json;
-    expect(cab.projects[0]).toMatchObject({ state: 'preparing', documents: expect.arrayContaining([quote.id]), nextAction: { kind: 'accept_quote', docId: quote.id } });
+    // no project before the client says yes (P-10): it is reserved by his acceptance
+    expect(cab.projects).toEqual([]);
     expect(cab.leads[0].nextAction).toEqual({ kind: 'accept_quote', docId: quote.id });
     expect(cab.leads[0].stage).toBe('proposal');
     expect(cab.leads[0].timeline.map((e: any) => e.kind)).toContain('kp');
@@ -119,6 +120,7 @@ describe('Cabinet v3: lead -> КП to the client -> accept -> contract -> signat
     expect(list.some((d) => d.kind === 'contract')).toBe(false);
     cab = (await w.adm('GET', `/admin/clients/by-email?email=${encodeURIComponent(EMAIL)}`)).json;
     expect(cab.leads[0].nextStep).toBe('КП принято, готовим договор');
+    expect(cab.projects[0]).toMatchObject({ state: 'preparing', documents: expect.arrayContaining([quote.id]) });
     expect(cab.projects[0].nextAction).toEqual({ kind: 'wait' });
 
     // 4. the owner fills the term (the only blank of the contract) and approves it: it goes to the client, `awaiting_signature`

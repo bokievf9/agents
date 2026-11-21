@@ -50,12 +50,18 @@ import { COMMAND_NAMES, routedTo } from './commands.js';
 import { installOwnerGlue } from './glue.js';
 import { createReach } from './reach.js';
 import { appTools, toolsFor } from './tools.js';
+import { installRejectionGuard, keepPolling } from './process-guard.js';
+import { EmailFailures } from './email-failures.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
 const hq = new Hq(db);
+// P-28: a forgotten promise is an error line and one alert in 10 minutes, never the end of the process (the alert sink is the Director, added below).
+installRejectionGuard(process, (text) => hq.alert(text), { now: Date.now });
 // Requests accepted from visitors that fail before the owner sees them: `lost_lead` rows and one summary alert an hour.
 const lost = new LostLeads(hq);
+// Emails to clients that failed (P-07): a row each, one alert an hour, the mark on the cabinet document.
+const emailFailures = new EmailFailures(hq);
 // Prices come from one place: the site's price list (fetched now and every 15 minutes (PRICES_RELOAD_MS), the last good copy is kept in the
 // database, a bundled snapshot is the last resort). Workers and the client bot read `getPrices()` when they need a number.
 const pricesOpts = { url: cfg.pricesUrl, store: { get: (k: string) => hq.setting(k) || undefined, set: (k: string, v: string) => hq.setSetting(k, v) } };
@@ -190,7 +196,7 @@ const backoffice = new BackofficeHead({
 // Cabinet v3 (2026-11-22): the client's documents (accept, sign), threads and uploads, the playground of agents. The heads hand the owner's approvals to it.
 const chatGateForAgents = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
 const cabinet = buildCabinet({
-  hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents,
+  hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents, kpValidDays: cfg.kpValidDays,
   tools: () => toolsFor(hq, tools, { agentId: 'documents', dept: BACKOFFICE, messenger, ownerId: cfg.ownerId }),
 });
 sales.cabinet = cabinet.docs;
@@ -214,7 +220,7 @@ const drill = new Drill({
 });
 director.onDrillCommand = (arg) => drill.command(arg);
 director.onTopicsCommand = async () => (await topicManager.ensure()).text;
-director.summaryLines.push(() => topicManager.summaryNote(), () => production.overdueLine(), () => backoffice.pendingLine(), () => lost.summaryLine());
+director.summaryLines.push(() => topicManager.summaryNote(), () => production.overdueLine(), () => backoffice.pendingLine(), () => lost.summaryLine(), () => emailFailures.summaryLine());
 
 installOwnerGlue(bot, { ownerId: cfg.ownerId, channel, queue, director, marketing, sales, topicManager });
 
@@ -282,12 +288,19 @@ const dueTick = async () => {
     await lost.flush();
   } catch (e) {
     log('warn', 'lost leads watch failed', { err: errMsg(e) });
-  }
+  }  // P-11: a КП the client never answered expires after KP_VALID_DAYS (the owner hears a day before and when it happens)
+  await cabinet.docs.expiryTick().catch((e) => log('warn', 'quote expiry tick failed', { err: errMsg(e) }));
+  // P-07: emails to clients that did not go (КП, contract, invoice, act, stage notices, clarifying questions): one alert an hour
+  await emailFailures.flush().catch((e) => log('warn', 'email failures flush failed', { err: errMsg(e) }));
 };
 void dueTick();
 const dueTimer = setInterval(() => void dueTick(), 30_000);
 dueTimer.unref();
 void topicManager.ensure().then((r) => log('info', 'topics checked', { state: r.state, created: r.created }));
+// P-09: cabinet notices a restart cut off (approved, never told to the client) go now, failed emails are tried again (3 emails per document in all).
+void cabinet.docs.recoverDeliveries()
+  .then((r) => { if (r.delivered || r.remailed) log('info', 'cabinet deliveries recovered', r); })
+  .catch((e) => log('warn', 'cabinet delivery recovery failed', { err: errMsg(e) }));
 // Wake every head once at start: tasks that waited while the process was down.
 for (const dept of hq.departments()) {
   const head = hq.headOf(dept);
@@ -395,12 +408,21 @@ process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
 
 log('info', 'hq starting', { tz: hq.tz, departments: hq.departments(), group: cfg.groupId !== undefined, marketingBot: Boolean(cfg.marketingBotToken), supportBot: Boolean(cfg.supportBotToken), salesBot: Boolean(cfg.salesBotToken), clientBot: Boolean(clientBot) });
-// The client bot polls on its own; if it stops, HQ keeps working (the Director stays the owner's interface).
-clientBot?.start().catch((e) => {
-  log('error', 'client bot stopped', { err: errMsg(e) });
-  // The main sales channel is down: the owner hears about it at once (the monitoring check turns `down` too).
-  void hq.alert('Клиентский бот @firtech_bot остановился: поллинг упал. Заявки из Telegram не принимаются, пока HQ не перезапущен. Подробности в логе hq.');
-});
+// The client bot polls on its own (P-05): a crashed poll starts again after a pause, three times in a row; then HQ exits and the container
+// restarts (compose `restart: unless-stopped`), so Telegram leads never wait for a manual restart.
+if (clientBot) {
+  const bot = clientBot;
+  void keepPolling(() => bot.start(), {
+    attempts: 3, pauseMs: 15_000, now: Date.now,
+    onRestart: (attempt, e) => log('warn', 'client bot polling restarts', { attempt, err: errMsg(e) }),
+    onGiveUp: async (e) => {
+      log('error', 'client bot stopped', { err: errMsg(e) });
+      // The main sales channel is down: the owner hears about it at once (the monitoring check turns `down` too).
+      await hq.alert('Клиентский бот @firtech_bot: поллинг упал 4 раза подряд, перезапускаю HQ (контейнер поднимется сам). Подробности в логе hq.').catch(() => undefined);
+      process.exit(1);
+    },
+  });
+}
 if (!clientBot) log('info', 'CLIENT_BOT_TOKEN is not set, the public client bot is off');
 startPolling(bot).catch((e) => {
   log('error', 'bot stopped', { err: errMsg(e) });

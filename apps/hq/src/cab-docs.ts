@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto';
 import { inflateSync } from 'node:zlib';
-import { errMsg, log, markdownToPdfDoc, zonedParts, type Db, type Tools } from '@fir/core';
+import { errMsg, log, markdownToPdfDoc, parseStages, zonedParts, type Db, type PaymentStage, type Tools } from '@fir/core';
+import { planStageDates, PmStore, type Product } from '@fir/worker-project-manager';
 import type { Hq } from '@fir/hq';
 import type { BillingWorker } from '@fir/worker-billing';
 import { fillTemplate, loadTemplate } from '@fir/worker-documents';
 import { z } from 'zod';
-import { addThreadMessage, ensureCabinetTables, postFromFirTech } from './cabinet.js';
+import { addCabMessage, addThreadMessage, ensureCabinetTables, postFromFirTech } from './cabinet.js';
 import type { Playground } from './playground.js';
 import { parseBuilderPlan, wantsPlayground } from './builder-plan.js';
+import { EmailFailures, type EmailKind } from './email-failures.js';
 
 /**
  * Cabinet v3 documents (2026-11-22): what the client sees of the papers and what he does with them. The owner's approval of a quote, a contract or an
@@ -17,7 +19,7 @@ import { parseBuilderPlan, wantsPlayground } from './builder-plan.js';
  */
 export const DOC_KINDS = ['quote', 'contract', 'invoice', 'act', 'other'] as const;
 export type DocKind = (typeof DOC_KINDS)[number];
-export const DOC_STATES = ['awaiting_client', 'accepted', 'awaiting_signature', 'signed', 'issued', 'paid', 'void'] as const;
+export const DOC_STATES = ['awaiting_client', 'accepted', 'declined', 'expired', 'awaiting_signature', 'signed', 'issued', 'paid', 'void'] as const;
 export type DocState = (typeof DOC_STATES)[number];
 
 const SCHEMA = `
@@ -62,11 +64,18 @@ CREATE TABLE IF NOT EXISTS bo_signatures (
 CREATE INDEX IF NOT EXISTS bo_signatures_doc ON bo_signatures (doc_id);
 `;
 
+/** Columns added after the first release (P-07, P-09, P-12): the email outcome of the row and the retry counters. Added once per database. */
+const LATER_COLUMNS: [string, string][] = [
+  ['mail_state', 'TEXT'], ['mail_error', 'TEXT'], ['mail_attempts', 'INTEGER NOT NULL DEFAULT 0'],
+];
+
 const ready = new WeakSet<object>();
 export function ensureDocTables(db: Db): void {
   if (ready.has(db)) return;
   ensureCabinetTables(db);
   db.exec(SCHEMA);
+  const cols = new Set((db.prepare('PRAGMA table_info(cab_documents)').all() as { name: string }[]).map((c) => c.name));
+  for (const [name, type] of LATER_COLUMNS) if (!cols.has(name)) db.exec(`ALTER TABLE cab_documents ADD COLUMN ${name} ${type}`);
   ready.add(db);
 }
 
@@ -74,6 +83,39 @@ export interface DocRow {
   id: number; client_id: number; kind: DocKind; title: string; number: string; lead_id: number | null; project_id: number | null; pack_id: number | null; state: DocState;
   src: string; src_id: number | null; amount_usd: number | null; stage_no: number | null; body: string; pdf_rel: string | null; pdf_sha256: string | null; signed_pdf_rel: string | null;
   meta: string; created_at: number; delivered_at: number | null; accepted_at: number | null; signed_at: number | null;
+  /** The email of the notice: `sent`, `failed`, `off` (no Resend: the thread line is the delivery), null before the first try. */
+  mail_state?: string | null; mail_error?: string | null; mail_attempts?: number;
+}
+
+type Notice = { ru: string; en: string; ruMail: string; enMail: string };
+
+/** The notice of a delivered row (the thread line and the email), the same words on the first sending and on «Отправить снова». Null: the row has no notice of its own (the estimate rides with the КП). */
+export function noticeOf(row: Pick<DocRow, 'kind' | 'number' | 'stage_no' | 'amount_usd'>): Notice | null {
+  if (row.kind === 'quote') {
+    return {
+      ru: 'Коммерческое предложение готово. Откройте раздел «Документы», прочитайте его и нажмите «Принять КП» или задайте вопрос в сообщениях.',
+      en: 'Your commercial proposal is ready. Open Documents, read it and press «Accept», or ask a question in Messages.',
+      ruMail: 'Ваше коммерческое предложение Fir Tech', enMail: 'Your Fir Tech commercial proposal',
+    };
+  }
+  if (row.kind === 'contract') {
+    return {
+      ru: 'Договор готов. Откройте раздел «Документы», прочитайте его и подпишите, нарисовав подпись мышью.',
+      en: 'The contract is ready. Open Documents, read it and sign it by drawing your signature with the mouse.',
+      ruMail: 'Договор Fir Tech готов к подписанию', enMail: 'Your Fir Tech contract is ready to sign',
+    };
+  }
+  if (row.kind === 'act') return { ru: 'Акт сдачи работ готов, он в разделе «Документы».', en: 'The completion certificate is ready in Documents.', ruMail: 'Акт сдачи работ Fir Tech', enMail: 'Your Fir Tech completion certificate' };
+  if (row.kind === 'invoice') {
+    const stage = row.stage_no ? ` (этап ${row.stage_no})` : '';
+    const stageEn = row.stage_no ? ` (stage ${row.stage_no})` : '';
+    return {
+      ru: `Счёт ${row.number}${stage} на $${row.amount_usd} выставлен. Оплатить можно кнопкой «Оплатить» в разделе «Документы» или в проекте.`,
+      en: `Invoice ${row.number}${stageEn} for $${row.amount_usd} has been issued. Pay with the «Pay» button in Documents or in your project.`,
+      ruMail: `Счёт ${row.number} от Fir Tech`, enMail: `Invoice ${row.number} from Fir Tech`,
+    };
+  }
+  return null;
 }
 
 /** What the client does next (the same words for a lead and for a project). `wait`: nothing, we are working. */
@@ -142,6 +184,9 @@ export function docNextStep(docs: DocRow[], action: NextAction, lang: string | n
   if (action.kind === 'sign_contract') return en ? 'Sign the contract in Documents' : 'Подпишите договор в разделе «Документы»';
   const quote = docs.find((d) => d.kind === 'quote')!;
   const contract = docs.find((d) => d.kind === 'contract');
+  const last = [...docs].reverse().find((d) => d.kind === 'quote')!;
+  if (last.state === 'declined') return en ? 'You sent your answer on the proposal: the manager replies in Messages' : 'Ваш ответ по КП у менеджера: он ответит в сообщениях';
+  if (last.state === 'expired') return en ? 'The proposal has expired: write in Messages and we will update it' : 'Срок КП истёк: напишите в сообщениях, обновим предложение';
   if (quote.state === 'accepted' && !contract) return en ? 'Proposal accepted, we are preparing the contract' : 'КП принято, готовим договор';
   if (contract?.state === 'signed' && !docs.some((d) => d.kind === 'invoice')) return en ? 'Contract signed, we are preparing the invoice for the first stage' : 'Договор подписан, готовим счёт на первый этап';
   return null;
@@ -196,6 +241,13 @@ export function parseSignature(dataUrl: string): { ok: true; png: Buffer } | { o
   return { ok: true, png };
 }
 
+const rejectBody = z.object({
+  reason: z.string().trim().min(1).max(1000),
+  /** `decline`: the client says no; `discuss`: he wants to change something first. Both close this КП; the owner answers in the thread. */
+  mode: z.enum(['decline', 'discuss']).default('decline'),
+});
+const DAY = 86_400_000;
+
 const signBody = z.object({
   signaturePng: z.string().min(1).max(400_000),
   name: z.string().trim().min(2).max(120),
@@ -213,13 +265,16 @@ export interface CabDocsDeps {
   siteUrl: string;
   /** A line for the owner's inbox (no approval). */
   notifyOwner: (text: string) => void;
+  /** How long a КП stands (`KP_VALID_DAYS`, the same number the КП text names); default 14. */
+  kpValidDays?: number;
 }
 
 /** What the Sales head hands over when the owner approved a КП whose lead has a cabinet. */
 export interface QuoteApproval {
   clientId: number;
   leadId: number;
-  projectId: number;
+  /** The reserved project; null when it is reserved on the client's acceptance (P-10: `reservation`). */
+  projectId: number | null;
   packId: number;
   client: string;
   totalUsd: number;
@@ -228,10 +283,14 @@ export interface QuoteApproval {
   /** The task metas of the next two steps (the contract, the invoice of stage 1): made after the client accepts and signs. */
   contractMeta: Record<string, unknown>;
   invoiceMeta: Record<string, unknown>;
+  /** P-10: what `PmStore.reserve` needs when the client accepts (the stage dates are planned from that day). */
+  reservation?: { client: string; what: string; product: Product; leadId: number | null; packId: number; stages: PaymentStage[]; dueProduct?: Product };
 }
 
 interface ClientRow { id: number; email: string; name: string; locale: string }
 const SEVEN_DAYS = 7 * 86_400_000;
+/** Emails per document in all (the first sending and the retries on start; the owner's «Отправить снова» is not limited). */
+export const MAX_MAIL_ATTEMPTS = 3;
 const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
 const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
 
@@ -281,6 +340,7 @@ export class CabDocs {
     return this.db.prepare('SELECT * FROM cab_documents WHERE id = ?').get(id) as DocRow | undefined;
   }
 
+  /** A new row; `delivered_at` stays null until the client got the notice (`notifyClient`), unless the caller says it is already with him. */
   private insert(r: Partial<DocRow> & Pick<DocRow, 'client_id' | 'kind' | 'title' | 'state'>): DocRow {
     const t = this.d.now();
     const id = Number(
@@ -289,7 +349,7 @@ export class CabDocs {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         r.client_id, r.kind, r.title, r.number ?? '', r.lead_id ?? null, r.project_id ?? null, r.pack_id ?? null, r.state, r.src ?? '', r.src_id ?? null, r.amount_usd ?? null,
-        r.stage_no ?? null, r.body ?? '', r.meta ?? '{}', t, t,
+        r.stage_no ?? null, r.body ?? '', r.meta ?? '{}', t, r.delivered_at === undefined ? null : r.delivered_at,
       ).lastInsertRowid,
     );
     return this.row(id)!;
@@ -354,27 +414,179 @@ export class CabDocs {
     if (r) this.db.prepare('UPDATE cab_documents SET pdf_rel = ?, pdf_sha256 = ? WHERE id = ?').run(r.rel, r.sha256, row.id);
   }
 
+  /** When the PDF of a row was last tried on a read (P-09): a missing one is built again at most every 10 minutes, so a broken font folder does not render on every poll. */
+  private readonly pdfTriedAt = new Map<number, number>();
+
+  /**
+   * P-09: a row whose PDF never got made (a restart in the middle of the background work, missing fonts at that moment) gets it on the next read. Returns the
+   * row as it is now. Never throws: the list must answer even when the PDF still cannot be made.
+   */
+  private async ensurePdf(r: DocRow): Promise<DocRow> {
+    if (r.state === 'signed' && !r.signed_pdf_rel) return this.ensureSignedPdf(r);
+    if (r.pdf_rel || r.signed_pdf_rel) return r;
+    const last = this.pdfTriedAt.get(r.id);
+    if (last !== undefined && this.d.now() - last < 10 * 60_000) return r;
+    this.pdfTriedAt.set(r.id, this.d.now());
+    try {
+      await this.attachPdf(r);
+      const now = this.row(r.id) ?? r;
+      if (now.pdf_rel) this.d.hq.log('documents', 'pdf_rebuilt', 'document', String(r.id), r.kind);
+      return now;
+    } catch (e) {
+      log('warn', 'cabinet pdf rebuild failed', { doc: r.id, err: errMsg(e) });
+      return r;
+    }
+  }
+
+  /** The signed copy of a contract, rendered from the stored signature (`bo_signatures`); null when it could not be made. */
+  private async renderSigned(r: DocRow): Promise<{ rel: string; sha256: string } | null> {
+    const sig = this.db.prepare('SELECT signature_png, name, at FROM bo_signatures WHERE doc_id = ? ORDER BY id DESC LIMIT 1').get(r.id) as { signature_png: Buffer; name: string; at: number } | undefined;
+    if (!sig) return null;
+    try {
+      return await this.render(r, { png: Buffer.from(sig.signature_png), name: sig.name, at: sig.at });
+    } catch (e) {
+      log('warn', 'signed pdf failed', { doc: r.id, err: errMsg(e) });
+      return null;
+    }
+  }
+
+  /** P-12: a signed contract without its signed PDF (the render failed at signing) gets it on the next read, at most every 10 minutes. */
+  private async ensureSignedPdf(r: DocRow): Promise<DocRow> {
+    const last = this.pdfTriedAt.get(r.id);
+    if (last !== undefined && this.d.now() - last < 10 * 60_000) return r;
+    this.pdfTriedAt.set(r.id, this.d.now());
+    const rendered = await this.renderSigned(r);
+    if (!rendered) return r;
+    this.db.prepare('UPDATE cab_documents SET signed_pdf_rel = ? WHERE id = ?').run(rendered.rel, r.id);
+    this.d.hq.log('documents', 'signed_pdf_rebuilt', 'document', String(r.id));
+    this.d.notifyOwner(`Подписанный PDF договора ${r.number} собран со второй попытки, он у клиента в «Документах».`);
+    return this.row(r.id) ?? r;
+  }
+
+  /**
+   * P-09, on the start of HQ: the notices the background work never finished (a restart between the owner's approval and the client's line, `delivered_at IS NULL`)
+   * are sent now, with the PDF made first; an email that failed is tried again. At most `MAX_MAIL_ATTEMPTS` emails per row in all. Returns what it did.
+   */
+  async recoverDeliveries(): Promise<{ delivered: number; remailed: number }> {
+    let delivered = 0;
+    let remailed = 0;
+    const rows = this.db.prepare(
+      `SELECT * FROM cab_documents WHERE kind IN ('quote', 'contract', 'invoice', 'act') AND mail_attempts < ? AND (delivered_at IS NULL OR mail_state = 'failed') ORDER BY id`,
+    ).all(MAX_MAIL_ATTEMPTS) as DocRow[];
+    for (const r of rows) {
+      const what = noticeOf(r);
+      const c = this.client(r.client_id);
+      if (!what || !c) continue;
+      try {
+        if (r.delivered_at === null) {
+          if (!r.pdf_rel) await this.attachPdf(r);
+          if (r.kind === 'quote' && r.pack_id !== null) {
+            const est = this.db.prepare("SELECT * FROM cab_documents WHERE kind = 'other' AND pack_id = ? AND client_id = ?").get(r.pack_id, r.client_id) as DocRow | undefined;
+            if (est && !est.pdf_rel) await this.attachPdf(est);
+          }
+          await this.notifyClient(this.row(r.id)!, what);
+          delivered++;
+        } else {
+          await this.mailRow(r, c, what);
+          remailed++;
+        }
+      } catch (e) {
+        log('warn', 'cabinet delivery recovery failed', { doc: r.id, err: errMsg(e) });
+      }
+    }
+    if (delivered || remailed) this.d.hq.log('documents', 'deliveries_recovered', 'document', '', `delivered ${delivered}, remailed ${remailed}`);
+    return { delivered, remailed };
+  }
+
   // ---- delivery: the owner's approval is the sending ----
   /** The email half of a notice (a link to the cabinet, never a PDF); returns what happened for the journal: `email`, `email_failed:<why>` or `journal` (no Resend). */
-  private async mail(c: ClientRow, what: { ru: string; en: string; ruMail: string; enMail: string }): Promise<string> {
+  private async mail(c: ClientRow, what: Notice): Promise<string> {
     const en = c.locale === 'en';
     const tools = this.d.tools();
     if (!tools.can('email.send')) return 'journal';
     const hello = en ? `Hello${c.name ? `, ${c.name}` : ''}!` : `Здравствуйте${c.name ? `, ${c.name}` : ''}!`;
-    const sent = await tools.email.send({
-      to: c.email, subject: en ? what.enMail : what.ruMail,
-      text: `${hello}\n\n${en ? what.en : what.ru}\n\n${en ? 'Open your cabinet' : 'Откройте личный кабинет'}: ${this.cabinetUrl(c)}\n\nFir Tech\nhello@firtech.pro`,
-    });
-    return sent.ok ? 'email' : `email_failed:${sent.error}`;
+    try {
+      const sent = await tools.email.send({
+        to: c.email, subject: en ? what.enMail : what.ruMail,
+        text: `${hello}\n\n${en ? what.en : what.ru}\n\n${en ? 'Open your cabinet' : 'Откройте личный кабинет'}: ${this.cabinetUrl(c)}\n\nFir Tech\nhello@firtech.pro`,
+      });
+      return sent.ok ? 'email' : `email_failed:${String(sent.error)}`;
+    } catch (e) {
+      return `email_failed:${errMsg(e).slice(0, 60)}`;
+    }
+  }
+
+  /** What did not go: one row for the owner's hourly alert (P-07). */
+  private get failures(): EmailFailures {
+    return new EmailFailures(this.d.hq);
+  }
+
+  /** The email of a row's notice and its outcome on the row (`mail_state`, P-07): a failure is recorded for the owner's hourly alert. Returns the journal word. */
+  private async mailRow(row: DocRow, c: ClientRow, what: Notice): Promise<string> {
+    const how = await this.mail(c, what);
+    const state = how === 'email' ? 'sent' : how === 'journal' ? 'off' : 'failed';
+    const why = state === 'failed' ? how.slice('email_failed:'.length) || 'unknown' : null;
+    this.db.prepare('UPDATE cab_documents SET mail_state = ?, mail_error = ?, mail_attempts = mail_attempts + 1 WHERE id = ?').run(state, why, row.id);
+    if (state === 'failed') this.failures.record(row.kind as EmailKind, row.number || `документ #${row.id}`, why ?? 'unknown');
+    return how;
   }
 
   /** The email (a link to the cabinet, never the PDF) and the line in the thread; the outcome goes to the journal without any text. */
-  private async notifyClient(row: DocRow, what: { ru: string; en: string; ruMail: string; enMail: string }): Promise<void> {
+  private async notifyClient(row: DocRow, what: Notice): Promise<void> {
     const c = this.client(row.client_id);
     if (!c) return;
     postFromFirTech(this.db, this.d.now(), c.id, row.lead_id, c.locale === 'en' ? what.en : what.ru);
-    const how = await this.mail(c, what);
+    // the client has the line: the row counts as delivered (P-09: a restart before this point is picked up by `recoverDeliveries`)
+    this.db.prepare('UPDATE cab_documents SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL').run(this.d.now(), row.id);
+    const how = await this.mailRow(row, c, what);
     this.d.hq.log('documents', 'doc_delivered', 'document', String(row.id), `${row.kind} ${how}`);
+  }
+
+  /**
+   * «Отправить снова» (the owner, Пульт): the email of a delivered row is sent again (no second line in the thread: the client has it). 404 unknown row,
+   * 409 `not_sendable` for a row without its own notice (the estimate), 409 `no_email` when Resend is not configured.
+   */
+  async resend(docId: number): Promise<DocReply> {
+    const r = this.row(docId);
+    if (!r) return failR(404, 'not_found');
+    const what = noticeOf(r);
+    const c = this.client(r.client_id);
+    if (!what || !c) return failR(409, 'not_sendable');
+    if (!this.d.tools().can('email.send')) return failR(409, 'no_email');
+    const how = await this.mailRow(r, c, what);
+    this.d.hq.log('owner', 'doc_resent', 'document', String(r.id), `${r.kind} ${how}`);
+    const now = this.row(r.id)!;
+    return how === 'email' ? okR({ mail: this.mailView(now) }) : failR(502, 'email_failed', { mail: this.mailView(now) });
+  }
+
+  private mailView(r: DocRow): { state: string | null; error: string | null; attempts: number } {
+    return { state: r.mail_state ?? null, error: r.mail_error ?? null, attempts: r.mail_attempts ?? 0 };
+  }
+
+  /**
+   * The owner's list of cabinet documents (`GET /admin/crm/cabinet-docs`): newest first, with the email outcome and whether the PDF exists. `problem`: only rows
+   * whose email failed or whose PDF is missing (the Пульт's mark «письмо не ушло» / «нет PDF»).
+   */
+  ownerList(o: { problem?: boolean; clientId?: number | null; limit?: number } = {}): Record<string, unknown>[] {
+    const where: string[] = [];
+    const params: number[] = [];
+    if (o.clientId) { where.push('d.client_id = ?'); params.push(o.clientId); }
+    if (o.problem) where.push("(d.mail_state = 'failed' OR (d.kind != 'invoice' AND d.pdf_rel IS NULL AND d.signed_pdf_rel IS NULL) OR (d.state = 'signed' AND d.signed_pdf_rel IS NULL))");
+    const rows = this.db.prepare(
+      `SELECT d.*, c.name AS client_name, c.email AS client_email FROM cab_documents d JOIN cab_clients c ON c.id = d.client_id ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY d.id DESC LIMIT ?`,
+    ).all(...params, Math.min(Math.max(o.limit ?? 100, 1), 500)) as (DocRow & { client_name: string; client_email: string })[];
+    return rows.map((r) => {
+      const problems = [
+        ...(r.mail_state === 'failed' ? ['email_failed'] : []),
+        ...(r.kind !== 'invoice' && !r.pdf_rel && !r.signed_pdf_rel ? ['no_pdf'] : []),
+        ...(r.state === 'signed' && !r.signed_pdf_rel ? ['no_signed_pdf'] : []),
+      ];
+      return {
+        id: r.id, clientId: r.client_id, client: r.client_name || r.client_email, kind: r.kind, title: r.title, number: r.number || null, leadId: r.lead_id, projectId: r.project_id,
+        state: this.liveState(r), createdAt: iso(r.created_at), deliveredAt: iso(r.delivered_at), mail: this.mailView(r), pdf: Boolean(r.pdf_rel), signedPdf: Boolean(r.signed_pdf_rel),
+        problems, actions: noticeOf(r) ? ['resend'] : [],
+      };
+    });
   }
 
   /**
@@ -386,20 +598,17 @@ export class CabDocs {
     if (dup) return { quoteId: dup.id };
     const quote = this.insert({
       client_id: q.clientId, kind: 'quote', title: 'Коммерческое предложение', number: `КП-${q.packId}`, lead_id: q.leadId, project_id: q.projectId, pack_id: q.packId, state: 'awaiting_client',
-      src: 'ps_quote', src_id: q.packId, amount_usd: q.totalUsd, body: q.kpText, meta: JSON.stringify({ contract: q.contractMeta, invoice: q.invoiceMeta, client: q.client }),
+      src: 'ps_quote', src_id: q.packId, amount_usd: q.totalUsd, body: q.kpText,
+      meta: JSON.stringify({ contract: q.contractMeta, invoice: q.invoiceMeta, client: q.client, ...(q.reservation ? { reservation: q.reservation } : {}) }),
     });
     const est = this.insert({
       client_id: q.clientId, kind: 'other', title: 'Смета', number: `КП-${q.packId}`, lead_id: q.leadId, project_id: q.projectId, pack_id: q.packId, state: 'issued', src: 'ps_estimate', src_id: q.packId,
-      amount_usd: q.totalUsd, body: q.estimateText,
+      amount_usd: q.totalUsd, body: q.estimateText, delivered_at: this.d.now(),
     });
     this.track((async () => {
       await this.attachPdf(this.row(quote.id)!);
       await this.attachPdf(this.row(est.id)!);
-      await this.notifyClient(quote, {
-        ru: 'Коммерческое предложение готово. Откройте раздел «Документы», прочитайте его и нажмите «Принять КП» или задайте вопрос в сообщениях.',
-        en: 'Your commercial proposal is ready. Open Documents, read it and press «Accept», or ask a question in Messages.',
-        ruMail: 'Ваше коммерческое предложение Fir Tech', enMail: 'Your Fir Tech commercial proposal',
-      });
+      await this.notifyClient(quote, noticeOf(quote)!);
     })());
     return { quoteId: quote.id };
   }
@@ -426,13 +635,7 @@ export class CabDocs {
       pack_id: Number(task?.meta.packId) || null, state: isContract ? 'awaiting_signature' : 'issued', src: 'bo', src_id: doc.id, body: doc.text,
     });
     await this.attachPdf(row);
-    await this.notifyClient(row, isContract
-      ? {
-        ru: 'Договор готов. Откройте раздел «Документы», прочитайте его и подпишите, нарисовав подпись мышью.',
-        en: 'The contract is ready. Open Documents, read it and sign it by drawing your signature with the mouse.',
-        ruMail: 'Договор Fir Tech готов к подписанию', enMail: 'Your Fir Tech contract is ready to sign',
-      }
-      : { ru: 'Акт сдачи работ готов, он в разделе «Документы».', en: 'The completion certificate is ready in Documents.', ruMail: 'Акт сдачи работ Fir Tech', enMail: 'Your Fir Tech completion certificate' });
+    await this.notifyClient(row, noticeOf(row)!);
     return true;
   }
 
@@ -449,13 +652,7 @@ export class CabDocs {
       state: 'issued', src: 'bl', src_id: inv.id, amount_usd: inv.amount_usd, stage_no: inv.stage_no, body: text,
     });
     await this.attachPdf(row);
-    const stage = inv.stage_no ? ` (этап ${inv.stage_no})` : '';
-    const stageEn = inv.stage_no ? ` (stage ${inv.stage_no})` : '';
-    await this.notifyClient(row, {
-      ru: `Счёт ${inv.number}${stage} на $${inv.amount_usd} выставлен. Оплатить можно кнопкой «Оплатить» в разделе «Документы» или в проекте.`,
-      en: `Invoice ${inv.number}${stageEn} for $${inv.amount_usd} has been issued. Pay with the «Pay» button in Documents or in your project.`,
-      ruMail: `Счёт ${inv.number} от Fir Tech`, enMail: `Invoice ${inv.number} from Fir Tech`,
-    });
+    await this.notifyClient(row, noticeOf(row)!);
     return true;
   }
 
@@ -501,13 +698,16 @@ export class CabDocs {
   }
 
   /** A line from Fir Tech in the project thread (`project-<id>`: the unread flag of the tab follows) and the email; the email runs in the background (`idle()`). */
-  private tellProject(c: ClientRow, projectId: number, what: { ru: string; en: string; ruMail: string; enMail: string }, journal: string): void {
+  private tellProject(c: ClientRow, projectId: number, what: Notice, journal: string): void {
     try {
       addThreadMessage(this.db, this.d.now(), { clientId: c.id, thread: `project-${projectId}`, from: 'manager', text: c.locale === 'en' ? what.en : what.ru });
     } catch (e) {
       log('warn', 'project thread line failed', { err: errMsg(e) });
     }
-    this.track(this.mail(c, what).then((how) => this.d.hq.log('documents', journal, 'project', String(projectId), how)));
+    this.track(this.mail(c, what).then((how) => {
+      this.d.hq.log('documents', journal, 'project', String(projectId), how);
+      if (how.startsWith('email_failed:')) this.failures.record('stage', `проект #${projectId}`, how.slice('email_failed:'.length) || 'unknown');
+    }));
   }
 
   /** A stage is finished and waits for the client: a line in the project thread and an email. */
@@ -568,7 +768,7 @@ export class CabDocs {
         .replace(/Заказчик: ____________/, `Заказчик: принято в кабинете firtech.pro, ${date}`);
       const row = this.insert({
         client_id: c.id, kind: 'act', title: 'Акт сдачи-приёмки', number, lead_id: p.leadId, project_id: p.id, pack_id: p.packId, state: 'issued', src: 'auto_act', src_id: p.id, body: text,
-        amount_usd: total > 0 ? total : null,
+        amount_usd: total > 0 ? total : null, delivered_at: t,
       });
       this.db.prepare('UPDATE cab_documents SET accepted_at = ? WHERE id = ?').run(t, row.id);
       this.track(this.attachPdf(this.row(row.id)!));
@@ -608,7 +808,7 @@ export class CabDocs {
         : null;
       const add = (r: Parameters<CabDocs['insert']>[0]): void => {
         if (this.db.prepare('SELECT 1 FROM cab_documents WHERE src = ? AND src_id = ?').get(r.src, r.src_id)) return;
-        const row = this.insert({ ...r, client_id: clientId, lead_id: l.id, project_id: projectId });
+        const row = this.insert({ ...r, client_id: clientId, lead_id: l.id, project_id: projectId, delivered_at: this.d.now() });
         this.track(this.attachPdf(this.row(row.id)!));
         made++;
       };
@@ -642,7 +842,7 @@ export class CabDocs {
   /** True while a delivered document can still be revised by the owner (no cabinet row at all counts as open: only the text is replaced). */
   revisable(src: 'ps_quote' | 'ps_estimate' | 'bo', srcId: number): boolean {
     const row = this.db.prepare('SELECT kind, state FROM cab_documents WHERE src = ? AND src_id = ?').get(src, srcId) as { kind: string; state: string } | undefined;
-    return !row || row.state === (row.kind === 'quote' ? 'awaiting_client' : row.kind === 'contract' ? 'awaiting_signature' : 'issued');
+    return !row || row.state === (row.kind === 'quote' ? 'awaiting_client' : row.kind === 'contract' ? 'awaiting_signature' : 'issued') || (row.kind === 'quote' && row.state === 'expired');
   }
 
   /**
@@ -655,8 +855,15 @@ export class CabDocs {
     const row = this.db.prepare('SELECT * FROM cab_documents WHERE src = ? AND src_id = ?').get(src, srcId) as DocRow | undefined;
     if (!row) return 'none';
     const open = row.kind === 'quote' ? 'awaiting_client' : row.kind === 'contract' ? 'awaiting_signature' : 'issued';
-    if (row.state !== open) return 'locked';
+    // an expired КП revised by the owner stands again from now (P-11): it waits for the client with a fresh term
+    const revive = row.kind === 'quote' && row.state === 'expired';
+    if (row.state !== open && !revive) return 'locked';
     this.db.prepare('UPDATE cab_documents SET body = ?, src_id = ?, pdf_rel = NULL, pdf_sha256 = NULL WHERE id = ?').run(body, newSrcId ?? row.src_id, row.id);
+    if (revive) {
+      const meta = JSON.parse(row.meta || '{}') as Record<string, unknown>;
+      delete meta.expiryWarned;
+      this.db.prepare("UPDATE cab_documents SET state = 'awaiting_client', delivered_at = ?, meta = ? WHERE id = ?").run(this.d.now(), JSON.stringify(meta), row.id);
+    }
     await this.attachPdf(this.row(row.id)!);
     const c = this.client(row.client_id);
     postFromFirTech(this.db, this.d.now(), row.client_id, row.lead_id,
@@ -679,7 +886,8 @@ export class CabDocs {
     return inv ? this.d.billing.payUrl({ number: inv.number, payKey: inv.pay_key, locale: inv.locale === 'en' ? 'en' : 'ru' }) : null;
   }
 
-  private async view(r: DocRow): Promise<Record<string, unknown>> {
+  private async view(row: DocRow): Promise<Record<string, unknown>> {
+    const r = await this.ensurePdf(row);
     const pay = this.payUrlOf(r);
     return {
       id: r.id, kind: r.kind, title: r.title, number: r.number || null, leadId: r.lead_id, projectId: r.project_id, state: this.liveState(r),
@@ -704,8 +912,24 @@ export class CabDocs {
     if (r.kind !== 'quote' || r.state !== 'awaiting_client') return failR(409, 'not_awaiting', { state: this.liveState(r) });
     const t = this.d.now();
     if (this.db.prepare("UPDATE cab_documents SET state = 'accepted', accepted_at = ? WHERE id = ? AND state = 'awaiting_client'").run(t, r.id).changes !== 1) return failR(409, 'not_awaiting');
-    const meta = JSON.parse(r.meta || '{}') as { contract?: Record<string, unknown>; client?: string };
+    const meta = JSON.parse(r.meta || '{}') as { contract?: Record<string, unknown>; invoice?: Record<string, unknown>; client?: string; reservation?: QuoteApproval['reservation'] };
     const hq = this.d.hq;
+    // P-10: the project is reserved now that the client said yes (stage dates from today); the contract and the invoice to come carry its id
+    if (meta.reservation && r.project_id === null) {
+      try {
+        const res = meta.reservation;
+        const stages = parseStages(res.stages) ?? [];
+        const project = new PmStore(this.db, this.d.now).reserve({ ...res, stages, dueAts: planStageDates(res.dueProduct ?? res.product, stages.map((x) => x.share), t, hq.tz) });
+        const fill = (m: Record<string, unknown> | undefined) => (m ? { ...m, projectId: project.id, ...(typeof m.chain === 'string' ? { chain: m.chain.replace('{project}', `#${project.id}`) } : {}) } : m);
+        meta.contract = fill(meta.contract);
+        meta.invoice = fill(meta.invoice);
+        this.db.prepare('UPDATE cab_documents SET meta = ? WHERE id = ?').run(JSON.stringify(meta), r.id);
+        this.db.prepare('UPDATE cab_documents SET project_id = ? WHERE client_id = ? AND pack_id IS ? AND project_id IS NULL').run(project.id, c.id, r.pack_id);
+        hq.log('documents', 'project_reserved', 'project', String(project.id), `pack ${res.packId}`);
+      } catch (e) {
+        log('warn', 'project reservation failed', { doc: r.id, err: errMsg(e) });
+      }
+    }
     if (meta.contract) {
       hq.createTask({ title: `Договор: ${meta.client ?? c.name ?? c.email}`, dept: 'backoffice', creator: 'head', priority: 1, meta: meta.contract });
       hq.wake('backoffice-head', 'task');
@@ -715,6 +939,72 @@ export class CabDocs {
     this.d.notifyOwner(`${c.name || c.email} принял КП ${r.number}: договор готовится, придёт карточкой на одобрение.`);
     this.autoAgent(c, r);
     return okR({ next: 'contract' });
+  }
+
+  /**
+   * P-11 `POST /admin/clients/:id/documents/:docId/reject` `{ reason, mode? }`: the client declines the КП or wants to discuss it. The quote is `declined` (no contract
+   * is drafted), his words go into the lead thread, the owner gets a Sales task and an inbox line. 404, 400 `invalid`, 409 `not_awaiting` like `accept`.
+   */
+  reject(clientId: number, docId: number, body: unknown): DocReply {
+    const c = this.client(clientId);
+    const r = this.row(docId);
+    if (!c || !r || r.client_id !== clientId) return failR(404, 'not_found');
+    const parsed = rejectBody.safeParse(body ?? {});
+    if (!parsed.success) return failR(400, 'invalid');
+    if (r.kind !== 'quote' || r.state !== 'awaiting_client') return failR(409, 'not_awaiting', { state: this.liveState(r) });
+    const t = this.d.now();
+    const { reason, mode } = parsed.data;
+    const meta = { ...(JSON.parse(r.meta || '{}') as Record<string, unknown>), declined: { at: t, mode } };
+    if (this.db.prepare("UPDATE cab_documents SET state = 'declined', meta = ? WHERE id = ? AND state = 'awaiting_client'").run(JSON.stringify(meta), r.id).changes !== 1) return failR(409, 'not_awaiting');
+    const en = c.locale === 'en';
+    const discuss = mode === 'discuss';
+    if (r.lead_id !== null) {
+      try {
+        addCabMessage(this.db, t, { clientId: c.id, leadId: r.lead_id, from: 'client', text: `${discuss ? (en ? 'I would like to discuss the proposal' : 'Хочу обсудить КП') : (en ? 'I decline the proposal' : 'Отклоняю КП')} ${r.number}: ${reason}` });
+      } catch (e) {
+        log('warn', 'quote reject thread line failed', { doc: r.id, err: errMsg(e) });
+      }
+    }
+    postFromFirTech(this.db, t, c.id, r.lead_id, en ? 'Thank you, your answer is with the manager: he replies here in Messages.' : 'Спасибо, ваш ответ у менеджера: он ответит здесь, в сообщениях.');
+    const hq = this.d.hq;
+    const who = c.name || c.email;
+    hq.createTask({
+      title: `КП ${r.number}: ${who} ${discuss ? 'хочет обсудить' : 'отклонил'}`, body: reason, dept: 'sales', creator: 'head', priority: 1,
+      meta: { action: 'kp_declined', leadId: r.lead_id, docId: r.id, packId: r.pack_id, mode, number: r.number, client: who },
+    });
+    hq.wake('sales-head', 'task');
+    hq.log('client', 'quote_declined', 'document', String(r.id), mode);
+    this.d.notifyOwner(`${who} ${discuss ? 'хочет обсудить' : 'отклонил'} КП ${r.number}: причина в задаче продаж и в треде заявки.`);
+    return okR({ state: 'declined' });
+  }
+
+  /**
+   * P-11, from the due ticker: a КП that waits for the client longer than it stands (`kpValidDays` from its delivery) is `expired`; the owner hears a day before
+   * and when it happens, the client gets one line. Returns how many quotes expired now.
+   */
+  async expiryTick(): Promise<number> {
+    const days = this.d.kpValidDays ?? 14;
+    const now = this.d.now();
+    let expired = 0;
+    const rows = this.db.prepare("SELECT d.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale FROM cab_documents d JOIN cab_clients c ON c.id = d.client_id WHERE d.kind = 'quote' AND d.state = 'awaiting_client'").all() as (DocRow & { client_name: string; client_email: string; client_locale: string })[];
+    for (const r of rows) {
+      const until = (r.delivered_at ?? r.created_at) + days * DAY;
+      const who = r.client_name || r.client_email;
+      const meta = JSON.parse(r.meta || '{}') as Record<string, unknown>;
+      if (now >= until) {
+        if (this.db.prepare("UPDATE cab_documents SET state = 'expired' WHERE id = ? AND state = 'awaiting_client'").run(r.id).changes !== 1) continue;
+        expired++;
+        postFromFirTech(this.db, now, r.client_id, r.lead_id, r.client_locale === 'en'
+          ? `The proposal ${r.number} has expired. If it is still relevant, write here and we will update it.`
+          : `Срок КП ${r.number} истёк. Если предложение ещё актуально, напишите здесь, мы его обновим.`);
+        this.d.hq.log('documents', 'quote_expired', 'document', String(r.id));
+        await this.d.hq.alert(`КП ${r.number} (${who}) истекло: клиент не ответил за ${days} дн. Продлить: правка КП в ревью-центре (уйдёт клиенту заново) или новое КП.`);
+      } else if (now >= until - DAY && meta.expiryWarned !== true) {
+        this.db.prepare('UPDATE cab_documents SET meta = ? WHERE id = ?').run(JSON.stringify({ ...meta, expiryWarned: true }), r.id);
+        await this.d.hq.alert(`КП ${r.number} (${who}) истекает завтра, клиент его не принял. Напомнить можно в треде заявки (Пульт, чаты).`);
+      }
+    }
+    return expired;
   }
 
   /** `POST /admin/clients/:id/documents/:docId/sign`: the simple electronic signature; the signed PDF is rendered and the stage-1 invoice is proposed. */
@@ -732,15 +1022,13 @@ export class CabDocs {
     if (this.db.prepare("UPDATE cab_documents SET state = 'signed', signed_at = ? WHERE id = ? AND state = 'awaiting_signature'").run(t, r.id).changes !== 1) return failR(409, 'not_awaiting');
     const unsignedSha = r.pdf_sha256 ?? sha(r.body);
     this.db.prepare('INSERT INTO bo_signatures (doc_id, signature_png, name, at, ip, ua, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)').run(r.id, sig.png, parsed.data.name, t, parsed.data.ip, parsed.data.userAgent, unsignedSha);
-    let rendered: { rel: string; sha256: string } | null = null;
-    try {
-      rendered = await this.render(this.row(r.id)!, { png: sig.png, name: parsed.data.name, at: t });
-    } catch (e) {
-      log('warn', 'signed pdf failed', { doc: r.id, err: errMsg(e) });
-    }
+    const rendered = await this.renderSigned(this.row(r.id)!);
     if (rendered) this.db.prepare('UPDATE cab_documents SET signed_pdf_rel = ? WHERE id = ?').run(rendered.rel, r.id);
+    else this.pdfTriedAt.set(r.id, t);
     const hq = this.d.hq;
     hq.log('client', 'contract_signed', 'document', String(r.id), rendered ? 'pdf' : 'no_pdf');
+    // P-12: the signature is stored, the signed copy is not: the owner hears it now, the next read of the documents tries again
+    if (!rendered) void hq.alert(`Договор ${r.number} подписан клиентом, но подписанный PDF не собрался (подпись сохранена). Повторю при следующем открытии документов; если не выйдет, проверьте шрифты и папку файлов HQ.`);
     // the owner's next card: the invoice of stage 1 (what the old chain made together with the contract)
     const quote = this.db.prepare("SELECT meta FROM cab_documents WHERE kind = 'quote' AND pack_id IS ? AND client_id = ? ORDER BY id DESC LIMIT 1").get(r.pack_id, clientId) as { meta: string } | undefined;
     const invoice = (JSON.parse(quote?.meta || '{}') as { invoice?: Record<string, unknown>; client?: string });

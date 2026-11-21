@@ -65,6 +65,7 @@ describe('stage plan: the chain stage by stage', () => {
     await w.beat();
     expect(invoices(w)).toHaveLength(1);
     // the owner accepts stage 1 (/mdone <project> <stage>): the next invoice is proposed, once
+    await w.cmd('mready', `${p.id} 1`); // P-15: the stage is ready first, then accepted
     await w.cmd('mdone', `${p.id} 1`);
     expect(w.lastToOwner()).toContain('этап 1');
     expect(w.lastToOwner()).toContain('принят');
@@ -105,11 +106,14 @@ describe('stage plan: the chain stage by stage', () => {
     const p = pm(w).projects('draft')[0]!;
     await payNext(w);
     await approveSpec(w);
+    await w.cmd('mready', `${p.id} 1`); // P-15: the stage is ready first, then accepted
     await w.cmd('mdone', `${p.id} 1`);
     await payNext(w);
+    await w.cmd('mready', `${p.id} 2`); // P-15: the stage is ready first, then accepted
     await w.cmd('mdone', `${p.id} 2`);
     await payNext(w); // stage 3 paid
     expect(w.hq.tasks({ dept: 'production' }).some((t) => t.meta.action === 'handover')).toBe(false);
+    await w.cmd('mready', `${p.id} 3`); // P-15: the stage is ready first, then accepted
     await w.cmd('mdone', `${p.id} 3`); // penultimate accepted: the invoice of stage 4 and the handover hold
     expect(w.lastToOwner()).toContain('передача доступов ждёт его оплаты');
     const handover = () => w.hq.tasks({ dept: 'production', limit: 100 }).find((t) => t.meta.action === 'handover')!;
@@ -128,6 +132,7 @@ describe('stage plan: the chain stage by stage', () => {
     await w.beat();
     expect(handover().status).toBe('done');
     // the last stage accepted: the project closes, no fifth invoice
+    await w.cmd('mready', `${p.id} 4`); // P-15: the stage is ready first, then accepted
     await w.cmd('mdone', `${p.id} 4`);
     expect(w.lastToOwner()).toContain('Проект закрыт');
     expect(pm(w).project(p.id)!.status).toBe('done');
@@ -142,6 +147,7 @@ describe('stage plan: the chain stage by stage', () => {
     expect(pm(w).stageMilestones(p.id)).toHaveLength(2);
     await payNext(w);
     await approveSpec(w);
+    await w.cmd('mready', `${p.id} 1`); // P-15: the stage is ready first, then accepted
     await w.cmd('mdone', `${p.id} 1`);
     expect(w.hq.tasks({ dept: 'production', limit: 100 }).find((t) => t.meta.action === 'handover')!.status).toBe('blocked');
     await w.beat();
@@ -154,6 +160,7 @@ describe('stage plan: the chain stage by stage', () => {
     const p = pm(w).projects('draft')[0]!;
     await payNext(w);
     await approveSpec(w);
+    await w.cmd('mready', `${p.id} 1`); // P-15: the stage is ready first, then accepted
     await w.cmd('mdone', `${p.id} 1`);
     await w.beat();
     const meta = w.hq.tasks({ dept: 'support', limit: 100 }).find((t) => t.meta.action === 'kp_invoice' && t.meta.stageNo === 2)!.meta;
@@ -178,6 +185,7 @@ describe('referral payout per paid stage', () => {
     const w = chainWorld();
     const p = await through(w);
     expect(w.toOwner().some((m) => m.includes('Рекомендатель cambridge: выплата $16.5 (10% этапа 1'))).toBe(true);
+    await w.cmd('mready', `${p.id} 1`); // P-15: the stage is ready first, then accepted
     await w.cmd('mdone', `${p.id} 1`);
     await payNext(w);
     expect(w.toOwner().some((m) => m.includes('выплата $16.5 (10% этапа 2'))).toBe(true);

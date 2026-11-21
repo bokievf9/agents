@@ -60,7 +60,8 @@ export class DocumentsWorker implements Worker {
     const date = `${String(p.d).padStart(2, '0')}.${String(p.mo).padStart(2, '0')}.${p.y}`;
     const docKey = client || 'firtech.pro';
     const data: DocData = {
-      client, what: found?.what ?? '', date, number: '',
+      // the sales chain names what is made (every product of the КП, P-08); a manual /doc takes it from the project
+      client, what: (typeof task.meta.what === 'string' && task.meta.what.trim()) || found?.what || '', date, number: '',
       milestones: found?.milestones ?? [],
       ...priceFromMeta(task.meta),
     };
