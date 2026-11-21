@@ -1,0 +1,32 @@
+{
+  "name": "@fir/fira",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fira: the one agent core of Fir Tech (spec -> prompt + tools, native tool use, knowledge, memory, lessons, evals)",
+  "dependencies": {
+    "@fir/core": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "eval": "tsx --conditions=source src/eval/cli.ts"
+  },
+  "files": [
+    "dist",
+    "role-packs",
+    "niche-packs",
+    "company-packs",
+    "evals",
+    "sql"
+  ],
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  }
+}
