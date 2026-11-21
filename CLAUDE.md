@@ -22,7 +22,8 @@ Node 22, TypeScript ESM (NodeNext), pnpm 12 workspaces. `grammy` (long polling),
 - `bot.ts`: `createBot`, `grammyMessenger`, `installApprovals` (кнопки и правка владельца), `setupBotMenu` (команды,
   описания, кнопка меню), `startPolling`. `messenger.ts`: интерфейс `Messenger` (HTML, reply-клавиатура, `edit` с кнопками,
   `editButtons`; в тестах `MemoryMessenger`, сеть не нужна), `escapeHtml`/`stripHtml`. Вид карточек одобрений задаёт
-  приложение (`queue.setCardFormat`), после решения ядро правит карточку на месте (`settleCard`). UX Директора: `apps/hq/docs/telegram-ux.md`.
+  приложение (`queue.setCardFormat`), после решения ядро правит карточку на месте (`settleCard`). Telegram владельца (один бот HQ с 2026-11-22):
+  `apps/hq/docs/telegram-ux.md`; карточки с кнопками в Telegram только с `TG_APPROVAL_CARDS=on`.
 - `scheduler.ts`: `schedule(name, cron, tz, job)` на croner, ошибка задачи логируется и не роняет процесс.
 - `approvals.ts`: **очередь одобрений**. Голова регистрирует тип действия (`register(kind, {initialLevel, locked, execute})`)
   и вызывает `propose(kind, payload, summary)`. Уровень 0: владельцу уходит сообщение с кнопками
@@ -101,8 +102,8 @@ Node 22, TypeScript ESM (NodeNext), pnpm 12 workspaces. `grammy` (long polling),
 
 ## Продажи: Приёмщик лидов и Разведчик (исполнители под головой Продаж, этап 2 HQ)
 Бывшие `apps/lead-intake` и `apps/prospector` теперь `packages/workers/lead-intake` и `packages/workers/prospector` (`run(task, ctx)`,
-без бота и крона, таблицы `li_*` и `pr_*` в SQLite HQ). Голова: `apps/hq/src/heads/sales.ts` (бот `SALES_BOT_TOKEN`, он же
-@firtech_leads_bot), webhook `POST /lead` (`x-lead-token` = `LEAD_WEBHOOK_TOKEN`, порт `WEBHOOK_PORT`) в `apps/hq/src/webhook.ts`
+без бота и крона, таблицы `li_*` и `pr_*` в SQLite HQ). Голова: `apps/hq/src/heads/sales.ts` (свой бот `SALES_BOT_TOKEN`
+снят 2026-11-22, см. «Один бот HQ»), webhook `POST /lead` (`x-lead-token` = `LEAD_WEBHOOK_TOKEN`, порт `WEBHOOK_PORT`) в `apps/hq/src/webhook.ts`
 создаёт задачу отдела на лид. Рутины: карточки Разведчика 07:30 и дожимы 07:40 по времени владельца. Первый ответ лиду уровень 1, всё с ценой уровень 0
 (`locked`); бизнесам в холодную пишет владелец вручную. Подробно: `apps/hq/README.md`, README пакетов.
 Публичный бот клиентов `apps/hq/src/client/` (`CLIENT_BOT_TOKEN`, @firtech_bot, только с токеном): приветствие, анкета из 4 шагов (последний вопрос: есть ли у клиента домен и хостинг)
@@ -126,7 +127,7 @@ Node 22, TypeScript ESM (NodeNext), pnpm 12 workspaces. `grammy` (long polling),
 Спека `../docs/architecture-hq.md`. `packages/hq` (`@fir/hq`): SQLite-ядро (агенты, задачи с атомарным `claim`, журнал, одобрения через
 очередь ядра, рутины, heartbeat раз в 30 с, расходы с лимитом отдела, activity, settings, `hq export/import` YAML). Исполнители
 без бота и крона в `packages/workers/*` (`run(task, ctx)`): `content-maker` (бывший `apps/content-maker`). `apps/hq`: один процесс,
-бот Директора (`HQ_BOT_TOKEN`), голова Маркетинга (`src/heads/marketing.ts`), инструкции агентов `apps/hq/instructions/*.md`.
+один бот владельца (`HQ_BOT_TOKEN`, см. «Один бот HQ»), голова Маркетинга (`src/heads/marketing.ts`), инструкции агентов `apps/hq/instructions/*.md`.
 Образ `agents-hq`, сервис `hq` (данные `/opt/fir-agents/data/hq`). Подробно: `packages/hq/README.md`, `apps/hq/README.md`.
 Маркетинг на автопилоте, этап 1 (2026-11-19): пакет недели покрывает всю страницу Instagram (7 рилсов, 3 поста, 2 карусели, 5 историй;
 `POSTS_PER_WEEK`, `STORIES_PER_WEEK`), после одобрения PNG рисуются `satori` + `@resvg/resvg-js` в `DATA_DIR/renders`, Публикатор шлёт альбом
@@ -179,7 +180,7 @@ Instagram с Мака (2026-11-20): Meta не пускает приложени�
 - Цепочка продаж: лид с услугой и бюджетом или сметой, КП само (`isQualified`) -> одобренное КП резервирует проект `draft` (`PmStore.reserve`) и ставит договор (`bo_document`) и счёт первого этапа
   (`billing_invoice`, ссылка на лид, пакет, проект, этап в `bl_invoices`) -> `/paid` (`SupportHead.onPaid`) запускает этап (`ProductionHead.onInvoicePaid`) и выплату рекомендателю
   (`referral_payout`, 10% оплаченного этапа, `locked`); дальше см. «Оплата по этапам». Виды одобрений остались прежними (`presales_pack`, `bo_document`, `billing_invoice`).
-- Команды: один список `apps/hq/src/commands.ts` (справка, меню до 20, обработчики, маршруты), `/workers` из `apps/hq/src/workers.ts`.
+- Команды: один список `apps/hq/src/commands.ts` (справка, обработчики, маршруты Пульта `POST /admin/command`), `/workers` из `apps/hq/src/workers.ts`. В Telegram с 2026-11-22 только `/start` и `/pult` (`glue.ts` `TG_COMMANDS`).
 - Потерянные заявки: `apps/hq/src/lost-leads.ts` (`activity` вида `lost_lead`, таблица `lost_leads`, один алерт в час). Недоступный шлюз: посетитель получает «Принял, менеджер ответит в рабочее время»
   (`freeAnswer`, `gatewayGate`), заявка всё равно создаётся. Публичный `/office` прячет клиентские данные в названиях задач, `/admin/office` отдаёт настоящие.
 
@@ -232,11 +233,32 @@ Agent Reach с Мака (2026-11-21): `~/Agent-Reach` (MIT, `agent-reach` 1.6.1 
 
 ## packages/fira: Fira, ядро агентов (2026-11-22, каркас)
 Одно ядро для всех агентов (HQ, ИИ-менеджер заявок, площадка клиентов): агент = должность × сфера × компания. Архитектура и вопросы владельцу: `docs/fira-architecture.md`, план переноса первой
-должности: `docs/fira-migration-lead-manager.md`. **К продакшену не подключён**: HQ его не импортирует, Supabase-адаптер заглушка (`sql/fira-schema.sql` не применён).
+должности: `docs/fira-migration-lead-manager.md`. В продакшене с 2026-11-22 одна должность: «ассистент руководителя» (`role-packs/executive-assistant.md`, `src/exec-assistant.ts`: определения инструментов,
+спека без охранников цен и дат, Sonnet и Haiku на «сколько ...»), ей отвечает бот HQ (`apps/hq/src/assistant.ts`, раздел «Один бот HQ»); ИИ-менеджер заявок и площадка
+пока на старом рантайме, Supabase-адаптер заглушка (`sql/fira-schema.sql` не применён).
 `spec.ts` (`AgentSpec`, пакеты), `packs.ts` (Markdown `role-packs/*.md`, `niche-packs/*.md`, JSON `company-packs/*.json`), `compile.ts` (детерминированный промпт из кэшируемого блока, инструменты, тир, бюджет),
 `run.ts` (нативный tool use через `LlmClient.chat` ядра, `before`/`after` правила приложения, охранники `guards.ts`, память с TTL: `live` 90 дней, `anon` 24 часа, `demo` ничего, журнал без текстов вне `live`),
 `stores.ts` + `adapters/memory.ts` (Knowledge, Memory, Lessons, Journal), `lessons.ts` (правка → урок), `eval/*` (формат `*.eval.json`, раннер, судья). Наборы: `pnpm --filter fira eval evals/lead-manager.eval.json [--live]`;
 в режиме скриптов они же идут в `pnpm -r test`. В `@fir/core` `llm.ts` добавлены `chat`, `tryChat`, `MockChatLlm`, тир `opus` (только для `chat`); `complete`/`tryJson` не менялись. Пакеты правятся коммитом, после прогона набора; снимок промпта в `tests/__snapshots__`.
+
+## Один бот HQ (2026-11-22, пункт 13 ревью)
+Слова владельца: «Всё на админке. В ТГ оставим только одного бота, сам HQ, он будет напоминалкой: новый клиент, новая заявка, документ на одобрение. Только
+напоминания, мало инфы, никаких функций. Но умный HQ: если я задам любой вопрос, он должен ответить». Подробно: `apps/hq/docs/telegram-ux.md`, переписи `docs/process-census.md` раздел 11.
+- Боты отделов сняты: `MARKETING_`, `SUPPORT_`, `SALES_`, `CONTENT_`, `PROSPECTOR_`, `PRODUCTION_`, `BACKOFFICE_BOT_TOKEN` игнорируются (одна строка в лог, без значений). Отчёты
+  отделов в темы группы только с `TG_GROUP_REPORTS=on` (пишет бот HQ). Клиентский бот и Polly как были.
+- `OwnerChannel` в политике `notices` (`presence.ts`): всё, что HQ пишет владельцу, лежит во «Входящих» Пульта; в Telegram только напоминания (`notice()`) и ответы на его
+  сообщения в боте. Карточки одобрений с кнопками и вся старая навигация Директора (`installLegacyCards` в `glue.ts`) только с `TG_APPROVAL_CARDS=on`, дрилл гоняет их с `tgCards`.
+- Напоминания `apps/hq/src/notices.ts` (`OwnerNotices`): `scan()` в `dueTick` читает таблицы (новый клиент кабинета, заявка, одобрение, оплата, этап готов/принят, подпись,
+  созвон), ключ `ref` против повторов, первый запуск на базе только помечает; одна-две строки и ссылка в Пульт (`links.ts`), имена можно, контакты и тексты клиентов нет
+  (`noContacts`); не чаще раза в 5 минут на тип (оплаты, алерты, сводки сразу), тихие часы в строку «За ночь» утренней сводки, за столом пропуск. Алерты несут вид
+  (`hq.alert(text, { kind, short })`): `lost_lead`, `email_failed`, `llm`, `budget`, `service` идут в Telegram короткой строкой, остальные только в Пульт. Утренняя сводка и
+  дайджест в Telegram короткие (`morningShort`, `weeklyShort`), полные во «Входящих».
+- Ответы: любой текст владельца в боте, кроме `/start` и `/pult`, идёт в `OwnerAssistant` (`assistant.ts`): Fira `run()` с должностью «ассистент руководителя», инструменты
+  только чтение (`assistant-tools.ts`: сводка, заявки, клиенты, проекты и этапы, одобрения, чаты без текстов, деньги, расходы LLM, задачи, история, сервисы, цены, ссылка),
+  Sonnet, Haiku на короткое «сколько ...», расход в `costs` (агент `director`, `meterLlm` теперь считает и `chat`). Просьба сделать (`actionRequest`) получает ссылку на экран
+  Пульта без модели; без модели ответ кодом с главными цифрами. Память: 10 вопросов и ответов в `as_turns`, обмен пишется в `director_history`. Eval:
+  `pnpm --filter fira eval evals/executive-assistant.eval.json` (15 случаев на мок-данных, `mocks` в формате набора). Дрилл: `apps/hq/tests/drill/onebot.test.ts`.
+- Настройки чатом («поставь сводку на 9:30») и карточка «Применить» остались только за флагом карточек: в Пульте их подтвердить нельзя (вопрос владельцу).
 
 ## Данные и секреты
 `.env*` и `data/` не коммитятся (в `data/` контакты клиентов). Секреты: `.env.local` (dev), `/opt/fir-agents/.env`
