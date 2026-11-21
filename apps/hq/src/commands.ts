@@ -55,6 +55,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'project', route: 'production', group: 'production', args: '<клиент>: <что делаем>', help: 'проект вручную (по КП он стартует сам после оплаты)', menu: 'Производство: проект из КП' },
   { name: 'pstatus', route: 'production', group: 'production', args: '<проект>', help: 'черновик статуса клиенту' },
   { name: 'target', route: 'production', group: 'production', args: '<проект> <куда деплоим>', help: 'цель деплоя проекта' },
+  { name: 'mready', route: 'production', group: 'production', args: '<проект> <номер этапа>', help: 'этап готов: клиент получает «Принять этап» (как после строителя)' },
   { name: 'mdone', route: 'production', group: 'production', args: '<проект> <номер этапа или brief|prototype|delivery|payment>', help: 'принять этап проекта (по этапам оплаты это запускает счёт следующего этапа)' },
   { name: 'doc', route: 'backoffice', group: 'backoffice', args: '<тип> <клиент>', help: 'документ клиенту: договор, оферта, политика, акт', menu: 'Бэк-офис: документ клиенту, /kb поиск' },
   { name: 'lesson', route: 'backoffice', group: 'backoffice', args: '<проект>: <урок>', help: 'записать урок из проекта' },

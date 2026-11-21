@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies of the API under test */
 import { afterEach, describe, expect, it } from 'vitest';
+import { PmStore } from '@fir/worker-project-manager';
 import { EmailFailures } from '../../src/email-failures.js';
 import { dataUrl, makePng } from '../png.js';
 import { TOKENS, drillWorld, type DrillWorld } from './world.js';
@@ -54,6 +55,19 @@ async function toContract(cid: number): Promise<any> {
   await w.director.sendApprovalBatch(false);
   await w.decide('approve', w.queue.pending().find((r) => r.kind === 'bo_document')!.id);
   return (await docs(cid)).find((d) => d.kind === 'contract');
+}
+/** The whole way to a running project: contract signed, invoice of stage 1 approved and paid, the ТЗ approved. Returns the project id. */
+async function toRunningProject(cid: number): Promise<number> {
+  const contract = await toContract(cid);
+  expect((await w.adm('POST', `/admin/clients/${cid}/documents/${contract.id}/sign`, SIGN)).status).toBe(200);
+  await w.beat();
+  await w.director.sendApprovalBatch(false);
+  await w.decide('approve', w.queue.pending().find((r) => r.kind === 'billing_invoice')!.id);
+  const inv = w.db.prepare('SELECT id FROM bl_invoices ORDER BY id DESC LIMIT 1').get() as { id: number };
+  expect((await w.adm('POST', `/admin/crm/invoices/${inv.id}`, { action: 'mark_paid' })).status).toBe(200);
+  await w.beat();
+  await approve('pm_spec');
+  return (w.db.prepare('SELECT id FROM pm_projects ORDER BY id DESC LIMIT 1').get() as { id: number }).id;
 }
 const SIGN = { signaturePng: dataUrl(makePng({ stroke: true })), name: 'Gaps Money', consent: true };
 
@@ -160,4 +174,38 @@ describe('P-12: the signed PDF that did not build', () => {
     expect(after.pdfUrl).toMatch(/contract-\d+-signed\.pdf/);
     expect(w.db.prepare("SELECT 1 FROM activity WHERE action = 'signed_pdf_rebuilt'").get()).toBeTruthy();
   }, 60_000);
+});
+
+describe('P-14: the owner marks a stage ready', () => {
+  it('/mready and the Пульт `ready_milestone` give the client «Принять этап» like a builder result; unpaid or repeated changes nothing', async () => {
+    const { cid } = await leadWithQuote();
+    const pid = await toRunningProject(cid);
+    const pm = new PmStore(w.db, w.hq.now);
+    const stage2 = pm.stageMilestone(pid, 2)!;
+    // an unpaid stage cannot be ready
+    const unpaid = await w.adm('POST', `/admin/crm/projects/${pid}`, { action: 'ready_milestone', milestoneId: stage2.id });
+    expect(unpaid.status).toBe(409);
+    expect(unpaid.json.error).toBe('not_paid');
+    expect(await w.production.command('mready', `${pid} 2`)).toContain('не оплачен');
+    // stage 1 is paid and running: the owner says it is ready
+    w.emails.length = 0;
+    expect(await w.production.command('mready', `${pid} 1`)).toContain('ждёт приёмки');
+    await w.cabinet!.docs.idle();
+    expect(pm.stageMilestone(pid, 1)!.status).toBe('done');
+    expect(w.emails.map((e) => e.subject)).toEqual(['Этап 1 готов к приёмке']);
+    const cab = (await w.adm('GET', `/admin/clients/by-email?email=${encodeURIComponent(EMAIL)}`)).json;
+    expect(cab.projects[0].nextAction).toEqual({ kind: 'accept_stage', stageNo: 1 });
+    const thread = (await w.adm('GET', `/admin/clients/${cid}/threads/project-${pid}/messages`)).json.items as any[];
+    expect(thread.filter((m) => /готов к приёмке/.test(m.text))).toHaveLength(1);
+    // a repeat (command or Пульт) sends nothing twice
+    expect(await w.production.command('mready', `${pid} 1`)).toContain('уже');
+    expect((await w.adm('POST', `/admin/crm/projects/${pid}`, { action: 'ready_milestone', milestoneId: pm.stageMilestone(pid, 1)!.id })).status).toBe(200);
+    await w.cabinet!.docs.idle();
+    expect(w.emails).toHaveLength(1);
+    // the client accepts it: the invoice of stage 2 is proposed
+    const acc = await w.adm('POST', `/admin/clients/${cid}/projects/${pid}/milestones/1/accept`);
+    expect(acc.status, acc.text).toBe(200);
+    expect(pm.stageMilestone(pid, 1)!.acceptedAt).toBeTruthy();
+    expect(await w.production.command('mready', 'x')).toContain('Формат: /mready');
+  }, 120_000);
 });

@@ -38,6 +38,7 @@ const callBody = z.object({ at: z.string().max(40) }).strict();
 const PROJECT_STATUSES = ['draft', 'active', 'done', 'paused'] as const;
 const projectBody = z.discriminatedUnion('action', [
   z.object({ action: z.literal('complete_milestone'), milestoneId: z.number().int().positive() }).strict(),
+  z.object({ action: z.literal('ready_milestone'), milestoneId: z.number().int().positive() }).strict(),
   z.object({ action: z.literal('set_deadline'), milestoneId: z.number().int().positive(), dueAt: z.string().max(40) }).strict(),
   z.object({ action: z.literal('set_status'), status: z.string().max(20) }).strict(),
   z.object({ action: z.literal('note'), text: z.string().trim().min(1).max(2000) }).strict(),
@@ -242,13 +243,21 @@ export function createPultCrm(d: PultCrmDeps) {
   async function projectPost(id: number, body: unknown): Promise<AdminReply> {
     if (!views.project(id)) return fail(404, 'not_found');
     const parsed = projectBody.safeParse(body ?? {});
-    if (!parsed.success) return fail(400, 'invalid', { allowed: ['complete_milestone', 'set_deadline', 'set_status', 'note'] });
+    if (!parsed.success) return fail(400, 'invalid', { allowed: ['complete_milestone', 'ready_milestone', 'set_deadline', 'set_status', 'note'] });
     const b = parsed.data;
     const pm = new PmStore(db, now);
-    if (b.action === 'complete_milestone' || b.action === 'set_deadline') {
+    if (b.action === 'complete_milestone' || b.action === 'set_deadline' || b.action === 'ready_milestone') {
       const m = pm.milestone(b.milestoneId);
       if (!m || m.projectId !== id) return fail(404, 'not_found');
-      if (b.action === 'complete_milestone') {
+      if (b.action === 'ready_milestone') {
+        // P-14: the stage is finished without the builder chain: the same `markDone` + `afterMilestone` (the client gets «Принять этап»), once
+        if (m.stageNo === null) {
+          if (m.status !== 'done') await d.channel.capture(() => d.director.onCommand('mdone', `${id} ${m.kind}`));
+        } else {
+          if (m.paidAt === null) return fail(409, 'not_paid', { hint: 'Этап не оплачен: работа и приёмка начинаются после оплаты.' });
+          if (m.status !== 'done') await d.channel.capture(() => d.director.onCommand('mready', `${id} ${m.stageNo}`));
+        }
+      } else if (b.action === 'complete_milestone') {
         // the same path as `/mdone`: a «Сдача» starts the deploy, the last milestone closes the project (idempotent: a closed one says so);
         // a stage of the payment plan is ACCEPTED (the next invoice is proposed), done or not
         if (m.stageNo !== null ? m.acceptedAt === null : m.status !== 'done') await d.channel.capture(() => d.director.onCommand('mdone', `${id} ${m.stageNo ?? m.kind}`));
