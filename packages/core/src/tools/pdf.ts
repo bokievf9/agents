@@ -32,6 +32,22 @@ export const pdfDocSchema = z.object({
   footer: z.string().max(300).optional(),
   /** One signature block per line, e.g. «Исполнитель: ____________ / Fir Tech». */
   signatures: z.array(z.string().max(200)).max(4).default([]),
+  /**
+   * The two parties of a contract side by side: a signature box (the drawn PNG of the simple electronic signature when `signature` is given, an empty
+   * line to sign otherwise), the name, detail lines and the date. Drawn after the sections, before `signatures`.
+   */
+  parties: z
+    .array(
+      z.object({
+        role: z.string().max(60),
+        name: z.string().max(200),
+        details: z.array(z.string().max(200)).max(4).default([]),
+        date: z.string().max(60).optional(),
+        signature: z.custom<Uint8Array>((v) => v instanceof Uint8Array, { message: 'signature must be PNG bytes' }).optional(),
+      }),
+    )
+    .max(2)
+    .default([]),
 });
 export type PdfDoc = z.input<typeof pdfDocSchema>;
 
@@ -157,6 +173,33 @@ export async function renderPdf(input: PdfDoc, fontDir = FONT_DIR): Promise<{ by
       for (const r of t.rows) drawRow(r, false);
       doc.moveDown(0.6);
     }
+  }
+
+  if (d.parties.length) {
+    const colW = (width - 24) / d.parties.length;
+    ensure(170);
+    doc.moveDown(1);
+    const y0 = doc.y;
+    d.parties.forEach((p, i) => {
+      const x = M + i * (colW + 24);
+      write(p.role, { size: 10.5, bold: true, x, y: y0, w: colW });
+      if (p.signature) {
+        try {
+          doc.image(Buffer.from(p.signature), x, y0 + 18, { fit: [colW, 56] });
+        } catch {
+          /* an unreadable image leaves the line empty: the stored signature row is the evidence, not the picture */
+        }
+      }
+      doc.moveTo(x, y0 + 78).lineTo(x + colW, y0 + 78).lineWidth(0.6).strokeColor('#555').stroke();
+      write(p.name, { size: 10.5, x, y: y0 + 82, w: colW });
+      let yy = y0 + 98;
+      for (const line of [...p.details, ...(p.date ? [p.date] : [])]) {
+        write(line, { size: 9, x, y: yy, w: colW, color: '#444' });
+        yy += 12;
+      }
+    });
+    doc.x = M;
+    doc.y = y0 + 150;
   }
 
   if (d.signatures.length) {

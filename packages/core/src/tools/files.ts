@@ -20,8 +20,11 @@ export interface Files {
   put(dir: string, name: string, bytes: Uint8Array | string): Promise<ToolResult<StoredFile>>;
   get(path: string): Promise<ToolResult<{ path: string; bytes: Buffer; size: number }>>;
   list(dir: string): Promise<ToolResult<(StoredFile & { name: string; modifiedAt: number })[]>>;
-  /** Signed public URL (`<base>/<sig>/<path>`) for png, jpg and mp4: what Instagram and other services fetch. */
-  url(path: string): Promise<ToolResult<string>>;
+  /**
+   * Signed public URL (`<base>/<sig>/<path>`) for png, jpg, mp4 and pdf: what Instagram and other services fetch. With `ttlMs` the link expires
+   * (the signature covers the expiry, `?e=<unix seconds>`): the cabinet's document links last 7 days.
+   */
+  url(path: string, o?: { ttlMs?: number }): Promise<ToolResult<string>>;
   /** The absolute path of a stored file (for `telegram.sendDocument` and adapters); null when unsafe or missing. */
   absolute(path: string): string | null;
 }
@@ -104,7 +107,7 @@ export function createFiles(k: Kit): Files {
           .sort((a, b) => a.name.localeCompare(b.name));
         return okv(out);
       }),
-    url: (path) =>
+    url: (path, o = {}) =>
       k.call('files.url', async () => {
         const rel = safeRel(path, true);
         if (!rel) return fail('invalid', 'unsafe path');
@@ -113,7 +116,8 @@ export function createFiles(k: Kit): Files {
         const abs = inside(rel);
         if (!abs) return fail('blocked', 'path leads outside the files folder');
         if (!existsSync(abs)) return fail('not_found', 'no such file');
-        return okv(mediaUrl(k.cfg.mediaBase!, k.cfg.mediaSecret!, rel));
+        if (o.ttlMs !== undefined && !(Number.isFinite(o.ttlMs) && o.ttlMs > 0 && o.ttlMs <= 30 * 86_400_000)) return fail('invalid', 'ttlMs: up to 30 days');
+        return okv(mediaUrl(k.cfg.mediaBase!, k.cfg.mediaSecret!, rel, o.ttlMs !== undefined ? { expiresAt: k.now() + o.ttlMs } : {}));
       }),
   };
 }

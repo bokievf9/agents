@@ -49,6 +49,26 @@ CREATE INDEX IF NOT EXISTS cab_messages_lead ON cab_messages (lead_id, at);
 CREATE UNIQUE INDEX IF NOT EXISTS cab_messages_ticket ON cab_messages (ticket_id, "from") WHERE ticket_id IS NOT NULL;
 `;
 
+/**
+ * The messages of the cabinet threads that are not a lead's (a project, the support thread, the client's agent): `thread` is `project-<id>`, `support` or `agent-<id>`.
+ * Owned by the HQ cabinet; declared here too because an approved ticket answer for such a thread lands in it (see `markAnswered`).
+ */
+export const CAB_TMSGS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS cab_tmsgs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  client_id INTEGER NOT NULL,
+  thread TEXT NOT NULL,
+  "from" TEXT NOT NULL CHECK ("from" IN ('manager', 'client', 'agent')),
+  text TEXT NOT NULL,
+  attachments TEXT NOT NULL DEFAULT '[]',
+  at INTEGER NOT NULL,
+  ticket_id INTEGER,
+  author TEXT NOT NULL DEFAULT 'hq'
+);
+CREATE INDEX IF NOT EXISTS cab_tmsgs_thread ON cab_tmsgs (client_id, thread, id);
+CREATE UNIQUE INDEX IF NOT EXISTS cab_tmsgs_ticket ON cab_tmsgs (ticket_id, "from") WHERE ticket_id IS NOT NULL;
+`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS cs_clients (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,6 +115,8 @@ export class CsStore {
     if (!cols.some((c) => c.name === 'answer')) db.exec('ALTER TABLE cs_tickets ADD COLUMN answer TEXT');
     // a cabinet message about a lead (cab_messages): the approved answer goes back to that lead's thread
     if (!cols.some((c) => c.name === 'lead_id')) db.exec('ALTER TABLE cs_tickets ADD COLUMN lead_id INTEGER');
+    // a cabinet message in a project or support thread (cab_tmsgs): the approved answer goes back to that thread
+    if (!cols.some((c) => c.name === 'thread')) db.exec('ALTER TABLE cs_tickets ADD COLUMN thread TEXT');
   }
 
   upsertClient(c: { name: string; contact?: string; product?: string; plan?: string; since?: string }): CsClient {
@@ -132,10 +154,10 @@ export class CsStore {
   }
 
   /** A ticket from the client cabinet: the name and contact (email) are the cabinet's own, no cs_clients lookup. */
-  addCabinetTicket(t: { clientName: string; contact: string; text: string; leadId?: number }): CsTicket {
+  addCabinetTicket(t: { clientName: string; contact: string; text: string; leadId?: number; thread?: string }): CsTicket {
     const r = this.db
-      .prepare("INSERT INTO cs_tickets (client_id, client_name, contact, text, money, created_at, source, lead_id) VALUES (NULL, ?, ?, ?, 0, ?, 'cabinet', ?)")
-      .run(t.clientName.trim(), t.contact, t.text, this.now(), t.leadId ?? null);
+      .prepare("INSERT INTO cs_tickets (client_id, client_name, contact, text, money, created_at, source, lead_id, thread) VALUES (NULL, ?, ?, ?, 0, ?, 'cabinet', ?, ?)")
+      .run(t.clientName.trim(), t.contact, t.text, this.now(), t.leadId ?? null, t.thread ?? null);
     return this.ticket(Number(r.lastInsertRowid))!;
   }
 
@@ -162,13 +184,20 @@ export class CsStore {
 
   /** A ticket written about a lead in the cabinet: its approved answer is also the manager's message in that lead's thread (once per ticket). */
   private answerToLeadThread(id: number, answer: string): void {
-    const t = this.db.prepare('SELECT lead_id, contact FROM cs_tickets WHERE id = ?').get(id) as { lead_id: number | null; contact: string } | undefined;
-    if (!t || t.lead_id === null || !answer.trim()) return;
+    const t = this.db.prepare('SELECT lead_id, contact, thread FROM cs_tickets WHERE id = ?').get(id) as { lead_id: number | null; contact: string; thread: string | null } | undefined;
+    if (!t || (t.lead_id === null && !t.thread) || !answer.trim()) return;
     const hasClients = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cab_clients'").get() !== undefined;
     if (!hasClients) return;
-    this.db.exec(CAB_MESSAGES_SCHEMA);
     const c = this.db.prepare('SELECT id FROM cab_clients WHERE email = ?').get(t.contact.trim().toLowerCase()) as { id: number } | undefined;
     if (!c) return;
+    if (t.thread) {
+      this.db.exec(CAB_TMSGS_SCHEMA);
+      this.db
+        .prepare("INSERT OR IGNORE INTO cab_tmsgs (client_id, thread, \"from\", text, at, ticket_id) VALUES (?, ?, 'manager', ?, ?, ?)")
+        .run(c.id, t.thread, answer.trim().slice(0, 2000), this.now(), id);
+      return;
+    }
+    this.db.exec(CAB_MESSAGES_SCHEMA);
     this.db
       .prepare("INSERT OR IGNORE INTO cab_messages (client_id, lead_id, \"from\", text, at, ticket_id) VALUES (?, ?, 'manager', ?, ?, ?)")
       .run(c.id, t.lead_id, answer.trim().slice(0, 2000), this.now(), id);
