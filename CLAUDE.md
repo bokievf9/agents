@@ -201,7 +201,7 @@ Agent Reach с Мака (2026-11-21): `~/Agent-Reach` (MIT, `agent-reach` 1.6.1 
 
 ## Дрилл процессов (2026-11-21)
 Владелец: «проверить, работает ли каждый процесс в офисе». `apps/hq/tests/drill/*.test.ts` (мир `world.ts`: все головы, Директор, Drill, админ-API, настоящий webhook на порту 0, настоящий обвес бота `src/glue.ts` на записывающем grammy-боте) прогоняет каждую команду,
-кнопку, вид одобрения (Telegram и ревью-API), рутину, маршрут и цепочку КП-счёт-этапы, плюс случайные прогулки `chaos.test.ts` с отказами Telegram и шлюза (`SEEDS=1,2 STEPS=400 pnpm --filter hq exec vitest run tests/drill/chaos.test.ts`).
+кнопку, вид одобрения (Telegram и ревью-API), рутину, маршрут и цепочку КП-счёт-этапы, плюс случайные прогулки `chaos.test.ts` с отказами Telegram и шлюза (`SEEDS=1,2 STEPS=400 pnpm --filter hq exec vitest run -c vitest.chaos.config.ts`; `pnpm --filter hq test` гонит их отдельным проходом после остального набора, без параллели, P-29).
 Таблица всех процессов, статусы и найденные ошибки: `docs/process-census.md`. Правила набора: JSON-логи ловит `guard.ts` (ни одной строки `error`, ни одного unhandled rejection, ни имён, контактов, текстов, токенов в логах), новый процесс получает строку в таблице и тест тут же.
 Что дрилл поменял в контрактах: `KindSpec.ready(payload)` (карточка с шаблоном `[цена]` или устаревшая, например счёт аннулирован, не падает в `failed`, а остаётся `pending` с подсказкой; сайт отвечает 409 `placeholder` или `not_ready`, `docs/admin-crm-api.md`).
 

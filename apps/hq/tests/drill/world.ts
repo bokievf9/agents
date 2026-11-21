@@ -258,6 +258,9 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
       ...(cabinet ? { agent: { handle: (id: string, r: any) => cabinet.playground.handlePublic(id, r) } } : {}),
     },
   );
+  // P-29: the test client (undici) keeps idle sockets about 4 s against the server's 5 s; under the load of the whole suite a request could go out on a
+  // socket the server was closing (ECONNRESET, «fetch failed»). A long server keep-alive takes the race away; `close()` still ends idle sockets.
+  webhook.keepAliveTimeout = 60_000;
   let url = '';
   if (o.withServer !== false) {
     webhook.listen(0, '127.0.0.1');
