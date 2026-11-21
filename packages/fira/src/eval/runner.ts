@@ -4,6 +4,7 @@ import { applyGuards, type GuardContext } from '../guards.js';
 import { run, type RunOut } from '../run.js';
 import type { AgentSpec } from '../spec.js';
 import type { ToolRegistry } from '../tools.js';
+import { mockTools } from '../exec-assistant.js';
 import type { EvalCase, EvalSet } from './format.js';
 import type { Judge } from './judge.js';
 
@@ -58,8 +59,10 @@ function firaTurn(o: EvalOptions, set: EvalSet): TurnFn {
     await stores.knowledge.add(kn.map((k, i) => ({ id: `k${i}`, companyId: o.spec.company.id, source: 'manual', title: k.title, text: k.text, updatedAt: now })));
     if (c.history.length) await stores.memory.append(o.spec.company.id, `eval-${c.id}`, c.history.map((h) => ({ role: h.role, text: h.text, at: now - 60_000 })), now + 86_400_000);
     const guard = typeof o.guard === 'function' ? o.guard(c.lang) : o.guard;
-    return run(o.spec, { id: `eval-${c.id}`, text: c.user, mode: c.mode, lang: c.lang }, {
-      llm: o.live ?? new MockChatLlm(c.script ?? []), ...stores, now: () => now, guard, ...(o.tools ? { tools: o.tools } : {}),
+    const mocks = { ...set.mocks, ...c.mocks };
+    const tools: ToolRegistry = { ...o.tools, ...(Object.keys(mocks).length ? mockTools(mocks) : {}) };
+    return run(o.spec, { id: `eval-${c.id}`, text: c.user, mode: c.mode, lang: c.lang, ...(c.task ? { task: c.task } : {}) }, {
+      llm: o.live ?? new MockChatLlm(c.script ?? []), ...stores, now: () => now, guard, tools,
     });
   };
 }

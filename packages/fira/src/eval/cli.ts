@@ -3,8 +3,7 @@ import { resolve } from 'node:path';
 import { createLlm } from '@fir/core';
 import { firtechGuardContext } from '../guards.js';
 import { FIRTECH_TOOLS } from '../firtech-tools.js';
-import { loadCompanyPack, loadNichePack, loadRolePack } from '../packs.js';
-import { makeSpec } from '../spec.js';
+import { specOf } from '../exec-assistant.js';
 import { parseEvalSet } from './format.js';
 import { LlmJudge } from './judge.js';
 import { runEval } from './runner.js';
@@ -22,7 +21,7 @@ async function main(argv: string[]): Promise<number> {
   // relative to where pnpm was called (INIT_CWD), else to the package (`evals/<name>.eval.json` works from the repo root too)
   const path = [resolve(process.env.INIT_CWD ?? process.cwd(), file), resolve(process.cwd(), file)].find((p) => existsSync(p)) ?? file;
   const set = parseEvalSet(JSON.parse(readFileSync(path, 'utf8')) as unknown);
-  const spec = makeSpec({ role: loadRolePack(set.spec.role), niche: loadNichePack(set.spec.niche), company: loadCompanyPack(set.spec.company) });
+  const spec = specOf(set.spec);
   const live = argv.includes('--live')
     ? createLlm({
       baseUrl: process.env.LLM_BASE_URL, apiKey: process.env.LLM_API_KEY ?? process.env.ANTHROPIC_API_KEY, modelFast: process.env.LLM_MODEL_FAST,
