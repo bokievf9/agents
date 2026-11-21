@@ -390,7 +390,7 @@ const settings = createSettings({
 settingsRef.view = () => settings.view();
 if (settings.seedBudgets()) log('info', 'first department limits written', { source: 'seed 2026-11-23' });
 const admin = cfg.adminToken
-  ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: COMMAND_NAMES, drill: (arg) => drill.command(arg), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),
+  ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: COMMAND_NAMES, drill: (arg) => drill.command(arg), drillStatus: () => drill.status(), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),
       reloadPrices: async () => { const r = await loadPrices(pricesOpts); return { source: r.source, updatedAt: r.prices.updatedAt }; },
       acceptStage: (projectId, stageNo) => Promise.resolve(production.acceptStage(projectId, stageNo, 'client')),
       billing, marketing, tools, cabinet, calls, rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), settings, ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),

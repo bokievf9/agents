@@ -18,6 +18,8 @@ import { createChats, type ChatsClient } from './chats.js';
 import { createReview } from './review.js';
 import { createPultTrends } from './pult-trends.js';
 import { createReach } from './reach.js';
+import type { DrillStatus } from './drill.js';
+import { createProcesses } from './pult-processes.js';
 import type { SettingsApi } from './settings.js';
 
 /**
@@ -50,6 +52,8 @@ export interface PultDeps {
   calls?: Calls | undefined;
   /** `GET` and `PATCH /admin/settings` (`settings.ts`). */
   settings?: SettingsApi | undefined;
+  /** The Drill behind `/admin/processes/drill` (`drill.ts`). */
+  drill?: { command(arg: string): Promise<string>; status(): DrillStatus } | undefined;
 }
 
 export function createPult(d: PultDeps) {
@@ -65,6 +69,7 @@ export function createPult(d: PultDeps) {
   const chats = createChats({ hq: d.hq, now: d.now, client: d.client, webReply: d.webReply });
   const trends = createPultTrends({ hq: d.hq, now: d.now, marketing: d.marketing });
   const reach = createReach({ hq: d.hq, now: d.now });
+  const processes = createProcesses({ db: d.hq.db, now: d.now, drill: d.drill });
 
   /** `seg`: the path after `/admin/`. null: not a «Пульт v3» route. */
   async function handle(method: string, seg: string[], query: URLSearchParams, body: unknown): Promise<AdminReply | null> {
@@ -104,6 +109,11 @@ export function createPult(d: PultDeps) {
       if (method === 'GET') return d.settings.get();
       if (method === 'PATCH') return d.settings.patch(body);
       return fail(405, 'method_not_allowed');
+    }
+    if (a === 'processes') {
+      if (method === 'GET' && seg.length === 1) return processes.get();
+      if (method === 'POST' && seg.length === 2 && seg[1] === 'drill') return processes.drill(body);
+      return fail(404, 'not_found');
     }
     if (a === 'reach') return reach.handle(method, seg, query, body);
     if (a === 'metrics') return method === 'GET' && seg.length === 2 && seg[1] === 'week' ? metrics.week(query) : fail(404, 'not_found');
