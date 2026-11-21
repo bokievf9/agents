@@ -60,6 +60,24 @@ describe('run(): native tool use', () => {
   });
 });
 
+describe('run(): knowledge by audience', () => {
+  it('a visitor\'s turn never sees internal knowledge; the owner\'s does; the spec says the default audience', async () => {
+    for (const [audience, sees] of [[undefined, false], ['client', false], ['owner', true]] as const) {
+      const llm = new MockChatLlm([{ text: 'Ок.' }]);
+      const d = deps(llm);
+      await d.knowledge.add([
+        { id: 'p', companyId: 'firtech', source: 'manual', title: 'Этапы оплаты', text: 'Оплата по этапам, каждый до начала.', updatedAt: NOW, tier: 'public' },
+        { id: 'i', companyId: 'firtech', source: 'manual', title: 'Этапы оплаты внутри', text: 'Этапы оплаты: внутренний порядок сверки в Пульте.', updatedAt: NOW, tier: 'internal' },
+      ]);
+      await run(spec, conv({ text: 'Как идут этапы оплаты?', ...(audience ? { audience } : {}) }), d);
+      const turn = JSON.stringify(llm.chats[0]!.system);
+      expect(turn, String(audience)).toContain('Оплата по этапам, каждый до начала.');
+      expect(turn.includes('внутренний порядок сверки'), String(audience)).toBe(sees);
+    }
+    expect(spec.audience).toBe('visitor');
+  });
+});
+
 describe('run(): the app\'s own rules around the model', () => {
   it('`before` answers by code without a model call (a person asked for); `after` adds the offers after the guards', async () => {
     const llm = new MockChatLlm([{ text: 'не должен звучать' }]);

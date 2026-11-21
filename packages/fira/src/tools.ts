@@ -1,5 +1,5 @@
 import { fail, okv, type LlmToolDef, type ToolResult } from '@fir/core';
-import type { Knowledge, Mode } from './stores.js';
+import type { Audience, Knowledge, Mode } from './stores.js';
 
 /**
  * Tools of a Fira agent. A tool is its definition for the model (native tool use: name, description, JSON Schema) and a `run` that never throws
@@ -25,6 +25,8 @@ export interface ToolCtx {
   conversationId: string;
   mode: Mode;
   lang: string;
+  /** Who the agent talks to in this turn (absent: a visitor): the knowledge tools read only what this audience may read. */
+  audience?: Audience;
   now: () => number;
   knowledge: Knowledge;
   outcome: Outcome;
@@ -54,7 +56,7 @@ export const knowledgeSearch: FiraTool = {
   async run(input, ctx) {
     const q = str(input.query, 300);
     if (!q) return fail('invalid', 'query is required');
-    const hits = await ctx.knowledge.search(ctx.companyId, q, 4);
+    const hits = await ctx.knowledge.search(ctx.companyId, q, 4, { audience: ctx.audience ?? 'visitor' });
     if (!hits.length) ctx.outcome.unknown = true;
     return okv({ hits: hits.map((h) => ({ title: h.title, text: h.text.slice(0, 600), source: h.source })) });
   },

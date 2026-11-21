@@ -12,6 +12,23 @@ export type Mode = (typeof MODES)[number];
 export const KNOWLEDGE_SOURCES = ['site', 'instagram', 'price', 'document', 'builder', 'faq', 'manual', 'niche'] as const;
 export type KnowledgeSource = (typeof KNOWLEDGE_SOURCES)[number];
 
+/**
+ * Secrecy of a knowledge document (owner 2026-11-23: «все знания компании и жёсткие правила о неразглашении»). `public`: what the site and its
+ * documents say to anyone. `internal`: how the company works inside (processes, playbooks, architecture): the owner only. `secret`: keys, env, the
+ * server, clients' data and dialogues, finances, margins, other clients' projects: never becomes knowledge at all (the store refuses it).
+ */
+export const KNOWLEDGE_TIERS = ['public', 'internal', 'secret'] as const;
+export type KnowledgeTier = (typeof KNOWLEDGE_TIERS)[number];
+
+/** Who the agent is talking to: an anonymous visitor, a signed-in client of the company, or the owner of the company. */
+export const AUDIENCES = ['visitor', 'client', 'owner'] as const;
+export type Audience = (typeof AUDIENCES)[number];
+
+/** The tiers an audience may read. A client reads what a visitor reads (its own pack lives in its own company); `secret` nobody. */
+export function tiersFor(audience: Audience): KnowledgeTier[] {
+  return audience === 'owner' ? ['public', 'internal'] : ['public'];
+}
+
 export interface KnowledgeChunk {
   id: string;
   companyId: string;
@@ -20,6 +37,8 @@ export interface KnowledgeChunk {
   text: string;
   /** Where it came from (a URL, a file name), for the cabinet; never sent to the model as an instruction. */
   ref?: string;
+  /** Secrecy; absent is `public`. A `secret` chunk is refused by every store. */
+  tier?: KnowledgeTier;
   updatedAt: number;
 }
 
@@ -38,10 +57,10 @@ export interface KnowledgeMiss {
 }
 
 export interface Knowledge {
-  /** Adds or replaces chunks by id; returns how many were written. */
+  /** Adds or replaces chunks by id; returns how many were written (`secret` chunks are dropped, never written). */
   add(chunks: KnowledgeChunk[]): Promise<number>;
-  /** Hybrid search (words + meaning) inside one company. */
-  search(companyId: string, query: string, k: number): Promise<KnowledgeHit[]>;
+  /** Hybrid search (words + meaning) inside one company, only the tiers the audience may read (default: a visitor, `public`). */
+  search(companyId: string, query: string, k: number, o?: { audience?: Audience }): Promise<KnowledgeHit[]>;
   /** Notes a question nothing answered. */
   missed(companyId: string, query: string, at: number): Promise<void>;
   misses(companyId: string, limit: number): Promise<KnowledgeMiss[]>;
@@ -96,6 +115,8 @@ export interface Lesson {
   /** What it should have said. */
   good: string;
   source: LessonSource;
+  /** What kind of correction (`price`, `tone`, `handoff`, `thread`...), for the owner's review of lessons. */
+  tag?: string;
   createdAt: number;
 }
 

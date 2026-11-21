@@ -62,6 +62,8 @@ create table if not exists knowledge_chunks (
   company_id text not null references companies(id) on delete cascade,
   id text not null,
   source text not null check (source in ('site','instagram','price','document','builder','faq','manual','niche')),
+  -- secrecy (2026-11-23): public for anyone, internal for the owner only; secret is never stored (the check refuses it)
+  tier text not null default 'public' check (tier in ('public','internal')),
   title text not null,
   text text not null,
   ref text,
@@ -129,6 +131,7 @@ create table if not exists lessons (
   bad text not null default '',
   good text not null,
   source text not null check (source in ('owner_review','client_cabinet','eval')),
+  tag text not null default '',      -- price, tone, handoff, thread...
   embedding vector(1024),
   created_at timestamptz not null default now()
 );
@@ -170,13 +173,13 @@ create table if not exists evals (
 );
 
 -- hybrid search: words (ts_rank) and meaning (cosine), half and half, one company only
-create or replace function fira_match_chunks(p_company text, p_query text, p_embedding vector, p_k int)
+create or replace function fira_match_chunks(p_company text, p_query text, p_embedding vector, p_k int, p_tiers text[] default array['public'])
 returns table (id text, title text, text text, source text, score real) language sql stable as $$
   select c.id, c.title, c.text, c.source,
          (0.5 * least(1, ts_rank(c.tsv, plainto_tsquery('simple', p_query)) * 10)
         + 0.5 * greatest(0, 1 - (c.embedding <=> p_embedding)))::real as score
   from knowledge_chunks c
-  where c.company_id = p_company
+  where c.company_id = p_company and c.tier = any(p_tiers)
   order by score desc
   limit p_k
 $$;

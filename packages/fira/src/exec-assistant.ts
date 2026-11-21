@@ -2,6 +2,7 @@ import { okv, type LlmToolDef } from '@fir/core';
 import { priceList } from './firtech-tools.js';
 import { loadCompanyPack, loadNichePack, loadRolePack } from './packs.js';
 import { makeSpec, type AgentSpec, type GuardPolicy, type ModelPolicy } from './spec.js';
+import type { Audience } from './stores.js';
 import type { FiraTool, ToolRegistry } from './tools.js';
 
 /**
@@ -87,8 +88,9 @@ export const EXEC_GUARDS: Partial<GuardPolicy> = { prices: false, dates: false, 
 export const EXEC_MODEL: Partial<ModelPolicy> = { default: 'sonnet', byTask: { faq: 'haiku', extract: 'haiku', judge: 'haiku' }, maxTokens: 700, maxRounds: 5 };
 
 /** Spec overrides of roles whose job is not a visitor's dialogue (the eval CLI and the app build the same spec). */
-export const ROLE_OVERRIDES: Record<string, { guards?: Partial<GuardPolicy>; model?: Partial<ModelPolicy> }> = {
-  'executive-assistant': { guards: EXEC_GUARDS, model: EXEC_MODEL },
+export const ROLE_OVERRIDES: Record<string, { guards?: Partial<GuardPolicy>; model?: Partial<ModelPolicy>; audience?: Audience }> = {
+  // the owner himself: internal knowledge is his, the visitor's secrecy rules do not apply
+  'executive-assistant': { guards: EXEC_GUARDS, model: EXEC_MODEL, audience: 'owner' },
 };
 
 /** The spec of a role × niche × company with the role's overrides (lead manager: none). */
@@ -96,7 +98,7 @@ export function specOf(o: { role: string; niche: string; company: string; versio
   const over = ROLE_OVERRIDES[o.role] ?? {};
   return makeSpec({
     role: loadRolePack(o.role), niche: loadNichePack(o.niche), company: loadCompanyPack(o.company), ...(o.version !== undefined ? { version: o.version } : {}),
-    ...(over.guards ? { guards: over.guards } : {}), ...(over.model ? { model: over.model } : {}),
+    ...(over.guards ? { guards: over.guards } : {}), ...(over.model ? { model: over.model } : {}), ...(over.audience ? { audience: over.audience } : {}),
   });
 }
 

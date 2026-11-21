@@ -2,7 +2,7 @@ import { errMsg, log, tryChat, turnText, turnToolUses, type LlmBlock, type LlmCh
 import { compile, tierFor, withBudget } from './compile.js';
 import { applyGuards, type GuardContext } from './guards.js';
 import type { AgentSpec, TaskKind } from './spec.js';
-import type { Journal, Knowledge, KnowledgeHit, Lesson, Lessons, Memory, Mode, PersonProfile } from './stores.js';
+import type { Audience, Journal, Knowledge, KnowledgeHit, Lesson, Lessons, Memory, Mode, PersonProfile } from './stores.js';
 import { BUILTIN_TOOLS, runTool, type Outcome, type ToolCtx, type ToolRegistry } from './tools.js';
 
 /**
@@ -23,6 +23,8 @@ export interface Conversation {
   task?: TaskKind;
   /** The app's instruction for this turn only (e.g. the lead manager: «сейчас не задавай вопроса, предложи»); goes into the per-turn block. */
   note?: string;
+  /** Who is talking (default: the spec's audience): a signed-in client, an anonymous visitor, the owner. */
+  audience?: Audience;
 }
 
 export interface RunDeps {
@@ -91,14 +93,15 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
   const agentId = spec.id;
   const now = deps.now();
   const outcome: Outcome = { used: [], unknown: false };
-  const ctx: ToolCtx = { companyId, agentId, conversationId: conv.id, mode: conv.mode, lang: conv.lang, now: deps.now, knowledge: deps.knowledge, outcome };
+  const audience: Audience = conv.audience ?? spec.audience;
+  const ctx: ToolCtx = { companyId, agentId, conversationId: conv.id, mode: conv.mode, lang: conv.lang, audience, now: deps.now, knowledge: deps.knowledge, outcome };
 
   let tier = withBudget(tierFor(spec.model, conv.task), spec.model, deps.spentUsd ? await deps.spentUsd() : 0);
   const [history, profile, lessons, hits] = await Promise.all([
     conv.mode === 'demo' ? Promise.resolve([]) : deps.memory.turns(companyId, conv.id, deps.historyTurns ?? HISTORY, now),
     conv.contactKey && conv.mode !== 'demo' ? deps.memory.profile(companyId, conv.contactKey, now) : Promise.resolve(null),
     deps.lessons.near(companyId, agentId, spec.role.id, conv.text, 3),
-    deps.knowledge.search(companyId, conv.text, 3),
+    deps.knowledge.search(companyId, conv.text, 3, { audience }),
   ]);
   const extra = turnBlock({ profile, lessons, hits, note: conv.note });
   const system: LlmSystemBlock[] = [...c.system, ...(extra ? [{ text: extra }] : [])];

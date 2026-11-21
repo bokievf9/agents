@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   chunkText, cosine, FiraNotWired, HashEmbedder, hybrid, InMemoryJournal, InMemoryKnowledge, InMemoryLessons, InMemoryMemory, SupabaseKnowledge, wordScore,
+  tiersFor,
 } from '../src/index.js';
 import { DAY, NOW } from './helpers.js';
 
@@ -29,6 +30,22 @@ describe('knowledge', () => {
     expect(hits.every((h) => h.companyId === 'salon')).toBe(true);
     expect(['words', 'meaning', 'both']).toContain(hits[0]!.via);
     expect(await k.search('nobody', 'часы', 3)).toEqual([]);
+  });
+
+  it('secrecy tiers: a visitor and a client read public, the owner public and internal; a secret chunk is never stored', async () => {
+    const k = new InMemoryKnowledge();
+    const n = await k.add([
+      { ...chunk('firtech', 'pub', 'Гарантия', 'Гарантия первого этапа: возвращаем оплату.'), tier: 'public' },
+      { ...chunk('firtech', 'int', 'Гарантия внутри', 'Гарантия первого этапа: как оформляем возврат внутри.'), tier: 'internal' },
+      { ...chunk('firtech', 'sec', 'Гарантия ключ', 'Гарантия первого этапа, ключ кошелька.'), tier: 'secret' },
+    ]);
+    expect(n).toBe(2);
+    const ids = async (audience?: 'visitor' | 'client' | 'owner') => (await k.search('firtech', 'гарантия первого этапа', 5, audience ? { audience } : {})).map((h) => h.id).sort();
+    expect(await ids()).toEqual(['pub']);
+    expect(await ids('visitor')).toEqual(['pub']);
+    expect(await ids('client')).toEqual(['pub']);
+    expect(await ids('owner')).toEqual(['int', 'pub']);
+    expect(tiersFor('owner')).not.toContain('secret');
   });
 
   it('misses are counted per company and question («агент не знал»)', async () => {
@@ -94,8 +111,11 @@ describe('Supabase adapter (stub)', () => {
   const s = new SupabaseKnowledge({ url: 'https://example.supabase.co', serviceKey: 'k', dims: 3 });
   it('builds the requests with the company on every row and filter, never sends them', async () => {
     expect(s.requestFor.search('firtech', 'часы', [0.1, 0.2, 0.3], 4)).toEqual({
-      method: 'POST', path: '/rest/v1/rpc/fira_match_chunks', body: { p_company: 'firtech', p_query: 'часы', p_embedding: [0.1, 0.2, 0.3], p_k: 4 },
+      method: 'POST', path: '/rest/v1/rpc/fira_match_chunks', body: { p_company: 'firtech', p_query: 'часы', p_embedding: [0.1, 0.2, 0.3], p_k: 4, p_tiers: ['public'] },
     });
+    expect((s.requestFor.search('firtech', 'часы', [0.1, 0.2, 0.3], 4, 'owner').body as { p_tiers: string[] }).p_tiers).toEqual(['public', 'internal']);
+    // a secret chunk never goes into the request body
+    expect(s.requestFor.add([{ ...chunk('firtech', 's', 't', 'b'), tier: 'secret' }, chunk('firtech', 'p', 't', 'b')], [[1, 2, 3], [1, 2, 3]]).body).toHaveLength(1);
     expect((s.requestFor.add([chunk('firtech', 'x', 't', 'b')], [[1, 2, 3]]).body as { company_id: string }[])[0]!.company_id).toBe('firtech');
     expect(s.requestFor.misses('firtech', 5).query).toMatchObject({ company_id: 'eq.firtech' });
     expect(() => s.requestFor.search('firtech', 'q', [1], 1)).toThrow(/dims/);
