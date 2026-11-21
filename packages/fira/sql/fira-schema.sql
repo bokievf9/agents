@@ -1,6 +1,7 @@
 -- Fira schema for Supabase (Postgres 15 + pgvector). DRAFT for review (docs/fira-architecture.md, §7): not applied anywhere yet.
 -- Applying it to the production project needs the owner's go-ahead. Every table carries company_id; RLS lets a signed-in cabinet user
 -- read only the rows of his company, HQ writes with the service role (bypasses RLS) and sets company_id itself.
+-- At apply time the tables go into their own schema (`create schema fira; set search_path = fira, public;`), apart from the site's tables.
 
 create extension if not exists vector;
 

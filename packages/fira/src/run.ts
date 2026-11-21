@@ -21,6 +21,8 @@ export interface Conversation {
   /** Known contact key (cabinet client, Telegram id, captured earlier): links memory to the person. */
   contactKey?: string;
   task?: TaskKind;
+  /** The app's instruction for this turn only (e.g. the lead manager: «сейчас не задавай вопроса, предложи»); goes into the per-turn block. */
+  note?: string;
 }
 
 export interface RunDeps {
@@ -67,8 +69,9 @@ const FALLBACK = {
 const fb = (lang: string) => (lang === 'en' ? FALLBACK.en : FALLBACK.ru);
 
 /** The per-turn block: who the person is, lessons for this kind of question, what the knowledge says. Not cached. */
-export function turnBlock(o: { profile: PersonProfile | null; lessons: Lesson[]; hits: KnowledgeHit[] }): string {
+export function turnBlock(o: { profile: PersonProfile | null; lessons: Lesson[]; hits: KnowledgeHit[]; note?: string | undefined }): string {
   const out: string[] = [];
+  if (o.note?.trim()) out.push('## Этот ход', o.note.trim());
   if (o.profile) {
     out.push('## Собеседник', ...(o.profile.name ? [`- Имя: ${o.profile.name}`] : []), ...o.profile.facts.map((f) => `- ${f}`));
     if (o.profile.summary) out.push(`- Прошлые разговоры: ${o.profile.summary}`);
@@ -97,7 +100,7 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
     deps.lessons.near(companyId, agentId, spec.role.id, conv.text, 3),
     deps.knowledge.search(companyId, conv.text, 3),
   ]);
-  const extra = turnBlock({ profile, lessons, hits });
+  const extra = turnBlock({ profile, lessons, hits, note: conv.note });
   const system: LlmSystemBlock[] = [...c.system, ...(extra ? [{ text: extra }] : [])];
   const messages: LlmChatMessage[] = [...history.map((t) => ({ role: t.role, content: t.text })), { role: 'user', content: conv.text }];
 
