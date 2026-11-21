@@ -1,6 +1,6 @@
 {
   "currency": "USD",
-  "updatedAt": "2026-11-21",
+  "updatedAt": "2026-11-22",
   "startingPrice": {
     "websites": 150,
     "bots": 100,
@@ -92,18 +92,6 @@
       "page": "apps"
     }
   },
-  "agentPlans": [
-    {
-      "id": "dono",
-      "setup": 150,
-      "monthly": 15
-    },
-    {
-      "id": "polly",
-      "setup": 100,
-      "monthly": 10
-    }
-  ],
   "contentPlans": [
     {
       "id": "content",
@@ -243,6 +231,40 @@
         },
         "share": 50
       }
+    ],
+    "company": [
+      {
+        "id": "map",
+        "title": {
+          "ru": "Карта компании и Директор",
+          "en": "Company map and the Director"
+        },
+        "share": 25
+      },
+      {
+        "id": "depts",
+        "title": {
+          "ru": "Первые отделы на ваших данных",
+          "en": "First departments on your data"
+        },
+        "share": 25
+      },
+      {
+        "id": "pult",
+        "title": {
+          "ru": "Пульт, база знаний и каналы",
+          "en": "Control panel, knowledge base and channels"
+        },
+        "share": 25
+      },
+      {
+        "id": "launch",
+        "title": {
+          "ru": "Обучение команды и запуск",
+          "en": "Team training and launch"
+        },
+        "share": 25
+      }
     ]
   },
   "products": {
@@ -272,24 +294,62 @@
       "kind": "from",
       "from": 660
     },
-    "agent": {
-      "kind": "plans",
-      "plans": [
-        {
-          "id": "dono",
-          "setup": 150,
-          "monthly": 15
-        },
-        {
-          "id": "polly",
-          "setup": 100,
-          "monthly": 10
-        }
-      ]
-    },
     "implementation": {
       "kind": "from",
       "from": 550
+    },
+    "personal": {
+      "kind": "plans",
+      "plans": [
+        {
+          "id": "basic",
+          "setup": 290,
+          "monthly": 29
+        },
+        {
+          "id": "plus",
+          "setup": 490,
+          "monthly": 49
+        },
+        {
+          "id": "max",
+          "setup": 790,
+          "monthly": 79
+        }
+      ]
+    },
+    "company": {
+      "kind": "plans",
+      "plans": [
+        {
+          "id": "company",
+          "setup": 1490,
+          "monthly": 149
+        }
+      ],
+      "byQuote": true
     }
+  },
+  "personalPlans": [
+    {
+      "id": "basic",
+      "setup": 290,
+      "monthly": 29
+    },
+    {
+      "id": "plus",
+      "setup": 490,
+      "monthly": 49
+    },
+    {
+      "id": "max",
+      "setup": 790,
+      "monthly": 79
+    }
+  ],
+  "companyPlan": {
+    "id": "company",
+    "setup": 1490,
+    "monthly": 149
   }
 }

@@ -20,6 +20,14 @@ describe('stagesFor: templates by product', () => {
     expect(stagesFor(1000, ['site']).map((s) => s.amountUsd)).toEqual([300, 400, 300]);
   });
 
+  it('ИИ-компания: four stages of 25% with the owner\'s titles, in a mixed bundle too', () => {
+    const s = stagesFor(1490, ['company']);
+    expect(shares(s)).toEqual([25, 25, 25, 25]);
+    expect(s.map((x) => x.title.ru)).toEqual(['Карта компании и Директор', 'Первые отделы на ваших данных', 'Пульт, база знаний и каналы', 'Обучение команды и запуск']);
+    expect(sum(s)).toBe(1490);
+    expect(stagesFor(2000, ['company', 'miniapp']).map((x) => x.id)).toEqual(['map', 'depts', 'pult', 'launch']);
+  });
+
   it('a mixed bundle takes the template of the most expensive part and the shares apply to the whole total', () => {
     const s = stagesFor(1300, ['site', 'miniapp']); // the mini app (the standard package) costs more than a site start
     expect(shares(s)).toEqual([25, 25, 25, 25]);
@@ -61,6 +69,7 @@ describe('stagesFor: small projects, subscriptions, rounding', () => {
     expect(s).toHaveLength(1);
     expect(s[0]).toMatchObject({ no: 1, id: 'setup', share: 100, amountUsd: 90 });
     expect(stagesFor(150, ['agent'])).toHaveLength(1);
+    expect(stagesFor(490, ['personal'])).toHaveLength(1);
   });
 
   it('a zero or broken total gives zero amounts, never NaN', () => {
@@ -100,7 +109,7 @@ describe('the templates come from the price list', () => {
     };
     const p = parsePrices(live)!;
     setPrices(p);
-    expect(p.stages.map((t) => t.id)).toEqual(['site', 'bot', 'automation', 'app', 'small']);
+    expect(p.stages.map((t) => t.id)).toEqual(['site', 'bot', 'automation', 'app', 'small', 'company']);
     expect(shares(stagesFor(1000, ['site']))).toEqual([50, 50]);
     expect(shares(stagesFor(1000, ['admin']))).toEqual([30, 40, 30]); // not published: the built-in template
   });
@@ -116,9 +125,9 @@ describe('the templates come from the price list', () => {
   });
 
   it('the bundled snapshot is in the site\'s published shape and carries the templates of the contract', () => {
-    expect(Object.keys(fallbackJson.stages)).toEqual(['site', 'bot', 'automation', 'app', 'small']);
+    expect(Object.keys(fallbackJson.stages)).toEqual(['site', 'bot', 'automation', 'app', 'small', 'company']);
     expect(Array.isArray(fallbackJson.stages)).toBe(false);
-    expect(FALLBACK_PRICES.stages?.map((t) => t.id)).toEqual(['site', 'bot', 'automation', 'app', 'small']);
+    expect(FALLBACK_PRICES.stages?.map((t) => t.id)).toEqual(['site', 'bot', 'automation', 'app', 'small', 'company']);
     expect(FALLBACK_PRICES.smallProjectMaxUsd).toBe(300);
   });
 });

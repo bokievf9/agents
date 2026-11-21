@@ -7,7 +7,7 @@ import { DEFAULT_SMALL_PROJECT_MAX_USD, DEFAULT_STAGE_TEMPLATES, type PaymentSta
  * template of the most expensive part and the shares apply to the whole one-time total. Subscriptions (content, agents) have one stage:
  * the setup, before the start (the monthly fee is paid in advance and is not a stage). Pure: read the templates from `getPrices()`.
  */
-export const SUBSCRIPTION_PRODUCTS = ['content', 'agent'];
+export const SUBSCRIPTION_PRODUCTS = ['content', 'agent', 'personal'];
 
 /** HQ key of a site product id (the same mapping as the price list's). */
 const HQ_KEY: Record<string, string> = { receptionist: 'intake', implementation: 'aiteam' };
@@ -17,6 +17,7 @@ export const smallProjectMaxUsd = (p: Prices = getPrices()): number => p.smallPr
 
 /** What a product costs in the list (its standard package, else a catalogue variant); 0 when unknown. */
 function priceOfProduct(id: string, p: Prices): number {
+  if (id === 'company' && p.companyPlan) return p.companyPlan.setup;
   const direct = p.products[HQ_KEY[id] ?? id];
   if (direct !== undefined) return direct;
   for (const c of Object.values(p.catalog)) if (c.variants[id] !== undefined) return c.variants[id]!;
