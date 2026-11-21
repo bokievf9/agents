@@ -6,7 +6,7 @@ import { ApprovalQueue, MemoryMessenger, MockLlm, openDb, type Button, type LlmC
 import { Hq, type Worker } from '@fir/hq';
 import { ProspectorWorker } from '@fir/worker-prospector';
 import { describe, expect, it } from 'vitest';
-import { ClientEngine, type ClientSinks, type ClientTransport, type From } from '../src/client/engine.js';
+import { ClientEngine, type ClientSinks, type ClientTransport, type From, type OwnerLine } from '../src/client/engine.js';
 import { gatewayGate } from '../src/client/shared.js';
 import { RateLimiter } from '../src/client/sanitize.js';
 import { WebChatEngine, type ChatRequest } from '../src/client/web.js';
@@ -308,12 +308,13 @@ describe('the gateway is down: the visitor gets the scripted answer and the requ
       const c = core(llm);
       const transport = new Transport();
       const leads: Record<string, unknown>[] = [];
+      const owner: OwnerLine[] = [];
       const engine = new ClientEngine({
         db: c.db, now: () => c.clock.t, tz: () => c.hq.tz, transport, llm, ownerId: OWNER, instructions: readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8'),
         sinks: { createLead: o.createLead ?? ((lead) => (leads.push(lead), leads.length)), createTicket: () => Promise.resolve(1), findClient: () => null, leadSlots: () => null },
-        onLost: (s, r, i) => c.lost.record(s, r, i), ...(o.gatewayDown ? { gatewayDown: o.gatewayDown } : {}),
+        onLost: (s, r, i) => c.lost.record(s, r, i), toOwner: (l) => owner.push(l), ...(o.gatewayDown ? { gatewayDown: o.gatewayDown } : {}),
       });
-      return { ...c, engine, transport, leads };
+      return { ...c, engine, transport, leads, owner };
     }
 
     it('a question while the model is down: the scripted «Принял», a lead record for the question (once per chat), the owner told; a second question only forwards', async () => {
@@ -325,10 +326,10 @@ describe('the gateway is down: the visitor gets the scripted answer and the requ
       expect(w.leads).toHaveLength(1);
       expect(String(w.leads[0]!.message)).toContain('подключить вашего бота к нашей CRM');
       expect(w.leads[0]).toMatchObject({ chatId: ME.chatId, service: 'other', contact: '@dilnoza_salon' });
-      expect(w.transport.to(OWNER).some((m) => m.html.includes('Заявка в клиентском боте'))).toBe(true);
+      expect(w.transport.to(OWNER)).toEqual([]); // the lead reminder is the HQ bot's (it reads the leads)
       await w.engine.onText(ME, 'И ещё: сколько это по времени?');
       expect(w.leads).toHaveLength(1); // the chat already has a lead
-      expect(w.transport.to(OWNER).at(-1)!.html).toContain('Вопрос без ответа (модель недоступна)');
+      expect(w.owner.at(-1)).toMatchObject({ kind: 'message', why: 'Вопрос без ответа (модель недоступна)' });
       expect(w.transport.to(ME.chatId).at(-1)!.html).toContain('Принял');
     });
 
@@ -350,7 +351,8 @@ describe('the gateway is down: the visitor gets the scripted answer and the requ
       await w.engine.onButton(ME, 'b:mid', w.engine.store.get(ME.chatId)!.card!);
       await w.engine.onButton(ME, 'h:none', w.engine.store.get(ME.chatId)!.card!);
       expect(w.lost.recent()[0]).toMatchObject({ source: 'bot', contact: '@dilnoza_salon' });
-      expect(w.transport.to(OWNER).some((m) => m.html.includes('Заявка не дошла до продаж'))).toBe(true);
+      expect(w.owner.at(-1)).toMatchObject({ kind: 'message', why: expect.stringContaining('Заявка не дошла до продаж') });
+      expect(w.transport.to(OWNER)).toEqual([]);
     });
   });
 

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { MockLlm, openDb, type Button, type LlmRequest } from '@fir/core';
 import { describe, expect, it } from 'vitest';
 import { ClientBlockedError } from '../src/client/channel.js';
-import { ClientEngine, type ClientSinks, type ClientTransport, type From } from '../src/client/engine.js';
+import { ClientEngine, type ClientSinks, type ClientTransport, type From, type OwnerLine } from '../src/client/engine.js';
 import { decodeBuild } from '../src/client/builder-link.js';
 import { instructionsDir, NOW, OWNER } from './sales-helpers.js';
 
@@ -31,8 +31,9 @@ function world(turns: (req: LlmRequest, n: number) => string) {
   const db = openDb(':memory:');
   const llm = new MockLlm((req, n) => turns(req, n));
   const transport = new Transport();
+  const owner: OwnerLine[] = []; // what the bot hands to HQ for the owner (it writes to him itself never)
   const engine = new ClientEngine({
-    db, now: () => clock.t, tz: () => 'Asia/Dushanbe', transport, llm, ownerId: OWNER, instructions: readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8'), perHour: 50, dailyCap: 300,
+    db, now: () => clock.t, tz: () => 'Asia/Dushanbe', transport, llm, ownerId: OWNER, toOwner: (l) => owner.push(l), instructions: readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8'), perHour: 50, dailyCap: 300,
   });
   const leads: Record<string, unknown>[] = [];
   const sinks: ClientSinks = { createLead: (lead) => (leads.push(lead), leads.length), createTicket: () => Promise.resolve(1), findClient: () => null, leadSlots: () => null };
@@ -42,7 +43,7 @@ function world(turns: (req: LlmRequest, n: number) => string) {
     await engine.onText(ME, text);
     return transport.to(CLIENT).slice(before).map((m) => m.html).join('\n');
   };
-  return { engine, transport, leads, llm, say };
+  return { engine, transport, leads, llm, say, owner };
 }
 
 const cafeModel = (_req: LlmRequest, n: number): string =>
@@ -94,7 +95,8 @@ describe('the receptionist in the Telegram bot', () => {
     await w.engine.onText(ME, 'Позовите живого менеджера');
     expect(w.llm.calls.length).toBe(calls);
     expect(w.engine.store.get(CLIENT)!.muted).toBe(true);
-    expect(w.transport.to(OWNER).some((m) => /Зовут человека/.test(m.html))).toBe(true);
+    expect(w.owner).toEqual([expect.objectContaining({ kind: 'human', chatId: CLIENT })]); // HQ reminds the owner; the bot itself writes him nothing
+    expect(w.transport.to(OWNER)).toEqual([]);
   });
 
   it('a price question keeps the template and calls no model', async () => {
