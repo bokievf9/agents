@@ -116,7 +116,7 @@ describe('Director: commands, summary, batch, alerts', () => {
     await w.director.onCommand('tasks', 'nope');
     expect(w.messenger.last()!.text).toContain('Нет отдела');
     await w.director.onCommand('org');
-    expect(w.messenger.last()!.text).toContain('marketing/marketing-head: Голова маркетинга, голова');
+    expect(w.messenger.last()!.text).toContain('marketing/marketing-head: Head of Marketing, голова');
     await w.director.onCommand('costs');
     expect(w.messenger.last()!.text).toContain('marketing: $0.00 (без лимита)');
     await w.director.onCommand('pause', 'marketing');
@@ -187,7 +187,7 @@ describe('org and config', () => {
   it('seedOrg creates director, head, workers and routines once; edits survive a second start', () => {
     const w = world();
     expect(w.hq.agents().map((a) => a.id)).toEqual(['director', 'marketing-head', 'analyst', 'content-maker', 'publisher', 'seo', 'trend-scout']);
-    expect(w.hq.agent('director')!.instructions).toContain('Директор Fir Tech');
+    expect(w.hq.agent('director')!.instructions).toContain('Fir Tech Director');
     expect(w.hq.agent('marketing-head')).toMatchObject({ bot: 'MARKETING_BOT_TOKEN', bossId: 'director' });
     expect(w.hq.routines().map((r) => [r.name, r.cron])).toEqual([
       ['marketing-weekly-pack', '0 6 * * 1'], ['marketing-daily-today', '0 9 * * *'], ['marketing-trends-daily', '30 7 * * *'],

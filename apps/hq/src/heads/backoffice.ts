@@ -1,4 +1,4 @@
-import { errMsg, log, markdownToPdfDoc, PLAYBOOK_ROLES, PLAYBOOK_ROLE_RU, loadPlaybook, playbookSection, type PlaybookRole, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
+import { errMsg, log, markdownToPdfDoc, PLAYBOOK_ROLES, PLAYBOOK_ROLE_RU, loadPlaybook, playbookSection, type PlaybookRole, type ApprovalQueue, type LlmClient, type Messenger, roleTitle, ROLE_TITLES } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx } from '@fir/hq';
 import {
   DocStore, DOC_RU, DOC_TYPES, kindSpecs as docKinds, onDecision as onDocDecision, parseDocType, DocumentsWorker, type DocContext,
@@ -24,11 +24,11 @@ export interface BackofficeSeedConfig {
 /** First start: the Back Office org (head, two workers) and the Sunday lessons export. Instructions come from the file once. */
 export function seedBackoffice(hq: Hq, cfg: BackofficeSeedConfig, readInstructions: (file: string) => string): void {
   hq.ensureAgent({
-    id: BACKOFFICE_HEAD_ID, dept: BACKOFFICE, role: 'head', title: 'Голова бэк-офиса', instructions: readInstructions('backoffice-head.md'),
+    id: BACKOFFICE_HEAD_ID, dept: BACKOFFICE, role: 'head', title: roleTitle('backoffice-head'), instructions: readInstructions('backoffice-head.md'),
     bossId: 'director', bot: 'BACKOFFICE_BOT_TOKEN', budgetUsdMonth: cfg.backofficeBudgetUsd,
   });
-  hq.ensureAgent({ id: DOCS_ID, dept: BACKOFFICE, role: 'worker', title: 'Документовед', bossId: BACKOFFICE_HEAD_ID });
-  hq.ensureAgent({ id: KNOWLEDGE_ID, dept: BACKOFFICE, role: 'worker', title: 'Хранитель знаний', bossId: BACKOFFICE_HEAD_ID });
+  hq.ensureAgent({ id: DOCS_ID, dept: BACKOFFICE, role: 'worker', title: roleTitle('documents'), bossId: BACKOFFICE_HEAD_ID });
+  hq.ensureAgent({ id: KNOWLEDGE_ID, dept: BACKOFFICE, role: 'worker', title: roleTitle('knowledge'), bossId: BACKOFFICE_HEAD_ID });
   hq.syncRoutines('backoffice', [
     { name: 'backoffice-lessons-weekly', cron: '0 19 * * 0', dept: BACKOFFICE, title: 'Обновить knowledge/lessons', meta: { action: 'lessons_export' } },
     { name: 'backoffice-backup-daily', cron: '30 3 * * *', dept: BACKOFFICE, title: 'Резервная копия баз и отправка владельцу', meta: { action: 'backup' } },
@@ -297,12 +297,14 @@ export class BackofficeHead {
 
 const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е').trim();
 
-/** A role by its id («content-maker») or its Russian name («контент-мейкер»), also by a start of either; null when unclear. */
+/** Names a role answers to: id, English title, and the old Russian name (the owner may still type it). */
+const roleNames = (r: PlaybookRole): string[] => [r, PLAYBOOK_ROLE_RU[r], ...(ROLE_TITLES.find((x) => x.id === r)?.legacy ?? []), ...(r === 'sales' ? ['продажи'] : []), ...(r === 'renderer-builder' ? ['строитель рендера'] : [])].map(norm);
+
+/** A role by its id («content-maker»), its English title or its old Russian name («контент-мейкер»), also by a start of any; null when unclear. */
 export function findPlaybookRole(query: string): PlaybookRole | null {
   const q = norm(query);
   if (!q) return null;
-  const hit = PLAYBOOK_ROLES.find((r) => r === q || norm(PLAYBOOK_ROLE_RU[r]) === q)
-    ?? PLAYBOOK_ROLES.find((r) => r.startsWith(q) || norm(PLAYBOOK_ROLE_RU[r]).startsWith(q));
+  const hit = PLAYBOOK_ROLES.find((r) => roleNames(r).includes(q)) ?? PLAYBOOK_ROLES.find((r) => roleNames(r).some((n) => n.startsWith(q)));
   return hit ?? null;
 }
 

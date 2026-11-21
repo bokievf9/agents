@@ -8,7 +8,7 @@ import { createSettings, startValues, type SettingsDefaults } from './settings.j
 import { seedTiming } from './timing.js';
 import { HEAD_ID, MarketingHead } from './heads/marketing.js';
 import { HEAD_ID as SALES_HEAD_ID, SalesHead, seedSales } from './heads/sales.js';
-import { seedOrg } from './org.js';
+import { seedOrg, syncRoleTitles } from './org.js';
 import { PRODUCTION_HEAD_ID, ProductionHead, seedProduction } from './heads/production.js';
 import { BACKOFFICE, BACKOFFICE_HEAD_ID, BackofficeHead, seedBackoffice } from './heads/backoffice.js';
 import { SUPPORT_HEAD_ID, SupportHead, seedSupport } from './heads/support.js';
@@ -94,6 +94,7 @@ seedSupport(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'ut
 seedSales(hq, cfg);
 seedProduction(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'utf8').trim());
 seedBackoffice(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'utf8').trim());
+syncRoleTitles(hq);
 
 // One bot in Telegram (owner 2026-11-22): HQ_BOT_TOKEN. The department bots are retired: their tokens are ignored, nothing polls or posts with them.
 if (cfg.retiredBots.length) log('info', 'department bots retired, HQ bot only', { ignored: cfg.retiredBots });

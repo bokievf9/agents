@@ -57,7 +57,7 @@ describe('launch film: props and copy', () => {
       expect(COPY[lang].cta.url).toBe('firtech.pro');
       expect(COPY[lang].cta.chips.join(' ')).toContain('USDT');
     }
-    expect(COPY.ru.cta.button).toBe('Собрать в конструкторе');
+    expect(COPY.ru.cta.button).toBe('Собрать проект');
     expect(COPY.ru.hook.big).toBe('24/7');
   });
 

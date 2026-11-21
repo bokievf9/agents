@@ -31,7 +31,7 @@ describe('prices, playbook, knowledge', () => {
     const { t } = tools();
     expect(await t.prices.get()).toEqual({ ok: true, value: getPrices() });
     const ex = await t.playbook.excerpt('trend-scout');
-    expect(ex.ok && ex.value).toContain('Трендвотчер');
+    expect(ex.ok && ex.value).toContain('Trend Scout');
     expect(ex.ok && ex.value.length).toBeLessThanOrEqual(2500);
     expect(await t.playbook.excerpt('nobody')).toMatchObject({ error: 'invalid' });
   });

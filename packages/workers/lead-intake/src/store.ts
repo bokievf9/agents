@@ -145,7 +145,7 @@ export class LeadStore {
     return this.byTask(taskId)!;
   }
 
-  /** The conversation summary and the rest of `Enrichment` (written by the Приёмщик when it makes the card). */
+  /** The conversation summary and the rest of `Enrichment` (written by the Lead Handler when it makes the card). */
   setEnrichment(id: number, e: Enrichment): void {
     this.db.prepare('UPDATE li_leads SET enrichment = ? WHERE id = ?').run(JSON.stringify(e), id);
   }

@@ -78,7 +78,7 @@ describe('GET /admin/company', () => {
       expect(Object.keys(x).sort()).toEqual(['dept', 'id', 'state', 'title']);
       expect(AGENT_STATUSES).toContain(x.state);
     }
-    expect(j.workers.find((x: any) => x.id === 'content-maker')).toMatchObject({ dept: 'marketing', title: 'Контент-мейкер' });
+    expect(j.workers.find((x: any) => x.id === 'content-maker')).toMatchObject({ dept: 'marketing', title: 'Content Maker' });
   });
 
   it('nextRunAt comes from the cron in the routine\'s own clock (owner or company), disabled ones have none', async () => {

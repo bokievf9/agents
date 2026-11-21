@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { roleTitle } from './role-titles.js';
 
 /**
  * Role playbooks: `knowledge/playbooks/<role>.md`, condensed craft rules written for the agents (and reviewed by the owner
@@ -10,13 +11,13 @@ export const PLAYBOOK_ROLES = ['content-maker', 'publisher', 'trend-scout', 'seo
 export type PlaybookRole = (typeof PLAYBOOK_ROLES)[number];
 
 export const PLAYBOOK_ROLE_RU: Record<PlaybookRole, string> = {
-  'content-maker': 'Контент-мейкер',
-  publisher: 'Публикатор',
-  'trend-scout': 'Трендвотчер',
-  seo: 'SEO',
-  analyst: 'Аналитик',
-  sales: 'Продажи',
-  'renderer-builder': 'Строитель рендера',
+  'content-maker': roleTitle('content-maker'),
+  publisher: roleTitle('publisher'),
+  'trend-scout': roleTitle('trend-scout'),
+  seo: roleTitle('seo'),
+  analyst: roleTitle('analyst'),
+  sales: 'Sales',
+  'renderer-builder': 'Render Builder',
 };
 
 export const isPlaybookRole = (s: string): s is PlaybookRole => (PLAYBOOK_ROLES as readonly string[]).includes(s);

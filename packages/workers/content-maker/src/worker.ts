@@ -356,7 +356,7 @@ export class ContentMakerWorker implements Worker {
     } else if (!nicheId) {
       if (asked) {
         const n = findNiche(asked);
-        if (!n) return { ok: false, result: '', error: `Не нашёл нишу «${asked.slice(0, 60)}». Нужна ниша из каталога конструктора, например барбершоп, стоматология, автосервис.` };
+        if (!n) return { ok: false, result: '', error: `Не нашёл нишу «${asked.slice(0, 60)}». Нужна ниша из каталога «Сборки проекта», например барбершоп, стоматология, автосервис.` };
         nicheId = n.id;
       } else {
         const age = (n: { id: string }) => used.get(`niche:${n.id}`) ?? 0;
@@ -381,7 +381,7 @@ export class ContentMakerWorker implements Worker {
       if (line === 'ai') {
         try {
           const hints = this.trends({ db: ctx.db, now: ctx.now }).slice(0, 3);
-          if (hints.length) trendsText = `Сигналы Трендвотчера (если один из них про ИИ и подходит теме, возьмите его поводом, остальное игнорируйте; чужие тексты не копировать):\n${hints.map((t) => `- ${t.hook}; почему растёт: ${t.why}`).join('\n')}\n`;
+          if (hints.length) trendsText = `Сигналы Trend Scout (если один из них про ИИ и подходит теме, возьмите его поводом, остальное игнорируйте; чужие тексты не копировать):\n${hints.map((t) => `- ${t.hook}; почему растёт: ${t.why}`).join('\n')}\n`;
         } catch (e) {
           log('warn', 'trends provider failed for the article', { err: errMsg(e) });
         }

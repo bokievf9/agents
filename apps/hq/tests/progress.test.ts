@@ -33,13 +33,13 @@ describe('Progress: the live message of a task', () => {
     w.clock.t += 14_000;
     expect(await p.tick()).toBe(1);
     expect(w.messenger.textOf(1)).toContain(`#${t.id} Маркетинг`);
-    expect(w.messenger.textOf(1)).toContain('✅ принял · ⏳ Контент-мейкер работает (14 с)');
+    expect(w.messenger.textOf(1)).toContain('✅ принял · ⏳ Content Maker работает (14 с)');
 
     // the counter moves, so a running task is edited every 5 s, never faster
     expect(await p.tick()).toBe(0);
     w.clock.t += 5_000;
     expect(await p.tick()).toBe(1);
-    expect(w.messenger.textOf(1)).toContain('Контент-мейкер работает (19 с)');
+    expect(w.messenger.textOf(1)).toContain('Content Maker работает (19 с)');
     w.hq.complete(kid.id, 'content-maker', 'готово');
     w.hq.complete(t.id, 'marketing-head', 'Сценарий: клиент пишет ночью, бот отвечает. Подпись для почты owner@example.com.', 'approval');
     expect(await p.tick()).toBe(0); // changed, but the last edit was just now

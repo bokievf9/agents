@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { errMsg, log, parseStages, stagesFor, tryJson, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
+import { errMsg, log, parseStages, stagesFor, tryJson, type ApprovalQueue, type LlmClient, type Messenger, roleTitle } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
 import { billingStoreFor, type Invoice } from '@fir/worker-billing';
 import { csStoreFor } from '@fir/worker-customer-support';
@@ -124,19 +124,19 @@ export function isQualified(lead: Pick<Lead, 'service' | 'budget'>, raw: Record<
 /** First start: the Sales org (head, two workers) and its two daily routines. Instructions come from the file once. */
 export function seedSales(hq: Hq, cfg: { instructionsDir: string; salesBudgetUsd: number }): void {
   hq.ensureAgent({
-    id: HEAD_ID, dept: SALES, role: 'head', title: 'Голова продаж', instructions: readFileSync(join(cfg.instructionsDir, 'sales-head.md'), 'utf8').trim(),
+    id: HEAD_ID, dept: SALES, role: 'head', title: roleTitle('sales-head'), instructions: readFileSync(join(cfg.instructionsDir, 'sales-head.md'), 'utf8').trim(),
     bossId: 'director', bot: 'SALES_BOT_TOKEN', budgetUsdMonth: cfg.salesBudgetUsd,
   });
-  hq.ensureAgent({ id: PROSPECTOR_ID, dept: SALES, role: 'worker', title: 'Разведчик', bossId: HEAD_ID });
-  hq.ensureAgent({ id: LEADS_ID, dept: SALES, role: 'worker', title: 'Приёмщик лидов', bossId: HEAD_ID });
-  hq.ensureAgent({ id: PRESALES_ID, dept: SALES, role: 'worker', title: 'Пресейл', bossId: HEAD_ID });
-  hq.ensureAgent({ id: REFERRAL_ID, dept: SALES, role: 'worker', title: 'Рекомендации', bossId: HEAD_ID });
+  hq.ensureAgent({ id: PROSPECTOR_ID, dept: SALES, role: 'worker', title: roleTitle('prospector'), bossId: HEAD_ID });
+  hq.ensureAgent({ id: LEADS_ID, dept: SALES, role: 'worker', title: roleTitle('lead-intake'), bossId: HEAD_ID });
+  hq.ensureAgent({ id: PRESALES_ID, dept: SALES, role: 'worker', title: roleTitle('presales'), bossId: HEAD_ID });
+  hq.ensureAgent({ id: REFERRAL_ID, dept: SALES, role: 'worker', title: roleTitle('referral'), bossId: HEAD_ID });
   // the public client bot and the website chat: their LLM calls are metered under this agent
-  hq.ensureAgent({ id: CLIENT_BOT_ID, dept: SALES, role: 'worker', title: 'Клиентский бот', bossId: HEAD_ID });
+  hq.ensureAgent({ id: CLIENT_BOT_ID, dept: SALES, role: 'worker', title: roleTitle('client-bot'), bossId: HEAD_ID });
   const routines = [
     // made on the owner's clock, early enough for his 09:00 batch
-    { name: 'sales-daily-cards', cron: '30 7 * * *', tz: 'owner' as const, dept: SALES, title: 'Карточки Разведчика на сегодня', meta: { action: 'batch' } },
-    { name: 'sales-followups', cron: '40 7 * * *', tz: 'owner' as const, dept: SALES, title: 'Дожимы Разведчика', meta: { action: 'followups' } },
+    { name: 'sales-daily-cards', cron: '30 7 * * *', tz: 'owner' as const, dept: SALES, title: 'Prospector: карточки на сегодня', meta: { action: 'batch' } },
+    { name: 'sales-followups', cron: '40 7 * * *', tz: 'owner' as const, dept: SALES, title: 'Prospector: дожимы', meta: { action: 'followups' } },
     { name: 'sales-referral-reminders', cron: '20 7 * * *', tz: 'owner' as const, dept: SALES, title: 'Напоминания по рекомендациям и выплатам', meta: { action: 'referral_reminders' } },
   ];
   hq.syncRoutines('sales', routines);
@@ -592,7 +592,7 @@ export class SalesHead implements ApprovalEditor {
         this.hq.claim(child.id, PROSPECTOR_ID);
         await this.hq.requestApproval(child.id, PROSPECTOR_ID, s.kind, s.payload, s.summary);
       }
-      return void (await this.report(taskId, `Разведчик: ${res.result} Карточки придут в утренней пачке на одобрение (или /approve).`));
+      return void (await this.report(taskId, `Prospector: ${res.result} Карточки придут в утренней пачке на одобрение (или /approve).`));
     }
     this.hq.complete(taskId, actor, res.result, staged.length > 0 ? 'review' : 'done');
     // Proposals that wait for the owner go first: one that runs at once (level 1) must not close the task while another is still open.

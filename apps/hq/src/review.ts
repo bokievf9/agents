@@ -465,7 +465,7 @@ export function createReview(d: ReviewDeps) {
       case 'prospect_followup':
       case 'prospect_reply': {
         const pr = has('pr_prospects') ? views.one<{ id: number; name: string; niche: string; city: string; telegram: string; instagram: string }>('SELECT id, name, niche, city, telegram, instagram FROM pr_prospects WHERE id = ?', Number(payload.prospectId)) : undefined;
-        return generic(l, payload, `Разведчик, ${PROSPECT_RU[str(payload.draftKind)] ?? 'сообщение'}: ${pr?.name ?? '?'}`, { meta: { prospect: pr ? { id: pr.id, name: pr.name, niche: pr.niche, city: pr.city, telegram: pr.telegram, instagram: pr.instagram } : { id: num(payload.prospectId) }, draftKind: str(payload.draftKind) || null } });
+        return generic(l, payload, `Prospector, ${PROSPECT_RU[str(payload.draftKind)] ?? 'сообщение'}: ${pr?.name ?? '?'}`, { meta: { prospect: pr ? { id: pr.id, name: pr.name, niche: pr.niche, city: pr.city, telegram: pr.telegram, instagram: pr.instagram } : { id: num(payload.prospectId) }, draftKind: str(payload.draftKind) || null } });
       }
       case 'seo_proposal':
         return generic(l, payload, `SEO: ${str(payload.title)}`, { text: { body: str(payload.change), page: str(payload.page) }, edit: null, meta: { seo: { key: str(payload.key), page: str(payload.page), needsBuilder: payload.needsBuilder === true } } });

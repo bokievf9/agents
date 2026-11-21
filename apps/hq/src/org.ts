@@ -1,9 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Hq } from '@fir/hq';
+import { roleTitle } from '@fir/core';
 import type { Config } from './config.js';
 
 const read = (dir: string, file: string): string => readFileSync(join(dir, file), 'utf8').trim();
+
+/**
+ * Job titles are English (owner 2026-11-23). Databases seeded before that hold the old Russian titles: this renames exactly those
+ * (an owner's own edit survives) and returns how many agents changed. Call after every seed.
+ */
+export function syncRoleTitles(hq: Hq): number {
+  return hq.syncAgentTitles();
+}
 
 /**
  * First start: puts the org into the database. Instructions come from `instructions/*.md` once; after that the
@@ -12,17 +21,17 @@ const read = (dir: string, file: string): string => readFileSync(join(dir, file)
  */
 export function seedOrg(hq: Hq, cfg: Pick<Config, 'instructionsDir' | 'marketingBudgetUsd'>): void {
   hq.ensureAgent({
-    id: 'director', dept: 'hq', role: 'director', title: 'Директор', instructions: read(cfg.instructionsDir, 'director.md'),
+    id: 'director', dept: 'hq', role: 'director', title: roleTitle('director'), instructions: read(cfg.instructionsDir, 'director.md'),
   });
   hq.ensureAgent({
-    id: 'marketing-head', dept: 'marketing', role: 'head', title: 'Голова маркетинга', instructions: read(cfg.instructionsDir, 'marketing-head.md'),
+    id: 'marketing-head', dept: 'marketing', role: 'head', title: roleTitle('marketing-head'), instructions: read(cfg.instructionsDir, 'marketing-head.md'),
     bossId: 'director', bot: 'MARKETING_BOT_TOKEN', budgetUsdMonth: cfg.marketingBudgetUsd,
   });
-  hq.ensureAgent({ id: 'content-maker', dept: 'marketing', role: 'worker', title: 'Контент-мейкер', bossId: 'marketing-head' });
-  hq.ensureAgent({ id: 'trend-scout', dept: 'marketing', role: 'worker', title: 'Трендвотчер', bossId: 'marketing-head' });
-  hq.ensureAgent({ id: 'publisher', dept: 'marketing', role: 'worker', title: 'Публикатор', bossId: 'marketing-head' });
-  hq.ensureAgent({ id: 'seo', dept: 'marketing', role: 'worker', title: 'SEO', bossId: 'marketing-head' });
-  hq.ensureAgent({ id: 'analyst', dept: 'marketing', role: 'worker', title: 'Аналитик', bossId: 'marketing-head' });
+  hq.ensureAgent({ id: 'content-maker', dept: 'marketing', role: 'worker', title: roleTitle('content-maker'), bossId: 'marketing-head' });
+  hq.ensureAgent({ id: 'trend-scout', dept: 'marketing', role: 'worker', title: roleTitle('trend-scout'), bossId: 'marketing-head' });
+  hq.ensureAgent({ id: 'publisher', dept: 'marketing', role: 'worker', title: roleTitle('publisher'), bossId: 'marketing-head' });
+  hq.ensureAgent({ id: 'seo', dept: 'marketing', role: 'worker', title: roleTitle('seo'), bossId: 'marketing-head' });
+  hq.ensureAgent({ id: 'analyst', dept: 'marketing', role: 'worker', title: roleTitle('analyst'), bossId: 'marketing-head' });
   // Clocks (owner decision 2026-11-19): what lands in the owner's morning (pack, trends, reports, SEO) is made on HIS clock, early enough
   // for the 09:00 batch; the morning «что публикуем» follows the market's publishing time (the company's clock).
   const routines = [

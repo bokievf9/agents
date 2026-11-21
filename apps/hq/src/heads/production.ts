@@ -1,4 +1,4 @@
-import { errMsg, log, type ApprovalQueue, type LlmClient, type Messenger } from '@fir/core';
+import { errMsg, log, type ApprovalQueue, type LlmClient, type Messenger, roleTitle } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type Worker, type WorkerCtx } from '@fir/hq';
 import { deployPlan, DeployerWorker, DeployStore, parseTarget } from '@fir/worker-deployer';
 import type { Invoice } from '@fir/worker-billing';
@@ -34,12 +34,12 @@ export interface ProductionSeedConfig {
 /** First start: the Production org (head, three workers) and the daily overdue check. Instructions come from the file once. */
 export function seedProduction(hq: Hq, cfg: ProductionSeedConfig, readInstructions: (file: string) => string): void {
   hq.ensureAgent({
-    id: PRODUCTION_HEAD_ID, dept: PRODUCTION, role: 'head', title: 'Голова производства', instructions: readInstructions('production-head.md'),
+    id: PRODUCTION_HEAD_ID, dept: PRODUCTION, role: 'head', title: roleTitle('production-head'), instructions: readInstructions('production-head.md'),
     bossId: 'director', bot: 'PRODUCTION_BOT_TOKEN', budgetUsdMonth: cfg.productionBudgetUsd,
   });
-  hq.ensureAgent({ id: PM_ID, dept: PRODUCTION, role: 'worker', title: 'Проектный менеджер', bossId: PRODUCTION_HEAD_ID });
-  hq.ensureAgent({ id: REVIEWER_ID, dept: PRODUCTION, role: 'worker', title: 'Ревьюер', bossId: PRODUCTION_HEAD_ID });
-  hq.ensureAgent({ id: DEPLOYER_ID, dept: PRODUCTION, role: 'worker', title: 'Деплойер', bossId: PRODUCTION_HEAD_ID });
+  hq.ensureAgent({ id: PM_ID, dept: PRODUCTION, role: 'worker', title: roleTitle('project-manager'), bossId: PRODUCTION_HEAD_ID });
+  hq.ensureAgent({ id: REVIEWER_ID, dept: PRODUCTION, role: 'worker', title: roleTitle('reviewer'), bossId: PRODUCTION_HEAD_ID });
+  hq.ensureAgent({ id: DEPLOYER_ID, dept: PRODUCTION, role: 'worker', title: roleTitle('deployer'), bossId: PRODUCTION_HEAD_ID });
   hq.syncRoutines('production', [{ name: 'production-overdue', cron: '50 7 * * *', tz: 'owner', dept: PRODUCTION, title: 'Просроченные этапы проектов', meta: { action: 'overdue' } }]);
 }
 

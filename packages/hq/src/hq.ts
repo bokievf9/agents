@@ -1,4 +1,4 @@
-import { MODEL_PRICES, errMsg, log as coreLog, priceFor, usdFor, zonedParts, zonedToMs, type ApprovalQueue, type Db, type KindSpec, type Payload, type PriceTable } from '@fir/core';
+import { MODEL_PRICES, errMsg, syncedTitle, log as coreLog, priceFor, usdFor, zonedParts, zonedToMs, type ApprovalQueue, type Db, type KindSpec, type Payload, type PriceTable } from '@fir/core';
 import { SCHEMA } from './schema.js';
 import type {
   Agent, ApprovalState, Creator, Heartbeat, NewRoutine, NewTask, Role, Routine, Task, TaskApproval, TaskEvent, TaskStatus,
@@ -50,7 +50,7 @@ interface AgentRow {
   trust_level: number; bot: string | null; budget_usd_month: number;
 }
 const toAgent = (r: AgentRow): Agent => ({
-  id: r.id, dept: r.dept, role: r.role, title: r.title, instructions: r.instructions, bossId: r.boss_id, status: r.status,
+  id: r.id, dept: r.dept, role: r.role, title: syncedTitle(r.id, r.title), instructions: r.instructions, bossId: r.boss_id, status: r.status,
   trustLevel: r.trust_level, bot: r.bot, budgetUsdMonth: r.budget_usd_month,
 });
 
@@ -178,6 +178,16 @@ export class Hq {
   /** Inserts only when the agent does not exist yet (first start: instructions from files never overwrite edits). */
   ensureAgent(a: Partial<Agent> & Pick<Agent, 'id' | 'dept' | 'role' | 'title'>): Agent {
     return this.agent(a.id) ?? this.upsertAgent(a);
+  }
+
+  /** Stored titles that are still an old Russian job title become the English one (owner 2026-11-23); an owner's own edit stays. Returns the count. */
+  syncAgentTitles(): number {
+    let n = 0;
+    for (const r of this.db.prepare('SELECT id, title FROM agents').all() as { id: string; title: string }[]) {
+      const t = syncedTitle(r.id, r.title);
+      if (t !== r.title) { this.db.prepare('UPDATE agents SET title = ? WHERE id = ?').run(t, r.id); n += 1; }
+    }
+    return n;
   }
 
   agent(id: string): Agent | undefined {

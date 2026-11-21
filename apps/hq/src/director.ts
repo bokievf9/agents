@@ -101,7 +101,7 @@ const STATUS_RU: Record<string, string> = {
 /** The cheat sheet of /help, Telegram HTML, made from the one command list (`commands.ts`; the full page: apps/hq/docs/owner-cheatsheet.md). */
 export const HELP = helpHtml();
 export const WELCOME = [
-  '👋 <b>Директор Fir Tech</b>',
+  '👋 <b>Fir Tech Director</b>',
   'Пишите задачу обычным текстом: я передам её отделу и покажу ход работы в одном сообщении.',
   'Кнопки внизу: одобрения, задачи, статус, отделы, помощь. Все команды: кнопка «Меню» слева от поля ввода.',
 ].join('\n');
@@ -628,7 +628,7 @@ export class Director {
 {"type":"task","title":"...","dept":"<отдел>","body":"...","priority":0-2,"due":"YYYY-MM-DD или null"}
 {"type":"status","dept":"<отдел или null>"}
 {"type":"rule","target":"setting","key":"<настройка>","value":"..."} или {"type":"rule","target":"instructions","agent_id":"<агент>","text":"<новое правило одной строкой>"}
-{"type":"sales_reply","id":<номер бизнеса из карточки Разведчика>,"text":"<текст ответа бизнеса, если он есть в сообщении>"} (бизнес ответил на наше сообщение)
+{"type":"sales_reply","id":<номер бизнеса из карточки Prospector>,"text":"<текст ответа бизнеса, если он есть в сообщении>"} (бизнес ответил на наше сообщение)
 {"type":"builder","title":"...","body":"..."} (нужен новый инструмент, бот или интеграция, которых нет)
 ${this.commandForms()}{"type":"unknown","question":"<что переспросить>"}
 Ответ: только JSON-объект.`;

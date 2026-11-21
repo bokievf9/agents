@@ -174,7 +174,7 @@ describe('Telegram UX: tasks, status, departments', () => {
     const card = stripHtml(w.messenger.textOf(id)!);
     expect(card).toContain(`#${t.id} · Маркетинг`);
     expect(card).toContain('Статус: застряла');
-    expect(card).toContain('Исполнитель: Голова маркетинга');
+    expect(card).toContain('Исполнитель: Head of Marketing');
     expect(texts(w.messenger.buttonsOf(id))).toEqual(['🔁 Повторить', '❌ Отклонить', '📜 Журнал', '◀ Назад']);
     expect(await w.director.onButton(`tk:${t.id}:j:all:0`, at(id))).toBe('Журнал');
     expect(stripHtml(w.messenger.textOf(id)!)).toContain('застряла: сбой: нет ответа');

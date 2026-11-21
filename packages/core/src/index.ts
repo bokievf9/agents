@@ -11,6 +11,7 @@ export * from './scheduler.js';
 export * from './time.js';
 export * from './prices.js';
 export * from './product-names.js';
+export * from './role-titles.js';
 export * from './pricing.js';
 export * from './conditions.js';
 export * from './stage-templates.js';

@@ -47,7 +47,7 @@ describe('/playbook', () => {
     const w = boWorld();
     await w.director.onCommand('playbook', 'контент-мейкер');
     const text = w.messenger.last()!.text;
-    expect(text).toContain('Плейбук «Контент-мейкер»: правила');
+    expect(text).toContain('Плейбук «Content Maker»: правила');
     expect(text).toContain('Хук в первые 2 секунды');
     expect(text).not.toContain('Чеклист перед сдачей');
     expect(text).not.toContain('Метрики успеха');
@@ -58,7 +58,7 @@ describe('/playbook', () => {
   it('without a role it lists the roles; an unknown role says so', async () => {
     const w = boWorld();
     await w.director.onCommand('playbook', '');
-    expect(w.messenger.last()!.text).toContain('Роли: content-maker (Контент-мейкер)');
+    expect(w.messenger.last()!.text).toContain('Роли: content-maker (Content Maker)');
     await w.director.onCommand('playbook', 'космос');
     expect(w.messenger.last()!.text).toContain('Не нашёл роль «космос»');
   });

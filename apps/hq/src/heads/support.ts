@@ -1,4 +1,4 @@
-import { errMsg, log, schedule, zonedParts, type LlmClient, type Messenger } from '@fir/core';
+import { errMsg, log, schedule, zonedParts, type LlmClient, type Messenger, roleTitle } from '@fir/core';
 import { meterLlm, type Agent, type Hq, type Task, type WorkerCtx } from '@fir/hq';
 import { BillingWorker, parseInvoiceArgs, parseSubArgs, usdt, type Invoice, type PaymentWatcher } from '@fir/worker-billing';
 import { leadStoreFor } from '@fir/worker-lead-intake';
@@ -39,14 +39,14 @@ export interface SupportSeedConfig {
  */
 export function seedSupport(hq: Hq, cfg: SupportSeedConfig, readInstructions: (file: string) => string): void {
   hq.ensureAgent({
-    id: SUPPORT_HEAD_ID, dept: SUPPORT, role: 'head', title: 'Голова сопровождения', instructions: readInstructions('support-head.md'),
+    id: SUPPORT_HEAD_ID, dept: SUPPORT, role: 'head', title: roleTitle('support-head'), instructions: readInstructions('support-head.md'),
     bossId: 'director', bot: 'SUPPORT_BOT_TOKEN', budgetUsdMonth: cfg.supportBudgetUsd,
   });
-  hq.ensureAgent({ id: 'monitoring', dept: SUPPORT, role: 'worker', title: 'Мониторинг', bossId: SUPPORT_HEAD_ID });
-  hq.ensureAgent({ id: 'finance', dept: SUPPORT, role: 'worker', title: 'Финансист', bossId: SUPPORT_HEAD_ID });
-  hq.ensureAgent({ id: 'customer-support', dept: SUPPORT, role: 'worker', title: 'Поддержка клиентов', bossId: SUPPORT_HEAD_ID });
-  hq.ensureAgent({ id: 'billing', dept: SUPPORT, role: 'worker', title: 'Биллинг', bossId: SUPPORT_HEAD_ID });
-  hq.ensureAgent({ id: 'onboarding', dept: SUPPORT, role: 'worker', title: 'Онбординг', bossId: SUPPORT_HEAD_ID });
+  hq.ensureAgent({ id: 'monitoring', dept: SUPPORT, role: 'worker', title: roleTitle('monitoring'), bossId: SUPPORT_HEAD_ID });
+  hq.ensureAgent({ id: 'finance', dept: SUPPORT, role: 'worker', title: roleTitle('finance'), bossId: SUPPORT_HEAD_ID });
+  hq.ensureAgent({ id: 'customer-support', dept: SUPPORT, role: 'worker', title: roleTitle('customer-support'), bossId: SUPPORT_HEAD_ID });
+  hq.ensureAgent({ id: 'billing', dept: SUPPORT, role: 'worker', title: roleTitle('billing'), bossId: SUPPORT_HEAD_ID });
+  hq.ensureAgent({ id: 'onboarding', dept: SUPPORT, role: 'worker', title: roleTitle('onboarding'), bossId: SUPPORT_HEAD_ID });
   const routines = [
     // all three land in the owner's morning (summary 08:00, batch 09:00 on his clock), so they run on his clock
     { name: 'support-daily', cron: '40 7 * * *', tz: 'owner' as const, dept: SUPPORT, title: 'Финансы и аптайм за сутки', meta: { action: 'daily' } },
@@ -282,8 +282,8 @@ export class SupportHead {
   private async paidSteps(ctx: WorkerCtx, inv: Invoice, nextDue?: string): Promise<string> {
     const chain = inv.paidVia === 'usdt_trc20' || inv.paidVia === 'usdt_ton';
     let text = chain
-      ? `Оплачено: счёт ${inv.number} (${inv.client}, $${inv.amountUsd}), пришло ${usdt(inv.payAmountUsd)} USDT в сети ${inv.paidVia === 'usdt_trc20' ? 'TRC20' : 'TON'}, tx ${inv.txId}. Выручка попадёт в отчёты Финансиста.`
-      : `Счёт ${inv.number} (${inv.client}, $${inv.amountUsd}) оплачен. Выручка попадёт в отчёты Финансиста.`;
+      ? `Оплачено: счёт ${inv.number} (${inv.client}, $${inv.amountUsd}), пришло ${usdt(inv.payAmountUsd)} USDT в сети ${inv.paidVia === 'usdt_trc20' ? 'TRC20' : 'TON'}, tx ${inv.txId}. Выручка попадёт в отчёты Finance.`
+      : `Счёт ${inv.number} (${inv.client}, $${inv.amountUsd}) оплачен. Выручка попадёт в отчёты Finance.`;
     if (nextDue) text += ` Следующая оплата по подписке: ${nextDue}.`;
     if (this.onPaid) {
       try {
