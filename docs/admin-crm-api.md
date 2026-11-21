@@ -840,3 +840,17 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 
 `POST /admin/processes/drill` `{ "action": "start" | "clear" }` → `{ ok, action, text, drill }`. `start` это существующие учения (`/drill`): тестовые задачи с тегом `drill` и тестовый клиент «Тест учения», клиенту ничего не уходит, повторный `start` во время работы ничего не создаёт; `clear` это `/drill clear` (задачи, одобрения и тестовые данные удаляются). 400 `bad_request` для другого тела, 503 `unavailable` без дрилла.
 
+
+## Calendar (2026-11-23, ветка `hq-tasks`)
+Раздел HQ «Calendar»: одна сетка недели и месяца из созвонов, этапов проектов, рутин и запланированного контента. Только чтение, под `x-admin-token`, код `apps/hq/src/pult-calendar.ts`.
+
+`GET /admin/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD` (оба конца включительно, дни по часовому поясу компании `TZ`, не больше 62 дней: 400 `invalid` для неверных дат, 400 `range_too_long` со `maxDays`) → `{ ok, from, to, tz, today, counts: {call, milestone, routine, content}, events }`, события по времени:
+```json
+{ "id": "call:12", "kind": "call|milestone|routine|content", "at": "2026-11-24T09:00:00.000Z", "allDay": false,
+  "title": "Анна", "detail": "bot", "dept": "sales", "status": "confirmed", "link": "calls:7" }
+```
+- `call`: `call_bookings` (кроме отменённых) с именем лида; `status` `pending|confirmed`; `link` `calls:<leadId>`.
+- `milestone`: `pm_milestones` со сроком в диапазоне (проекты-черновики не считаются); `detail` клиент проекта; `status` этапа (`open`, `ready`, `done`...); `link` `projects:<projectId>`.
+- `routine`: включённые рутины, каждое срабатывание cron по часовому поясу рутины (до 300 на ответ); `detail` cron; `link` `routines:<name>`.
+- `content`: `cm_items` с `planned_date` в диапазоне (кроме отклонённых), `allDay: true`, `at` начало дня; `status` материала; `link` `content:item:<id>`.
+Источник, которого ещё нет в базе, даёт пустой список. Текстов клиентов нет, только имя лида и услуга.
