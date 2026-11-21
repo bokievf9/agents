@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { describe, expect, it } from 'vitest';
-import { createLlm, GatewayWatch, MockChatLlm, MockLlm, OffLlm, tryChat, turnOf, turnText, turnToolUses, type LlmChatRequest } from '../src/index.js';
+import { createLlm, GatewayWatch, MockChatLlm, MockLlm, OffLlm, tryChat, turnOf, turnText, turnToolUses, type LlmChatRequest, type LlmClient } from '../src/index.js';
 
 /** Native tool use (2026-11-22, Fira): an optional `chat` beside `complete`; nothing of the old protocol changes. */
 const noKey = { baseUrl: undefined, apiKey: undefined, modelFast: undefined, modelSmart: undefined, timeoutMs: 2000, maxRetries: 0 };
@@ -96,7 +96,7 @@ describe('llm tool use', () => {
   it('tryChat is null when the model is off or the client has no chat; the old MockLlm is unchanged', async () => {
     expect(await tryChat(new OffLlm(), req)).toBeNull();
     expect(await tryChat(new MockLlm(() => 'x'), req)).toBeNull();
-    expect(new MockLlm(() => 'x').chat).toBeUndefined();
+    expect((new MockLlm(() => 'x') as LlmClient).chat).toBeUndefined();
   });
 
   it('MockChatLlm plays a script: tool calls with ids, then text; records every request', async () => {
