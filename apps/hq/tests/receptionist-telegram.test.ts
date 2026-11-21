@@ -63,7 +63,7 @@ describe('the receptionist in the Telegram bot', () => {
     const code = decodeURIComponent(/builder\?b=([^\s]+)/.exec(b)![1]!);
     expect(decodeBuild(code)).toMatchObject({ kind: 'cafe', products: ['intake'], channels: ['instagram'] });
     expect(w.leads).toEqual([]);
-    expect(w.engine.store.get(CLIENT)!.draft.q).toMatchObject({ kind: 'cafe', product: 'receptionist', turns: 2 });
+    expect(w.engine.store.get(CLIENT)!.draft.q).toMatchObject({ kind: 'cafe', products: ['receptionist'], turns: 2 });
   });
 
   it('a call asked for becomes a lead with the conversation summary, the family, the niche, the score and the link', async () => {

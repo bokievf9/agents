@@ -132,8 +132,8 @@ describe('welcome and language', () => {
     const welcome = w.transport.last(CLIENT)!;
     expect(welcome.html).toContain('<b>Fir Tech</b>');
     expect(welcome.html).toContain('Dilnoza');
-    expect(welcome.html).toMatch(/Dono/);
-    expect(welcome.html).toMatch(/Polly/);
+    expect(welcome.html).not.toMatch(/Dono|Polly|собственные ассистенты/); // personal products are not part of the public pitch
+    expect(welcome.html).toContain('https://firtech.pro/ru/builder');
     expect(welcome.html).not.toContain('!');
     expect(welcome.html.length).toBeLessThan(700);
     expect(welcome.html).toContain('Я ИИ-менеджер заявок Fir Tech. Что мы делаем: ИИ-администратор, ИИ-менеджер заявок, Автоматизация процессов, Контент на автопилоте, Telegram Mini App, Персональный ИИ-ассистент, ИИ-отдел под ключ');

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BUILDER_PRODUCTS, buildFromText, builderPath, decodeBuild, encodeBuild } from '../src/client/builder-link.js';
-import { asksCatalogue, NEED_RULES, NO_SITE_DELIVERY, productOfBot, productOfNeed, siteNeedOf } from '../src/client/needs.js';
+import { asksCatalogue, inCatalogueOrder, NEED_RULES, needChange, NO_SITE_DELIVERY, productOfBot, productOfNeed, siteNeedOf } from '../src/client/needs.js';
 import { BUILDER_PRODUCT_OF } from '../src/client/builder-link.js';
 import { isCatalogueId } from '../src/client/products.js';
 
@@ -75,5 +75,38 @@ describe('builder link: where the agent lives (l.) and whether it gets a site (z
     expect(decodeBuild('p.intake~l.none~z.maybe~l.fax')).toMatchObject({ products: ['intake'], delivery: [] });
     expect(decodeBuild('l.telegram-playground-fax~z.have')).toEqual({ extras: [], delivery: ['telegram', 'playground'], siteNeed: 'have' });
     expect(buildFromText('Моя сборка: /ru/builder?b=k.salon~p.adminbot~l.playground~z.no')?.build).toMatchObject({ delivery: ['playground'], siteNeed: 'no' });
+  });
+});
+
+/** One message -> what it does to the list of products: explicit needs add (every matching row), a negated need removes, «только X» replaces, a bare «бот» is the fallback. */
+describe('needChange: add, remove, only', () => {
+  const rows: [string, string | undefined, { add: string[]; remove?: string[]; only?: boolean; generic?: string }][] = [
+    ['нужен администратор для записи', 'salon', { add: ['admin'] }],
+    ['и ещё сайт', 'salon', { add: ['site'] }],
+    ['нужен администратор и сайт', 'salon', { add: ['admin', 'site'] }],
+    ['хотим сайт, контент и рассылки', undefined, { add: ['automation', 'content', 'site'] }],
+    ['только сайт', undefined, { add: ['site'], only: true }],
+    ['нужен только администратор', 'salon', { add: ['admin'], only: true }],
+    ['just a website please', undefined, { add: ['site'], only: true }],
+    ['сайт не нужен', undefined, { add: [], remove: ['site'] }],
+    ['не нужен сайт, нужен администратор', 'salon', { add: ['admin'], remove: ['site'] }],
+    ['без рассылки', undefined, { add: [], remove: ['automation'] }],
+    ['don\'t need a website, need an appointment bot', 'salon', { add: ['admin'], remove: ['site'] }],
+    ['у нас уже есть сайт, нужен администратор', 'salon', { add: ['admin'], remove: ['site'] }],
+    ['хочу бота', 'salon', { add: [], generic: 'admin' }],
+    ['хочу бота и сайт', 'salon', { add: ['site'] }],
+    ['не нужен бот', 'salon', { add: [] }],
+    ['привет', undefined, { add: [] }],
+  ];
+  it.each(rows)('«%s» (%s)', (text, kind, want) => {
+    const got = needChange(text, kind as never);
+    expect(got.add).toEqual(want.add);
+    expect(got.remove).toEqual(want.remove ?? []);
+    expect(got.only).toBe(want.only ?? false);
+    expect(got.generic).toBe(want.generic);
+  });
+
+  it('products come out in the catalogue order, once each', () => {
+    expect(inCatalogueOrder(['site', 'admin', 'site', 'content'])).toEqual(['admin', 'content', 'site']);
   });
 });

@@ -107,10 +107,13 @@ function needLabels(lang: 'ru' | 'en', extra: Record<'site' | 'other' | 'bot' | 
   return out as Record<Need, string>;
 }
 
+/** The project builder the welcome points to (the site's page, no brief filled). */
+const BUILDER_URL = { ru: 'https://firtech.pro/ru/builder', en: 'https://firtech.pro/en/builder' } as const;
+
 const RU: Texts = {
   welcome: (name) =>
     `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Я ${productName('intake', 'ru')} Fir Tech. Что мы делаем: ${productList('ru')}.\n\n` +
-    `Наши собственные ассистенты работают каждый день: Dono ведёт учёбу студента, Polly учит языкам. Этот чат тоже наша работа: так выглядит ${productName('intake', 'ru')}.\n\nЧем помочь?`,
+    `Можно сразу собрать проект и увидеть цену: ${BUILDER_URL.ru}\n\nЧем помочь?`,
   welcomeShort: (name) => `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Я ${productName('intake', 'ru')} Fir Tech.`,
   menu: { discuss: '💬 Обсудить проект', products: '🧩 Продукты', client: '🧾 Я уже клиент', human: '👤 Позвать человека', lang: '🇬🇧 English', demo: '🧪 Попробовать демо' },
   productsTitle: '<b>Продукты Fir Tech</b>',
@@ -156,7 +159,7 @@ const RU: Texts = {
 const EN: Texts = {
   welcome: (name) =>
     `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. I am the Fir Tech ${productName('intake', 'en')}. What we do: ${productList('en')}.\n\n` +
-    `Our own assistants work every day: Dono runs a student’s studies, Polly teaches languages. This chat is our work too: this is what an ${productName('intake', 'en')} looks like.\n\nHow can we help?`,
+    `You can put a project together right away and see the price: ${BUILDER_URL.en}\n\nHow can we help?`,
   welcomeShort: (name) => `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. I am the Fir Tech ${productName('intake', 'en')}.`,
   menu: { discuss: '💬 Discuss a project', products: '🧩 Products', client: '🧾 I am a client', human: '👤 Talk to a person', lang: '🇷🇺 Русский', demo: '🧪 Try the demo' },
   productsTitle: '<b>Fir Tech products</b>',

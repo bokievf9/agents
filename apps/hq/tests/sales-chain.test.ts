@@ -124,6 +124,31 @@ describe('an approved КП: contract and invoice in one go, the project only res
     expect(text(w2, 'billing_invoice')).toContain(dflt);
   });
 
+  it('a contract edited inside the pending pack is the text Back Office drafts from; untouched, the template stays', async () => {
+    const edited = 'ДОГОВОР ВЛАДЕЛЬЦА № {{number}} для {{client}}: правка из ревью. Цена {{price}}.';
+    const w = chainWorld();
+    w.sales.createLeadTask(QUALIFIED, 'bots');
+    await w.beat();
+    await w.beat();
+    await w.director.sendApprovalBatch(false);
+    const pack = w.queue.pending().find((p) => p.kind === 'presales_pack')!;
+    await w.queue.applyPatch(pack.id, { contract: edited, contractEdited: true });
+    await w.decide('approve', pack.id);
+    expect(w.hq.tasks({ dept: 'backoffice' })[0]!.meta.contractText).toBe(edited);
+    await w.beat();
+    await w.director.sendApprovalBatch(false);
+    const text = String(w.queue.pending().find((p) => p.kind === 'bo_document')!.payload.text);
+    expect(text).toMatch(/^ДОГОВОР ВЛАДЕЛЬЦА № \d{4}-\d+ для Dilnoza: правка из ревью\. Цена \$\d+/);
+    expect(text).not.toContain('Договор оказания услуг');
+    // nothing edited: no contractText, the template is used
+    const w2 = chainWorld();
+    await approvedKp(w2);
+    expect(w2.hq.tasks({ dept: 'backoffice' })[0]!.meta).not.toHaveProperty('contractText');
+    await w2.beat();
+    await w2.director.sendApprovalBatch(false);
+    expect(String(w2.queue.pending().find((p) => p.kind === 'bo_document')!.payload.text)).toContain('Договор оказания услуг');
+  });
+
   it('a drill КП never makes a real project, contract or invoice', async () => {
     const w = chainWorld();
     w.sales.createLeadTask(QUALIFIED, 'bots');

@@ -164,7 +164,7 @@ export class SalesHead implements ApprovalEditor {
     d.hq.onApprovalDecision((link, state) => onReferralDecision(base, link, state));
     // The chain after an approved КП: a project is only RESERVED (it starts on the first payment), the contract and the invoice are drafted at once.
     d.hq.onApprovalDecision((link, state) => {
-      if (link.kind === KIND_PACK && state === 'executed') this.afterKpApproved(link.taskId, link.payload);
+      if (link.kind === KIND_PACK && state === 'executed') this.afterKpApproved(link.taskId, { ...link.payload, ...((link.approvalId !== null ? this.d.queue.get(link.approvalId)?.payload : undefined) ?? {}) }); // the owner's edits live in the core row, the link keeps the first draft
     });
   }
 
@@ -200,7 +200,9 @@ export class SalesHead implements ApprovalEditor {
     const line = (here: 'contract' | 'invoice') => cabinetClient !== null
       ? `Цепочка: КП #${packId} (утверждено, у клиента) → клиент принял → договор${here === 'contract' ? ' (эта карточка)' : ''} → клиент подписал → счёт этапа 1${here === 'invoice' ? ' (эта карточка)' : ''} → проект #${project.id} стартует после оплаты этапа 1`
       : `Цепочка: КП #${packId} (утверждено) → договор${here === 'contract' ? ' (эта карточка)' : ''} → счёт этапа 1${here === 'invoice' ? ' (эта карточка)' : ''} → проект #${project.id} стартует после оплаты этапа 1`;
-    const contractMeta = { action: 'doc', type: 'contract', client, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project.id, priceUsd: totalUsd, stages, ...(monthlyUsd > 0 ? { monthlyUsd } : {}), ...infra };
+    // the owner edited the contract inside the pending pack: Back Office drafts from his text, not from the template (untouched: the template stays)
+    const editedContract = pack.contractEdited === true && typeof pack.contract === 'string' && pack.contract.trim() ? { contractText: pack.contract } : {};
+    const contractMeta = { action: 'doc', type: 'contract', client, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project.id, priceUsd: totalUsd, stages, ...(monthlyUsd > 0 ? { monthlyUsd } : {}), ...infra, ...editedContract };
     const invoiceMeta = {
       action: 'kp_invoice', client, amountUsd: first.amountUsd, totalUsd, what: `Этап 1 из ${stages.length}: «${first.title.ru}», КП #${packId}: ${offer.title}`, packId, leadId: lead?.id ?? null,
       projectId: project.id, stageNo: 1, stageCount: stages.length, chain: line('invoice'), ...infra,

@@ -65,7 +65,9 @@ export class DocumentsWorker implements Worker {
       ...priceFromMeta(task.meta),
     };
     // The number is the version row id, known after insert: fill twice.
-    const template = loadTemplate(type, this.o.templatesDir);
+    // the owner's own text of a contract (edited inside the КП pack) replaces the template; nothing edited: the template
+    const edited = type === 'contract' && typeof task.meta.contractText === 'string' ? task.meta.contractText.trim() : '';
+    const template = edited || loadTemplate(type, this.o.templatesDir);
     const row = store.add({ type, client: docKey, projectId: found?.projectId ?? null, text: '', taskId: task.id });
     data.number = `${p.y}-${row.id}`;
     const text = fillTemplate(template, data);

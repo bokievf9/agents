@@ -6,7 +6,7 @@ import { asksCatalogue } from './needs.js';
 import { clip, GREETING, intakeRecord, TurnHistory } from './shared.js';
 import { DemoChat, isPersona, PERSONAS } from './persona.js';
 import { isPriceQuestion } from '@fir/worker-lead-intake';
-import { enrichmentOf, findContact, HANDOFF, LEAD_DONE, merge, newQ, receptionistTurn, wantsPerson, type Cta, type QState } from './receptionist.js';
+import { enrichmentOf, findContact, HANDOFF, LEAD_DONE, merge, newQ, productNamesOf, receptionistTurn, wantsPerson, type Cta, type QState } from './receptionist.js';
 import { parseRefSlug, RefStore, type Draft } from './store.js';
 import { BUDGETS, DEADLINES, NEEDS, SERVICE, T, type Budget, type Deadline, type Lang, type Need } from './texts.js';
 import { WebSessionStore, type WebSession, type WebState } from './web-store.js';
@@ -391,7 +391,7 @@ export class WebChatEngine {
 
   /** The menu button «Обсудить проект» (or a product card): the first question of the qualification, no form. */
   private startQualify(s: WebSession, lang: Lang, product?: string): Step {
-    const q: QState = { ...newQ(), ...(product && isCatalogueId(product) ? { product } : {}) };
+    const q: QState = { ...newQ(), ...(product && isCatalogueId(product) ? { products: [product] } : {}) };
     this.setState(s, 'idle', { ...this.fresh(s), q, ...(s.draft.identity ? { identity: s.draft.identity } : {}) });
     const name = product && isCatalogueId(product) ? PRODUCTS[product].name[lang] : '';
     const ask = lang === 'ru'
@@ -483,7 +483,7 @@ export class WebChatEngine {
     const ref = this.refs.get(`web:${s.id}`);
     const state: QState = { ...q, handoff: q.handoff || handoff };
     const enrichment = enrichmentOf(state, true);
-    const product = state.product ? PRODUCTS[state.product].name.ru : '';
+    const product = productNamesOf(state);
     const message = [
       state.pain ? `Задача (словами клиента): ${state.pain}` : handoff ? 'Просит живого менеджера в веб-чате.' : 'Оставил контакт в веб-чате.',
       ...(product ? [`Продукт: ${product}`] : []),
@@ -494,7 +494,7 @@ export class WebChatEngine {
       ...(page ? [`Страница: ${page}`] : []),
     ].join('\n');
     const lead = {
-      name: id?.name || 'Посетитель веб-чата', contact: clip(contact, 120), service: SERVICE[state.product ?? 'other'], product, budget: clip(state.budget ?? '', 40), message: clip(message, 2000), estimate: '',
+      name: id?.name || 'Посетитель веб-чата', contact: clip(contact, 120), service: SERVICE[state.products?.[0] ?? 'other'], product, budget: clip(state.budget ?? '', 40), message: clip(message, 2000), estimate: '',
       locale: lang, slot: '', source: ref ? `ref:${ref}` : 'web', page, sessionId: s.id, enrichment, ...(handoff ? { handoff: true } : {}),
       ...(id ? { clientEmail: id.email, ...(id.cabinetId ? { cabinetId: id.cabinetId } : {}), ...(id.name ? { clientName: id.name } : {}) } : {}),
     };

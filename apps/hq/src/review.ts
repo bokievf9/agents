@@ -330,7 +330,7 @@ export function createReview(d: ReviewDeps) {
     } else {
       const core = openApproval(l);
       if (core === null) return fail(409, 'not_pending', { status: baseStatus(l) });
-      const { result } = await d.channel.capture(() => queue.applyPatch(core, { [b.doc!]: next }));
+      const { result } = await d.channel.capture(() => queue.applyPatch(core, b.doc === 'contract' ? { contract: next, contractEdited: true } : { [b.doc!]: next }));
       if (!result) return fail(409, 'not_applied', { status: queue.get(core)?.status ?? baseStatus(l) });
       await queue.settleCard(core).catch(() => false);
     }

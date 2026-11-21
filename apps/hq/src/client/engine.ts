@@ -4,13 +4,13 @@ import { inWindow, linksOnly, RateLimiter, type CounterStore } from './sanitize.
 import { isPriceQuestion } from '@fir/worker-lead-intake';
 import { asksCatalogue } from './needs.js';
 import { clip, GREETING, intakeRecord, TurnHistory } from './shared.js';
-import { enrichmentOf, newQ, receptionistTurn, type EnrichmentOut } from './receptionist.js';
+import { enrichmentOf, newQ, productNamesOf, receptionistTurn, type EnrichmentOut } from './receptionist.js';
 import { ChatStore, maskUsername, RefStore, refFromStartArg, textHash, type Chat, type Draft } from './store.js';
 import {
   BUDGETS, budgetButtons, DEADLINES, deadlineButtons, esc, haveButtons, HAVES, haveFlags, parseHave, menuButtons, NEEDS, needButtons, productCardButtons, productCardHtml, productListButtons,
   productListHtml, SERVICE, T, X, type Budget, type Deadline, type Have, type Lang, type Need,
 } from './texts.js';
-import { isCatalogueId, nicheHint, PRODUCTS } from './products.js';
+import { isCatalogueId, nicheHint } from './products.js';
 import { DemoSalon, DEMO_START } from './demo.js';
 import { auditInputSchema, type AuditOutcome } from '../audit-shared.js';
 import type { LostInfo, LostSource } from '../lost-leads.js';
@@ -529,11 +529,11 @@ export class ClientEngine implements ClientChannel {
     // a call asked for: the lead with the conversation summary (the person is reachable in this chat)
     if (out.callAsked && !chat.leadTask) {
       const q = out.q;
-      const product = q.product ? PRODUCTS[q.product].name.ru : '';
+      const product = productNamesOf(q);
       await this.createLead(
         chat, from,
-        { message: `Просит созвон в клиентском боте.${q.pain ? `\nЗадача (словами клиента): ${q.pain}` : ''}${product ? `\nПродукт: ${product}` : ''}`, budget: q.budget ?? '', service: SERVICE[q.product ?? 'other'], product, enrichment: enrichmentOf(q, true) },
-        `созвон, ${q.product ?? 'продукт не определён'}`,
+        { message: `Просит созвон в клиентском боте.${q.pain ? `\nЗадача (словами клиента): ${q.pain}` : ''}${product ? `\nПродукт: ${product}` : ''}`, budget: q.budget ?? '', service: SERVICE[q.products?.[0] ?? 'other'], product, enrichment: enrichmentOf(q, true) },
+        `созвон, ${q.products?.join(', ') || 'продукт не определён'}`,
       );
     }
   }

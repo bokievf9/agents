@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { decodeBuild } from '../src/client/builder-link.js';
 import { DEMO_TURNS, personaSystem } from '../src/client/persona.js';
 import {
-  enrichmentOf, findContact, intentScore, MAX_QUALIFY_TURNS, newQ, nextSlot, parseModel, summaryLines, wantsPerson, type QState,
+  enrichmentOf, findContact, intentScore, MAX_QUALIFY_TURNS, merge, needReply, newQ, nextSlot, normalizeQ, parseModel, priceProducts, summaryLines, wantsPerson, type QState,
 } from '../src/client/receptionist.js';
 import { PRODUCT_IDS, PRODUCTS } from '../src/client/products.js';
 import { RateLimiter } from '../src/client/sanitize.js';
@@ -132,7 +132,7 @@ describe('qualification: from the first words to the builder link', () => {
   it('the slots go in the order of the playbook: business, pain, product, channels, timeline, budget', () => {
     const q: QState = newQ();
     const order: string[] = [];
-    const fill: Partial<QState>[] = [{ niche: 'кафе' }, { pain: 'нет ответов ночью' }, { product: 'receptionist' }, { channels: ['telegram'] }, { timeline: 'month' }, { budget: 'до $500' }];
+    const fill: Partial<QState>[] = [{ niche: 'кафе' }, { pain: 'нет ответов ночью' }, { products: ['receptionist'] }, { channels: ['telegram'] }, { timeline: 'month' }, { budget: 'до $500' }];
     let cur = q;
     for (const f of fill) {
       order.push(nextSlot(cur)!);
@@ -188,7 +188,7 @@ describe('the lead of a conversation: enrichment on the card', () => {
     q.kind = 'salon';
     scores.push(intentScore(q, false));
     q.pain = 'x';
-    q.product = 'admin';
+    q.products = ['admin'];
     scores.push(intentScore(q, false));
     q.timeline = 'asap';
     q.askedPrice = true;
@@ -549,3 +549,93 @@ describe('receptionist gaps (owner remarks 2026-11-21): need first, right link, 
     expect(DEMO_TURNS).toBeGreaterThan(0);
   });
 });
+
+describe('several products in one dialogue (the builder allows several)', () => {
+  const start = (products: QState['products'], extra: Partial<QState> = {}): QState => ({ ...newQ(), kind: 'salon', ...(products ? { products } : {}), ...extra });
+
+  /** [state before, visitor's words, products after]: an explicit need adds, «только» replaces, a negated need removes, a guess nobody saw is replaced. */
+  const rows: [string, QState, string, string[]][] = [
+    ['adds «и ещё сайт» to an explicit administrator', start(['admin']), 'и ещё сайт', ['admin', 'site']],
+    ['adds in the catalogue order, not the order of speech', start(['site']), 'и ещё администратор', ['admin', 'site']],
+    ['two needs in one message', start([]), 'нужен администратор и сайт', ['admin', 'site']],
+    ['«только X» replaces the list', start(['admin', 'site']), 'только сайт', ['site']],
+    ['«не нужен X» removes one', start(['admin', 'site']), 'сайт не нужен', ['admin']],
+    ['«не хочу сайт» removes the site and sets z.no', start(['admin', 'site']), 'не хочу сайт', ['admin']],
+    ['a repeated need is not doubled', start(['admin']), 'нужен администратор для записи', ['admin']],
+    ['a guess nobody saw is replaced by the first explicit need', start(['admin'], { productsGuessed: true }), 'нужен сайт', ['site']],
+    ['a guess already offered in a link is kept and added to', start(['admin'], { productsGuessed: true, offered: { builder: 1, call: 0, telegram: 0 } }), 'нужен сайт', ['admin', 'site']],
+    ['«ещё» keeps a guess', start(['admin'], { productsGuessed: true }), 'и ещё сайт', ['admin', 'site']],
+    ['a generic «бот» only fills an empty list', start(['site']), 'и ещё бота', ['site']],
+  ];
+  it.each(rows)('%s', (_name, before, said, after) => {
+    expect(merge(before, { reply: '' }, said).products).toEqual(after);
+    // the turn merges twice (before and after the model): the same words change nothing the second time
+    expect(merge(merge(before, { reply: '' }, said), { reply: '' }, said).products).toEqual(after);
+  });
+
+  it('«не хочу сайт» sets z.no and the playground; the model\'s product only fills an empty or guessed list', () => {
+    const q = merge(start(['admin', 'site']), { reply: '' }, 'не хочу сайт');
+    expect(q).toMatchObject({ siteNeed: 'no', delivery: ['playground'], products: ['admin'] });
+    expect(merge(start(['admin']), { reply: '', extract: { product: 'content' } }, 'расскажите подробнее').products).toEqual(['admin']);
+    expect(merge(start([]), { reply: '', extract: { product: 'content' } }, 'расскажите').products).toEqual(['content']);
+  });
+
+  it('a state saved with the single `product` is read as a one-item list', () => {
+    const old = { ...newQ(), product: 'admin' } as unknown as QState;
+    expect(normalizeQ(old).products).toEqual(['admin']);
+    expect('product' in normalizeQ(old)).toBe(false);
+    expect(normalizeQ({ ...newQ(), product: 'bot', kind: 'salon' } as unknown as QState).products).toEqual(['admin']);
+  });
+
+  it('the price answer covers the listed products, three at most; one product keeps its companions; the personal agent is never named', () => {
+    expect(priceProducts({ products: ['admin', 'site'] })).toEqual(['admin', 'site']);
+    expect(priceProducts({ products: ['admin', 'content', 'miniapp', 'site'] })).toEqual(['admin', 'content', 'miniapp']);
+    expect(priceProducts({ products: ['agent', 'site'] })).not.toContain('agent');
+    expect(priceProducts({ products: ['admin'] })).toHaveLength(3);
+    expect(priceProducts({})).toHaveLength(3);
+    expect(needReply({ ...newQ(), products: ['admin', 'site'] }, 'ru', true)).toBe('Для этого подойдут «ИИ-администратор», «Сайт».');
+  });
+
+  it('a dialogue: administrator, then «и ещё сайт»: the link carries both, the price answer and the lead list both, «только сайт» and «не нужен сайт» change them back', async () => {
+    const w = world({ turns: (_req, n) => json(n === 1 ? { reply: 'Понял, салон. Что теряется?', extract: { kind: 'salon', niche: 'салон' } } : { reply: 'Ясно, заявки теряются вечером.', ready: true, extract: { pain: 'заявки вечером' } }) });
+    await w.say('У меня салон, нужен администратор для записи');
+    const prop = await w.say('Вечером теряются заявки');
+    expect(prop.builderLink).toMatch(/p\.adminbot(~|$)/);
+    expect(prop.builderLink).not.toMatch(/site/);
+    const calls = w.receptionistCalls().length;
+    const more = await w.say('и ещё сайт');
+    expect(more.cta).toEqual(['builder']);
+    expect(w.receptionistCalls()).toHaveLength(calls); // the link is regenerated by the code
+    expect(decodeBuild(new URL(more.builderLink!).searchParams.get('b'))).toMatchObject({ kind: 'salon', products: ['adminbot', 'site'] });
+    expect(more.builderLink).toMatch(/p\.adminbot-site/);
+    const price = await w.say('сколько стоит?');
+    const head = price.reply.split('\n\n')[0]!;
+    expect(head).toContain('ИИ-администратор от $');
+    expect(head).toContain('Сайт от $');
+    expect(head.split(';')).toHaveLength(2);
+    expect(price.builderLink).toMatch(/p\.adminbot-site/);
+    const only = await w.say('только сайт');
+    expect(only.builderLink).toMatch(/p\.site(~|&|$)/);
+    expect(only.builderLink).not.toMatch(/adminbot/);
+    const back = await w.say('и ещё администратор');
+    expect(back.builderLink).toMatch(/p\.adminbot-site/);
+    const less = await w.say('сайт не нужен');
+    expect(less.builderLink).toMatch(/p\.adminbot~l\.playground~z\.no/);
+    const done = await w.say('мой телеграм @dilnoza_salon');
+    expect(done).toMatchObject({ leadCreated: true });
+    expect(w.leads[0]).toMatchObject({ product: 'ИИ-администратор', service: 'bots' });
+  });
+
+  it('the lead and the summary list all products', async () => {
+    const w = world({ turns: (_req, n) => json(n === 1 ? { reply: 'Понял. Что теряется?', extract: { kind: 'salon', niche: 'салон' } } : { reply: 'Ясно.', ready: true, extract: { pain: 'заявки вечером' } }) });
+    await w.say('У меня салон, нужен администратор и сайт');
+    await w.say('Вечером теряются заявки');
+    await w.say('мой телеграм @dilnoza_salon');
+    const lead = w.leads[0]!;
+    expect(lead).toMatchObject({ product: 'ИИ-администратор, Сайт', service: 'bots' });
+    expect((lead.enrichment as { summary: string[]; productFamily: string }).summary[1]).toMatch(/Подходит: ИИ-администратор, Сайт;/);
+    expect((lead.enrichment as { productFamily: string }).productFamily).toBe('admin, site');
+    expect(String(lead.message)).toContain('Продукт: ИИ-администратор, Сайт');
+  });
+});
+

@@ -48,7 +48,9 @@ describe('КП, смета and договор are editable before the approval',
     expect(p.w.queue.get(core)).toMatchObject({ status: 'pending', edited: true, payload: { kp: 'КП v2, новая цена', estimate: 'Смета v1', contract: 'Договор v1' } });
     expect((p.w.db.prepare("SELECT body FROM ps_documents WHERE kind = 'kp'").get() as any).body).toBe('КП v2, новая цена');
     // a plain string text works as draft; the contract and the estimate too; unchanged text is refused
+    expect(p.w.queue.get(core)!.payload.contractEdited).toBeUndefined(); // a КП edit does not mark the contract as the owner's
     expect((await p.act(x.id, { action: 'edit', doc: 'contract', text: 'Договор v2' })).json.item.text.documents[2].body).toBe('Договор v2');
+    expect(p.w.queue.get(core)!.payload.contractEdited).toBe(true);
     expect((await p.act(x.id, { action: 'edit', doc: 'estimate', text: { draft: 'Смета v2' } })).json.item.versions.length).toBe(4);
     expect((await p.act(x.id, { action: 'edit', doc: 'estimate', text: { draft: 'Смета v2' } })).json.error).toBe('not_applied');
     await p.act(x.id, { action: 'approve' });
