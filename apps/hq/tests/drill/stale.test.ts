@@ -7,8 +7,9 @@ const g = useGuard();
 let w: DrillWorld;
 afterEach(async () => { await w?.close(); });
 
+/** The legacy flag TG_APPROVAL_CARDS=on: a stale card is pressed in Telegram and decided on the site at once. */
 async function seeded() {
-  w = await drillWorld();
+  w = await drillWorld({ tgCards: true });
   for (const k of w.queue.trustTable()) w.queue.setLevel(k.kind, 0);
   await seedEverything(w);
   return w;

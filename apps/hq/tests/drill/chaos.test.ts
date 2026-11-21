@@ -43,7 +43,7 @@ async function walk(seed: number, steps: number) {
     else if (k === 3) await w.press(pick(['ap:all', 'ap:later', 'ap:show', 'pg:all:0', 'pg:sales:0', 'dp:list', `dp:${pick(['sales', 'support', 'marketing', 'production', 'backoffice'])}:${pick(['o', 'p', 'r'])}`, `tk:${pick(ids())}:${pick(['o', 'r', 'x', 'X', 'j'])}`, `pk:${pick(ids())}:${pick(['o', 'v'])}`, `pc:${pick(ids())}:c`, `pb:${pick(ids())}`, `ce:${pick(ids())}:caption`, `rl:${pick(ids())}:${pick(['y', 'n'])}`]));
     else if (k === 4) await w.say(pick(['Сделай пост про бота', 'статус', 'какие задачи у продаж?', 'Новый текст владельца', 'ок', '/skip', 'клиент Dilnoza ответил: интересно', 'поставь утреннюю сводку на 9:15']));
     else if (k === 5 || k === 6) { const [m, p] = pick(ROUTES); const r = await w.adm(m, p.replace(/ap_\d+/, `ap_${pick(ids())}`), m === 'POST' ? pick(BODIES) : undefined); expect(r.status, `${m} ${p}`).toBeLessThan(500); }
-    else if (k === 7) await w.beat();
+    else if (k === 7) { await w.beat(); await w.notices.scan(); }
     else if (k === 8) w.hq.runRoutine(pick(w.hq.routines()).name);
     else if (k === 9) w.clock.t += pick([60_000, 3_600_000, 6 * 3_600_000, 86_400_000]);
     else if (k === 10) await w.director.sendApprovalBatch(rnd(2) === 0);

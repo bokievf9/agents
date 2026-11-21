@@ -52,6 +52,7 @@ export class EmailFailures {
     await this.hq.alert(
       `Письма клиентам не ушли: ${rows.length} (${what.join(', ')}${rows.length > what.length ? ', …' : ''}), причина: ${reasons.join(', ')}. `
       + 'Документы и строки в треде у клиента есть, почты нет. Отправить снова: Пульт, документ клиента, «Отправить снова» (POST /admin/crm/cabinet-docs/:id {"action":"resend"}).',
+      { kind: 'email_failed', short: `Письма клиентам не ушли: ${rows.length} (${what.slice(0, 3).join(', ')}). Отправить снова в Пульте.` },
     );
     return rows.length;
   }

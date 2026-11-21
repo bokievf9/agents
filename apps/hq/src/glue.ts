@@ -1,12 +1,13 @@
 import type { Bot } from 'grammy';
-import { errMsg, installApprovals, log, type ApprovalQueue } from '@fir/core';
+import { errMsg, escapeHtml, installApprovals, log, type ApprovalQueue } from '@fir/core';
+import type { OwnerAssistant } from './assistant.js';
 import type { Director } from './director.js';
 import type { MarketingHead } from './heads/marketing.js';
 import { parseCopy, type SalesHead } from './heads/sales.js';
+import type { PultLinks } from './links.js';
 import type { OwnerChannel } from './presence.js';
 import { menuCommand } from './tg.js';
 import type { TopicManager } from './topics.js';
-import { COMMAND_NAMES } from './commands.js';
 
 export interface GlueDeps {
   ownerId: number;
@@ -16,14 +17,30 @@ export interface GlueDeps {
   marketing: MarketingHead;
   sales: SalesHead;
   topicManager: TopicManager;
+  /** The owner's questions (any text): answered from the data of HQ (`assistant.ts`). */
+  assistant: OwnerAssistant;
+  links: PultLinks;
+  /** `TG_APPROVAL_CARDS=on`: the old approval cards and their buttons (and «Править» by text) work again. Off: decisions only in the review center. */
+  cards?: boolean;
 }
 
+/** The two commands left in the bot (owner 2026-11-22: «никаких функций»): what the bot is, and the link to the Пульт. */
+export const TG_COMMANDS: { command: string; description: string }[] = [
+  { command: 'start', description: 'Что умеет HQ и ссылка на Пульт' },
+  { command: 'pult', description: 'Открыть Пульт: управление компанией' },
+];
+
 /**
- * The Telegram glue of the owner's bot, in the order the handlers must run (group events, owner-only gate, the button handlers,
- * the core's approval buttons, commands, free text). Moved out of `index.ts` unchanged so the drill suite can feed it updates.
+ * The Telegram glue of the one HQ bot, in the order the handlers must run: group events, the owner-only gate, the buttons (old cards answer
+ * «решения в Пульте»; with `cards` the legacy approval buttons), `/start` and `/pult`, then every other text is a question to the assistant.
+ * The Director's commands, the reply keyboard and the task cards are gone from Telegram: the same actions live in the Пульт (admin API).
  */
 export function installOwnerGlue(bot: Bot, d: GlueDeps): void {
-  const { ownerId, channel, queue, director, marketing, sales, topicManager } = d;
+  const { ownerId, channel, director, topicManager, assistant, links } = d;
+  const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'owner message failed', { cmd: name, err: errMsg(e) }));
+  /** Plain text to the owner in this chat (inside the reply scope it goes to Telegram and is kept in the inbox as a reply). */
+  const answer = (text: string) => channel.sendMessage(ownerId, escapeHtml(text), undefined, { html: true }).then(() => undefined);
+
   // Group service messages: the basic group became a supergroup (new id), or a topic was created by hand.
   bot.on('message', async (ctx, next) => {
     if (ctx.chat.type === 'private') return next();
@@ -44,6 +61,48 @@ export function installOwnerGlue(bot: Bot, d: GlueDeps): void {
     if (ctx.from?.id === ownerId && ctx.chat?.type === 'private') await channel.asReply(() => next());
   });
 
+  if (d.cards) installLegacyCards(bot, d);
+  else {
+    // A card or a button from before the switch: answered with where decisions live now, never left spinning.
+    bot.on('callback_query:data', async (ctx) => {
+      await ctx.answerCallbackQuery({ text: 'Решения теперь в Пульте, в ревью-центре' }).catch(() => undefined);
+    });
+  }
+
+  bot.command('start', (ctx) => background('start', async () => {
+    // the old reply keyboard (Одобрения, Задачи, Статус...) goes away with this message
+    const text = assistant.help();
+    try {
+      await ctx.reply(text, { reply_markup: { remove_keyboard: true }, link_preview_options: { is_disabled: true } });
+      channel.record('reply', text);
+    } catch {
+      await answer(text);
+    }
+  }));
+  bot.command('pult', () => background('pult', () => answer(`Пульт: ${links.to('home')}\nОдобрения: ${links.to('review')}`)));
+  // Any other text is a question, answered in the background (the next update is not held). An old /command gets a short hint instead.
+  bot.on('message:text', (ctx) => {
+    const text = ctx.message.text;
+    if (text.startsWith('/')) {
+      background('unknown', () => answer(`Команд в Telegram больше нет, управление в Пульте: ${links.to('home')}. Спросите обычным текстом, например «что висит?».`));
+      return;
+    }
+    background('question', async () => {
+      // with the legacy cards an «Править» waits for the owner's next text first
+      if (d.cards && (await director.consumeEdit(text))) return;
+      await answer(await assistant.answer(text));
+    });
+  });
+}
+
+/**
+ * The approval cards of the old Director bot, behind `TG_APPROVAL_CARDS=on` (kept so a fallback and the drill still work): the Director's buttons,
+ * the Scout's «Скопировать», «Править» on content, the core approval buttons and their edit text. Moved here unchanged.
+ */
+function installLegacyCards(bot: Bot, d: GlueDeps): void {
+  const { ownerId, queue, director, marketing, sales } = d;
+  // «/skip» leaves a pending «Править» (the one command the old cards still need)
+  bot.command('skip', (ctx) => void director.onCommand('skip').catch((e) => log('error', 'owner message failed', { cmd: 'skip', err: errMsg(e) })).then(() => void ctx));
   // A button never spins: a handler that throws still answers the callback query.
   bot.on('callback_query:data', async (ctx, next) => {
     try {
@@ -105,19 +164,5 @@ export function installOwnerGlue(bot: Bot, d: GlueDeps): void {
   // Anything else (an old card from before a restart, a button of a removed feature): answered, never left spinning.
   bot.on('callback_query:data', async (ctx) => {
     await ctx.answerCallbackQuery({ text: 'Устарело' }).catch(() => undefined);
-  });
-
-  // every command of the one list (`commands.ts`): the same names feed /help, the menu and these handlers
-  const botCommands = COMMAND_NAMES;
-  const background = (name: string, run: () => Promise<void>) => void run().catch((e) => log('error', 'command failed', { cmd: name, err: errMsg(e) }));
-  for (const name of botCommands) {
-    bot.command(name, (ctx) => background(name, () => director.onCommand(name, ctx.match)));
-  }
-  // A free-text message goes through the LLM: run it in the background so buttons stay responsive.
-  // An unknown /command gets a short hint with the keyboard instead of silence.
-  bot.on('message:text', (ctx) => {
-    const text = ctx.message.text;
-    if (!text.startsWith('/')) background('text', () => director.onText(text));
-    else background('unknown', () => director.hint(`Не знаю команды ${text.split(/\s/)[0]!.slice(0, 40)}.`));
   });
 }

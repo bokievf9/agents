@@ -45,8 +45,21 @@ export interface NotifyOpts {
   keyboard?: ReplyKeyboard;
 }
 
+/**
+ * What reaches Telegram. `all` (the old Director bot): everything addressed to the owner while he is away. `notices` (owner 2026-11-22, one HQ bot):
+ * only the short reminders of `OwnerNotices` (`notice()`) and the answers to his own messages in the bot; everything else lives in the inbox of the
+ * Пульт. Approval cards reach Telegram only with `cards` (`TG_APPROVAL_CARDS=on`).
+ */
+export type TelegramPolicy = 'all' | 'notices';
+
 export interface OwnerChannelDeps {
   hq: Hq;
+  /** Default `all` (tests of the older flows); the app passes `notices`. */
+  telegram?: TelegramPolicy;
+  /** With `telegram: 'notices'`: approval cards with buttons still go to Telegram (the legacy flag). */
+  cards?: boolean;
+  /** The Пульт, for the one link of the presence digest (default https://firtech.pro/admin). */
+  pultUrl?: string;
   inner: Messenger;
   ownerId: number;
   /** The site is considered gone after this many minutes without a ping. */
@@ -144,7 +157,10 @@ export class OwnerChannel implements Messenger {
       .filter((r) => r.kind !== 'approval' || r.approval_id === null || !this.d.approvalPending || this.d.approvalPending(r.approval_id));
     if (!rows.length) return;
     const n = (k: InboxKind) => rows.filter((r) => r.kind === k).length;
-    const text = `Пока вы были на месте: ${n('approval')} одобрений, ${n('progress')} задач готово, ${n('alert')} алертов. /approve, /status`;
+    const text = this.notices
+      ? `Пока вы были за столом: ждут одобрения ${n('approval')}, алертов ${n('alert')}. Пульт: ${this.d.pultUrl ?? 'https://firtech.pro/admin'}`
+      : `Пока вы были на месте: ${n('approval')} одобрений, ${n('progress')} задач готово, ${n('alert')} алертов. /approve, /status`;
+    if (this.notices && n('approval') + n('alert') === 0) return;
     const ids = rows.map((r) => r.id);
     try {
       await this.d.inner.send(this.d.ownerId, text);
@@ -153,6 +169,22 @@ export class OwnerChannel implements Messenger {
     } catch (e) {
       log('warn', 'presence digest failed', { err: errMsg(e) });
     }
+  }
+
+  private get notices(): boolean {
+    return this.d.telegram === 'notices';
+  }
+
+  /**
+   * A short reminder to Telegram (`OwnerNotices`): it is a ping about something the Пульт already shows, so it is not stored in the inbox.
+   * At the desk it is skipped (he sees the site), inside a website command it is dropped. Returns what happened.
+   */
+  async notice(html: string): Promise<'sent' | 'desk' | 'capture'> {
+    if (this.capturing()) return 'capture';
+    await this.sync();
+    if (this.effective() === 'desk') return 'desk';
+    await this.d.inner.sendMessage(this.d.ownerId, html, undefined, { html: true });
+    return 'sent';
   }
 
   // ---- scopes ----
@@ -199,14 +231,19 @@ export class OwnerChannel implements Messenger {
     return this.d.inner.editButtons(chatId, messageId, buttons);
   }
 
-  /** Pictures cannot live in the website inbox: they always go to Telegram (the owner forwards them to Instagram from there). */
+  /**
+   * Pictures cannot live in the website inbox: with `all` they go to Telegram (the owner forwards them to Instagram from there). With `notices`
+   * the files stay in the review center and the inbox gets the caption only.
+   */
   sendPhotos(chatId: number, files: string[], caption?: string): Promise<void> {
+    if (this.notices && chatId === this.d.ownerId) return Promise.resolve(this.record('message', `${caption ?? 'Картинки'} (${files.length} шт., файлы в ревью-центре)`));
     if (!this.d.inner.sendPhotos) return Promise.reject(new Error('this messenger cannot send photos'));
     return this.d.inner.sendPhotos(chatId, files, caption);
   }
 
   /** The reel's MP4 always goes to Telegram too (a video cannot live in the website inbox). Same as `sendPhotos`: delegates to the real messenger. */
   sendVideo(chatId: number, file: string, caption?: string, buttons?: Button[][]): Promise<void> {
+    if (this.notices && chatId === this.d.ownerId) return Promise.resolve(this.record('message', `${caption ?? 'Видео'} (видео в ревью-центре)`));
     if (!this.d.inner.sendVideo) return Promise.reject(new Error('this messenger cannot send video'));
     return this.d.inner.sendVideo(chatId, file, caption, buttons);
   }
@@ -241,7 +278,10 @@ export class OwnerChannel implements Messenger {
     const c = this.classify(plain, o.buttons);
     const inReply = scope?.mode === 'reply';
     const k: InboxKind = c.kind === 'approval' ? 'approval' : inReply ? 'reply' : (kind ?? c.kind);
-    const toTg = Boolean(o.force) || inReply || this.effective() === 'away';
+    const away = this.effective() === 'away';
+    const toTg = this.notices
+      ? (c.kind === 'approval' ? Boolean(this.d.cards) && (Boolean(o.force) || inReply || away) : inReply)
+      : Boolean(o.force) || inReply || away;
     // the same card sent again (the first send failed, or a re-ask): the old undelivered copy is replaced, not shown twice on the site and resent by /approve
     if (c.approvalId !== null) this.db.prepare("DELETE FROM owner_inbox WHERE approval_id = ? AND kind = 'approval' AND delivered_tg = 0").run(c.approvalId);
     const id = this.insert(k, plain, o.taskId ?? null, c.approvalId, o.buttons, inReply && k === 'reply', false, o.html ? text : null);
@@ -268,7 +308,8 @@ export class OwnerChannel implements Messenger {
 
   /** `/approve` in Telegram: pending approval cards that never reached it (sent while at the desk) go out now. */
   async resendUndelivered(): Promise<number> {
-    if (this.capturing()) return 0;
+    // with the one HQ bot the cards stay in the Пульт (TG_APPROVAL_CARDS=on brings them back)
+    if (this.capturing() || (this.notices && !this.d.cards)) return 0;
     const rows = this.db
       .prepare("SELECT id, text, html, approval_id, buttons FROM owner_inbox WHERE kind = 'approval' AND delivered_tg = 0 AND buttons IS NOT NULL ORDER BY id")
       .all() as { id: number; text: string; html: string | null; approval_id: number | null; buttons: string }[];

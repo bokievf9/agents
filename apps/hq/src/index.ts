@@ -1,4 +1,3 @@
-import { Api } from 'grammy';
 import {
   ApprovalQueue, GatewayWatch, OutboxMessenger, createBot, createLlm, errMsg, grammyMessenger, log, openDb, safeGetJson, setupBotMenu, startPolling, startPricesRefresh, loadPrices,
 } from '@fir/core';
@@ -6,12 +5,12 @@ import { HeartbeatWorker, Hq, meterLlm, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
 import { Director } from './director.js';
 import { seedTiming } from './timing.js';
-import { HEAD_ID, MARKETING, MarketingHead } from './heads/marketing.js';
-import { HEAD_ID as SALES_HEAD_ID, SALES, SalesHead, seedSales } from './heads/sales.js';
+import { HEAD_ID, MarketingHead } from './heads/marketing.js';
+import { HEAD_ID as SALES_HEAD_ID, SalesHead, seedSales } from './heads/sales.js';
 import { seedOrg } from './org.js';
-import { PRODUCTION, PRODUCTION_HEAD_ID, ProductionHead, seedProduction } from './heads/production.js';
+import { PRODUCTION_HEAD_ID, ProductionHead, seedProduction } from './heads/production.js';
 import { BACKOFFICE, BACKOFFICE_HEAD_ID, BackofficeHead, seedBackoffice } from './heads/backoffice.js';
-import { SUPPORT, SUPPORT_HEAD_ID, SupportHead, seedSupport } from './heads/support.js';
+import { SUPPORT_HEAD_ID, SupportHead, seedSupport } from './heads/support.js';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BillingWorker, CHAIN_HOSTS, PaymentWatcher } from '@fir/worker-billing';
@@ -45,9 +44,12 @@ import { siteSlots } from './client/site-slots.js';
 import { FALLBACK_INSTRUCTIONS } from './client/prompt.js';
 import { clientSinks } from './client/sinks.js';
 import { gatewayGate } from './client/shared.js';
-import { DIRECTOR_COMMANDS, DIRECTOR_PROFILE, deptBotMenu } from './tg.js';
+import { HQ_PROFILE } from './tg.js';
 import { COMMAND_NAMES, routedTo } from './commands.js';
-import { installOwnerGlue } from './glue.js';
+import { installOwnerGlue, TG_COMMANDS } from './glue.js';
+import { pultLinks } from './links.js';
+import { OwnerNotices } from './notices.js';
+import { OwnerAssistant } from './assistant.js';
 import { createReach } from './reach.js';
 import { appTools, toolsFor } from './tools.js';
 import { installRejectionGuard, keepPolling } from './process-guard.js';
@@ -57,7 +59,7 @@ const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
 const hq = new Hq(db);
 // P-28: a forgotten promise is an error line and one alert in 10 minutes, never the end of the process (the alert sink is the Director, added below).
-installRejectionGuard(process, (text) => hq.alert(text), { now: Date.now });
+installRejectionGuard(process, (text) => hq.alert(text, { kind: 'service', short: 'HQ: ошибка в фоне (обещание без обработки), процесс работает. Подробности в логе hq.' }), { now: Date.now });
 // Requests accepted from visitors that fail before the owner sees them: `lost_lead` rows and one summary alert an hour.
 const lost = new LostLeads(hq);
 // Emails to clients that failed (P-07): a row each, one alert an hour, the mark on the cabinet document.
@@ -79,13 +81,19 @@ seedSales(hq, cfg);
 seedProduction(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'utf8').trim());
 seedBackoffice(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'utf8').trim());
 
+// One bot in Telegram (owner 2026-11-22): HQ_BOT_TOKEN. The department bots are retired: their tokens are ignored, nothing polls or posts with them.
+if (cfg.retiredBots.length) log('info', 'department bots retired, HQ bot only', { ignored: cfg.retiredBots });
 const bot = createBot(cfg.botToken);
-// Every message to the owner goes through the channel: inbox always, Telegram only when he is away (presence.ts).
+const links = pultLinks(cfg.siteUrl);
+// Every message to the owner goes through the channel: the inbox of the Пульт always; Telegram gets only the short reminders (`notices`) and the
+// answers to his own messages in the bot (presence.ts, `telegram: 'notices'`). TG_APPROVAL_CARDS=on brings the approval cards back.
 const telegram = new OutboxMessenger(grammyMessenger(bot));
 const channel: OwnerChannel = new OwnerChannel({
   hq, inner: telegram, ownerId: cfg.ownerId, awayAfterMin: cfg.presenceAwayAfterMin, approvalPending: (id: number): boolean => queue.get(id)?.status === 'pending',
   onCardSent: (id: number, messageId: number) => queue.noteCard(id, cfg.ownerId, messageId),
+  telegram: 'notices', cards: cfg.tgApprovalCards, pultUrl: links.base,
 });
+const notices = new OwnerNotices({ hq, links, deliver: (html) => channel.notice(html) });
 const messenger = channel;
 const queue: ApprovalQueue = new ApprovalQueue(db, messenger, cfg.ownerId, cfg.trustThreshold);
 hq.attachQueue(queue);
@@ -97,8 +105,8 @@ if (cutOff.length) log('warn', 'approvals interrupted by a restart marked failed
 const directLlm = cfg.llm.mode === 'direct';
 const modelsName = directLlm ? 'Claude (Anthropic)' : 'Шлюз моделей';
 const llm = new GatewayWatch(createLlm(cfg.llm), {
-  onDown: () => hq.alert(`${modelsName} не отвечает больше минуты, задачи подождут (задачи с ошибкой модели можно повторить: /retry). Скажу, когда вернётся.`),
-  onUp: () => hq.alert(`${modelsName} снова отвечает, работа идёт.`),
+  onDown: () => hq.alert(`${modelsName} не отвечает больше минуты, задачи подождут (задачи с ошибкой модели можно повторить в Пульте). Скажу, когда вернётся.`, { kind: 'llm', short: `${modelsName} не отвечает больше минуты, задачи подождут.` }),
+  onUp: () => hq.alert(`${modelsName} снова отвечает, работа идёт.`, { kind: 'llm' }),
 });
 if (directLlm) {
   try { db.prepare("DELETE FROM mon_state WHERE check_id = 'omniroute'").run(); } catch { /* no monitoring table yet */ }
@@ -110,24 +118,18 @@ const gatewayDown = gatewayGate(() => llm.down, Date.now); // visitors get the s
 const clientLlm = meterLlm(llm, hq, { agentId: 'client-bot', urgent: true });
 const counter = { get: (k: string) => hq.setting(k) || undefined, set: (k: string, v: string) => hq.setSetting(k, v) };
 
-// Department bots only post into their topic of the HQ group (no polling, no private chats). Without a token, silent.
-const senders = new Map<string, TopicSender>();
-const topicSender = (api: Api): TopicSender => async (chatId, threadId, text) => {
-  await api.sendMessage(chatId, text, { message_thread_id: threadId, link_preview_options: { is_disabled: true } });
+// Department reports: into the topics of the HQ group only with TG_GROUP_REPORTS=on, and then by the HQ bot itself. Off (the default), a report stays
+// in the task journal and the Пульт (Reporter.post returns false).
+const topicSender: TopicSender = async (chatId, threadId, text) => {
+  await bot.api.sendMessage(chatId, text, { message_thread_id: threadId, link_preview_options: { is_disabled: true } });
 };
-senders.set('general', topicSender(bot.api));
-// Every department reports through the Director's bot unless it has its own bot token (the department bots are optional).
 const topicManager = new TopicManager(hq, cfg.groupId, cfg.topics, bot.api);
-const deptApis = new Map<string, Api>();
-for (const [dept, token] of [[MARKETING, cfg.marketingBotToken], [SUPPORT, cfg.supportBotToken], [SALES, cfg.salesBotToken], [PRODUCTION, cfg.productionBotToken], [BACKOFFICE, cfg.backofficeBotToken]] as const) {
-  if (!token) continue;
-  const api = new Api(token);
-  deptApis.set(dept, api);
-  senders.set(dept, topicSender(api));
-}
-const reporter = new Reporter(() => topicManager.groupId(), () => topicManager.topics(), senders, topicSender(bot.api));
+const reporter = cfg.tgGroupReports
+  ? new Reporter(() => topicManager.groupId(), () => topicManager.topics(), new Map([['general', topicSender]]), topicSender)
+  : new Reporter(undefined, {}, new Map());
 
-const director = new Director({ hq, llm, messenger, queue, ownerId: cfg.ownerId, reporter });
+const director = new Director({ hq, llm, messenger, queue, ownerId: cfg.ownerId, reporter, notices, links });
+const assistant = new OwnerAssistant({ hq, llm, links, pendingApprovals: () => queue.pending().length });
 // The agents' toolbox (docs/tools.md): keys from the config and the app's adapters; every head gives each worker run its own `ctx.tools`.
 const tools = appTools(hq, llm, cfg);
 
@@ -220,20 +222,16 @@ const drill = new Drill({
 });
 director.onDrillCommand = (arg) => drill.command(arg);
 director.onTopicsCommand = async () => (await topicManager.ensure()).text;
-director.summaryLines.push(() => topicManager.summaryNote(), () => production.overdueLine(), () => backoffice.pendingLine(), () => lost.summaryLine(), () => emailFailures.summaryLine());
+if (cfg.tgGroupReports) director.summaryLines.push(() => topicManager.summaryNote());
+director.summaryLines.push(() => production.overdueLine(), () => backoffice.pendingLine(), () => lost.summaryLine(), () => emailFailures.summaryLine());
 
-installOwnerGlue(bot, { ownerId: cfg.ownerId, channel, queue, director, marketing, sales, topicManager });
+installOwnerGlue(bot, { ownerId: cfg.ownerId, channel, queue, director, marketing, sales, topicManager, assistant, links, cards: cfg.tgApprovalCards });
 
-// The menu: the owner's command list with descriptions, the menu button, profile texts; department bots point to the Director.
-const setupMenus = async () => {
-  await setupBotMenu(bot.api, {
-    commands: [], ownerCommands: { chatId: cfg.ownerId, commands: DIRECTOR_COMMANDS }, description: DIRECTOR_PROFILE.description,
-    shortDescription: DIRECTOR_PROFILE.short, menuButtonChatId: cfg.ownerId,
-  }, 'director');
-  const me = await bot.api.getMe().then((m) => m.username).catch(() => undefined);
-  for (const [dept, api] of deptApis) await setupBotMenu(api, deptBotMenu(dept, me), dept);
-};
-void setupMenus().catch((e) => log('warn', 'bot menu setup failed', { err: errMsg(e) }));
+// The menu of the one bot: /start and /pult only, the profile texts say what it is (a reminder and answers; control in the Пульт).
+void setupBotMenu(bot.api, {
+  commands: [], ownerCommands: { chatId: cfg.ownerId, commands: TG_COMMANDS }, description: HQ_PROFILE.description,
+  shortDescription: HQ_PROFILE.short, menuButtonChatId: cfg.ownerId,
+}, 'hq').catch((e) => log('warn', 'bot menu setup failed', { err: errMsg(e) }));
 
 // Heartbeat: the heads work only when woken (a task, a message or a routine).
 const heartbeats = new HeartbeatWorker(hq, async (agent) => {
@@ -292,11 +290,13 @@ const dueTick = async () => {
   await cabinet.docs.expiryTick().catch((e) => log('warn', 'quote expiry tick failed', { err: errMsg(e) }));
   // P-07: emails to clients that did not go (КП, contract, invoice, act, stage notices, clarifying questions): one alert an hour
   await emailFailures.flush().catch((e) => log('warn', 'email failures flush failed', { err: errMsg(e) }));
+  // the reminders of the one HQ bot: new clients, leads, approvals, payments, stages, signatures, calls (grouped, quiet hours to the morning)
+  await notices.scan().catch((e) => log('warn', 'owner notices scan failed', { err: errMsg(e) }));
 };
 void dueTick();
 const dueTimer = setInterval(() => void dueTick(), 30_000);
 dueTimer.unref();
-void topicManager.ensure().then((r) => log('info', 'topics checked', { state: r.state, created: r.created }));
+if (cfg.tgGroupReports) void topicManager.ensure().then((r) => log('info', 'topics checked', { state: r.state, created: r.created }));
 // P-09: cabinet notices a restart cut off (approved, never told to the client) go now, failed emails are tried again (3 emails per document in all).
 void cabinet.docs.recoverDeliveries()
   .then((r) => { if (r.delivered || r.remailed) log('info', 'cabinet deliveries recovered', r); })
@@ -407,7 +407,7 @@ const stop = () => {
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
 
-log('info', 'hq starting', { tz: hq.tz, departments: hq.departments(), group: cfg.groupId !== undefined, marketingBot: Boolean(cfg.marketingBotToken), supportBot: Boolean(cfg.supportBotToken), salesBot: Boolean(cfg.salesBotToken), clientBot: Boolean(clientBot) });
+log('info', 'hq starting', { tz: hq.tz, departments: hq.departments(), group: cfg.groupId !== undefined, groupReports: cfg.tgGroupReports, approvalCards: cfg.tgApprovalCards, clientBot: Boolean(clientBot) });
 // The client bot polls on its own (P-05): a crashed poll starts again after a pause, three times in a row; then HQ exits and the container
 // restarts (compose `restart: unless-stopped`), so Telegram leads never wait for a manual restart.
 if (clientBot) {
@@ -418,7 +418,7 @@ if (clientBot) {
     onGiveUp: async (e) => {
       log('error', 'client bot stopped', { err: errMsg(e) });
       // The main sales channel is down: the owner hears about it at once (the monitoring check turns `down` too).
-      await hq.alert('Клиентский бот @firtech_bot: поллинг упал 4 раза подряд, перезапускаю HQ (контейнер поднимется сам). Подробности в логе hq.').catch(() => undefined);
+      await hq.alert('Клиентский бот @firtech_bot: поллинг упал 4 раза подряд, перезапускаю HQ (контейнер поднимется сам). Подробности в логе hq.', { kind: 'service', short: 'Клиентский Telegram @firtech_bot упал, HQ перезапускается.' }).catch(() => undefined);
       process.exit(1);
     },
   });

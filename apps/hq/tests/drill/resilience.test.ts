@@ -12,8 +12,25 @@ afterEach(async () => { await w?.close(); });
 const tooMany = () => new GrammyError('Too Many Requests', { ok: false, error_code: 429, description: 'Too Many Requests: retry after 2', parameters: { retry_after: 2 } } as any, 'sendMessage', {});
 
 describe('Telegram trouble: the outbox retries, nothing is lost or doubled', () => {
-  it('a 429 on a card is retried after retry_after and the card arrives once', async () => {
-    w = await drillWorld({ withServer: false });
+  it('a 429 on a reminder is retried after retry_after and the reminder arrives once', async () => {
+    w = await drillWorld();
+    await w.notices.scan(); // the first scan only marks what exists
+    const real = w.tg.sendMessage.bind(w.tg);
+    let fails = 2;
+    w.tg.sendMessage = (...a: Parameters<typeof real>) => (fails-- > 0 ? Promise.reject(tooMany()) : real(...a));
+    expect((await w.http('POST', '/lead', { ...LEAD, name: 'Ретрай' }, { 'x-lead-token': TOKENS.lead })).status).toBe(200);
+    await w.beat(); // 15:00 Kuala Lumpur, not quiet
+    const n = w.tg.sent.length;
+    await w.notices.scan();
+    expect(w.sleeps.filter((ms) => ms >= 2000).length, 'it waited the retry_after').toBeGreaterThanOrEqual(2);
+    const sent = w.tg.sent.slice(n).filter((m) => m.text.includes('Новая заявка'));
+    expect(sent).toHaveLength(1);
+    await w.notices.scan(); // the next tick sends nothing again
+    expect(w.tg.sent.slice(n).filter((m) => m.text.includes('Новая заявка'))).toHaveLength(1);
+    expect(g.errors()).toEqual([]);
+  });
+  it('TG_APPROVAL_CARDS=on (legacy): a 429 on a card is retried after retry_after and the card arrives once', async () => {
+    w = await drillWorld({ withServer: false, tgCards: true });
     for (const k of w.queue.trustTable()) w.queue.setLevel(k.kind, 0);
     const real = w.tg.sendMessage.bind(w.tg);
     let fails = 2;
@@ -28,8 +45,8 @@ describe('Telegram trouble: the outbox retries, nothing is lost or doubled', () 
     expect(w.queue.pending().filter((r) => r.kind === 'billing_invoice')).toHaveLength(1);
     expect(g.errors()).toEqual([]);
   });
-  it('Telegram down for good: the card stays queued, the owner is not told twice, the next batch sends it once', async () => {
-    w = await drillWorld({ withServer: false });
+  it('TG_APPROVAL_CARDS=on (legacy): Telegram down for good: the card stays queued, the owner is not told twice, the next batch sends it once', async () => {
+    w = await drillWorld({ withServer: false, tgCards: true });
     for (const k of w.queue.trustTable()) w.queue.setLevel(k.kind, 0);
     const real = w.tg.sendMessage.bind(w.tg);
     let down = true;
@@ -57,19 +74,25 @@ describe('Telegram trouble: the outbox retries, nothing is lost or doubled', () 
 });
 
 describe('quiet hours (owner clock 23:00-08:00 Kuala Lumpur)', () => {
-  it('an alert in the night waits for the morning summary instead of waking the owner', async () => {
+  it('an alert in the night waits for the morning summary instead of waking the owner (the Пульт has it at once)', async () => {
     w = await drillWorld({ withServer: false });
     w.clock.t = Date.UTC(2026, 10, 18, 17, 30); // 01:30 Kuala Lumpur
     expect(w.hq.isQuiet()).toBe(true);
     const n = w.tg.sent.length;
-    await w.director.alertOwner('Тестовый ночной алерт');
+    await w.hq.alert('Тестовый ночной алерт: подробности для Пульта', { kind: 'llm', short: 'Тестовый ночной алерт' });
+    await w.notices.flush();
     expect(w.tg.sent.length).toBe(n);
-    expect(w.hq.setting('held_alerts')).toContain('Тестовый ночной алерт');
-    w.clock.t = Date.UTC(2026, 10, 18, 0, 5); // 08:05
+    expect(w.channel.list({ limit: 50 }).map((m) => m.text).join('\n')).toContain('подробности для Пульта');
+    w.clock.t = Date.UTC(2026, 10, 19, 0, 5); // 08:05
     expect(w.hq.isQuiet()).toBe(false);
+    await w.notices.flush();
+    expect(w.tg.sent.length, 'the night alert is not sent on its own in the morning').toBe(n);
     await w.director.sendMorningSummary();
-    expect(w.tg.sent.slice(n).map((m) => m.text).join('\n')).toContain('Тестовый ночной алерт');
-    expect(w.hq.setting('held_alerts')).toBe('[]');
+    const morning = w.tg.sent.slice(n).map((m) => m.text).join('\n');
+    expect(morning).toContain('Утренняя сводка');
+    expect(morning).toContain('За ночь: алертов 1');
+    expect(morning).toContain('Тестовый ночной алерт');
+    expect(w.tg.sent.slice(n)).toHaveLength(1);
   });
   it('the web chat in quiet hours still answers 200 and the visitor is promised a reply', async () => {
     w = await drillWorld();

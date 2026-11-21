@@ -7,7 +7,7 @@ import { useGuard } from './guard.js';
 const g = useGuard();
 let w: DrillWorld;
 beforeAll(async () => {
-  w = await drillWorld();
+  w = await drillWorld({ tgCards: true });
   for (const k of w.queue.trustTable()) w.queue.setLevel(k.kind, 0);
   await seedEverything(w);
 }, 60_000);
@@ -15,7 +15,7 @@ afterAll(async () => { await w?.close(); });
 
 const answered = (calls: { method: string }[]) => calls.some((c) => c.method === 'answerCallbackQuery');
 
-describe('the Director buttons through the real bot glue', () => {
+describe('TG_APPROVAL_CARDS=on (legacy): the Director buttons through the real bot glue', () => {
   const taskId = () => w.hq.tasks({ dept: 'support', limit: 5 })[0]!.id;
   const BUTTONS = ['pg:all:0', 'pg:all:5', 'pg:sales:0', 'pg:support:1', 'pg:nope:0', 'pg:all:9999', 'dp:list', 'dp:sales:o', 'dp:sales:p', 'dp:sales:r', 'dp:nope:p', 'dp:marketing:o', 'ap:all', 'ap:later', 'ap:show', 'ap:99999:f', 'ap:99999:s', 'tk:99999:o', 'tk:99999:r', 'tk:99999:x', 'tk:99999:X', 'tk:99999:j', 'pk:99999:o', 'pk:99999:v', 'pb:99999', 'rl:99999:y', 'rl:99999:n', 'pc:99999:c', 'ce:99999:caption', 'ap:99999:a', 'ap:99999:e', 'ap:99999:r', 'zz:unknown', 'garbage', '', 'ap:', 'tk:abc:o'];
   it.each(BUTTONS)('%s is answered, never left spinning', async (data) => {
@@ -54,31 +54,60 @@ describe('the Director buttons through the real bot glue', () => {
   });
 });
 
-describe('free text, menu buttons, strangers and groups', () => {
-  it.each([['📥 Одобрения', 'Нечего одобрять|Ждут'], ['📋 Задачи', 'Открытые задачи'], ['📊 Статус', 'Сейчас в офисе'], ['🏢 Отделы', 'Отделы'], ['🆘 Помощь', 'Директор Fir Tech'], ['задачи', 'Открытые задачи'], ['  📊  Статус ', 'Сейчас в офисе']])('the reply keyboard button %s answers', async (label, expected) => {
+describe('the one HQ bot: free text is a question, old buttons and commands, strangers and groups', () => {
+  it.each(['📥 Одобрения', '📊 Статус', 'задачи', 'что висит?', 'Сколько заявок сегодня?'])('%s is a question: the assistant answers with a link to the Пульт', async (text) => {
     const w2 = await drillWorld({ withServer: false });
     const n = w2.tg.sent.length;
-    await w2.say(label);
+    await w2.say(text);
     await w2.settle();
-    expect(w2.tg.sent.slice(n).map((m) => m.text).join('\n')).toMatch(new RegExp(expected));
+    const out = w2.tg.sent.slice(n);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.text).toContain('https://firtech.pro/admin');
+    expect(out[0]!.buttons ?? []).toEqual([]);
+    expect(w2.chatCalls.length).toBeGreaterThan(0); // the model was asked, with the tools
+    expect(w2.chatCalls[0]!.tools!.map((t) => t.name)).toContain('hq_overview');
     expect(g.errors()).toEqual([]);
     await w2.close();
   });
-  it('menu buttons run their commands; unknown commands get a hint; text from strangers and groups is ignored', async () => {
+  it('a request to act gets the screen of the Пульт, without a model call and without doing anything', async () => {
     const w2 = await drillWorld({ withServer: false });
-    const before = w2.tg.sent.length;
-    await w2.say('/nope');
+    for (const [text, url] of [['Одобри КП для Шифо', 'https://firtech.pro/admin/review'], ['ответь клиенту, что всё готово', 'https://firtech.pro/admin/chats'], ['отметь счёт FT-2026-001 оплаченным', 'panel=backoffice'], ['создай задачу маркетингу', 'panel=director']] as const) {
+      const n = w2.tg.sent.length;
+      await w2.say(text);
+      await w2.settle();
+      expect(w2.tg.sent.slice(n).map((m) => m.text).join('\n'), text).toContain(url);
+    }
+    expect(w2.chatCalls).toHaveLength(0);
+    expect(w2.hq.tasks({ limit: 100 }).filter((t) => t.creator === 'owner')).toEqual([]);
+    await w2.close();
+  });
+  it('/start and /pult answer; every old command gets the hint; old buttons answer «в Пульте»; strangers and groups are ignored', async () => {
+    const w2 = await drillWorld({ withServer: false });
+    const start = await w2.say('/start');
     await w2.settle();
-    expect(w2.tg.sent.length).toBeGreaterThan(before);
+    const reply = start.find((c) => c.method === 'sendMessage')!;
+    expect(reply.payload.reply_markup).toEqual({ remove_keyboard: true }); // the old reply keyboard goes away
+    expect(String(reply.payload.text)).toContain('Пульт');
+    const n = w2.tg.sent.length;
+    await w2.say('/pult');
+    await w2.settle();
+    expect(w2.tg.sent.slice(n).at(-1)!.text).toContain('https://firtech.pro/admin/review');
+    for (const old of ['/status', '/approve', '/paid FT-2026-001', '/level lead_reply 1', '/mdone 1 1', '/nope']) {
+      const m = w2.tg.sent.length;
+      await w2.say(old);
+      await w2.settle();
+      expect(w2.tg.sent.slice(m).map((x) => x.text).join(' '), old).toContain('Команд в Telegram больше нет');
+    }
+    for (const data of ['ap:1:a', 'pg:all:0', 'tk:1:o', 'dp:list', 'garbage']) {
+      const calls = await w2.press(data);
+      expect(JSON.stringify(calls.find((c) => c.method === 'answerCallbackQuery')?.payload ?? {}), data).toContain('Пульте');
+    }
     const b2 = w2.tg.sent.length;
     await w2.say('/status', { from: 555 });
     await w2.say('привет', { from: 555 });
-    await w2.say('/status', { from: OWNER, chat: -100123, type: 'supergroup' });
+    await w2.say('что висит?', { from: OWNER, chat: -100123, type: 'supergroup' });
     await w2.settle();
     expect(w2.tg.sent.length).toBe(b2);
-    await w2.say('/status');
-    await w2.settle();
-    expect(w2.tg.sent.length).toBeGreaterThan(b2);
     // the group becomes a supergroup: the topic manager hears it and the glue does not throw
     await w2.bot.handleUpdate({ update_id: 9001, message: { message_id: 5, date: 0, chat: { id: -500, type: 'group', title: 'HQ' }, from: { id: OWNER, is_bot: false, first_name: 'o' }, migrate_to_chat_id: -100500 } } as any);
     expect(g.rejections).toEqual([]);
@@ -117,10 +146,10 @@ describe('free text, menu buttons, strangers and groups', () => {
     expect(g.errors().map((l) => `${l.msg}: ${String(l.err)}`)).toEqual([]);
     await w2.close();
   });
-  it('a rule card: apply, cancel, press again (stale), unknown id', async () => {
-    const w2 = await drillWorld({ withServer: false });
+  it('TG_APPROVAL_CARDS=on (legacy): a rule card: apply, cancel, press again (stale), unknown id', async () => {
+    const w2 = await drillWorld({ withServer: false, tgCards: true });
     w2.state.intent = () => '{"type":"rule","target":"setting","key":"summary_time","value":"09:30"}';
-    await w2.say('утреннюю сводку в 9:30');
+    await w2.channel.asReply(() => w2.director.onText('утреннюю сводку в 9:30'));
     await w2.settle();
     const seq = Number(w2.hq.setting('pending_seq'));
     expect(seq).toBeGreaterThan(0);
@@ -132,16 +161,15 @@ describe('free text, menu buttons, strangers and groups', () => {
     expect(g.errors()).toEqual([]);
     await w2.close();
   });
-  it('the model gateway is down: free text says so, commands still work, the alert is held in quiet hours', async () => {
+  it('the model gateway is down: the question still gets the main numbers said by code, with the link', async () => {
     const w2 = await drillWorld({ withServer: false, gatewayDown: true });
     const n = w2.tg.sent.length;
-    await w2.say('сделай пост');
+    await w2.say('что висит?');
     await w2.settle();
-    expect(w2.tg.sent.length).toBeGreaterThan(n);
-    expect(w2.tg.sent.at(-1)!.text).toMatch(/модель|Кнопки/);
-    await w2.say('/status');
-    await w2.settle();
-    expect(w2.tg.sent.at(-1)!.text).toContain('Сейчас в офисе');
+    const out = w2.tg.sent.slice(n).at(-1)!.text;
+    expect(out).toMatch(/Модель сейчас недоступна/);
+    expect(out).toMatch(/ждёт одобрения \d+/);
+    expect(out).toContain('https://firtech.pro/admin');
     expect(g.rejections).toEqual([]);
     await w2.close();
   });

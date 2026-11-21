@@ -220,7 +220,8 @@ export class SupportHead {
         this.hq.addEvent(duty.id, 'incident', SUPPORT_HEAD_ID, e.text);
         this.hq.log(SUPPORT_HEAD_ID, e.kind === 'down' ? 'incident' : 'incident_recovered', 'check', e.checkId);
         await this.d.reporter.post(SUPPORT, e.text);
-        await this.hq.alert(e.text);
+        // a service down or back (site, models, the client bot, disk, containers): a reminder for the owner's Telegram
+        await this.hq.alert(e.text, { kind: 'service' });
       }
       return events;
     } finally {

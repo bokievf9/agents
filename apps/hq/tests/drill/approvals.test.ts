@@ -9,8 +9,9 @@ const g = useGuard();
 /** Kinds the real flows put in front of the owner at once; the rest (referral, reminders, follow-ups) are driven in chain.test.ts. */
 const KINDS = ['article', 'seo_proposal', 'audit', 'support_answer', 'support_money', 'billing_invoice', 'onboarding_guide', 'presales_pack', 'prospect_first', 'lead_reply', 'lead_price', 'pm_spec', 'pm_client_status', 'bo_document'];
 
+/** The legacy flag TG_APPROVAL_CARDS=on: the cards and their buttons in Telegram (the default since 2026-11-22 is the review API, review-api.test.ts). */
 async function seeded(): Promise<DrillWorld> {
-  const w = await drillWorld();
+  const w = await drillWorld({ tgCards: true });
   for (const k of w.queue.trustTable()) w.queue.setLevel(k.kind, 0);
   await seedEverything(w);
   return w;
@@ -22,7 +23,7 @@ const decisions = (w: DrillWorld, id: number) => (w.db.prepare("SELECT COUNT(*) 
 const PLACEHOLDER_KINDS = new Set(['support_money', 'lead_price', 'bo_document']);
 const NEW_TEXT = 'Готовый текст владельца, без заготовок: всё впишу сам.';
 
-describe('Telegram buttons through the bot glue', () => {
+describe('TG_APPROVAL_CARDS=on (legacy): Telegram buttons through the bot glue', () => {
   describe('approve every kind', () => {
     let w: DrillWorld;
     beforeAll(async () => { w = await seeded(); }, 60_000);
@@ -77,7 +78,7 @@ describe('Telegram buttons through the bot glue', () => {
   });
 });
 
-describe('the weekly pack and its items', () => {
+describe('TG_APPROVAL_CARDS=on (legacy): the weekly pack and its items', () => {
   const pack = (w: DrillWorld) => w.queue.pending().find((r) => r.kind === 'content_pack')!;
   it('«Одобрить» on the pack card approves every held item, once', async () => {
     const w = await seeded();
@@ -129,7 +130,7 @@ describe('the weekly pack and its items', () => {
   }, 30_000);
 });
 
-describe('«Править» on content and articles through the bot glue', () => {
+describe('TG_APPROVAL_CARDS=on (legacy): «Править» on content and articles through the bot glue', () => {
   it('a content item: the part picker, a part chosen, the new text replaces only that part; /skip cancels a pending edit', async () => {
     const w = await seeded();
     const p = w.queue.pending().find((r) => r.kind === 'content_pack')!;
