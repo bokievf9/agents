@@ -98,12 +98,14 @@ describe('product names: one map, no «бот» in the name of an AI product', (
   });
 
   it('the catalogue of the chat and the bot takes its names from the map, RU and EN', () => {
-    const ids: Record<string, string> = { admin: 'adminbot', receptionist: 'intake', automation: 'automation', content: 'content', miniapp: 'miniapp', agent: 'agent', ai: 'aiteam' };
+    const ids: Record<string, string> = { admin: 'adminbot', receptionist: 'intake', automation: 'automation', content: 'content', miniapp: 'miniapp', personal: 'personal', company: 'company', ai: 'aiteam' };
     for (const id of PRODUCT_IDS) {
       expect(PRODUCTS[id].name.ru, id).toBe(productName(ids[id]!, 'ru'));
       expect(PRODUCTS[id].name.en, id).toBe(productName(ids[id]!, 'en'));
       expect(PRODUCTS[id].name.ru, id).not.toMatch(/бот/i);
     }
+    expect(PRODUCTS.personal.name.ru).toBe('Персональный ИИ');
+    expect(PRODUCTS.company.name.en).toBe('AI company');
     expect(PRODUCTS.admin.name.ru).toBe('ИИ-администратор');
     expect(PRODUCTS.receptionist.name.en).toBe('AI lead manager');
   });

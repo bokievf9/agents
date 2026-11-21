@@ -1,5 +1,5 @@
 import { productList, productName, type Button } from '@fir/core';
-import { isCatalogueId, KIND_LABELS, PRODUCT_IDS, PRODUCTS, publicPrices, startingPrices, type CatalogueId } from './products.js';
+import { isCatalogueId, KIND_LABELS, PRODUCT_IDS, PRODUCTS, companyPrice, personalLevels, startingPrices, type CatalogueId } from './products.js';
 
 export type Lang = 'ru' | 'en';
 
@@ -8,8 +8,9 @@ export const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g,
 
 /** Intake choices: the key travels in callback data, the label is what the person and the lead card see. */
 /** Intake step 1: the seven products, the classics and «other». `bot` and `app` stay valid keys (old buttons) but are not offered. */
-export const NEED_BUTTONS = ['admin', 'receptionist', 'automation', 'content', 'miniapp', 'agent', 'ai', 'site', 'other'] as const;
-export const NEEDS = [...NEED_BUTTONS, 'bot', 'app'] as const;
+export const NEED_BUTTONS = ['personal', 'company', 'admin', 'receptionist', 'automation', 'content', 'miniapp', 'ai', 'site', 'other'] as const;
+/** `bot`, `app` and the retired `agent` (now `personal`) stay valid keys (old buttons) but are not offered. */
+export const NEEDS = [...NEED_BUTTONS, 'bot', 'app', 'agent'] as const;
 export const DEADLINES = ['urgent', 'month', 'norush'] as const;
 export const BUDGETS = ['lt300', 'mid', 'gt1000', 'unknown'] as const;
 export type Need = (typeof NEEDS)[number];
@@ -53,7 +54,7 @@ export function parseHave(text: string): Have {
 
 export const SERVICE: Record<Need, string> = {
   site: 'web', bot: 'bots', app: 'app', automation: 'automation', other: 'other',
-  admin: 'bots', receptionist: 'bots', content: 'other', miniapp: 'app', agent: 'bots', ai: 'automation',
+  admin: 'bots', receptionist: 'bots', content: 'other', miniapp: 'app', agent: 'bots', personal: 'bots', company: 'automation', ai: 'automation',
 };
 
 /** The catalogue name of a chosen need in Russian (the lead's `product` field), empty for «other». */
@@ -104,6 +105,7 @@ interface Texts {
 function needLabels(lang: 'ru' | 'en', extra: Record<'site' | 'other' | 'bot' | 'app', string>, emoji = true): Record<Need, string> {
   const out = { ...extra } as Record<string, string>;
   for (const id of PRODUCT_IDS) out[id] = emoji ? `${PRODUCTS[id].emoji} ${PRODUCTS[id].name[lang]}` : PRODUCTS[id].name[lang];
+  out.agent = out.personal!;
   return out as Record<Need, string>;
 }
 
@@ -240,13 +242,15 @@ export function productCardHtml(lang: Lang, id: CatalogueId): string {
   const c = T[lang].card;
   const whom = p.kinds.map((k) => KIND_LABELS[k][lang]).join(', ');
   const pair = p.pairs.map((i) => PRODUCTS[i].name[lang]).join(', ');
+  // the flagships name their plans on the card; every sum comes from the price list
+  const price = p === PRODUCTS.personal ? personalLevels(lang) : p === PRODUCTS.company ? companyPrice(lang) : '';
   return [
     `<b>${p.emoji} ${esc(p.name[lang])}</b>`,
     esc(p.benefit[lang]),
     ...(whom ? [`\n<b>${c.forWhom}:</b> ${esc(whom)}`] : []),
     `\n<b>${c.inside}:</b>\n${p.inside[lang].map((x) => `• ${esc(x)}`).join('\n')}`,
     `\n<b>${c.pairs}:</b> ${esc(pair)}`,
-    `${esc(p.demo[lang])}${id === 'agent' ? ` ${esc(publicPrices(lang))}` : ''}`,
+    `${esc(p.demo[lang])}${price ? ` ${esc(price)}` : ''}`,
   ].join('\n');
 }
 

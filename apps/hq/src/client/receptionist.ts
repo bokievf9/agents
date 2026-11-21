@@ -2,10 +2,10 @@ import { detectText, errMsg, formatSlot, log, productList, productName, tryCompl
 import { isPriceQuestion } from '@fir/worker-lead-intake';
 import { z } from 'zod';
 import {
-  BUILD_CHANNELS, BUILD_GOALS, BUILDER_KINDS, BUILDER_PRODUCT_OF, builderPath, DETAIL_DEADLINES, kindFromText, type Build, type BuildChannel, type BuildGoal, type BuilderKind, type DeliveryChannel, type DetailDeadline, type SiteNeed,
+  BUILD_CHANNELS, BUILD_GOALS, BUILDER_KINDS, FLAGSHIP_OPTION_IDS, type FlagshipOptions, BUILDER_PRODUCT_OF, builderPath, DETAIL_DEADLINES, kindFromText, type Build, type BuildChannel, type BuildGoal, type BuilderKind, type DeliveryChannel, type DetailDeadline, type SiteNeed,
 } from './builder-link.js';
-import { asksCatalogue, inCatalogueOrder, needChange, NO_SITE_DELIVERY, productOfBot, siteNeedOf } from './needs.js';
-import { catalogueText, detectKind, isCatalogueId, PRODUCT_IDS, CLASSIC_IDS, PRODUCTS, priceOf, type CatalogueId } from './products.js';
+import { asksCatalogue, flagshipOptionsOf, inCatalogueOrder, needChange, NO_SITE_DELIVERY, productOfBot, siteNeedOf } from './needs.js';
+import { catalogueText, currentId, detectKind, isCatalogueId, PRODUCT_IDS, CLASSIC_IDS, PRODUCTS, priceOf, type CatalogueId } from './products.js';
 import { sanitizeAnswer } from './sanitize.js';
 import type { Turn } from './shared.js';
 import { TEAM_MARK } from './prompt.js';
@@ -39,6 +39,8 @@ export interface QState {
    */
   products?: CatalogueId[];
   productsGuessed?: boolean;
+  /** Options of the flagships the visitor named (services, departments): they travel in the builder link (`f.personal.mail-calendar`). */
+  options?: FlagshipOptions;
   channels?: BuildChannel[];
   goals?: BuildGoal[];
   timeline?: Timeline;
@@ -67,11 +69,13 @@ export const newQ = (): QState => ({ turns: 0, offered: { builder: 0, call: 0, t
 
 /** A state saved before the list existed (`product`, one id) becomes a one-item list; the old field goes. */
 export function normalizeQ(q: QState): QState {
+  // the retired `agent` product is `personal` (2026-11-22)
+  if (q.products?.some((x) => (x as string) === 'agent')) q = { ...q, products: [...new Set(q.products.map((x) => ((x as string) === 'agent' ? 'personal' : x) as CatalogueId))] };
   const legacy = (q as QState & { product?: CatalogueId }).product;
   if (legacy === undefined) return q;
   const rest: QState & { product?: CatalogueId } = { ...q };
   delete rest.product;
-  return { ...rest, ...(rest.products?.length || !isCatalogueId(legacy) ? {} : { products: [legacy === 'bot' ? productOfBot(rest.kind) : legacy] }) };
+  return { ...rest, ...(rest.products?.length || !isCatalogueId(legacy) ? {} : { products: [legacy === 'bot' ? productOfBot(rest.kind) : currentId(legacy)] }) };
 }
 
 /** The names of the listed products in one line («ИИ-администратор, Сайт»); empty when none. */
@@ -210,7 +214,7 @@ export function merge(q: QState, m: Model, visitorText: string): QState {
   }
   list = list.filter((x) => !ch.remove.includes(x));
   if (!ch.add.length) {
-    const heard = e.product === 'bot' ? productOfBot(next.kind) : e.product && isCatalogueId(e.product) ? e.product : undefined;
+    const heard = e.product === 'bot' ? productOfBot(next.kind) : e.product && isCatalogueId(e.product) ? currentId(e.product) : undefined;
     if (heard && (!list.length || guessed)) {
       list = [heard];
       guessed = true;
@@ -233,6 +237,12 @@ export function merge(q: QState, m: Model, visitorText: string): QState {
   } else {
     delete next.products;
     delete next.productsGuessed;
+  }
+  const opts = flagshipOptionsOf(visitorText, next.products ?? []);
+  if (Object.keys(opts).length) {
+    const merged: FlagshipOptions = { ...next.options };
+    for (const id of ['personal', 'company'] as const) if (opts[id]) merged[id] = FLAGSHIP_OPTION_IDS[id].filter((o) => (merged[id] ?? []).includes(o) || opts[id]!.includes(o));
+    next.options = merged;
   }
   const site = siteNeedOf(visitorText);
   if (site) {
@@ -272,6 +282,7 @@ export function buildOf(q: QState): Build {
     ...(q.channels?.length ? { channels: q.channels } : {}),
     ...(q.delivery ? { delivery: q.delivery } : {}),
     ...(q.siteNeed ? { siteNeed: q.siteNeed } : {}),
+    ...(q.options ? { options: q.options } : {}),
     ...(q.timeline ? { details: { deadline: q.timeline } } : {}),
   };
 }
@@ -332,22 +343,22 @@ export function stageRule(lang: Lang): string {
     : `Payment is by stages: each stage before it starts, the last one before handover; small projects go in two stages, the exact shares are in the estimate. We name the exact price and timing before the start, in the estimate.`;
 }
 
-/** The products a price answer names: the one that fits the need and its usual companions, three at most; never the personal agents (Dono, Polly). */
+/** The products a price answer names: the one that fits the need and its usual companions, three at most; the flagships may be named: they are products now. */
 export function priceProducts(q: Pick<QState, 'products'>): CatalogueId[] {
   // several products listed: exactly those (three at most), the visitor chose them; one or none: the product and its usual companions
-  const listed = (q.products ?? []).filter((x) => x !== 'agent');
+  const listed = q.products ?? [];
   if (listed.length >= 2) return listed.slice(0, 3);
   const first: CatalogueId = listed[0] ?? 'admin';
   const rest: CatalogueId[] = [...PRODUCTS[first].pairs, 'receptionist', 'automation', 'site'];
-  return [...new Set<CatalogueId>([first, ...rest.filter((x) => x !== 'agent')])].slice(0, 3);
+  return [...new Set<CatalogueId>([first, ...rest])].slice(0, 3);
 }
 
 /**
  * The answer to a price question: the prices of the 1-3 products that fit the need (`getPrices()`), the stage rule and a pointer to the builder for the rest. Nothing
- * here comes from the model. No personal products (Dono, Polly) and one full stop at the end of the list.
+ * here comes from the model. The flagships first and one full stop at the end of the list.
  */
 export function priceAnswer(lang: Lang, q: Pick<QState, 'products'> = {}): string {
-  const list = priceProducts(q).map((id) => `${PRODUCTS[id].name[lang]} ${priceOf(id, lang)}`).join('; ');
+  const list = priceProducts(q).flatMap((id) => { const price = priceOf(id, lang); return price ? [`${PRODUCTS[id].name[lang]} ${price}`] : []; }).join('; ');
   const head = lang === 'ru' ? `Цены на сайте, в долларах: ${list}.` : `Prices as on the site, in USD: ${list}.`;
   const rest = lang === 'ru' ? 'Остальное и точную сумму под вас считает сборка проекта.' : 'The rest, and the exact sum for you, comes from the project builder.';
   return `${head} ${rest}\n\n${stageRule(lang)}`;
@@ -561,7 +572,7 @@ const SLOT_QUESTION: Record<NonNullable<ReturnType<typeof nextSlot>>, Record<Lan
 
 /** The code's own answer to a named need: the one product that fits and ONE question (no question when the proposal follows). Used when the model dumped the list. */
 export function needReply(q: QState, lang: Lang, proposing: boolean): string {
-  const listed = (q.products ?? []).filter((x) => x !== 'agent');
+  const listed = q.products ?? [];
   const product = listed.length === 1 ? PRODUCTS[listed[0]!] : undefined;
   const slot = nextSlot(q) ?? 'pain';
   const ask = proposing ? '' : ` ${SLOT_QUESTION[slot][lang]}`;

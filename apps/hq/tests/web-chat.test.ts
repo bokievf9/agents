@@ -126,7 +126,7 @@ describe('intake to a web lead', () => {
     await w.say('/start', { page: '/ru/services' });
     const s1 = await w.say('/btn intake');
     expect(s1).toMatchObject({ state: 'intake' });
-    expect(ids(s1.buttons)).toEqual(['need:admin', 'need:receptionist', 'need:automation', 'need:content', 'need:miniapp', 'need:agent', 'need:ai', 'need:site', 'need:other']);
+    expect(ids(s1.buttons)).toEqual(['need:personal', 'need:company', 'need:admin', 'need:receptionist', 'need:automation', 'need:content', 'need:miniapp', 'need:ai', 'need:site', 'need:other']);
     const s2 = await w.say('/btn need:bot');
     expect(s2.state).toBe('intake');
     expect(ids(s2.buttons)).toEqual(['deadline:urgent', 'deadline:month', 'deadline:norush']);
@@ -193,9 +193,15 @@ describe('products in the web chat', () => {
   it('greeting carries the product line; /btn products lists, product:<id> opens the card, need:<id> starts the intake with the product', async () => {
     const w = world();
     const hi = await w.say('/start');
-    expect(hi.reply).toContain('Я ИИ-менеджер заявок Fir Tech: так же я могу принимать клиентов вашего бизнеса. Что мы делаем: ИИ-администратор, ИИ-менеджер заявок');
+    expect(hi.reply).toContain('Я ИИ-менеджер заявок Fir Tech: так же я могу принимать клиентов вашего бизнеса. Что мы делаем: Персональный ИИ, ИИ-компания, ИИ-администратор, ИИ-менеджер заявок');
     const list = await w.say('/btn products');
-    expect(ids(list.buttons)).toEqual(['product:admin', 'product:receptionist', 'product:automation', 'product:content', 'product:miniapp', 'product:agent', 'product:ai', 'product:site']);
+    expect(ids(list.buttons)).toEqual(['product:personal', 'product:company', 'product:admin', 'product:receptionist', 'product:automation', 'product:content', 'product:miniapp', 'product:ai', 'product:site']);
+    // the flagships' cards carry their plans
+    const personal = await w.say('/btn product:personal');
+    expect(personal.reply).toContain('Персональный ИИ');
+    expect(personal.reply).toContain('Старт $290 + $29/мес');
+    expect(ids(personal.buttons)).toEqual(['need:personal', 'products']);
+    expect((await w.say('/btn product:company')).reply).toContain('от $1 490 + $149/мес, точно по смете');
     const card = await w.say('/btn product:receptionist');
     expect(card.reply).toContain('ИИ-менеджер заявок');
     expect(card.reply).toContain('Для кого');

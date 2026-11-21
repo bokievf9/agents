@@ -1,4 +1,4 @@
-import { allowedAmounts, planOf, zonedParts } from '@fir/core';
+import { allowedAmounts, getPrices, planOf, zonedParts } from '@fir/core';
 
 export const MAX_ANSWER = 600;
 
@@ -33,7 +33,9 @@ const DOLLAR = /\$\s?(\d[\d\s]*)(?:[.,]\d+)?/g;
  * list is a made-up price.
  */
 function amountsAllowedIn(sentence: string): Set<number> {
-  const agents = (['dono', 'polly'] as const).filter((id) => new RegExp(`\\b${id}\\b`, 'i').test(sentence));
+  // the retired Dono/Polly plans (the site dropped them, 2026-11-22): a sentence about them is held to their own amounts only while the list still has them
+  const retired = new Set((getPrices().agentPlans ?? []).map((x) => x.id));
+  const agents = (['dono', 'polly'] as const).filter((id) => retired.has(id) && new RegExp(`\\b${id}\\b`, 'i').test(sentence));
   if (agents.length === 0) return allowedAmounts();
   const s = new Set<number>();
   for (const id of agents) {

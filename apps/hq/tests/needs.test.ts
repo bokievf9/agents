@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BUILDER_PRODUCTS, buildFromText, builderPath, decodeBuild, encodeBuild } from '../src/client/builder-link.js';
-import { asksCatalogue, inCatalogueOrder, NEED_RULES, needChange, NO_SITE_DELIVERY, productOfBot, productOfNeed, siteNeedOf } from '../src/client/needs.js';
+import { asksCatalogue, flagshipOptionsOf, inCatalogueOrder, NEED_RULES, needChange, NO_SITE_DELIVERY, productOfBot, productOfNeed, siteNeedOf } from '../src/client/needs.js';
 import { BUILDER_PRODUCT_OF } from '../src/client/builder-link.js';
 import { isCatalogueId } from '../src/client/products.js';
 
@@ -15,7 +15,14 @@ describe('need -> product table', () => {
     ['делайте рилс и посты', undefined, 'content'],
     ['автоматизация таблиц и отчётов', undefined, 'automation'],
     ['связать CRM и рассылки', undefined, 'automation'],
-    ['нужен личный ассистент', undefined, 'agent'],
+    ['нужен личный ассистент', undefined, 'personal'],
+    ['хочу ИИ для себя: почта и календарь', undefined, 'personal'],
+    ['нужен мой ассистент', undefined, 'personal'],
+    ['I need a personal AI for myself', undefined, 'personal'],
+    ['хотим всю компанию на агентах', undefined, 'company'],
+    ['нужны отделы из ИИ: продажи и поддержка', undefined, 'company'],
+    ['хотим, чтобы у нас было как у вас', undefined, 'company'],
+    ['we want an AI company like yours', undefined, 'company'],
     ['нужен администратор для записи клиентов', 'salon', 'admin'],
     ['клиенты должны записываться онлайн', 'barber', 'admin'],
     ['нужна бронь столиков', 'restaurant', 'admin'],
@@ -34,6 +41,27 @@ describe('need -> product table', () => {
       expect(BUILDER_PRODUCTS as readonly string[], r.id).toContain(BUILDER_PRODUCT_OF[r.product]);
       expect(rows.some(([, , p]) => p === r.product), r.id).toBe(true);
     }
+  });
+
+  it('the flagships: whole company and departments are `company`, one «ИИ-отдел» stays `ai`, plain talk is not a wish for a personal AI or a company', () => {
+    expect(productOfNeed('нужен ИИ-отдел продаж')?.product).toBe('ai');
+    expect(productOfNeed('нужны все отделы на агентах')?.product).toBe('company'); // plural before the single department
+    expect(productOfNeed('сайт как у вас, пожалуйста', undefined)?.product).toBe('site');
+    expect(productOfNeed('как у вас дела?')).toBeNull();
+    expect(productOfNeed('для меня важно, чтобы был сайт')?.product).toBe('site');
+    expect(productOfNeed('нужен администратор для записи клиентов', 'salon')?.product).toBe('admin');
+    expect(productOfNeed('поможете с учёбой, дедлайнами')?.product).toBe('personal');
+    // a message names both: both are added, in the flagships-first order of the catalogue
+    expect(needChange('нужен личный помощник и ещё сайт').add).toEqual(['personal', 'site']);
+    expect(needChange('вся компания и контент').add).toEqual(['company', 'content']);
+    expect(inCatalogueOrder(['site', 'admin', 'company', 'personal'])).toEqual(['personal', 'company', 'admin', 'site']);
+  });
+
+  it('options of a flagship the visitor names go into the f. chunk of the link', () => {
+    expect(flagshipOptionsOf('нужна почта, календарь и голос', ['personal'])).toEqual({ personal: ['mail', 'calendar', 'voice'] });
+    expect(flagshipOptionsOf('продажи, поддержка, пульт и обучение команды', ['company'])).toEqual({ company: ['sales', 'support', 'pult', 'training'] });
+    expect(flagshipOptionsOf('почта и продажи', ['company'])).toEqual({ company: ['sales'] }); // only the product asked about
+    expect(flagshipOptionsOf('почта', [])).toEqual({});
   });
 
   it('a generic «бот» is resolved by the kind of business: bookings -> ИИ-администратор, goods and food -> Mini App, else the ИИ-менеджер заявок; never `bot`', () => {

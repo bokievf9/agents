@@ -136,14 +136,14 @@ describe('welcome and language', () => {
     expect(welcome.html).toContain('https://firtech.pro/ru/builder');
     expect(welcome.html).not.toContain('!');
     expect(welcome.html.length).toBeLessThan(700);
-    expect(welcome.html).toContain('Я ИИ-менеджер заявок Fir Tech. Что мы делаем: ИИ-администратор, ИИ-менеджер заявок, Автоматизация процессов, Контент на автопилоте, Telegram Mini App, Персональный ИИ-ассистент, ИИ-отдел под ключ');
+    expect(welcome.html).toContain('Я ИИ-менеджер заявок Fir Tech. Что мы делаем: Персональный ИИ, ИИ-компания, ИИ-администратор, ИИ-менеджер заявок, Автоматизация процессов, Контент на автопилоте, Telegram Mini App, ИИ-отдел под ключ');
     expect(buttonTexts(welcome.buttons)).toEqual(['💬 Обсудить проект', '🧩 Продукты', '🧾 Я уже клиент', '👤 Позвать человека', '🧪 Попробовать демо', '🇬🇧 English']);
     for (const t of buttonTexts(welcome.buttons)) expect((t.match(/\p{Extended_Pictographic}/gu) ?? []).length).toBeLessThanOrEqual(1);
 
     await w.engine.onButton(ME, 'm:lang', welcome.id);
     const edited = w.transport.edits.at(-1)!;
     expect(edited.messageId).toBe(welcome.id);
-    expect(edited.html).toContain('I am the Fir Tech AI lead manager. What we do: AI booking assistant, AI lead manager');
+    expect(edited.html).toContain('I am the Fir Tech AI lead manager. What we do: Personal AI, AI company, AI booking assistant, AI lead manager');
     expect(buttonTexts(edited.buttons)).toContain('🇷🇺 Русский');
     expect(w.engine.store.get(CLIENT)!.lang).toBe('en');
     await w.engine.onCommand(ME, 'start', '');
@@ -638,8 +638,9 @@ describe('grammy wiring', () => {
 });
 
 describe('products in the chat', () => {
-  it('the catalogue is complete in Russian and English: seven products and the classics', () => {
-    expect(PRODUCT_IDS).toHaveLength(7);
+  it('the catalogue is complete in Russian and English: the two flagships, six products and the classics', () => {
+    expect(PRODUCT_IDS).toHaveLength(8);
+    expect(PRODUCT_IDS.slice(0, 2)).toEqual(['personal', 'company']); // the flagships first
     expect(CLASSIC_IDS).toEqual(['site', 'bot', 'app']);
     for (const id of [...PRODUCT_IDS, ...CLASSIC_IDS]) {
       const p = PRODUCTS[id];
@@ -660,9 +661,13 @@ describe('products in the chat', () => {
   it('the LLM system prompt carries the catalogue and the price rule', () => {
     const sys = systemPrompt('Инструкции', 'ru');
     expect(sys).toContain('ИИ-менеджер заявок');
-    expect(sys).toContain('Dono: $150 + $15/мес');
     expect(sys).toContain('Подбери продукт');
-    expect(systemPrompt('x', 'en')).toContain('Polly: $100 + $10/month');
+    // the flagships come first, with their plans from the price list
+    expect(sys).toContain('Персональный ИИ (от $290 + $29/мес)');
+    expect(sys).toContain('ИИ-компания (от $1 490 + $149/мес, точно по смете)');
+    expect(sys.indexOf('Персональный ИИ (от')).toBeLessThan(sys.indexOf('ИИ-администратор (от'));
+    expect(systemPrompt('x', 'en')).toContain('Personal AI (from $290 + $29/month)');
+    expect(sys).not.toMatch(/Dono|Polly/);
     // every product line carries its site price
     expect(sys).toContain('ИИ-администратор (от $290)');
     expect(sys).toContain('ИИ-менеджер заявок (от $220)');
@@ -678,9 +683,10 @@ describe('products in the chat', () => {
     await w.engine.onButton(ME, 'm:products', welcome);
     const list = w.transport.edits.at(-1)!;
     expect(list.messageId).toBe(welcome);
-    expect(buttonTexts(list.buttons)).toHaveLength(8);
-    expect(buttonTexts(list.buttons)[0]).toContain('ИИ-администратор');
-    expect(list.buttons!.flat()[0]!.data).toBe('p:admin');
+    expect(buttonTexts(list.buttons)).toHaveLength(9);
+    expect(buttonTexts(list.buttons)[0]).toContain('Персональный ИИ');
+    expect(buttonTexts(list.buttons)[1]).toContain('ИИ-компания');
+    expect(list.buttons!.flat().map((b) => b.data).slice(0, 3)).toEqual(['p:personal', 'p:company', 'p:admin']);
     await w.engine.onButton(ME, 'p:admin', welcome);
     const card = w.transport.edits.at(-1)!;
     expect(card.html).toContain('ИИ-администратор');
@@ -699,23 +705,27 @@ describe('products in the chat', () => {
     expect(String(lead.message)).toContain('Продукт: ИИ-администратор');
   });
 
-  it('intake step 1 offers the products as buttons and stores the chosen one; the agent card shows only the public prices', async () => {
+  it('intake step 1 offers the products as buttons and stores the chosen one; the flagship cards show their plans', async () => {
     const w = world();
     await w.engine.onCommand(ME, 'start', '');
     await w.engine.onButton(ME, 'm:discuss', w.card());
     const step1 = w.transport.edits.at(-1)!;
     expect(step1.buttons!.flat().map((b) => b.data)).toEqual([
-      'n:admin', 'n:receptionist', 'n:automation', 'n:content', 'n:miniapp', 'n:agent', 'n:ai', 'n:site', 'n:other',
+      'n:personal', 'n:company', 'n:admin', 'n:receptionist', 'n:automation', 'n:content', 'n:miniapp', 'n:ai', 'n:site', 'n:other',
     ]);
     await w.engine.onButton(ME, 'n:miniapp', w.card());
     await w.engine.onButton(ME, 'd:month', w.card());
     await w.engine.onButton(ME, 'b:mid', w.card());
     await w.engine.onButton(ME, 'h:none', w.card());
     expect(w.leadTasks()[0]!.meta.lead).toMatchObject({ product: 'Telegram Mini App', service: 'app' });
-    await w.engine.onButton(ME, 'p:agent', w.card()).catch(() => undefined);
-    const agent = (await import('../src/client/texts.js')).productCardHtml('ru', 'agent');
-    expect(agent).toContain('$150 + $15/мес');
-    expect(agent).toContain('$100 + $10/мес');
+    const { productCardHtml } = await import('../src/client/texts.js');
+    const personal = productCardHtml('ru', 'personal');
+    expect(personal).toContain('Старт $290 + $29/мес');
+    expect(personal).toContain('Плюс $490 + $49/мес');
+    expect(personal).toContain('Максимум $790 + $79/мес');
+    expect(productCardHtml('ru', 'company')).toContain('от $1 490 + $149/мес, точно по смете');
+    // the retired `agent` (a button of an old message) opens the Персональный ИИ card
+    expect(productCardHtml('ru', 'agent' as never)).toBe(personal);
   });
 
   it('a niche in free text gets one line with the typical product and its pairing', async () => {
@@ -732,19 +742,21 @@ describe('products in the chat', () => {
     expect(nicheHint('ru', 'что-то непонятное')).toBe('');
   });
 
-  it('the sanitiser lets the Dono and Polly prices through and still strips every other price', () => {
+  it('the sanitiser lets the flagship plans through and still strips every other price (the retired Dono and Polly amounts included)', () => {
     const NOTE = 'Стоимость и сроки назовём после короткого разговора с командой.';
-    const ok = sanitizeAnswer('Dono стоит $150 + $15/мес. Polly: $100 + $10/мес.', NOTE);
+    const ok = sanitizeAnswer('Персональный ИИ от $290 + $29/мес. ИИ-компания от $1490 + $149/мес.', NOTE);
     expect(ok.removed).toBe(0);
-    expect(ok.text).toContain('$150 + $15/мес');
-    expect(ok.text).toContain('$100 + $10/мес');
-    expect(sanitizeAnswer('Dono: $150 + $15/month.', NOTE).removed).toBe(0);
+    expect(ok.text).toContain('$290 + $29/мес');
+    expect(ok.text).toContain('$1490 + $149/мес');
+    expect(sanitizeAnswer('Personal AI: $490 + $49/month.', NOTE).removed).toBe(0);
+    // Dono and Polly are not sold any more and their plans left the list: their old amounts are foreign
+    expect(sanitizeAnswer('Dono стоит $150 + $15/мес.', NOTE).removed).toBe(1);
     // the site's prices go through, a stale or invented one does not
     expect(sanitizeAnswer('Бот-администратор стоит от $290. Расскажете о салоне?', NOTE)).toEqual({ text: 'Бот-администратор стоит от $290. Расскажете о салоне?', removed: 0 });
     expect(sanitizeAnswer('Mini App от $660, внедрение ИИ от $550.', NOTE).removed).toBe(0);
     expect(sanitizeAnswer('Приёмщик заявок стоит $300.', NOTE).text).toBe(NOTE);
     expect(sanitizeAnswer('Приёмщик заявок стоит $220 за 3 дня.', NOTE).text).toBe(NOTE);
-    for (const bad of ['Dono стоит $200 + $15/мес.', 'Dono: $150 + $25/мес.', 'Бот-администратор стоит $99.', 'Polly: $150 + $10/мес.', 'Сайт от 300 долларов.']) {
+    for (const bad of ['Персональный ИИ стоит $200 + $15/мес.', 'Бот-администратор стоит $99.', 'Polly: $100 + $10/мес.', 'Сайт от 300 долларов.']) {
       const r = sanitizeAnswer(bad, NOTE);
       expect(r.removed, bad).toBe(1);
       expect(r.text).toBe(NOTE);

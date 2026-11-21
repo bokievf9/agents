@@ -1,4 +1,4 @@
-import type { BuilderKind, DeliveryChannel, SiteNeed } from './builder-link.js';
+import { FLAGSHIP_OPTION_IDS, type BuilderKind, type DeliveryChannel, type FlagshipOptions, type SiteNeed } from './builder-link.js';
 import { CLASSIC_IDS, PRODUCT_IDS, type CatalogueId } from './products.js';
 
 /**
@@ -12,12 +12,18 @@ export interface NeedRule {
   product: CatalogueId;
 }
 
+/**
+ * The flagships (owner 2026-11-22, `docs/products-contract.md` of the site): the whole company (departments, «как у вас») is `company`, a personal helper is `personal`.
+ * `company` comes before `department` («ИИ-отдел», one department is `implementation`), the plural «отделы» and «вся компания» are the whole company.
+ * Two guards against plain talk: «сайт как у вас» is a site, «для меня важно» is not a wish for a personal assistant.
+ */
 export const NEED_RULES: NeedRule[] = [
+  { id: 'company', re: /вс[яюе]\s+компани|все\s+отделы|(?<![\p{L}])отделы(?![\p{L}])|(?<!(?:сайт|лендинг|дизайн)\s)как\s+у\s+(вас|fir\s?tech)(?!\s+(дела|жизнь))|компани[яию]\s+на\s+агентах|(?<![\p{L}])ии[- ]?компани|директор\s+из\s+(ии|ai)|whole\s+company|all\s+departments|like\s+yours|ai\s+company/iu, product: 'company' },
+  { id: 'personal', re: /личн(ый|ого|ым)\s+(ассистент|помощник|ии)|персональн\w+\s+(ассистент|помощник|ии)|для\s+(себя|меня)(?![\p{L}])(?!\s+(важн|главн|удобн|принципиальн))|мне\s+лично|мо(й|его|им)\s+(личн\w+\s+)?ассистент|мо(й|его)\s+календар|мо[яй]\s+почт|(?<![\p{L}])(учёб|учеб)\p{L}*|personal\s+(ai|assistant|agent)|for\s+myself|my\s+own\s+assistant/iu, product: 'personal' },
   { id: 'department', re: /(?<![\p{L}])(ии|ai)[- ]?отдел|отдел из (ии|агент)|баз[ауыойе] знаний|knowledge base|ai department/iu, product: 'ai' },
   { id: 'miniapp', re: /mini ?app|мини-?апп|мини-?приложени|магазин (в|внутри) телеграм|каталог (в|внутри) телеграм/iu, product: 'miniapp' },
   { id: 'content', re: /контент|рилс|reels|посты|постов|соцсет|ведение (инстаграм|instagram)|content plan|social media/iu, product: 'content' },
   { id: 'automation', re: /автоматизац|таблиц|crm|отчёт(ы|ов)|отчет(ы|ов)|рассыл(к|ок)|интеграци|automation|spreadsheet|reports?\b/iu, product: 'automation' },
-  { id: 'assistant', re: /личн(ый|ого) (ассистент|помощник)|персональн\w+ (ассистент|помощник)|personal (assistant|agent)/iu, product: 'agent' },
   { id: 'booking', re: /администратор|запис(ь|и|ывать|ывает|ываться|аться)|бронь|бронир|booking|appointment|reservation|\breceptionist\b|front desk/iu, product: 'admin' },
   { id: 'intake', re: /приём заявок|приема заявок|принимать заявки|обрабатывать заявки|менеджер заявок|заявк\w+ (ночью|вечером|в instagram|из instagram)|квалифицир|lead intake|lead manager|qualif/iu, product: 'receptionist' },
   { id: 'site', re: /(?<![\p{L}])(сайт|лендинг|landing)(?![\p{L}])|\bwebsite\b|web ?site/iu, product: 'site' },
@@ -127,3 +133,29 @@ export const NO_SITE_DELIVERY: DeliveryChannel[] = ['playground'];
 /** «Что вы делаете», «какие продукты»: the only questions the whole product list answers. */
 export const asksCatalogue = (text: string): boolean =>
   /что вы делаете|чем (вы )?занимаетесь|какие (у вас )?(продукты|услуги|решения)|что (вы )?(предлагаете|продаёте|продаете|умеете|можете)|ваши (продукты|услуги)|what do you (do|offer|sell)|what (products|services) do you|which products|your (products|services)/iu.test(text);
+
+/** Words that name an option of a flagship (the `f.` chunk of the builder link): the services a Персональный ИИ connects and the departments and parts of an ИИ-компания. */
+const OPTION_WORDS: Record<'personal' | 'company', [string, RegExp][]> = {
+  personal: [
+    ['mail', /почт|e-?mail|\bmail\b|письм|inbox/iu], ['calendar', /календар|calendar|расписани|встреч/iu], ['tasks', /задач|дела\b|напоминани|tasks?\b|to-?do|reminders?/iu],
+    ['study', /учёб|учеб|студент|moodle|дедлайн|study|lessons?\b|language/iu], ['notes', /заметк|notes?\b/iu], ['messengers', /мессенджер|whatsapp|ватсап|messengers?/iu],
+    ['voice', /голос|voice|голосов/iu], ['memory', /памят|помни|memory|remember/iu],
+  ],
+  company: [
+    ['sales', /продаж|sales/iu], ['marketing', /маркетинг|marketing/iu], ['support', /поддержк|support/iu], ['production', /производств|production|delivery of work/iu],
+    ['backoffice', /бэк-?офис|бухгалтер|финанс|back[- ]?office|accounting/iu],
+    ['pult', /пульт|control (panel|room)|dashboard/iu], ['knowledge', /баз[аыуе] знаний|knowledge base/iu], ['channels', /канал|channels?\b/iu], ['training', /обучени|training/iu],
+  ],
+};
+
+/** The options of a flagship the visitor named in a message, in the site's order of ids. Only the product asked about (the others are never touched). */
+export function flagshipOptionsOf(text: string, products: readonly string[]): FlagshipOptions {
+  const out: FlagshipOptions = {};
+  for (const id of ['personal', 'company'] as const) {
+    if (!products.includes(id)) continue;
+    const hit = OPTION_WORDS[id].filter(([, re]) => re.test(text)).map(([o]) => o);
+    const picked = FLAGSHIP_OPTION_IDS[id].filter((o) => hit.includes(o));
+    if (picked.length) out[id] = picked;
+  }
+  return out;
+}
