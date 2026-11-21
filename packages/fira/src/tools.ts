@@ -15,6 +15,8 @@ export interface Outcome {
   used: string[];
   /** A knowledge search came back empty. */
   unknown: boolean;
+  /** `handoff_owner`: the one line for the owner (the app delivers it, e.g. `hq.alert(kind: 'human')`), and why. */
+  owner?: { line: string; reason: string };
 }
 
 export interface ToolCtx {
@@ -89,10 +91,38 @@ export const handoffHuman: FiraTool = {
   },
 };
 
+/** Reasons the owner is asked (the escalation policy of `escalation.ts` reads the same words). */
+export const OWNER_REASONS = ['money', 'legal', 'unsure', 'vip', 'person', 'anger'] as const;
+export type OwnerReason = (typeof OWNER_REASONS)[number];
+
+export const handoffOwner: FiraTool = {
+  def: {
+    name: 'handoff_owner',
+    description: 'Передать вопрос основателю одной строкой: деньги и скидки, договор и юридическое, нет знаний для ответа, важный клиент. Собеседнику сказать, что ответ придёт сюда же; что решит основатель, не обещать.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        reason: { type: 'string', enum: [...OWNER_REASONS], description: 'money, legal, unsure, vip, person, anger' },
+        line: { type: 'string', description: 'одна строка для основателя: суть вопроса без контактов' },
+      },
+      required: ['reason', 'line'],
+    },
+  },
+  run(input, ctx) {
+    const reason = (OWNER_REASONS as readonly string[]).includes(String(input.reason)) ? String(input.reason) : 'unsure';
+    const line = str(input.line, 200);
+    if (!line) return Promise.resolve(fail('invalid', 'line is required'));
+    ctx.outcome.owner = { line, reason };
+    ctx.outcome.handoff ??= reason;
+    return Promise.resolve(okv({ passed: true }));
+  },
+};
+
 export const BUILTIN_TOOLS: ToolRegistry = {
   [knowledgeSearch.def.name]: knowledgeSearch,
   [captureContact.def.name]: captureContact,
   [handoffHuman.def.name]: handoffHuman,
+  [handoffOwner.def.name]: handoffOwner,
 };
 
 /** Runs a tool by name for the model: unknown or not allowed names and thrown errors become a failed result, never an exception. */

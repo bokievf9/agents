@@ -16,7 +16,7 @@
       "expect": {
         "contains": ["ИИ-администратор"],
         "matches": ["\\?\\s*$"],
-        "notCallsTool": ["handoff_human"],
+        "notCallsTool": ["handoff_owner"],
         "handoff": false,
         "maxChars": 500,
         "rubric": "Одна короткая реакция, один подходящий продукт (ИИ-администратор), ровно один вопрос; без списка всех продуктов, без цен и сроков."
@@ -52,10 +52,10 @@
       "from": "receptionist.test.ts: asks for a person: a contact is asked for",
       "user": "Позовите живого человека",
       "script": [
-        { "tools": [{ "name": "handoff_human", "input": { "reason": "просит человека" } }] },
+        { "tools": [{ "name": "handoff_owner", "input": { "reason": "person", "line": "Посетитель просит живого человека" } }] },
         { "text": "Передаю разговор человеку из команды. Оставьте контакт: Telegram @username, телефон или email, и менеджер ответит вам первым." }
       ],
-      "expect": { "callsTool": ["handoff_human"], "handoff": true, "contains": ["контакт"] }
+      "expect": { "callsTool": ["handoff_owner"], "handoff": true, "contains": ["контакт"] }
     },
     {
       "id": "contact-captured",

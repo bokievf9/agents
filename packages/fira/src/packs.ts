@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -76,11 +76,16 @@ const RoleSchema = z.object({
   style: z.array(z.string()),
   tools: z.array(z.string()),
   tier: z.enum(MODEL_TIERS),
+  segments: z.array(z.string()),
+  offer: z.array(z.string()),
+  objections: z.array(z.object({ q: z.string().min(2), a: z.string().min(2) })),
+  selling: z.array(z.string()),
 });
 
 const NicheSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/),
   title: z.string().min(2),
+  kinds: z.array(z.string().regex(/^[a-z]+$/)),
   terms: z.array(z.string()),
   services: z.array(z.string()).min(1),
   faq: z.array(z.object({ q: z.string().min(2), a: z.string().min(2) })),
@@ -119,6 +124,10 @@ export function parseRolePack(md: string): RolePack {
     style: pick(p, 'стиль'),
     tools: list(p.meta.tools),
     tier: p.meta.tier ?? 'sonnet',
+    segments: pick(p, 'сегменты'),
+    offer: pick(p, 'оффер'),
+    objections: qa(pick(p, 'возражения')),
+    selling: pick(p, 'как продаёт менеджер'),
   });
 }
 
@@ -127,6 +136,7 @@ export function parseNichePack(md: string): NichePack {
   return NicheSchema.parse({
     id: p.meta.id,
     title: p.meta.title ?? p.title,
+    kinds: list(p.meta.kinds),
     terms: pick(p, 'термины'),
     services: pick(p, 'услуги'),
     faq: qa(pick(p, 'частые вопросы')),
@@ -147,5 +157,40 @@ const safeId = (id: string): string => {
 
 export const loadRolePack = (id: string, dir = join(PACKAGE_DIR, 'role-packs')): RolePack => parseRolePack(readFileSync(join(dir, `${safeId(id)}.md`), 'utf8'));
 export const loadNichePack = (id: string, dir = join(PACKAGE_DIR, 'niche-packs')): NichePack => parseNichePack(readFileSync(join(dir, `${safeId(id)}.md`), 'utf8'));
+/** Niche packs on disk (ids), sorted. */
+export const nichePackIds = (dir = join(PACKAGE_DIR, 'niche-packs')): string[] => readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)).sort();
+
+/** The niche pack that covers a business kind of the builder (`salon`, `dentist`, `delivery`...), or null. */
+const byKind = new Map<string, Map<string, NichePack>>();
+export function nicheOfKind(kind: string | undefined, dir = join(PACKAGE_DIR, 'niche-packs')): NichePack | null {
+  if (!kind) return null;
+  let map = byKind.get(dir);
+  if (!map) {
+    map = new Map();
+    for (const id of nichePackIds(dir)) {
+      const n = loadNichePack(id, dir);
+      for (const k of n.kinds) if (!map.has(k)) map.set(k, n);
+    }
+    byKind.set(dir, map);
+  }
+  return map.get(kind) ?? null;
+}
+
+/**
+ * A short brief of the visitor's niche for the per-turn block of a selling role (not the agent's own niche): what the field buys, its words, its
+ * questions and objections, its limits. Bounded to `max` characters so the turn block stays small.
+ */
+export function nicheBrief(n: NichePack, max = 1800): string {
+  const out = [
+    `Ниша собеседника: ${n.title}.`,
+    ...n.services.slice(0, 6).map((s) => `- ${s}`),
+    ...(n.terms.length ? [`Слова ниши: ${n.terms.slice(0, 3).join(' ')}`] : []),
+    ...n.faq.slice(0, 4).map((x) => `- Вопрос: ${x.q} Ответ: ${x.a}`),
+    ...n.objections.slice(0, 3).map((x) => `- Возражение: ${x.q} Ответ: ${x.a}`),
+    ...n.boundaries.map((b) => `- Граница: ${b}`),
+  ].join('\n');
+  return out.length > max ? `${out.slice(0, max - 1)}…` : out;
+}
+
 export const loadCompanyPack = (id: string, dir = join(PACKAGE_DIR, 'company-packs')): CompanyPack =>
   parseCompanyPack(JSON.parse(readFileSync(join(dir, `${safeId(id)}.json`), 'utf8')) as unknown);

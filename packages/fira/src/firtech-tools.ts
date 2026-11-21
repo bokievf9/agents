@@ -1,4 +1,4 @@
-import { fail, getPrices, okv, productName } from '@fir/core';
+import { fail, getPrices, okv, productName, type LlmToolDef } from '@fir/core';
 import type { FiraTool, ToolRegistry } from './tools.js';
 
 /**
@@ -58,4 +58,67 @@ export const callSlots: FiraTool = {
   },
 };
 
-export const FIRTECH_TOOLS: ToolRegistry = { price_list: priceList, builder_link: builderLink, call_slots: callSlots };
+/** The enums of `record_brief` the app knows (HQ passes the builder's kinds, products, channels, goals and deadlines). */
+export interface BriefEnums {
+  kinds?: readonly string[];
+  products?: readonly string[];
+  channels?: readonly string[];
+  goals?: readonly string[];
+  timelines?: readonly string[];
+}
+
+const strOf = (description: string, values?: readonly string[]) => ({ type: 'string', description, ...(values?.length ? { enum: [...values] } : {}) });
+const listOf = (description: string, values?: readonly string[]) => ({ type: 'array', description, items: values?.length ? { type: 'string', enum: [...values] } : { type: 'string' } });
+
+/**
+ * `record_brief`: the lead manager reports what the visitor said about himself (the old JSON `extract` of the receptionist as a native tool). The app
+ * merges it into its own state; nothing here is shown to the visitor. Only the visitor's own words: empty when he did not say it.
+ */
+export function recordBriefDef(e: BriefEnums = {}): LlmToolDef {
+  return {
+    name: 'record_brief',
+    description: 'Записать, что собеседник сам рассказал о себе (бизнес, боль, продукт, каналы, цели, срок, бюджет). Звать на каждом ходу, где он сказал что-то новое; только его слова, пустое не заполнять.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kind: strOf('вид бизнеса', e.kinds),
+        niche: { type: 'string', description: 'бизнес его словами, коротко' },
+        pain: { type: 'string', description: 'что мешает или теряется, его словами' },
+        product: strOf('подходящий продукт', e.products),
+        channels: listOf('где пишут его клиенты', e.channels),
+        goals: listOf('цели', e.goals),
+        timeline: strOf('срок', e.timelines),
+        budget: { type: 'string', description: 'бюджет, только если назвал сам' },
+        intent: { type: 'string', enum: ['qualify', 'price', 'builder', 'call', 'support', 'other'], description: 'чего он хочет сейчас' },
+        ready: { type: 'boolean', description: 'true, когда бизнес, боль и продукт ясны' },
+      },
+    },
+  };
+}
+
+export const recordBrief: FiraTool = {
+  def: recordBriefDef(),
+  run() {
+    return Promise.resolve(okv({ saved: true }));
+  },
+};
+
+/** Niche pages of the site that show the demo of a field (the stand-in of `demo_link`; HQ gives the lead's draft agent of the playground first). */
+export const DEMO_PAGE_KINDS = ['salon', 'barber', 'clinic', 'dentist', 'cafe', 'restaurant', 'delivery', 'shop', 'webshop', 'carservice', 'onlineschool', 'tutor', 'languages'] as const;
+
+export const demoLinkDef: LlmToolDef = {
+  name: 'demo_link',
+  description: 'Ссылка на демо: черновой агент на площадке Fir Tech под нишу собеседника или страница решения его ниши с демо. Для холодного собеседника, который сомневается, что это работает.',
+  input_schema: { type: 'object', properties: { kind: { type: 'string', description: 'вид бизнеса, если известен' } } },
+};
+
+export const demoLink: FiraTool = {
+  def: demoLinkDef,
+  run(input, ctx) {
+    const kind = typeof input.kind === 'string' && (DEMO_PAGE_KINDS as readonly string[]).includes(input.kind) ? input.kind : '';
+    const lang = ctx.lang === 'en' ? 'en' : 'ru';
+    return Promise.resolve(okv({ url: kind ? `https://firtech.pro/${lang}/solutions/${kind}` : `https://firtech.pro/${lang}#demo`, draft: false }));
+  },
+};
+
+export const FIRTECH_TOOLS: ToolRegistry = { price_list: priceList, builder_link: builderLink, call_slots: callSlots, record_brief: recordBrief, demo_link: demoLink };

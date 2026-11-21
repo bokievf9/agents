@@ -34,12 +34,19 @@ export interface RolePack {
   tools: string[];
   /** Default tier of the dialogue. */
   tier: ModelTier;
+  /** Selling roles (`lead-manager`): who buys and what hurts them, the offer, objections with answers, how a good manager sells. Empty elsewhere. */
+  segments: string[];
+  offer: string[];
+  objections: QA[];
+  selling: string[];
 }
 
 /** The field: words, services, typical questions, objections, limits of the field (medicine, law, money), tone. */
 export interface NichePack {
   id: string;
   title: string;
+  /** Business kinds of the builder (`k.` chunk) this niche covers, e.g. `salon, barber, nails` (front matter `kinds`). */
+  kinds: string[];
   terms: string[];
   services: string[];
   faq: QA[];

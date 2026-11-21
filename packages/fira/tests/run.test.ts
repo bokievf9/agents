@@ -17,7 +17,7 @@ describe('run(): native tool use', () => {
     expect(out.fallback).toBe(false);
     const first = llm.chats[0]!;
     expect(first.tier).toBe('sonnet');
-    expect(first.tools!.map((t) => t.name)).toEqual(['builder_link', 'call_slots', 'capture_contact', 'handoff_human', 'knowledge_search', 'price_list']);
+    expect(first.tools!.map((t) => t.name)).toEqual(['builder_link', 'call_slots', 'capture_contact', 'demo_link', 'handoff_owner', 'knowledge_search', 'price_list', 'record_brief']);
     expect(first.toolChoice).toEqual({ type: 'auto' });
     expect(Array.isArray(first.system) && first.system[0]!.cache).toBe(true);
     const second = llm.chats[1]!;
@@ -40,11 +40,12 @@ describe('run(): native tool use', () => {
 
   it('hand-off and contact are outcomes the app acts on; an invalid contact is refused to the model', async () => {
     const llm = new MockChatLlm([
-      { tools: [{ name: 'capture_contact', input: { contact: 'завтра' } }, { name: 'capture_contact', input: { contact: '@salon_liza', note: 'салон' } }, { name: 'handoff_human', input: { reason: 'просит человека' } }] },
+      { tools: [{ name: 'capture_contact', input: { contact: 'завтра' } }, { name: 'capture_contact', input: { contact: '@salon_liza', note: 'салон' } }, { name: 'handoff_owner', input: { reason: 'person', line: 'Просит человека' } }] },
       { text: 'Передаю разговор человеку из команды.' },
     ]);
     const out = await run(spec, conv({ text: 'Позовите человека, мой ник @salon_liza' }), deps(llm));
-    expect(out.outcome.handoff).toBe('просит человека');
+    expect(out.outcome.handoff).toBe('person');
+    expect(out.outcome.owner).toEqual({ line: 'Просит человека', reason: 'person' });
     expect(out.outcome.contact).toEqual({ contact: '@salon_liza', name: '', note: 'салон' });
     const results = llm.chats[1]!.messages.at(-1)!.content as Extract<LlmBlock, { type: 'tool_result' }>[];
     expect(results.map((r) => Boolean(r.is_error))).toEqual([true, false, false]);
