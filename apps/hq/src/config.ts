@@ -61,6 +61,8 @@ export interface Config extends BaseConfig {
   siteEventsToken: string | undefined;
   /** P-04: `x-hq-token` of HQ's own call bookings on the site (`POST <site>/api/slots`); empty: `LEAD_WEBHOOK_TOKEN` (the same site-HQ pair); both empty: nothing is booked on the site. */
   siteBookingToken: string | undefined;
+  /** Shared with the site (`UNSUBSCRIBE_SECRET`): signs the «Отписаться» links of news and recommendation letters; shorter than 16 characters counts as unset. */
+  unsubscribeSecret: string | undefined;
   /** Shared secret of `GET /office` (header `x-office-token`); without it the route answers 404. */
   officeToken: string | undefined;
   /** Secret of `/admin/*` (header `x-admin-token`). Required for the routes: without it `/admin/*` answers 404 (no fallback to `OFFICE_TOKEN`, which the public hero uses). */
@@ -195,6 +197,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     webChatToken: optional(env, 'WEB_CHAT_TOKEN'),
     siteEventsToken: optional(env, 'SITE_EVENTS_TOKEN') ?? optional(env, 'WEB_CHAT_TOKEN'),
     siteBookingToken: optional(env, 'SITE_BOOKING_TOKEN') ?? optional(env, 'LEAD_WEBHOOK_TOKEN'),
+    unsubscribeSecret: ((s) => (s && s.length >= 16 ? s : undefined))(optional(env, 'UNSUBSCRIBE_SECRET')),
     webhookPort: Math.round(num(env, 'WEBHOOK_PORT', 8787, 1, 65_535)),
     batchSize: Math.round(num(env, 'BATCH_SIZE', 10, 1, 100)),
     slotHours: [hours[0]!, hours[1]!],

@@ -55,13 +55,15 @@ export class DocumentsWorker implements Worker {
     if (needsClient && !asked) return { ok: false, result: '', error: 'нужен клиент: /doc <тип> <клиент>' };
     const found = asked ? this.o.lookup?.(asked) : undefined;
     const client = found?.client ?? asked;
+    // the customer of the papers: the cabinet client's legal name and address when he filled them in (the lookups above stay by the project's own name)
+    const legalLabel = typeof task.meta.legalLabel === 'string' ? task.meta.legalLabel.trim().slice(0, 500) : '';
     const store = storeFor(ctx);
     const p = zonedParts(ctx.now(), ctx.tz);
     const date = `${String(p.d).padStart(2, '0')}.${String(p.mo).padStart(2, '0')}.${p.y}`;
     const docKey = client || 'firtech.pro';
     const data: DocData = {
       // the sales chain names what is made (every product of the КП, P-08); a manual /doc takes it from the project
-      client, what: (typeof task.meta.what === 'string' && task.meta.what.trim()) || found?.what || '', date, number: '',
+      client: legalLabel || client, what: (typeof task.meta.what === 'string' && task.meta.what.trim()) || found?.what || '', date, number: '',
       milestones: found?.milestones ?? [],
       ...priceFromMeta(task.meta),
     };

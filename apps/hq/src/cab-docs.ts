@@ -5,6 +5,7 @@ import { planStageDates, PmStore, type Product } from '@fir/worker-project-manag
 import type { Hq } from '@fir/hq';
 import type { BillingWorker } from '@fir/worker-billing';
 import { fillTemplate, loadTemplate } from '@fir/worker-documents';
+import { legalLabel, legalMeta, legalPartyOfClient } from '@fir/worker-lead-intake';
 import { z } from 'zod';
 import { addCabMessage, addThreadMessage, ensureCabinetTables, postFromFirTech } from './cabinet.js';
 import type { Playground } from './playground.js';
@@ -392,7 +393,7 @@ export class CabDocs {
         { role: 'Исполнитель', name: 'Fir Tech', details: ['hello@firtech.pro'], date: when },
         sign
           ? { role: 'Заказчик', name: sign.name, details: ['Простая электронная подпись в кабинете firtech.pro'], date: when, signature: sign.png }
-          : { role: 'Заказчик', name: c?.name || c?.email || '____________', details: ['Подпись ставится в кабинете firtech.pro'] },
+          : { role: 'Заказчик', name: (c ? legalPartyOfClient(this.db, c.id)?.name : '') || c?.name || c?.email || '____________', details: ['Подпись ставится в кабинете firtech.pro'] },
       );
     }
     const doc = { ...markdownToPdfDoc(body, { title: row.title, footer: 'Fir Tech · firtech.pro' }), ...(parties.length ? { parties } : {}) };
@@ -822,7 +823,7 @@ export class CabDocs {
       const total = stages.reduce((a, x) => a + (x.amountUsd ?? 0), 0);
       const number = `АКТ-${p.id}`;
       const text = fillTemplate(loadTemplate('act'), {
-        client: p.client || c.name || c.email, what: p.what, date, number, price: total > 0 ? `$${total}` : '',
+        client: (legalPartyOfClient(this.db, c.id) ? legalLabel(legalPartyOfClient(this.db, c.id)!) : '') || p.client || c.name || c.email, what: p.what, date, number, price: total > 0 ? `$${total}` : '',
         milestones: stages.map((x) => `- Этап ${x.stageNo}: ${x.title}${x.amountUsd !== null ? `, $${x.amountUsd}` : ''}`),
       })
         .replace(/\[заполнить: замечания или «нет»\]/, 'нет')
@@ -992,7 +993,8 @@ export class CabDocs {
       }
     }
     if (meta.contract) {
-      hq.createTask({ title: `Договор: ${meta.client ?? c.name ?? c.email}`, dept: 'backoffice', creator: 'head', priority: 1, meta: meta.contract });
+      // the legal name may have been filled in after the owner approved the КП: read it again now
+      hq.createTask({ title: `Договор: ${meta.client ?? c.name ?? c.email}`, dept: 'backoffice', creator: 'head', priority: 1, meta: { ...meta.contract, ...legalMeta(legalPartyOfClient(this.db, c.id)) } });
       hq.wake('backoffice-head', 'task');
     }
     hq.log('client', 'quote_accepted', 'document', String(r.id));
@@ -1094,7 +1096,7 @@ export class CabDocs {
     const quote = this.db.prepare("SELECT meta FROM cab_documents WHERE kind = 'quote' AND pack_id IS ? AND client_id = ? ORDER BY id DESC LIMIT 1").get(r.pack_id, clientId) as { meta: string } | undefined;
     const invoice = (JSON.parse(quote?.meta || '{}') as { invoice?: Record<string, unknown>; client?: string });
     if (invoice.invoice && !this.db.prepare("SELECT 1 FROM tasks WHERE json_extract(meta, '$.action') = 'kp_invoice' AND json_extract(meta, '$.packId') IS ? AND json_extract(meta, '$.stageNo') = 1").get(r.pack_id)) {
-      hq.createTask({ title: `Счёт этапа 1: ${invoice.client ?? c.name ?? c.email}`, dept: 'support', creator: 'head', priority: 1, meta: invoice.invoice });
+      hq.createTask({ title: `Счёт этапа 1: ${invoice.client ?? c.name ?? c.email}`, dept: 'support', creator: 'head', priority: 1, meta: { ...invoice.invoice, ...legalMeta(legalPartyOfClient(this.db, c.id)) } });
       hq.wake('support-head', 'task');
     }
     postFromFirTech(this.db, t, c.id, r.lead_id,

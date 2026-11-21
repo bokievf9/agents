@@ -57,6 +57,12 @@ export function ensureCabinetTables(db: Db): void {
   db.exec(CAB_FILES_SCHEMA);
   // the profile of the cabinet (2026-11-22): phone and company next to the name, the Telegram handle and the language
   for (const c of ['phone', 'company']) if (!hasColumn(db, 'cab_clients', c)) db.exec(`ALTER TABLE cab_clients ADD COLUMN ${c} TEXT NOT NULL DEFAULT ''`);
+  // profile v2 (2026-11-23): consents, channel, the business facts and the legal party of the papers (site contract `docs/cabinet.md`, `client-prefs.ts`)
+  if (!hasColumn(db, 'cab_clients', 'recommendations_consent')) db.exec('ALTER TABLE cab_clients ADD COLUMN recommendations_consent INTEGER NOT NULL DEFAULT 0');
+  if (!hasColumn(db, 'cab_clients', 'notify_channel')) db.exec("ALTER TABLE cab_clients ADD COLUMN notify_channel TEXT NOT NULL DEFAULT 'email'");
+  // the chat of the client's own Telegram bot link; nothing writes it yet (the link by the bot is not built), so «telegram» channels fall back to email
+  if (!hasColumn(db, 'cab_clients', 'tg_chat_id')) db.exec('ALTER TABLE cab_clients ADD COLUMN tg_chat_id INTEGER');
+  for (const c of ['niche', 'website', 'city', 'legal_name', 'legal_address', 'refund_wallet']) if (!hasColumn(db, 'cab_clients', c)) db.exec(`ALTER TABLE cab_clients ADD COLUMN ${c} TEXT NOT NULL DEFAULT ''`);
   // P-13 (2026-11-22): a manager line the client should hear about by email (`notify`) and whether that email went (`mailed`); see `client-mail.ts`
   for (const t of ['cab_messages', 'cab_tmsgs']) {
     for (const c of ['notify', 'mailed']) if (!hasColumn(db, t, c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} INTEGER NOT NULL DEFAULT 0`);

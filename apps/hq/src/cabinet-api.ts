@@ -34,6 +34,8 @@ export interface CabinetDeps {
   tools: () => Tools;
   billing: BillingWorker;
   siteUrl: string;
+  /** `UNSUBSCRIBE_SECRET`: without it HQ sends no news or recommendation letters. */
+  unsubscribeSecret?: string | undefined;
   dataDir: string;
   mediaSecret?: string | undefined;
   mediaBase?: string | undefined;
@@ -50,7 +52,7 @@ export function buildCabinet(o: CabinetDeps): CabinetApi {
   const now = o.hq.now;
   const notifyOwner = (t: string) => hooks.notifyOwner?.(t);
   const cabinetTicket = (t: { id: number; name: string; text: string; telegram: string; leadId?: number }) => hooks.cabinetTicket?.(t);
-  const mail = new ClientMail({ hq: o.hq, tools: o.tools, siteUrl: o.siteUrl });
+  const mail = new ClientMail({ hq: o.hq, tools: o.tools, siteUrl: o.siteUrl, unsubscribeSecret: o.unsubscribeSecret });
   const docs = new CabDocs({ hq: o.hq, now, tools: o.tools, billing: o.billing, siteUrl: o.siteUrl, notifyOwner, mail, ...(o.kpValidDays !== undefined ? { kpValidDays: o.kpValidDays } : {}) });
   const ref: { pg?: Playground } = {};
   const threads = new CabThreads({

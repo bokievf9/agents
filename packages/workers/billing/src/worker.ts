@@ -227,11 +227,11 @@ export class BillingWorker {
    * The invoice for the owner to send. A project invoice (not a subscription payment) carries the fixed conditions line: domain, hosting,
    * server and paid third-party services are not in the sum. `infra` is what the client already has (from the lead's brief); unknown is the default line.
    */
-  invoiceText(inv: Invoice, infra: Infrastructure = {}): string {
+  invoiceText(inv: Invoice, infra: Infrastructure = {}, legal = ''): string {
     const page = this.chainMethods(inv).length > 0 && this.payUrl(inv) !== null;
     return [
       `Счёт ${inv.number}`,
-      `Клиент: ${inv.client}`,
+      `Клиент: ${legal || inv.client}`,
       `За что: ${inv.what}`,
       `Сумма: ${usd(inv.amountUsd)}`,
       ...(page ? [`Сумма к переводу: ${usdt(inv.payAmountUsd)} USDT (ровно эта сумма: по ней платёж находится автоматически)`] : []),
@@ -262,7 +262,7 @@ export class BillingWorker {
   }
 
   /** Creates an invoice and stages its text for the owner (locked, level 0). */
-  async createInvoice(ctx: WorkerCtx, a: { client: string; amountUsd: number; what: string; dueDate?: string | null; method?: PayMethod | null; newProject?: boolean; subscriptionId?: number | null; link?: InvoiceLink; infra?: Infrastructure; locale?: Locale }): Promise<Invoice> {
+  async createInvoice(ctx: WorkerCtx, a: { client: string; amountUsd: number; what: string; dueDate?: string | null; method?: PayMethod | null; newProject?: boolean; subscriptionId?: number | null; link?: InvoiceLink; infra?: Infrastructure; legal?: string; locale?: Locale }): Promise<Invoice> {
     const store = this.store(ctx);
     const year = zonedParts(ctx.now(), ctx.tz).y;
     const due = a.dueDate ?? addDays(dateStr(ctx.now(), ctx.tz), DEFAULT_DUE_DAYS);
@@ -276,7 +276,7 @@ export class BillingWorker {
     );
     await ctx.requestApproval(
       KIND_INVOICE,
-      { text: this.invoiceText(inv, a.infra), invoiceId: inv.id, name: inv.client },
+      { text: this.invoiceText(inv, a.infra, a.legal), invoiceId: inv.id, name: inv.client },
       `${a.link?.chain ? `${a.link.chain}\n` : ''}Счёт ${inv.number} для ${inv.client}: ${usd(inv.amountUsd)}, до ${ruDate(inv.dueDate)}. Одобрение = «счёт утверждён», отправьте его клиенту сами. Метка в скобках означает, что реквизитов нет в PAYMENT_DETAILS_JSON: нажмите «Править».${a.link?.totalUsd ? ` Сумма: ${a.link.stageNo ? `этап ${a.link.stageNo}${a.link.stageCount ? ` из ${a.link.stageCount}` : ''}` : 'часть'} точной цены пакета из КП (всего ${usd(a.link.totalUsd)}), проверьте и поправьте текст.` : ''}${this.payLinkLines(inv)}`,
     );
     ctx.log('invoice', inv.number);

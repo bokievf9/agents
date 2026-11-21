@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { detectInfrastructure, log, usd, type Button, type KindSpec, type Payload } from '@fir/core';
 import type { ApprovalState, Task, TaskApproval, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
-import { leadStoreFor, type Lead } from '@fir/worker-lead-intake';
+import { leadStoreFor, legalLabel, legalPartyOfLead, type Lead } from '@fir/worker-lead-intake';
 import { buildDocs, draftWording, exactLabel, PILOT_DIRECTIONS, stagesOf, type Brief } from './docs.js';
 import { builderEstimate } from './estimate.js';
 import { bundleOffer, guessDirection, OFFERS } from './offers.js';
@@ -105,6 +105,9 @@ export class PresalesWorker implements Worker {
       const lead = leadStoreFor(ctx).get(leadId);
       if (!lead) return { ok: false, result: '', error: `Лид ${leadId} не найден` };
       brief = briefFromLead(lead);
+      // the customer of the КП is the legal name the cabinet client gave (with the address), else the lead's name
+      const party = legalPartyOfLead(ctx.db, lead.id);
+      if (party) brief.client = legalLabel(party);
       const assumed = Array.isArray(task.meta.assumptions) ? task.meta.assumptions.filter((x): x is string => typeof x === 'string' && x.trim() !== '').slice(0, 6) : [];
       if (assumed.length) brief.assumptions = assumed;
       source = lead.origin;

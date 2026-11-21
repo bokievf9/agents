@@ -17,7 +17,7 @@ export interface Telegram {
 
 export interface Email {
   /** One plain-text email through Resend. Outward action: call it only from an approved step (the owner saw the text). */
-  send(m: { to: string; subject: string; text: string; replyTo?: string }): Promise<ToolResult<{ id: string }>>;
+  send(m: { to: string; subject: string; text: string; replyTo?: string; headers?: Record<string, string> }): Promise<ToolResult<{ id: string }>>;
 }
 
 export interface MacPoster {
@@ -102,12 +102,19 @@ export function createEmail(k: Kit): Email {
         if (msg.replyTo !== undefined && !EMAIL_RE.test(String(msg.replyTo).trim())) return fail('invalid', 'replyTo: one email address');
         if (typeof msg.subject !== 'string' || !msg.subject.trim() || msg.subject.length > 200 || /[\r\n]/.test(msg.subject)) return fail('invalid', 'subject: one line, 1..200 characters');
         if (typeof msg.text !== 'string' || !msg.text.trim() || msg.text.length > 20_000) return fail('invalid', 'text: 1..20000 characters');
+        // extra headers (List-Unsubscribe and its one-click partner): a few, plain names, one-line values
+        let extra: Record<string, string> | undefined;
+        if (msg.headers !== undefined) {
+          const e = Object.entries(msg.headers);
+          if (e.length > 5 || e.some(([n, v]) => !/^[A-Za-z][A-Za-z0-9-]{0,40}$/.test(n) || typeof v !== 'string' || !v || v.length > 600 || /[\r\n]/.test(v))) return fail('invalid', 'headers: up to 5, plain names, one-line values');
+          extra = Object.fromEntries(e);
+        }
         const cap = policyOf('email.send')!.limits.perDay!;
         const counterKey = `tools.email.${dayIn(k.now(), k.tz)}`;
         const j = k.deps.journal;
         const sent = j ? Number(j.setting(counterKey) || 0) : 0;
         if (sent >= cap) return fail('rate_limited', `email cap of ${cap} a day reached`, { retryable: false });
-        const body = JSON.stringify({ from: k.cfg.emailFrom, to: [msg.to.trim()], subject: msg.subject.trim(), text: msg.text, ...(msg.replyTo ? { reply_to: msg.replyTo.trim() } : {}) });
+        const body = JSON.stringify({ from: k.cfg.emailFrom, to: [msg.to.trim()], subject: msg.subject.trim(), text: msg.text, ...(msg.replyTo ? { reply_to: msg.replyTo.trim() } : {}), ...(extra ? { headers: extra } : {}) });
         const r = await rawRequest(`https://${RESEND_HOST}/emails`, {
           method: 'POST', hosts: [RESEND_HOST], headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', accept: 'application/json' }, body,
           timeoutMs: policyOf('email.send')!.limits.timeoutMs!, maxBytes: 100_000, perHost: 1, minGapMs: 600,
