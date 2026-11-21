@@ -149,7 +149,7 @@ describe('what counts as a request to act, and as a trivial question', () => {
   it.each([
     ['Одобри КП для Шифо', 'review'], ['пожалуйста, отклони счёт', 'review'], ['Ответь Лоле, что всё готово', 'chats'], ['напиши клиенту про макет', 'chats'],
     ['отметь оплату FT-2026-014', 'money'], ['выставь счёт за второй этап', 'money'], ['прими этап 2 у Лолы', 'projects'], ['создай задачу маркетингу', 'tasks'], ['сделай пост про ИИ', 'tasks'],
-    ['можешь поставить сводку на 9:30', 'tasks'],
+    ['можешь поставить сводку на 9:30', 'settings'],
   ])('«%s» goes to %s', (text, screen) => {
     expect(actionRequest(text)?.screen).toBe(screen);
   });

@@ -29,6 +29,15 @@ export const AGENT_STATES = ['draft', 'live'] as const;
 const MAX_AGENTS_PER_CLIENT = 3;
 const HISTORY_TURNS = 12;
 const DEFAULT_LIMITS = { draft: 50, live: 500 };
+/** The daily message limit of an agent without its own: the owner's settings (`pg_limit_draft`, `pg_limit_live`), else the defaults. */
+function defaultLimit(db: Db, state: 'draft' | 'live'): number {
+  try {
+    const v = Number((db.prepare('SELECT value FROM settings WHERE key = ?').get(`pg_limit_${state}`) as { value: string } | undefined)?.value);
+    return Number.isFinite(v) && v > 0 ? v : DEFAULT_LIMITS[state];
+  } catch {
+    return DEFAULT_LIMITS[state]; // a database without the HQ settings table (tests)
+  }
+}
 const RETENTION_DAYS = 30;
 
 const SCHEMA = `
@@ -378,7 +387,7 @@ export class Playground {
     return {
       id: a.id, publicId: a.public_id, name: a.name, company: a.company, niche: a.niche, goals: json<string[]>(a.goals, []), tone: a.tone, languages: json<string[]>(a.languages, ['ru']),
       persona: a.persona, tools: json<string[]>(a.tools, []), channels: { web: true, telegram: { connected: Boolean(ch.telegram) }, siteWidget: ch.siteWidget ?? null },
-      limits: { msgsPerDay: limits.msgsPerDay ?? DEFAULT_LIMITS[a.state === 'live' ? 'live' : 'draft'] }, state: a.state, mode: a.state === 'live' ? 'live' : 'demo', usageToday: { messages: this.usedToday(a.id) },
+      limits: { msgsPerDay: limits.msgsPerDay ?? defaultLimit(this.db, a.state === 'live' ? 'live' : 'draft') }, state: a.state, mode: a.state === 'live' ? 'live' : 'demo', usageToday: { messages: this.usedToday(a.id) },
       leadId: a.lead_id, projectId: a.project_id, chatPath: `/agent/${a.public_id}/chat`, createdAt: iso(a.created_at), updatedAt: iso(a.updated_at), ...extra,
     };
   }
@@ -694,7 +703,7 @@ export class Playground {
   }
 
   private async chat(a: AgentRow, o: { conversationId: string; text: string; channel: 'cabinet' | 'widget' | 'demo' }): Promise<ChatOut | { error: string }> {
-    const limit = json<{ msgsPerDay?: number }>(a.limits, {}).msgsPerDay ?? DEFAULT_LIMITS[a.state === 'live' ? 'live' : 'draft'];
+    const limit = json<{ msgsPerDay?: number }>(a.limits, {}).msgsPerDay ?? defaultLimit(this.db, a.state === 'live' ? 'live' : 'draft');
     if (this.usedToday(a.id) >= limit) {
       this.count(a.id, 'limit_hit');
       return { error: 'limit_reached' };

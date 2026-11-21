@@ -137,6 +137,8 @@ export class ApprovalQueue {
   private readonly kinds = new Map<string, KindSpec>();
   private editing: number | null = null;
   private format: CardFormat | null = null;
+  /** The approvals in a row a kind needs before it moves to level 1: one number for all by default, the owner's settings give it per kind. */
+  thresholdFor: (kind: string) => number = () => this.threshold;
 
   constructor(
     private readonly db: Db,
@@ -288,9 +290,10 @@ export class ApprovalQueue {
     this.db.prepare('UPDATE trust SET level = ?, streak = 0 WHERE kind = ?').run(level, kind);
   }
 
-  trustTable(): { kind: string; level: number; streak: number; locked: boolean }[] {
+  trustTable(): { kind: string; level: number; streak: number; locked: boolean; threshold: number }[] {
     return [...this.kinds.entries()].map(([kind, s]) => ({
       kind,
+      threshold: this.thresholdFor(kind),
       level: this.level(kind),
       streak: this.streak(kind),
       locked: Boolean(s.locked),
@@ -516,10 +519,10 @@ export class ApprovalQueue {
   private async bumpClean(kind: string): Promise<void> {
     this.db.prepare('UPDATE trust SET streak = streak + 1 WHERE kind = ?').run(kind);
     const spec = this.spec(kind);
-    if (this.level(kind) === 0 && !spec.locked && !spec.keepManual && this.streak(kind) >= this.threshold) {
+    if (this.level(kind) === 0 && !spec.locked && !spec.keepManual && this.streak(kind) >= this.thresholdFor(kind)) {
       this.db.prepare('UPDATE trust SET level = 1 WHERE kind = ?').run(kind);
       log('info', 'trust level raised', { kind, level: 1 });
-      await this.messenger.send(this.ownerId, `Тип «${kind}»: ${this.threshold} одобрений подряд без правок, перехожу на уровень 1 (делаю сам, отчитываюсь). Вернуть: /level ${kind} 0`);
+      await this.messenger.send(this.ownerId, `Тип «${kind}»: ${this.thresholdFor(kind)} одобрений подряд без правок, перехожу на уровень 1 (делаю сам, отчитываюсь). Вернуть: /level ${kind} 0`);
     }
   }
 }

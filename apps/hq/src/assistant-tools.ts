@@ -20,6 +20,8 @@ export interface AssistantToolDeps {
   links: PultLinks;
   /** What is waiting in the approval queue of the core (pending cards), next to the proposals of HQ. */
   pendingApprovals?: () => number;
+  /** The company settings as `GET /admin/settings` answers them (`settings.ts` `view`); absent: the tool says so. Read only. */
+  settingsView?: () => unknown;
 }
 
 type Period = 'today' | 'week' | 'month';
@@ -232,6 +234,13 @@ export function assistantTools(d: AssistantToolDeps): ToolRegistry {
       const up = s.services.filter((x) => x.state === 'up').map((x) => TITLE_RU[x.id] ?? x.title);
       const unknown = s.services.filter((x) => x.state === 'unknown').map((x) => TITLE_RU[x.id] ?? x.title);
       return Promise.resolve(okv({ ok: down.length === 0, down, up, unknown, link: links.to('company') }));
+    }),
+
+    tool('company_settings', () => {
+      const v = d.settingsView?.() as { settings?: Record<string, unknown>; usage?: unknown; restartRequired?: boolean } | null | undefined;
+      if (!v?.settings) return Promise.resolve(okv({ available: false, link: links.to('settings') }));
+      const { trust, ...rest } = v.settings as { trust?: { defaultThreshold?: number; kinds?: { kind: string; level: number; threshold: number }[] } } & Record<string, unknown>;
+      return Promise.resolve(okv({ ...rest, trust: { defaultThreshold: trust?.defaultThreshold, level1: (trust?.kinds ?? []).filter((k) => k.level === 1).map((k) => k.kind) }, usage: v.usage, restartRequired: v.restartRequired === true, link: links.to('settings') }));
     }),
 
     ['price_list', priceList],

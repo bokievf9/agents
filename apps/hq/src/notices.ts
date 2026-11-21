@@ -14,13 +14,15 @@ import { kindRu } from './tg.js';
  * the night's notices become one line of the morning summary (`takeNight`). At the desk (the site open) a notice is skipped: the inbox shows it.
  */
 
-export type NoticeType = 'client' | 'lead' | 'approval' | 'payment' | 'stage_ready' | 'stage_accepted' | 'signed' | 'call' | 'alert' | 'summary';
-export const NOTICE_TYPES: readonly NoticeType[] = ['client', 'lead', 'approval', 'payment', 'stage_ready', 'stage_accepted', 'signed', 'call', 'alert', 'summary'];
+export type NoticeType = 'client' | 'lead' | 'approval' | 'payment' | 'stage_ready' | 'stage_accepted' | 'signed' | 'call' | 'human' | 'chat' | 'alert' | 'summary';
+export const NOTICE_TYPES: readonly NoticeType[] = ['client', 'lead', 'approval', 'payment', 'stage_ready', 'stage_accepted', 'signed', 'call', 'human', 'chat', 'alert', 'summary'];
+/** The switch of a type in the settings (`notice.<name>`): the two stage types share one. Summaries are not switchable. */
+const SWITCH: Partial<Record<NoticeType, string>> = { client: 'client', lead: 'lead', approval: 'approval', payment: 'payment', stage_ready: 'stage', stage_accepted: 'stage', signed: 'signed', call: 'call', human: 'human', chat: 'chat' };
 
 /** Alerts that are reminders (Telegram); the rest stay in the Пульт and count in the morning line. */
 export const TG_ALERT_KINDS: ReadonlySet<AlertKind> = new Set<AlertKind>(['lost_lead', 'email_failed', 'llm', 'budget', 'service']);
 
-const UNGROUPED: ReadonlySet<NoticeType> = new Set<NoticeType>(['payment', 'alert', 'summary']);
+const UNGROUPED: ReadonlySet<NoticeType> = new Set<NoticeType>(['payment', 'human', 'alert', 'summary']);
 export const GROUP_MS = 5 * 60_000;
 const WINDOW_MS = 3 * 86_400_000;
 const KEEP_MS = 30 * 86_400_000;
@@ -54,13 +56,15 @@ const GROUP_RU: Record<NoticeType, [string, PultScreen]> = {
   stage_accepted: ['Этапы приняты', 'projects'],
   signed: ['Договоры подписаны', 'projects'],
   call: ['Созвоны забронированы', 'calls'],
+  human: ['Клиенты просят человека', 'chats'],
+  chat: ['Сообщения клиентов', 'chats'],
   alert: ['Алерты', 'company'],
   summary: ['Сводки', 'home'],
 };
 /** The night line of the morning summary. */
 const NIGHT_RU: Record<NoticeType, string> = {
   client: 'новых клиентов', lead: 'заявок', approval: 'на одобрение', payment: 'оплат', stage_ready: 'этапов к приёмке', stage_accepted: 'этапов принято',
-  signed: 'подписей договоров', call: 'созвонов', alert: 'алертов', summary: 'сводок',
+  signed: 'подписей договоров', call: 'созвонов', human: 'просьб позвать человека', chat: 'сообщений клиентов', alert: 'алертов', summary: 'сводок',
 };
 const SOURCE_RU: Record<string, string> = {
   site: 'сайт', form: 'сайт', lead: 'сайт', web: 'веб-чат', chat: 'веб-чат', telegram: 'Telegram', bot: 'Telegram', cabinet: 'кабинет', builder: 'сборка проекта',
@@ -112,13 +116,28 @@ export class OwnerNotices {
     return this.d.hq.now();
   }
 
+  /** The owner's switches (settings): a type switched off is recorded as `muted` (never sent, never replayed when it is switched on again). */
+  private enabled(type: NoticeType): boolean {
+    const name = SWITCH[type];
+    return name === undefined || this.d.hq.setting(`notice.${name}`) !== '0';
+  }
+
+  /** The grouping window in ms (`notice.group_min`, default 5 minutes; 0: every notice alone). */
+  private groupMs(): number {
+    const raw = this.d.hq.setting('notice.group_min');
+    const n = raw === '' ? NaN : Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n * 60_000 : GROUP_MS;
+  }
+
   // ---- in ----
   /** Queues one notice (a `ref` already seen is ignored). Payments, alerts and summaries go out at once. Returns whether it was new. */
   async push(type: NoticeType, text: string, link: string, ref?: string): Promise<boolean> {
+    const muted = !this.enabled(type);
     const r = this.db
-      .prepare('INSERT OR IGNORE INTO owner_notices (at, type, ref, text, link, night) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(this.now, type, ref ?? null, type === 'summary' ? text.slice(0, 1500) : oneLine(noContacts(text), 400), link, type !== 'summary' && this.d.hq.isQuiet() ? 1 : 0);
+      .prepare('INSERT OR IGNORE INTO owner_notices (at, type, ref, text, link, night, state) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(this.now, type, ref ?? null, type === 'summary' ? text.slice(0, 1500) : oneLine(noContacts(text), 400), link, type !== 'summary' && this.d.hq.isQuiet() ? 1 : 0, muted ? 'muted' : 'queued');
     if (!r.changes) return false;
+    if (muted) return true;
     if (UNGROUPED.has(type)) await this.flush();
     return true;
   }
@@ -126,6 +145,7 @@ export class OwnerNotices {
   /** An alert from `hq.alert` (through the Director): the reminder kinds only; the rest stays in the Пульт. */
   async alert(text: string, o: AlertOpts = {}): Promise<boolean> {
     if (!TG_ALERT_KINDS.has(o.kind ?? 'other')) return false;
+    if (this.d.hq.setting(`notice.alert.${o.kind ?? 'other'}`) === '0') return false;
     const line = o.short?.trim() || text.split('\n')[0]!;
     return this.push('alert', line, this.d.links.to(o.kind === 'lost_lead' ? 'leads' : o.kind === 'email_failed' ? 'chats' : 'company'));
   }
@@ -155,7 +175,7 @@ export class OwnerNotices {
         continue;
       }
       const last = (this.db.prepare("SELECT MAX(sent_at) m FROM owner_notices WHERE type = ? AND state IN ('sent','desk')").get(type) as { m: number | null }).m;
-      if (last !== null && now - last < GROUP_MS) continue;
+      if (last !== null && now - last < this.groupMs()) continue;
       if (mine.length === 1) done += await this.send(mine, mine[0]!.text, mine[0]!.link);
       else {
         const [title, screen] = GROUP_RU[type];
@@ -246,9 +266,10 @@ export class OwnerNotices {
       return 0;
     }
     for (const f of found) {
-      const r = this.db.prepare('INSERT OR IGNORE INTO owner_notices (at, type, ref, text, link, label, night) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .run(this.now, f.type, f.ref, oneLine(noContacts(f.text), 400), f.link, oneLine(noContacts(f.label), 60), this.d.hq.isQuiet() ? 1 : 0);
-      n += r.changes;
+      const muted = !this.enabled(f.type);
+      const r = this.db.prepare('INSERT OR IGNORE INTO owner_notices (at, type, ref, text, link, label, night, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(this.now, f.type, f.ref, oneLine(noContacts(f.text), 400), f.link, oneLine(noContacts(f.label), 60), this.d.hq.isQuiet() ? 1 : 0, muted ? 'muted' : 'queued');
+      if (!muted) n += r.changes;
     }
     await this.flush();
     return n;

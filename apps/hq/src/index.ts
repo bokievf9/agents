@@ -4,6 +4,7 @@ import {
 import { HeartbeatWorker, Hq, meterLlm, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
 import { Director } from './director.js';
+import { createSettings, startValues, type SettingsDefaults } from './settings.js';
 import { seedTiming } from './timing.js';
 import { HEAD_ID, MarketingHead } from './heads/marketing.js';
 import { HEAD_ID as SALES_HEAD_ID, SalesHead, seedSales } from './heads/sales.js';
@@ -76,6 +77,16 @@ const recovered = hq.recoverInterrupted();
 if (recovered.length) log('warn', 'interrupted tasks put back to assigned', { count: recovered.length });
 // Two clocks, both settings (the first start takes them from TZ and OWNER_TZ): the company's for the market, the owner's for what reaches him.
 seedTiming(hq, cfg);
+// The owner's settings (`GET`/`PATCH /admin/settings`) override the env, which stays the default: read before anything below takes a value from `cfg`.
+const settingsDefaults: SettingsDefaults = {
+  trustThreshold: cfg.trustThreshold, slotHours: [...cfg.slotHours], kpValidDays: cfg.kpValidDays, clientLlmDailyCap: cfg.clientLlmDailyCap,
+  tgApprovalCards: cfg.tgApprovalCards, tgGroupReports: cfg.tgGroupReports,
+};
+const startVals = startValues(hq, settingsDefaults);
+cfg.tgApprovalCards = startVals.tgApprovalCards;
+cfg.tgGroupReports = startVals.tgGroupReports;
+cfg.clientLlmDailyCap = startVals.clientLlmDailyCap;
+cfg.slotHours = startVals.slotHours;
 seedOrg(hq, cfg);
 seedSupport(hq, cfg, (file) => readFileSync(join(cfg.instructionsDir, file), 'utf8').trim());
 seedSales(hq, cfg);
@@ -92,11 +103,12 @@ const telegram = new OutboxMessenger(grammyMessenger(bot));
 const channel: OwnerChannel = new OwnerChannel({
   hq, inner: telegram, ownerId: cfg.ownerId, awayAfterMin: cfg.presenceAwayAfterMin, approvalPending: (id: number): boolean => queue.get(id)?.status === 'pending',
   onCardSent: (id: number, messageId: number) => queue.noteCard(id, cfg.ownerId, messageId),
-  telegram: 'notices', cards: cfg.tgApprovalCards, pultUrl: links.base,
+  telegram: 'notices', cards: cfg.tgApprovalCards, pultUrl: links.base, skipAtDesk: () => hq.setting('notice.skip_desk') !== '0',
 });
 const notices = new OwnerNotices({ hq, links, deliver: (html) => channel.notice(html) });
 const messenger = channel;
 const queue: ApprovalQueue = new ApprovalQueue(db, messenger, cfg.ownerId, cfg.trustThreshold);
+queue.thresholdFor = startVals.trustThreshold; // per kind from the settings, else the global one, else TRUST_THRESHOLD
 hq.attachQueue(queue);
 // A decision cut off mid-execution by a restart is failed (never run twice); the owner decides again.
 const cutOff = queue.recoverInterrupted();
@@ -130,7 +142,8 @@ const reporter = cfg.tgGroupReports
   : new Reporter(undefined, {}, new Map());
 
 const director = new Director({ hq, llm, messenger, queue, ownerId: cfg.ownerId, reporter, notices, links });
-const assistant = new OwnerAssistant({ hq, llm, links, pendingApprovals: () => queue.pending().length });
+const settingsRef: { view: (() => unknown) | null } = { view: null };
+const assistant = new OwnerAssistant({ hq, llm, links, pendingApprovals: () => queue.pending().length, settingsView: () => settingsRef.view?.() ?? null });
 // The agents' toolbox (docs/tools.md): keys from the config and the app's adapters; every head gives each worker run its own `ctx.tools`.
 const tools = appTools(hq, llm, cfg);
 
@@ -190,7 +203,7 @@ const sales = new SalesHead({
   hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel, freeSlots,
   // «демо на ваших данных»: a lead with a niche gets its draft agent at once, the demo link goes into the first reply
   demoLink: (leadId, lang) => cabinetRef.current?.playground.draftForLead(leadId, lang)?.url ?? null,
-  referralReward: cfg.referralReward, kpValidDays: cfg.kpValidDays,
+  referralReward: cfg.referralReward, kpValidDays: startVals.kpValidDays,
   ...(clientBot ? { client: clientBot } : {}), lost,
 });
 const auditGate = new AuditGate(hq.now);
@@ -206,7 +219,7 @@ const backoffice = new BackofficeHead({
 // Cabinet v3 (2026-11-22): the client's documents (accept, sign), threads and uploads, the playground of agents. The heads hand the owner's approvals to it.
 const chatGateForAgents = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
 const cabinet = buildCabinet({
-  hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents, kpValidDays: cfg.kpValidDays,
+  hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents, kpValidDays: startVals.kpValidDays,
   tools: () => toolsFor(hq, tools, { agentId: 'documents', dept: BACKOFFICE, messenger, ownerId: cfg.ownerId }),
 });
 sales.cabinet = cabinet.docs;
@@ -346,11 +359,20 @@ const webChat = cfg.webChatToken
 webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix, calls }));
 if (webChat) calls.webReply = (sessionId, text) => webChat.store.queueOwnerReply(sessionId, text);
 
+// The company settings of the Пульт: the first department limits are written once, when every limit is still 0.
+const settings = createSettings({
+  hq, queue, defaults: settingsDefaults, slotHours: cfg.slotHours, now: hq.now,
+  limiters: () => [...new Set([clientBot?.engine.limiter, chatGateForAgents, chatGate].filter((x): x is RateLimiter => x !== undefined))],
+  setLevel: (kind, level) => void director.levelCommand(`${kind} ${level}`),
+  onSchedule: () => { director.start(); director.onTimingChange?.(); },
+});
+settingsRef.view = () => settings.view();
+if (settings.seedBudgets()) log('info', 'first department limits written', { source: 'seed 2026-11-23' });
 const admin = cfg.adminToken
   ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: COMMAND_NAMES, drill: (arg) => drill.command(arg), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),
       reloadPrices: async () => { const r = await loadPrices(pricesOpts); return { source: r.source, updatedAt: r.prices.updatedAt }; },
       acceptStage: (projectId, stageNo) => Promise.resolve(production.acceptStage(projectId, stageNo, 'client')),
-      billing, marketing, tools, cabinet, calls, rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
+      billing, marketing, tools, cabinet, calls, rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), settings, ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
     })
   : null;
 // Presence: the site pings while it is open; without pings the owner counts as away and a digest goes to Telegram.

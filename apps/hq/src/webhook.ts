@@ -51,7 +51,7 @@ export const MAX_UPLOAD_BODY = 14 * 1024 * 1024 + 64 * 1024;
 const SIGN_PATH = /^\/admin\/clients\/\d+\/documents\/\d+\/sign$/;
 const UPLOAD_PATH = /^\/admin\/clients\/\d+\/uploads$/;
 /** The one route that takes `PATCH` (the agent's settings, `playground.ts`); everything else of `/admin/*` is GET or POST. */
-const AGENT_PATCH_PATH = /^\/admin\/clients\/\d+\/agents\/\d+$/;
+const AGENT_PATCH_PATH = /^\/admin\/(?:clients\/\d+\/agents\/\d+|settings)$/;
 const bodyLimit = (path: string): number => (REACH_RESULT_PATH.test(path) ? MAX_REACH_BODY : SIGN_PATH.test(path) ? MAX_SIGN_BODY : UPLOAD_PATH.test(path) ? MAX_UPLOAD_BODY : MAX_BODY);
 /** What a browser shows inline; the rest (Word, zip, text) is offered as a download. */
 const INLINE_TYPES = /^(image\/|video\/|application\/pdf$)/;

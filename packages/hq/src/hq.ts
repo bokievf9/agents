@@ -844,7 +844,20 @@ export class Hq {
   // ---- costs ----
   /** Department budget: the monthly limit of its head (0 = no limit). */
   deptBudget(dept: string): number {
-    return this.headOf(dept)?.budgetUsdMonth ?? 0;
+    return this.budgetAgent(dept)?.budgetUsdMonth ?? 0;
+  }
+
+  /** The agent that carries a department's limit: its head; the Director's own work (`hq`, `director`) is limited on the Director. */
+  budgetAgent(dept: string): Agent | undefined {
+    return dept === 'hq' || dept === 'director' ? this.agent('director') : this.headOf(dept);
+  }
+
+  /** Sets the monthly limit (USD, 0 = none) of a department at once: `overBudget` and the 80% / 100% alerts read it on the next cost. False for an unknown department. */
+  setDeptBudget(dept: string, usd: number): boolean {
+    const a = this.budgetAgent(dept);
+    if (!a) return false;
+    this.db.prepare('UPDATE agents SET budget_usd_month = ? WHERE id = ?').run(usd, a.id);
+    return true;
   }
 
   monthStart(at = this.now()): number {

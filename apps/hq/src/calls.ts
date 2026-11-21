@@ -96,10 +96,18 @@ export class Calls {
     return (this.db.prepare("SELECT at FROM call_bookings WHERE state != 'cancelled' AND at > ?").all(this.d.hq.now()) as { at: number }[]).map((r) => r.at);
   }
 
-  /** The site's free windows minus the ones HQ holds. */
+  /**
+   * The site's free windows minus the ones HQ holds. A held call blocks the windows closer to it than its length plus the buffer (the owner's settings
+   * `call_min`, default 30, and `call_buffer_min`, default 0), so with the defaults only the same window is blocked.
+   */
   freeOf(slots: number[]): number[] {
-    const held = new Set(this.held());
-    return slots.filter((s) => !held.has(s));
+    const num = (key: string, d: number) => {
+      const raw = this.d.hq.setting(key);
+      return raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : d;
+    };
+    const gap = (num('call_min', 30) + num('call_buffer_min', 0)) * 60_000;
+    const held = this.held();
+    return slots.filter((s) => !held.some((h) => Math.abs(h - s) < gap));
   }
 
   private when(at: number, lang: string | null | undefined): string {

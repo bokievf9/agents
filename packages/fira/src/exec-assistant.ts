@@ -69,10 +69,15 @@ export const EXEC_TOOL_DEFS: Record<string, LlmToolDef> = {
     description: 'Состояние сервисов: сайт, модели (Claude), клиентский Telegram, сервер, публикации; что не в норме и с какого времени.',
     input_schema: obj(),
   },
+  company_settings: {
+    name: 'company_settings',
+    description: 'Настройки компании только на чтение: расписание (сводка, дайджест, тихие часы), какие напоминания включены, пороги доверия, лимиты расходов отделов и расход месяца, окна созвонов, срок КП. Менять нельзя: на просьбу поменять дать ссылку из поля link.',
+    input_schema: obj(),
+  },
   pult_link: {
     name: 'pult_link',
-    description: 'Ссылка на экран Пульта: review (одобрения), leads, lead, clients, projects, project, chats, money, tasks, company, home. Для просьб что-то сделать: дать ссылку, где это делается.',
-    input_schema: obj({ screen: { type: 'string', enum: ['review', 'leads', 'lead', 'clients', 'projects', 'project', 'chats', 'money', 'tasks', 'company', 'home'] }, id: { type: 'integer' } }, ['screen']),
+    description: 'Ссылка на экран Пульта: review (одобрения), leads, lead, clients, projects, project, chats, money, tasks, company, settings (настройки компании), home. Для просьб что-то сделать: дать ссылку, где это делается.',
+    input_schema: obj({ screen: { type: 'string', enum: ['review', 'leads', 'lead', 'clients', 'projects', 'project', 'chats', 'money', 'tasks', 'company', 'settings', 'home'] }, id: { type: 'integer' } }, ['screen']),
   },
 };
 

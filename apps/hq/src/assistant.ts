@@ -76,6 +76,7 @@ const W = '(?![\\p{L}\\p{N}])';
 const re = (src: string) => new RegExp(`^(?:${src})${W}`, 'u');
 /** Requests to act, with the screen where the owner does it; imperative or, after «можешь», «надо», infinitive. The first match wins. */
 const ACTIONS: [RegExp, PultScreen, string][] = [
+  [re('(?:постав(?:ь|ьте|ить)|измен(?:и|ите|ить)|поменя(?:й|йте|ть)|включ(?:и|ите|ить)|выключ(?:и|ите|ить)|отключ(?:и|ите|ить)|установ(?:и|ите|ить)|сдела(?:й|йте|ть))\\s+(?:мне\\s+)?(?:\\S+\\s+){0,3}?(?:сводк|дайджест|тих\\S+\\s+час|лимит|бюджет|напоминани|настройк|порог|слот)\\S*'), 'settings', 'Настройки компании меняются в Пульте, на вкладке «Настройки»'],
   [re('(?:прим(?:и|ите)|принять|закро(?:й|йте)|закрыть|запуст(?:и|ите|ить)|отмет(?:ь|ьте|ить))\\s+(?:этап|проект)\\S*'), 'projects', 'Этапы и проекты ведутся в Пульте, в производстве'],
   [re('(?:одобр(?:и|ите|ить)|утверд(?:и|ите|ить)|согласу(?:й|йте)|согласовать|отклон(?:и|ите|ить)|откаж(?:и|ите)|отказать|опублику(?:й|йте)|опубликовать|вылож(?:и|ите|ить)|перепиш(?:и|ите)|переписать|поправ(?:ь|ьте|ить)|исправ(?:ь|ьте|ить)|отредактиру(?:й|йте)|отредактировать)'), 'review', 'Одобрения, правки и публикации делаются в ревью-центре'],
   [re('(?:ответ(?:ь|ьте|ить)|(?:напиш(?:и|ите)|написать|отправ(?:ь|ьте|ить)|передай|передать)\\s+(?:клиент|лид|ему|ей|им|сообщени)\\S*)'), 'chats', 'Ответ клиенту пишется в чатах Пульта'],
@@ -102,6 +103,8 @@ export interface AssistantDeps {
   llm: LlmClient;
   links: PultLinks;
   pendingApprovals?: () => number;
+  /** The company settings (read only) for the question «какие настройки?». */
+  settingsView?: () => unknown;
 }
 
 export class OwnerAssistant {
@@ -117,7 +120,7 @@ export class OwnerAssistant {
     this.memory = new OwnerMemory(d.hq.db);
     this.llm = meterLlm(d.llm, d.hq, { agentId: 'director' });
     this.history = createDirectorHistory(d.hq.db, d.hq.now);
-    this.tools = assistantTools({ hq: d.hq, links: d.links, ...(d.pendingApprovals ? { pendingApprovals: d.pendingApprovals } : {}) });
+    this.tools = assistantTools({ hq: d.hq, links: d.links, ...(d.pendingApprovals ? { pendingApprovals: d.pendingApprovals } : {}), ...(d.settingsView ? { settingsView: d.settingsView } : {}) });
   }
 
   /** The answer to one message of the owner (plain text with a link). Never throws. */

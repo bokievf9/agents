@@ -268,7 +268,7 @@ export interface CabDocsDeps {
   /** A line for the owner's inbox (no approval). */
   notifyOwner: (text: string) => void;
   /** How long a КП stands (`KP_VALID_DAYS`, the same number the КП text names); default 14. */
-  kpValidDays?: number;
+  kpValidDays?: number | (() => number);
   /** Emails outside the document notices (payment received, P-13; the review request, P-16). Absent: the thread line only. */
   mail?: ClientMail | undefined;
 }
@@ -1044,7 +1044,7 @@ export class CabDocs {
    * and when it happens, the client gets one line. Returns how many quotes expired now.
    */
   async expiryTick(): Promise<number> {
-    const days = this.d.kpValidDays ?? 14;
+    const days = typeof this.d.kpValidDays === 'function' ? this.d.kpValidDays() : (this.d.kpValidDays ?? 14);
     const now = this.d.now();
     let expired = 0;
     const rows = this.db.prepare("SELECT d.*, c.name AS client_name, c.email AS client_email, c.locale AS client_locale FROM cab_documents d JOIN cab_clients c ON c.id = d.client_id WHERE d.kind = 'quote' AND d.state = 'awaiting_client'").all() as (DocRow & { client_name: string; client_email: string; client_locale: string })[];

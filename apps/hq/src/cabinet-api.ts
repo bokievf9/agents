@@ -41,7 +41,7 @@ export interface CabinetDeps {
   secret?: string | undefined;
   gate?: { llmAllowed(): boolean; llmUsed(): void } | undefined;
   /** How long a КП stands (`KP_VALID_DAYS`): the quote expires after it (P-11). */
-  kpValidDays?: number | undefined;
+  kpValidDays?: number | (() => number) | undefined;
 }
 
 /** Builds the three modules of the cabinet and the dispatcher; the heads get `docs` (`sales.cabinet = cabinet.docs`, ...). */

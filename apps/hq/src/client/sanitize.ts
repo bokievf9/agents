@@ -146,11 +146,16 @@ export class RateLimiter {
 
   constructor(
     private readonly perHour: number,
-    private readonly dailyCap: number,
+    private dailyCap: number,
     private readonly now: () => number,
     private readonly tz: () => string,
     private readonly store?: CounterStore,
   ) {}
+
+  /** The daily cap of model answers changes at once (the owner's settings). */
+  setDailyCap(n: number): void {
+    this.dailyCap = n;
+  }
 
   /** 'ok', 'warn' (first message over the limit: answer once) or 'drop' (stay silent). */
   hit(chatId: number | string): 'ok' | 'warn' | 'drop' {

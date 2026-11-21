@@ -64,6 +64,8 @@ export interface OwnerChannelDeps {
   ownerId: number;
   /** The site is considered gone after this many minutes without a ping. */
   awayAfterMin?: number;
+  /** `notice.skip_desk` of the settings: a reminder is skipped while the Пульт is open (default yes). */
+  skipAtDesk?: () => boolean;
   /** Is the core approval still waiting for the owner? Used to keep digests and resends honest. */
   approvalPending?: (approvalId: number) => boolean;
   /** An approval card reached Telegram later (resent from the inbox): where it is, so it can be edited after the decision. */
@@ -182,7 +184,7 @@ export class OwnerChannel implements Messenger {
   async notice(html: string): Promise<'sent' | 'desk' | 'capture'> {
     if (this.capturing()) return 'capture';
     await this.sync();
-    if (this.effective() === 'desk') return 'desk';
+    if (this.effective() === 'desk' && (this.d.skipAtDesk?.() ?? true)) return 'desk';
     await this.d.inner.sendMessage(this.d.ownerId, html, undefined, { html: true });
     return 'sent';
   }

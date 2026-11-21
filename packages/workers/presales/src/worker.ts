@@ -70,7 +70,8 @@ export function briefFromLead(l: Lead): Brief {
 }
 
 export interface PresalesOptions {
-  validDays?: number;
+  /** Days a КП stands: a number, or a function read at every КП (the owner changes it in the settings without a restart). */
+  validDays?: number | (() => number);
   /** Directory with kp.md, estimate.md, contract.md. Default: the package's own templates. */
   templatesDir?: string;
   promptFile?: string;
@@ -84,12 +85,15 @@ export class PresalesWorker implements Worker {
   readonly id = 'presales';
   private readonly templates: Templates;
   private readonly prompt: string;
-  private readonly validDays: number;
+  private readonly validDaysOf: number | (() => number);
+  private get validDays(): number {
+    return typeof this.validDaysOf === 'function' ? this.validDaysOf() : this.validDaysOf;
+  }
 
   constructor(opts: PresalesOptions = {}) {
     this.templates = loadTemplates(opts.templatesDir ?? new URL('../templates', import.meta.url).pathname);
     this.prompt = readFileSync(opts.promptFile ?? new URL('../prompts/kp.md', import.meta.url).pathname, 'utf8');
-    this.validDays = opts.validDays ?? 14;
+    this.validDaysOf = opts.validDays ?? 14;
   }
 
   async run(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {

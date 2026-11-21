@@ -19,6 +19,7 @@ import { createChats } from './chats.js';
 import { createReview } from './review.js';
 import { createPultTrends } from './pult-trends.js';
 import { createReach } from './reach.js';
+import type { SettingsApi } from './settings.js';
 
 /**
  * «Пульт v3»: the owner workplace routes added on top of `/admin/*` (hub, CRM writes, content, metrics, company).
@@ -48,6 +49,8 @@ export interface PultDeps {
   cabinet?: Pick<CabDocs, 'reviseDelivered' | 'revisable'> & Partial<Pick<CabDocs, 'resend' | 'ownerList'>> | undefined;
   /** P-18/P-19: the call bookings behind the lead's «Созвон» (`calls.ts`). */
   calls?: Calls | undefined;
+  /** `GET` and `PATCH /admin/settings` (`settings.ts`). */
+  settings?: SettingsApi | undefined;
 }
 
 export function createPult(d: PultDeps) {
@@ -95,6 +98,12 @@ export function createPult(d: PultDeps) {
       if (method === 'GET' && seg.length === 1) return trends.list(query);
       if (method === 'POST' && seg.length === 1) return trends.post(body);
       return fail(404, 'not_found');
+    }
+    if (a === 'settings' && seg.length === 1) {
+      if (!d.settings) return fail(503, 'unavailable');
+      if (method === 'GET') return d.settings.get();
+      if (method === 'PATCH') return d.settings.patch(body);
+      return fail(405, 'method_not_allowed');
     }
     if (a === 'reach') return reach.handle(method, seg, query, body);
     if (a === 'metrics') return method === 'GET' && seg.length === 2 && seg[1] === 'week' ? metrics.week(query) : fail(404, 'not_found');

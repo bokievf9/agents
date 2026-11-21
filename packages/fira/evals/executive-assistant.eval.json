@@ -237,6 +237,11 @@
       ],
       "link": "https://firtech.pro/admin/office?panel=company"
     },
+    "company_settings": {
+      "schedule": { "summaryTime": "08:00", "digestDay": 1, "digestTime": "08:30", "quietHours": "23:00-08:00" },
+      "limits": { "marketing": { "limitUsd": 25, "monthUsd": 4.2 }, "sales": { "limitUsd": 20, "monthUsd": 1.1 } },
+      "link": "https://firtech.pro/admin/office?panel=company&tab=settings"
+    },
     "director_history": {
       "items": [
         {

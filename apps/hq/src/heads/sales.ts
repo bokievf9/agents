@@ -56,7 +56,7 @@ export interface SalesDeps {
   /** Reward for a referral after the referred client pays (env REFERRAL_REWARD). */
   referralReward?: string;
   /** КП validity in days (env KP_VALID_DAYS). The payment split is by stages (`stagesFor`), no longer a prepayment share. */
-  kpValidDays?: number;
+  kpValidDays?: number | (() => number);
   /** New Scout cards per daily batch. */
   batchSize?: number;
   slotHours?: [string, string];

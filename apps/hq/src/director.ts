@@ -209,7 +209,7 @@ export class Director {
     return [
       { name: 'director-summary', cron: dailyCron(this.hq.setting('summary_time')), tz },
       { name: 'director-approvals', cron: dailyCron(this.hq.setting('approval_time')), tz },
-      { name: 'director-digest', cron: weeklyCron(this.hq.setting('digest_time'), 1), tz },
+      { name: 'director-digest', cron: weeklyCron(this.hq.setting('digest_time'), Number(this.hq.setting('digest_day') || '1') % 7), tz },
     ];
   }
 
