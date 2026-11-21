@@ -24,7 +24,7 @@ export interface CrmReply {
 const TEXT_CAP = 500;
 const LIMIT_DEFAULT = 50;
 const LIMIT_MAX = 200;
-export const TICKET_STATUSES = ['open', 'answered'] as const;
+export const TICKET_STATUSES = ['open', 'answered', 'closed'] as const;
 
 const iso = (ms: number | null | undefined) => (ms === null || ms === undefined ? null : new Date(ms).toISOString());
 const cap = (s: string | null | undefined) => (s ?? '').slice(0, TEXT_CAP);
@@ -304,7 +304,8 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       if (reply !== undefined) return fail(400, 'reply_not_supported', { hint: 'answer through POST /admin/say or /admin/command (ticket), the draft goes to approvals' });
       if (status !== undefined) {
         if (!statuses.includes(status as 'open')) return fail(400, 'invalid_status', { allowed: statuses });
-        if (status === 'answered') db.prepare("UPDATE cs_tickets SET status = 'answered', answered_at = COALESCE(answered_at, ?) WHERE id = ?").run(now(), id);
+        if (status === 'closed') new CsStore(db, now).close(id);
+        else if (status === 'answered') db.prepare("UPDATE cs_tickets SET status = 'answered', answered_at = COALESCE(answered_at, ?) WHERE id = ?").run(now(), id);
         else db.prepare("UPDATE cs_tickets SET status = 'open', answered_at = NULL WHERE id = ?").run(id);
       }
       if (text !== undefined) setNote('ticket', id, text);
@@ -428,7 +429,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     const leadCounts = has('li_leads')
       ? Object.fromEntries(all<{ k: string; n: number }>('SELECT COALESCE(t.status, \'unknown\') k, COUNT(*) n FROM li_leads l LEFT JOIN tasks t ON t.id = l.task_id GROUP BY k').map((r) => [r.k, r.n]))
       : {};
-    const tickets = has('cs_tickets') ? { open: 0, answered: 0, ...countBy('cs_tickets', 'status') } : {};
+    const tickets = has('cs_tickets') ? { open: 0, answered: 0, closed: 0, ...countBy('cs_tickets', 'status') } : {};
     const docs: Record<string, Record<string, number>> = {};
     const addDocs = (kind: string, status: string, n: number) => { (docs[kind] ??= {})[status] = ((docs[kind] ??= {})[status] ?? 0) + n; };
     if (has('bo_documents')) for (const r of all<{ k: string; s: string; n: number }>('SELECT type k, status s, COUNT(*) n FROM bo_documents GROUP BY type, status')) addDocs(r.k, r.s, r.n);
@@ -662,6 +663,19 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     return ok({ item: { id: tk.id, text: tk.text, status: tk.status, createdAt: iso(tk.createdAt), answeredAt: iso(tk.answeredAt), answer: tk.answer } });
   }
 
+  /** `POST /admin/clients/:id/tickets/:ticketId/close` (P-22): the client's «вопрос решён» in the cabinet. Only their own ticket; idempotent. */
+  function clientTicketClose(id: number, ticketId: number): CrmReply {
+    const c = cabById(id);
+    if (!c) return fail(404, 'not_found');
+    const t = has('cs_tickets') ? one<TicketRow>('SELECT * FROM cs_tickets WHERE id = ?', ticketId) : undefined;
+    // someone else's ticket looks exactly like a missing one
+    if (!t || t.source !== 'cabinet' || t.contact.trim().toLowerCase() !== c.email) return fail(404, 'not_found');
+    const already = t.status === 'closed';
+    new CsStore(db, now).close(ticketId);
+    const fresh = one<TicketRow>('SELECT * FROM cs_tickets WHERE id = ?', ticketId)!;
+    return ok({ already, item: { id: fresh.id, text: fresh.text, status: fresh.status, createdAt: iso(fresh.created_at), answeredAt: iso(fresh.answered_at), answer: fresh.answer ?? null } });
+  }
+
   /** `POST /admin/clients/:id/leads/:leadId/messages`: the client writes about their own lead; it becomes a Support ticket (draft through approvals). */
   function leadMessageCreate(id: number, leadId: number, body: unknown): CrmReply {
     const c = cabById(id);
@@ -737,6 +751,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     if (method === 'GET' && seg.length === 1 && seg[0] === 'by-email') return clientByEmail(query);
     if (method === 'POST' && seg.length === 4 && seg[1] === 'leads' && seg[3] === 'messages' && /^\d+$/.test(seg[0]!) && /^\d+$/.test(seg[2]!)) return leadMessageCreate(Number(seg[0]), Number(seg[2]), body);
     if (method === 'POST' && seg.length === 6 && seg[1] === 'projects' && seg[3] === 'milestones' && seg[5] === 'accept' && [seg[0], seg[2], seg[4]].every((x) => /^\d+$/.test(x!))) return stageAccept(Number(seg[0]), Number(seg[2]), Number(seg[4]));
+    if (method === 'POST' && seg.length === 4 && seg[1] === 'tickets' && seg[3] === 'close' && /^\d+$/.test(seg[0]!) && /^\d+$/.test(seg[2]!)) return clientTicketClose(Number(seg[0]), Number(seg[2]));
     if (method === 'POST' && seg.length === 2 && seg[1] === 'tickets' && /^\d+$/.test(seg[0]!)) return clientTicketCreate(Number(seg[0]), body);
     if ((method === 'POST' || method === 'PATCH') && seg.length === 1 && /^\d+$/.test(seg[0]!)) return profilePatchRoute(Number(seg[0]), body);
     const v3 = hooks.cabinet?.route(method, seg, query, body);

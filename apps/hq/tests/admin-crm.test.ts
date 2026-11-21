@@ -137,16 +137,28 @@ describe('admin crm: panels', () => {
     const { call } = setup();
     const r = (await call('GET', '/admin/crm/tickets?status=open')).json;
     expect(r.items).toHaveLength(2);
-    expect(r.statuses).toEqual(['open', 'answered']);
+    expect(r.statuses).toEqual(['open', 'answered', 'closed']);
     const id = r.items[0].id;
     expect((await call('POST', `/admin/crm/tickets/${id}`, { reply: 'hi' })).json.error).toBe('reply_not_supported');
-    expect((await call('POST', `/admin/crm/tickets/${id}`, { status: 'closed' })).json).toMatchObject({ error: 'invalid_status', allowed: ['open', 'answered'] });
+    expect((await call('POST', `/admin/crm/tickets/${id}`, { status: 'resolved' })).json).toMatchObject({ error: 'invalid_status', allowed: ['open', 'answered', 'closed'] });
     expect((await call('POST', '/admin/crm/tickets/999', { status: 'answered' })).status).toBe(404);
     const upd = await call('POST', `/admin/crm/tickets/${id}`, { status: 'answered', note: 'позвонил' });
     expect(upd.json.item).toMatchObject({ status: 'answered', note: 'позвонил' });
     expect(upd.json.item.answeredAt).not.toBeNull();
     expect((await call('GET', '/admin/crm/tickets?status=open')).json.items).toHaveLength(1);
     expect((await call('GET', '/admin/crm/tickets?q=счёт')).json.items).toHaveLength(1);
+  });
+
+  it('P-22: the owner closes a ticket; it leaves the open list and the counters, and can be reopened', async () => {
+    const { call } = setup();
+    const id = (await call('GET', '/admin/crm/tickets?status=open')).json.items[0].id;
+    const closed = await call('POST', `/admin/crm/tickets/${id}`, { status: 'closed' });
+    expect(closed.json.item).toMatchObject({ status: 'closed', slaAlerted: true });
+    expect(closed.json.item.answeredAt).not.toBeNull();
+    expect((await call('GET', '/admin/crm/tickets?status=open')).json.items).toHaveLength(1);
+    expect((await call('GET', '/admin/crm/tickets?status=closed')).json.items).toHaveLength(1);
+    expect((await call('GET', '/admin/crm/summary')).json.tickets).toMatchObject({ open: 1, byStatus: { closed: 1 } });
+    expect((await call('POST', `/admin/crm/tickets/${id}`, { status: 'open' })).json.item.status).toBe('open');
   });
 
   it('documents: contracts, presales kits and invoices in one list', async () => {

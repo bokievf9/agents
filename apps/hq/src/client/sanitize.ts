@@ -145,6 +145,8 @@ export class RateLimiter {
   private day = '';
   private llmCalls = 0;
   private loaded = false;
+  /** P-25: told when the day's model calls reach 80% and 100% of the cap (once each per day; the app puts it into the owner's inbox). */
+  onCap?: (level: 80 | 100, used: number, cap: number) => void;
 
   constructor(
     private readonly perHour: number,
@@ -225,6 +227,13 @@ export class RateLimiter {
     this.sync();
     this.llmCalls++;
     this.save();
+    const eighty = Math.max(1, Math.ceil(this.dailyCap * 0.8));
+    try {
+      if (this.llmCalls === this.dailyCap) this.onCap?.(100, this.llmCalls, this.dailyCap);
+      else if (this.llmCalls === eighty) this.onCap?.(80, this.llmCalls, this.dailyCap);
+    } catch {
+      // a notice never breaks an answer
+    }
   }
 
   get llmToday(): number {

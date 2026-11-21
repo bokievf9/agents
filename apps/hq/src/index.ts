@@ -1,7 +1,7 @@
 import {
   ApprovalQueue, GatewayWatch, OutboxMessenger, createBot, createLlm, errMsg, grammyMessenger, log, openDb, safeGetJson, setupBotMenu, startPolling, startPricesRefresh, loadPrices,
 } from '@fir/core';
-import { HeartbeatWorker, Hq, meterLlm, startRoutines } from '@fir/hq';
+import { catchUpRoutines, HeartbeatWorker, Hq, meterLlm, startRoutines } from '@fir/hq';
 import { loadConfig } from './config.js';
 import { Director } from './director.js';
 import { createSettings, startValues, type SettingsDefaults } from './settings.js';
@@ -291,6 +291,13 @@ beatTimer.unref();
 const reachTimer = setInterval(() => { try { createReach({ hq, now: hq.now }).sweep(); } catch (e) { log('warn', 'reach sweep failed', { err: errMsg(e) }); } }, 300_000);
 reachTimer.unref();
 let routineJobs = startRoutines(hq);
+// P-26: routines whose time passed while HQ was down run once now (not on a timing change: only at start).
+try {
+  const caught = catchUpRoutines(hq);
+  if (caught.length) log('info', 'routines caught up', { n: caught.length, names: caught });
+} catch (e) {
+  log('warn', 'routine catch-up failed', { err: errMsg(e) });
+}
 // A clock or a time changed through the Director: the routines and the heads' own crons follow it at once (no restart needed).
 director.onTimingChange = () => {
   routineJobs.forEach((j) => j.stop());
@@ -353,6 +360,11 @@ for (const dept of hq.departments()) {
 // POST /lead from firtech.pro (same host): a Sales task per lead. No token, no server.
 // POST /chat (website chat): the same conversation engine as the client bot, its LLM daily cap shared with the Telegram counter.
 const chatGate = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
+// P-25: the owner hears when the day's model calls of the clients' chats reach 80% and 100% of the cap (one shared counter: any limiter tells it).
+const capNotice = (level: 80 | 100, used: number, cap: number) => void hq.alert(level === 100
+  ? `Дневной лимит вызовов модели для клиентских чатов исчерпан (${used} из ${cap}): до завтра чаты отвечают сценариями. Лимит меняется в Пульте, настройки.`
+  : `Клиентские чаты израсходовали ${used} из ${cap} вызовов модели за сегодня (80%). Лимит меняется в Пульте, настройки.`, { kind: 'budget' });
+for (const l of new Set([clientBot?.engine.limiter, chatGateForAgents, chatGate])) if (l) l.onCap ??= capNotice;
 const webChat = cfg.webChatToken
   ? new WebChatEngine({
       db, now: hq.now, tz: () => hq.tz, llm: clientLlm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate,

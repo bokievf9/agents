@@ -79,7 +79,7 @@ Read-mostly представления над таблицами исполни�
 Курсор здесь смещение; порядок: последнее касание, новые первыми.
 
 ## GET /admin/crm/tickets
-Обращения клиентов (`cs_tickets`). У каждого `clientId`: тот же идентификатор, что у ряда `/admin/crm/clients` (`"<id кабинета>"`, если контакт обращения совпал с email или Telegram-ником клиента кабинета или имя принадлежит такому клиенту, иначе `"c:<имя в нижнем регистре>"`); он же в `tickets` у `GET /admin/crm/clients/:id` и `GET /admin/clients/by-email`. Параметры: `limit`, `cursor`, `q` (клиент, контакт, текст), `status` (`open`, `answered`).
+Обращения клиентов (`cs_tickets`). У каждого `clientId`: тот же идентификатор, что у ряда `/admin/crm/clients` (`"<id кабинета>"`, если контакт обращения совпал с email или Telegram-ником клиента кабинета или имя принадлежит такому клиенту, иначе `"c:<имя в нижнем регистре>"`); он же в `tickets` у `GET /admin/crm/clients/:id` и `GET /admin/clients/by-email`. Параметры: `limit`, `cursor`, `q` (клиент, контакт, текст), `status` (`open`, `answered`, `closed`; `closed` since P-22: the owner sets it with `POST /admin/crm/tickets/:id {status:'closed'}` or the client with the cabinet button; a closed ticket has no SLA alert).
 ```json
 { "ok": true, "available": true, "statuses": ["open","answered"], "nextCursor": null,
   "items": [{ "id": 3, "clientId": "7", "clientName": "Алиса", "contact": "@alice", "text": "не работает бот", "status": "open", "money": false, "slaAlerted": false,
@@ -156,6 +156,9 @@ Upsert по email в `cab_clients` (повторный вызов обновля
 - `referrals`: как у `GET /admin/crm/referrals`, где клиент рекомендатель (по имени из его лидов или по слагу).
 - `referralSlug`: слаг клиента (`c` + id + 6 hex), выдаётся при первом запросе и больше не меняется; ссылка `?start=ref_<slug>` в боте и `source=ref:<slug>` в форме
   дают рекомендацию с `referrer` равным слагу (воркер рефералов имён кабинета не знает).
+
+### POST /admin/clients/:id/tickets/:ticketId/close
+P-22: «вопрос решён» in the cabinet. Only the client's own cabinet ticket (another's or a missing one: 404), idempotent: `{ ok, already, item: {id, text, status:'closed', createdAt, answeredAt, answer} }`.
 
 ### POST /admin/clients/:id/tickets
 Тело `{ text }` (1..1000 символов после обрезки). Неизвестный клиент 404 `not_found`, плохой текст 400 `invalid`, больше 10 обращений за час от одного клиента 429 `rate_limited`.
@@ -774,3 +777,9 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 Журнал: таблица `settings_log` (`at`, `key`, `old`, `new`, `source`): ключ в той же записи, что в `changed` (`schedule.summaryTime`, `limits.deptBudgetUsd.sales`, `trust.levels.lead_reply`...), `source` `owner` или `seed 2026-11-23`; значения только настроек, текстов клиентов нет. Первичные лимиты (marketing 25, sales 20, support 15, production 15, backoffice 10, director 5, USD в месяц, бюджет API 100 USD) пишутся один раз при старте, если у всех голов 0 (метка `limits_seeded`: лимит, который владелец позже вернул в 0, остаётся 0).
 
 Ассистент HQ-бота: «какие настройки?» читает эти же значения (инструмент `company_settings`, только чтение), «поставь сводку на 9:30» не меняет ничего и отвечает ссылкой `…/admin/office?panel=company&tab=settings`.
+
+
+## Pack 3 (P-17, P-25, P-26)
+- `GET /admin/director/history` items carry `source`: `site` (say and command from the Пульт) or `telegram` (the owner's lines in the HQ bot: questions, `/start`, `/pult`, old commands, and HQ's answers).
+- P-25: the daily cap of client model calls counts every call (a playground turn is several); the owner gets an alert at 80% and 100% of `CLIENT_LLM_DAILY_CAP`, and an inbox line once a day per agent that hits its `msgsPerDay`; the client's agent thread gets a line that the limit is reached.
+- P-26: at start HQ fires once every enabled routine that ran before but missed its latest scheduled time within 72 h (`catchUpRoutines`).

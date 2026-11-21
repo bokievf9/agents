@@ -11,7 +11,8 @@ export interface CsClient {
   createdAt: number;
 }
 
-export type TicketStatus = 'open' | 'answered';
+/** `closed` (P-22): resolved, by the owner or by the client («вопрос решён»); a closed ticket is not in the SLA or the open counters. */
+export type TicketStatus = 'open' | 'answered' | 'closed';
 
 export interface CsTicket {
   id: number;
@@ -171,7 +172,7 @@ export class CsStore {
   }
 
   recent(limit = 15): CsTicket[] {
-    return (this.db.prepare("SELECT * FROM cs_tickets ORDER BY (status = 'open') DESC, id DESC LIMIT ?").all(limit) as TicketRow[]).map(toTicket);
+    return (this.db.prepare("SELECT * FROM cs_tickets ORDER BY (status = 'open') DESC, (status = 'closed') ASC, id DESC LIMIT ?").all(limit) as TicketRow[]).map(toTicket);
   }
 
   markAnswered(id: number, answer?: string): void {
@@ -180,6 +181,13 @@ export class CsStore {
       this.answerToLeadThread(id, answer);
     }
     this.db.prepare("UPDATE cs_tickets SET status = 'answered', answered_at = ? WHERE id = ? AND status = 'open'").run(this.now(), id);
+  }
+
+  /** Closes a ticket whatever its state (idempotent: the time of the first closing stays). Returns false for an unknown id. */
+  close(id: number): boolean {
+    if (!this.ticket(id)) return false;
+    this.db.prepare("UPDATE cs_tickets SET status = 'closed', answered_at = COALESCE(answered_at, ?), alerted = 1 WHERE id = ?").run(this.now(), id);
+    return true;
   }
 
   /** A ticket written about a lead in the cabinet: its approved answer is also the manager's message in that lead's thread (once per ticket). */

@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, 
 import { tryJson, zonedParts, type Db, type LlmClient } from '@fir/core';
 import { z } from 'zod';
 import { addThreadMessage, ensureCabinetTables } from './cabinet.js';
+import { countCalls } from './client/shared.js';
 
 /**
  * The playground (2026-11-22): an agent instance per cabinet client, for those who do not need a website. Its persona is built from the answers of the
@@ -366,6 +367,10 @@ export class Playground {
     this.db.prepare('INSERT INTO pg_journal (agent_id, day, kind, n) VALUES (?, ?, ?, ?) ON CONFLICT(agent_id, day, kind) DO UPDATE SET n = n + excluded.n').run(agentId, this.day(), kind, n);
   }
 
+  private hitsToday(agentId: number): number {
+    return (this.db.prepare("SELECT n FROM pg_journal WHERE agent_id = ? AND day = ? AND kind = 'limit_hit'").get(agentId, this.day()) as { n: number } | undefined)?.n ?? 0;
+  }
+
   private usedToday(agentId: number): number {
     return (this.db.prepare("SELECT n FROM pg_journal WHERE agent_id = ? AND day = ? AND kind = 'message'").get(agentId, this.day()) as { n: number } | undefined)?.n ?? 0;
   }
@@ -723,6 +728,8 @@ export class Playground {
   private async chat(a: AgentRow, o: { conversationId: string; text: string; channel: 'cabinet' | 'widget' | 'demo' }): Promise<ChatOut | { error: string }> {
     const limit = json<{ msgsPerDay?: number }>(a.limits, {}).msgsPerDay ?? defaultLimit(this.db, a.state === 'live' ? 'live' : 'draft');
     if (this.usedToday(a.id) >= limit) {
+      // P-25: the owner hears about it once per agent per day (counts and the agent's name only)
+      if (this.hitsToday(a.id) === 0) this.d.notifyOwner?.(`Агент «${a.name}» клиента исчерпал лимит ${limit} сообщений в сутки: следующие ответы получают отказ до завтра. Лимит меняется в Пульте.`);
       this.count(a.id, 'limit_hit');
       return { error: 'limit_reached' };
     }
@@ -750,9 +757,10 @@ export class Playground {
     const system = `${persona}\n\n${protocol(ctx.tools)}`;
     const messages: { role: 'user' | 'assistant'; content: string }[] = [...history, { role: 'user', content: text }];
     if (this.d.llm.enabled && (this.d.gate?.llmAllowed() ?? true)) {
-      this.d.gate?.llmUsed();
+      // P-25: the daily cap counts every model call of the loop, not the turn
+      const llm = this.d.gate ? countCalls(this.d.llm, this.d.gate) : this.d.llm;
       for (let round = 0; round < 4; round++) {
-        const res = await tryJson(this.d.llm, { tier: 'sonnet', system, messages, maxTokens: 500 }, modelReply, 2);
+        const res = await tryJson(llm, { tier: 'sonnet', system, messages, maxTokens: 500 }, modelReply, 2);
         if (!res) break;
         if (!res.tool) return { reply: guard(res.reply), usedTools: ctx.used };
         if (!ctx.tools.includes(res.tool.name)) {

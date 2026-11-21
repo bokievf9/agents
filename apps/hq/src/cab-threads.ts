@@ -271,7 +271,11 @@ export class CabThreads {
     const mine = addThreadMessage(this.db, at, { clientId: c.id, thread: threadId, from: 'client', text, attachments: ids });
     const r = await this.d.agentReply(c.id, agentId, text, ids);
     const item = { id: mine, at: iso(at), from: 'client', text, attachments: this.attachments(c.id, ids), readAt: null };
-    if ('error' in r) return failR(r.error === 'limit_reached' ? 429 : 503, r.error, { item });
+    if ('error' in r) {
+      // P-25: the client sees why the agent is silent (a line of the agent in the thread), not just an error
+      if (r.error === 'limit_reached') addThreadMessage(this.db, this.d.now(), { clientId: c.id, thread: threadId, from: 'agent', text: 'Лимит сообщений этого агента на сегодня исчерпан, он ответит завтра. Лимит можно поднять у менеджера Fir Tech.' });
+      return failR(r.error === 'limit_reached' ? 429 : 503, r.error, { item });
+    }
     const t2 = this.d.now();
     const rid = addThreadMessage(this.db, t2, { clientId: c.id, thread: threadId, from: 'agent', text: r.reply });
     return okR({ item, reply: { id: rid, at: iso(t2), from: 'agent', text: r.reply, attachments: [], readAt: null } });
