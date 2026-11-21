@@ -223,6 +223,14 @@ Agent Reach с Мака (2026-11-21): `~/Agent-Reach` (MIT, `agent-reach` 1.6.1 
 Поправки 2026-11-21 (замечания владельца): таблица «нужда → продукт» одна, `client/needs.ts` (`NEED_RULES`, `productOfBot` по нише: салон + «бот» = ИИ-администратор, не `p.bot`; `siteNeedOf`: «не хочу сайт» → в ссылке `l.playground~z.no`, ссылка пересобирается и уходит снова как `cta: builder` без вызова модели); не больше трёх вопросов (`MAX_QUALIFY_TURNS = 3`, четвёртый ход предлагает); весь список продуктов только на «что вы делаете» (первое сообщение с нуждой получает короткое приветствие `welcomeShort`, а ответ модели с четырьмя и более названиями заменяет `needReply`); ответ на цену: 1-3 подходящих продукта без Dono/Polly, одна точка, «остальное в сборке проекта»; после «давайте в телеграме» t.me и строка возврата к сборке; демо-персоны не просят контакт (сайт их не принимает), а предлагают время записи; слово «приёмщик» не стоит ни в одном клиентском тексте (тест `/приём?щик/iu`).
 Тесты: `receptionist.test.ts`, `receptionist-telegram.test.ts`, `product-names.test.ts`, `builder-link.test.ts`, `clarify.test.ts`, `drill/clarify.test.ts`, пакет `lead-intake`.
 
+## packages/fira: Fira, ядро агентов (2026-11-22, каркас)
+Одно ядро для всех агентов (HQ, ИИ-менеджер заявок, площадка клиентов): агент = должность × сфера × компания. Архитектура и вопросы владельцу: `docs/fira-architecture.md`, план переноса первой
+должности: `docs/fira-migration-lead-manager.md`. **К продакшену не подключён**: HQ его не импортирует, Supabase-адаптер заглушка (`sql/fira-schema.sql` не применён).
+`spec.ts` (`AgentSpec`, пакеты), `packs.ts` (Markdown `role-packs/*.md`, `niche-packs/*.md`, JSON `company-packs/*.json`), `compile.ts` (детерминированный промпт из кэшируемого блока, инструменты, тир, бюджет),
+`run.ts` (нативный tool use через `LlmClient.chat` ядра, `before`/`after` правила приложения, охранники `guards.ts`, память с TTL: `live` 90 дней, `anon` 24 часа, `demo` ничего, журнал без текстов вне `live`),
+`stores.ts` + `adapters/memory.ts` (Knowledge, Memory, Lessons, Journal), `lessons.ts` (правка → урок), `eval/*` (формат `*.eval.json`, раннер, судья). Наборы: `pnpm --filter fira eval evals/lead-manager.eval.json [--live]`;
+в режиме скриптов они же идут в `pnpm -r test`. В `@fir/core` `llm.ts` добавлены `chat`, `tryChat`, `MockChatLlm`, тир `opus` (только для `chat`); `complete`/`tryJson` не менялись. Пакеты правятся коммитом, после прогона набора; снимок промпта в `tests/__snapshots__`.
+
 ## Данные и секреты
 `.env*` и `data/` не коммитятся (в `data/` контакты клиентов). Секреты: `.env.local` (dev), `/opt/fir-agents/.env`
 (сервер, 600). Секреты с `$` в `.env` брать в одинарные кавычки (compose раскрывает `$`).
