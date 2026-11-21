@@ -840,3 +840,6 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 
 `POST /admin/processes/drill` `{ "action": "start" | "clear" }` → `{ ok, action, text, drill }`. `start` это существующие учения (`/drill`): тестовые задачи с тегом `drill` и тестовый клиент «Тест учения», клиенту ничего не уходит, повторный `start` во время работы ничего не создаёт; `clear` это `/drill clear` (задачи, одобрения и тестовые данные удаляются). 400 `bad_request` для другого тела, 503 `unavailable` без дрилла.
 
+
+## Finance (HQ, 2026-11-23)
+Раздел Finance сайта (`/admin/finance`) читает уже существующие маршруты, новых нет: счета `GET /admin/crm/invoices` (вкладки Invoices и Payments), расход LLM по отделам и агентам `GET /admin/agents` (`departments[].budgetUsd`, `monthUsd`, `agents[].monthUsd`) и `GET /admin/company` (`costs.byDept[].todayUsd`, `costs.byDay`). Лимиты отделов лежат в `GET /admin/settings` (`limits.deptBudgetUsd`, `usage.deptMonthUsd`), но сайт берёт их из `agents`, где они уже совпадают. Тексты клиентов ни в одном из этих ответов не передаются.
