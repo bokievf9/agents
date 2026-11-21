@@ -3,6 +3,8 @@
  * `productCatalog`). Copied by hand, never read at build time (different repo). When the site adds a niche, add it
  * here: the id is the `/solutions/<id>` slug, so a wrong id breaks the article's internal link.
  */
+import { productName } from '@fir/core';
+
 export interface Niche {
   id: string;
   category: string;
@@ -84,18 +86,26 @@ export const NICHES: Niche[] = [
 /** Niches that make a topic or an article (the catch-all «Другое» does not). */
 export const TOPIC_NICHES: Niche[] = NICHES.filter((n) => n.category !== 'other');
 
+/** A product as the posts name it: from the one map of product names (`@fir/core`), read at the moment of use. */
+const named = (id: string): { id: string; name: string } => ({
+  id,
+  get name() {
+    return productName(id, 'ru');
+  },
+});
+
 /** The ten products of the catalogue (`productIds`), as the posts name them. */
 export const PRODUCTS: { id: string; name: string }[] = [
-  { id: 'adminbot', name: 'Бот-администратор' },
-  { id: 'intake', name: 'ИИ-приёмщик заявок' },
-  { id: 'automation', name: 'Автоматизация рутины' },
-  { id: 'content', name: 'Контент на автопилоте' },
-  { id: 'miniapp', name: 'Telegram Mini App' },
-  { id: 'agent', name: 'Личный агент' },
-  { id: 'aiteam', name: 'Внедрение ИИ в компанию' },
-  { id: 'site', name: 'Сайт' },
-  { id: 'bot', name: 'Telegram-бот' },
-  { id: 'app', name: 'Приложение' },
+  named('adminbot'),
+  named('intake'),
+  named('automation'),
+  named('content'),
+  named('miniapp'),
+  named('agent'),
+  named('aiteam'),
+  named('site'),
+  named('bot'),
+  named('app'),
 ];
 
 export const nicheById = (id: string): Niche | undefined => NICHES.find((n) => n.id === id);

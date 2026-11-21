@@ -143,7 +143,7 @@ describe('demo salon: the state machine', () => {
     await w.engine.onButton(w.from, 'b:mid', card);
     await w.engine.onButton(w.from, 'h:none', card);
     expect(w.leads).toHaveLength(1);
-    expect(w.leads[0]).toMatchObject({ source: 'demo_salon', chatId: CHAT, product: 'Бот-администратор для услуг', service: 'bots' });
+    expect(w.leads[0]).toMatchObject({ source: 'demo_salon', chatId: CHAT, product: 'ИИ-администратор', service: 'bots' });
     expect(String(w.leads[0]!.message)).toContain('Салон Лайм');
   });
 

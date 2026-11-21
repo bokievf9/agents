@@ -88,7 +88,7 @@ describe('prices come from the price list only', () => {
     await r.run({ leadId: 1 });
     const docs = [r.staged[0]!.payload.kp, r.staged[0]!.payload.estimate, r.staged[0]!.payload.contract].join('\n');
     expect(docs).not.toContain('$99');
-    expect(docs).toContain('Предлагаем решение «Telegram-бот-администратор». Стоимость: $290.');
+    expect(docs).toContain('Предлагаем решение «ИИ-администратор». Стоимость: $290.');
     expect(wordingOk({ ...GOOD, problem: 'Это — проблема' })).toBe(false);
     expect(wordingOk({ ...GOOD, scope: [...GOOD.scope.slice(0, 5)] })).toBe(true);
   });
@@ -263,7 +263,7 @@ describe('exact figures (owner decision 2026-11-19): one price for the chosen pa
     for (const doc of [p.kp, p.estimate, p.contract] as string[]) expect(doc.replace(costsLine(), '')).not.toMatch(/(^|[^\p{L}])от \$/u);
     expect(p).toMatchObject({ totalUsd: 290, prepayUsd: 145, prepayPercent: 50 });
     expect(p.stages).toEqual(stagesFor(290, ['admin']));
-    expect(p.kp).toContain('| Telegram-бот-администратор | $290 |');
+    expect(p.kp).toContain('| ИИ-администратор | $290 |');
     expect(p.kp).toContain('| Этап 2 | Запуск | $145 (50%) |');
     expect(p.estimate).toContain('| Итого | $290 |');
     expect(p.contract).toContain('Стоимость Услуги в долларах США: $290 (цена точная');

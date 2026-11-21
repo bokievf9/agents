@@ -75,7 +75,7 @@ describe('the receptionist in the Telegram bot', () => {
     expect(r).toMatch(/созвон/);
     expect(w.leads).toHaveLength(1);
     const lead = w.leads[0]!;
-    expect(lead).toMatchObject({ chatId: CLIENT, service: 'bots', product: 'ИИ-приёмщик заявок 24/7', source: 'telegram' });
+    expect(lead).toMatchObject({ chatId: CLIENT, service: 'bots', product: 'ИИ-менеджер заявок', source: 'telegram' });
     const e = lead.enrichment as { summary: string[]; productFamily: string; niche: string; intentScore: number; builderLink: string };
     expect(e.summary).toHaveLength(3);
     expect(e).toMatchObject({ productFamily: 'receptionist', niche: 'кафе' });

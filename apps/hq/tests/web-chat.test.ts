@@ -193,11 +193,11 @@ describe('products in the web chat', () => {
   it('greeting carries the product line; /btn products lists, product:<id> opens the card, need:<id> starts the intake with the product', async () => {
     const w = world();
     const hi = await w.say('/start');
-    expect(hi.reply).toContain('Строим бота-администратора для записи, ИИ-приёмщика заявок');
+    expect(hi.reply).toContain('Я ИИ-менеджер заявок Fir Tech: так же я могу принимать клиентов вашего бизнеса. Что мы делаем: ИИ-администратор, ИИ-менеджер заявок');
     const list = await w.say('/btn products');
     expect(ids(list.buttons)).toEqual(['product:admin', 'product:receptionist', 'product:automation', 'product:content', 'product:miniapp', 'product:agent', 'product:ai', 'product:site']);
     const card = await w.say('/btn product:receptionist');
-    expect(card.reply).toContain('ИИ-приёмщик заявок 24/7');
+    expect(card.reply).toContain('ИИ-менеджер заявок');
     expect(card.reply).toContain('Для кого');
     expect(card.reply).toContain('Что внутри');
     expect(card.reply).toContain('Этот чат и есть демо');
@@ -209,8 +209,8 @@ describe('products in the web chat', () => {
     await w.say('/btn budget:mid');
     await w.say('@dilnoza_salon');
     const lead = w.leadTasks()[0]!.meta.lead as Record<string, unknown>;
-    expect(lead).toMatchObject({ product: 'ИИ-приёмщик заявок 24/7', service: 'bots', source: 'web' });
-    expect(String(lead.message)).toContain('Продукт: ИИ-приёмщик заявок 24/7');
+    expect(lead).toMatchObject({ product: 'ИИ-менеджер заявок', service: 'bots', source: 'web' });
+    expect(String(lead.message)).toContain('Продукт: ИИ-менеджер заявок');
   });
 
   it('English cards and a niche hint after a free-text need', async () => {
@@ -218,11 +218,11 @@ describe('products in the web chat', () => {
     const en = { locale: 'en' as const };
     await w.say('/start', en);
     const card = await w.say('/btn product:admin', en);
-    expect(card.reply).toContain('Booking assistant bot');
+    expect(card.reply).toContain('AI booking assistant');
     expect(card.reply).toContain('barbershops');
     await w.say('/btn intake', en);
     const r = await w.say('We run a dental clinic', en);
-    expect(r.reply).toContain('For a clinic we usually suggest “Booking assistant bot”');
+    expect(r.reply).toContain('For a clinic we usually suggest “AI booking assistant”');
     expect(ids(r.buttons)).toEqual(['deadline:urgent', 'deadline:month', 'deadline:norush']);
   });
 });

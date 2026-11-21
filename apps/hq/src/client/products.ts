@@ -4,7 +4,7 @@
  * the plain ways to order. No dollar amount is typed here: every price is read from the site's price list at the moment
  * of use (`getPrices()` in @fir/core, firtech.pro/api/prices), see `priceOf` and `startingPrices`.
  */
-import { getPrices, planOf, usd, type ProductKey } from '@fir/core';
+import { getPrices, planOf, productNames, usd, type ProductKey } from '@fir/core';
 
 export type PLang = 'ru' | 'en';
 type L<T> = Record<PLang, T>;
@@ -51,7 +51,10 @@ export const KIND_LABELS: Record<KindId, L<string>> = {
 export const PRODUCTS: Record<CatalogueId, Product> = {
   admin: {
     id: 'admin', emoji: '🤖',
-    name: { ru: 'Бот-администратор для услуг', en: 'Booking assistant bot' },
+    /** From the one map of product names (`@fir/core` `product-names.ts`), the live title of the price list first. */
+    get name() {
+      return productNames('admin');
+    },
     benefit: {
       ru: 'Клиенты сами записываются в Telegram, получают напоминания и оставляют отзывы, а вы не сидите на телефоне.',
       en: 'Clients book in Telegram on their own, get reminders and leave reviews, and you stay off the phone.',
@@ -62,11 +65,14 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
       en: ['Booking: pick the specialist, day and time', 'Reminders before the visit and one-tap rescheduling', 'Reviews collected after the visit and alerts to you'],
     },
     pairs: ['content', 'receptionist'],
-    demo: { ru: 'Покажем рабочий бот-администратор под вашу нишу на звонке.', en: 'We will show a working booking bot for your niche on a call.' },
+    demo: { ru: 'Покажем рабочего ИИ-администратора под вашу нишу на звонке.', en: 'We will show a working AI booking assistant for your niche on a call.' },
   },
   receptionist: {
     id: 'receptionist', emoji: '💬',
-    name: { ru: 'ИИ-приёмщик заявок 24/7', en: 'AI request handler 24/7' },
+    /** From the one map of product names (`@fir/core` `product-names.ts`), the live title of the price list first. */
+    get name() {
+      return productNames('receptionist');
+    },
     benefit: {
       ru: 'Отвечает на обращения днём и ночью, задаёт нужные вопросы и передаёт вам готовую заявку.',
       en: 'Answers requests day and night, asks the right questions and hands you a ready lead.',
@@ -77,11 +83,14 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
       en: ['Answers to common questions from your materials', 'A short intake and a lead card in Telegram', 'Handover to a person when one is needed'],
     },
     pairs: ['admin', 'automation'],
-    demo: { ru: 'Этот чат и есть демо: вы уже говорите с таким приёмщиком.', en: 'This very chat is the demo: you are already talking to one.' },
+    demo: { ru: 'Этот чат и есть демо: вы уже разговариваете с ним.', en: 'This very chat is the demo: you are already talking to one.' },
   },
   automation: {
     id: 'automation', emoji: '⚙️',
-    name: { ru: 'Автоматизация рутины', en: 'Routine automation' },
+    /** From the one map of product names (`@fir/core` `product-names.ts`), the live title of the price list first. */
+    get name() {
+      return productNames('automation');
+    },
     benefit: {
       ru: 'Заявки, таблицы, отчёты и рассылки идут сами, без ручного копирования.',
       en: 'Leads, spreadsheets, reports and mailings run by themselves, with no manual copying.',
@@ -96,7 +105,10 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
   },
   content: {
     id: 'content', emoji: '🎬',
-    name: { ru: 'Контент на автопилоте по подписке', en: 'Content on autopilot, subscription' },
+    /** From the one map of product names (`@fir/core` `product-names.ts`), the live title of the price list first. */
+    get name() {
+      return productNames('content');
+    },
     benefit: {
       ru: 'Посты, карточки и ролики выходят регулярно, вы только утверждаете.',
       en: 'Posts, cards and short videos go out regularly, you only approve them.',
@@ -111,7 +123,10 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
   },
   miniapp: {
     id: 'miniapp', emoji: '📱',
-    name: { ru: 'Telegram Mini App', en: 'Telegram Mini App' },
+    /** From the one map of product names (`@fir/core` `product-names.ts`), the live title of the price list first. */
+    get name() {
+      return productNames('miniapp');
+    },
     benefit: {
       ru: 'Магазин, запись или программа лояльности прямо внутри Telegram, без установки приложения.',
       en: 'A shop, booking or loyalty programme right inside Telegram, with no app to install.',
@@ -126,7 +141,10 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
   },
   agent: {
     id: 'agent', emoji: '🧠',
-    name: { ru: 'Личный агент', en: 'Personal agent' },
+    /** From the one map of product names (`@fir/core` `product-names.ts`), the live title of the price list first. */
+    get name() {
+      return productNames('agent');
+    },
     benefit: {
       ru: 'Персональный ассистент в Telegram: Dono ведёт учёбу студента, Polly учит языкам. Под вашу задачу сделаем такого же.',
       en: 'A personal assistant in Telegram: Dono runs a student’s studies, Polly teaches languages. We can build one for your task.',
@@ -141,7 +159,10 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
   },
   ai: {
     id: 'ai', emoji: '🏢',
-    name: { ru: 'Внедрение ИИ в компанию', en: 'AI for your company' },
+    /** From the one map of product names (`@fir/core` `product-names.ts`), the live title of the price list first. */
+    get name() {
+      return productNames('ai');
+    },
     benefit: {
       ru: 'ИИ отвечает по вашим документам и базе знаний, команда меньше тратит время на поиск и рутину.',
       en: 'AI answers from your documents and knowledge base, and the team spends less time searching and on routine.',
@@ -156,7 +177,10 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
   },
   site: {
     id: 'site', emoji: '🌐',
-    name: { ru: 'Сайт под ключ', en: 'Website' },
+    /** From the one map of product names (`@fir/core` `product-names.ts`), the live title of the price list first. */
+    get name() {
+      return productNames('site');
+    },
     benefit: {
       ru: 'Лендинг или сайт компании, который показывает ваши услуги и приводит заявки.',
       en: 'A landing page or company site that shows your services and brings in requests.',
@@ -171,7 +195,10 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
   },
   bot: {
     id: 'bot', emoji: '🤖',
-    name: { ru: 'Telegram-бот под задачу', en: 'Custom Telegram bot' },
+    /** From the one map of product names (`@fir/core` `product-names.ts`), the live title of the price list first. */
+    get name() {
+      return productNames('bot');
+    },
     benefit: { ru: 'Бот под любой сценарий, если готовые продукты не подходят.', en: 'A bot for any scenario when the ready products do not fit.' },
     kinds: [],
     inside: {
@@ -179,11 +206,14 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
       en: ['A scenario for your task', 'An admin view and alerts to you', 'Launch and support'],
     },
     pairs: ['admin', 'receptionist'],
-    demo: { ru: 'Этот бот тоже наша работа.', en: 'This bot is our work too.' },
+    demo: { ru: 'Этот чат тоже наша работа.', en: 'This chat is our work too.' },
   },
   app: {
     id: 'app', emoji: '📲',
-    name: { ru: 'Приложение', en: 'App' },
+    /** From the one map of product names (`@fir/core` `product-names.ts`), the live title of the price list first. */
+    get name() {
+      return productNames('app');
+    },
     benefit: { ru: 'Веб-приложение или мобильное приложение под ваш процесс.', en: 'A web or mobile app for your process.' },
     kinds: [],
     inside: {

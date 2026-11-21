@@ -1,4 +1,4 @@
-import { errMsg, log, type ApprovalQueue, type Messenger } from '@fir/core';
+import { errMsg, log, productName, type ApprovalQueue, type Messenger } from '@fir/core';
 import type { Hq, Task } from '@fir/hq';
 import type { Reporter } from './reporter.js';
 
@@ -39,7 +39,7 @@ interface Scenario {
 
 const SCENARIOS: Scenario[] = [
   { dept: 'marketing', worker: 'trend-scout', title: 'тренды дня', mode: 'task', meta: { action: 'trends' } },
-  { dept: 'marketing', worker: 'content-maker', title: 'клип «ИИ-приёмщик для барбершопа»', mode: 'task', meta: { action: 'topic', topic: 'ИИ-приёмщик для барбершопа' } },
+  { dept: 'marketing', worker: 'content-maker', title: `клип «${productName('intake', 'ru')} для барбершопа»`, mode: 'task', meta: { action: 'topic', topic: `${productName('intake', 'ru')} для барбершопа` } },
   { dept: 'marketing', worker: 'publisher', title: 'пакет публикации клипа', mode: 'task', meta: { action: 'daily' }, after: 'content-maker' },
   { dept: 'marketing', worker: 'seo', title: 'проверка firtech.pro', mode: 'task', meta: { action: 'seo' } },
   { dept: 'marketing', worker: 'analyst', title: 'недельный отчёт', mode: 'task', meta: { action: 'report' } },

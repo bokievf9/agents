@@ -282,7 +282,7 @@ export class ClientEngine implements ClientChannel {
     return stale();
   }
 
-  /** «Хочу такого бота себе»: the demo is wiped and the normal intake starts with the booking bot chosen, `source: demo_salon`. */
+  /** «Хочу такого бота себе»: the demo is wiped and the normal intake starts with the AI booking assistant chosen, `source: demo_salon`. */
   private async demoWant(chat: Chat, messageId: number): Promise<void> {
     this.demo.wipe(chat.chatId);
     const draft: Draft = { source: DEMO_START };

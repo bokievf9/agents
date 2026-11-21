@@ -1,4 +1,4 @@
-import { tryComplete, type LlmClient } from '@fir/core';
+import { productName, tryComplete, type LlmClient } from '@fir/core';
 import { buildPersona, DEMOS, NICHE_RU, NICHES, slotsFor, type Niche } from '../playground.js';
 import { TurnHistory } from './shared.js';
 import type { Lang } from './texts.js';
@@ -16,8 +16,12 @@ export const isPersona = (s: string): s is Persona => (PERSONAS as readonly stri
 export const DEMO_TURNS = 12;
 
 const SCRIPTED: Record<Lang, string> = {
-  ru: 'Демо сейчас недоступно, попробуйте через минуту. Так отвечал бы ИИ-приёмщик вашего бизнеса: коротко, по делу и в тоне компании.',
-  en: 'The demo is not available right now, please try again in a minute. This is how an AI receptionist of your business would answer: short, to the point and in the voice of the company.',
+  get ru() {
+    return `Демо сейчас недоступно, попробуйте через минуту. Так отвечал бы «${productName('intake', 'ru')}» вашего бизнеса: коротко, по делу и в тоне компании.`;
+  },
+  get en() {
+    return `The demo is not available right now, please try again in a minute. This is how an ${productName('intake', 'en')} of your business would answer: short, to the point and in the voice of the company.`;
+  },
 };
 const CAPPED: Record<Lang, string> = {
   ru: 'Это демо, в нём ограничено число реплик. Чтобы собрать такого приёмщика под ваш бизнес, откройте сборку проекта на сайте.',

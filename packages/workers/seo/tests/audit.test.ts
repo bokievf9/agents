@@ -53,7 +53,7 @@ describe('leadFacts and collectFacts', () => {
 const FACTS: AuditFacts = { reachable: true, status: 200, ms: 3200, title: 'x', hasDescription: false, h1: 0, canonical: false, og: false, viewport: false, messenger: false, form: false, instagram: false };
 const five = (extra = '') => ({
   findings: Array.from({ length: 5 }, (_, i) => ({ problem: `Проблема ${i + 1}: клиенты уходят${extra}`, fix: `Исправление ${i + 1}: добавить кнопку` })),
-  closing: 'Наш «Бот-администратор» принимает заявки сам. Напишите в @firtech_bot.',
+  closing: 'Наш «ИИ-администратор» принимает заявки сам. Напишите в @firtech_bot.',
 });
 
 describe('findings schema and composition', () => {
@@ -80,7 +80,7 @@ describe('findings schema and composition', () => {
     for (const reply of [JSON.stringify(five(', всего $200')), JSON.stringify({ ...five(), findings: five().findings.slice(1) }), 'не json']) {
       const r = await composeFindings(new MockLlm(() => reply), FACTS, 'ru');
       expect(r.findings).toHaveLength(5);
-      expect(r.closing).toContain('Бот-администратор');
+      expect(r.closing).toContain('ИИ-администратор');
       expect(JSON.stringify(r)).not.toMatch(/\$|usd/i);
     }
     expect(acceptFindings(five(), FACTS, 'ru')).not.toBeNull();
@@ -89,8 +89,8 @@ describe('findings schema and composition', () => {
   it('a closing line without a real product name is replaced; the matching product follows the gap', () => {
     const odd = { ...five(), closing: 'Купите что-нибудь у нас, это недорого.' };
     expect(acceptFindings(odd, FACTS, 'ru')!.closing).toBe(closingLine(FACTS, 'ru'));
-    expect(closingLine({ ...FACTS, messenger: true, form: false }, 'ru')).toContain('ИИ-приёмщик заявок');
-    expect(closingLine(FACTS, 'en')).toContain('Booking bot');
+    expect(closingLine({ ...FACTS, messenger: true, form: false }, 'ru')).toContain('ИИ-менеджер заявок');
+    expect(closingLine(FACTS, 'en')).toContain('AI booking assistant');
   });
 
   it('an unreachable site: findings about the fact and a request for the Instagram page', async () => {

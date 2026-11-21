@@ -1,4 +1,4 @@
-import { allowedAmounts, getPrices, planOf, supportMonthly, type ProductKey } from '@fir/core';
+import { allowedAmounts, getPrices, planOf, productName, supportMonthly, type ProductKey } from '@fir/core';
 
 /**
  * Service directions of the content plan (pillars). Names and summaries live here; every dollar amount comes from the
@@ -37,32 +37,36 @@ const make = (m: Meta, price: () => { from: number; monthly?: number }, support 
 const product = (key: ProductKey) => () => ({ from: getPrices().products[key]! });
 
 export const DIRECTIONS: Direction[] = [
-  make({ id: 'admin', name: 'Бот-администратор', pillar: 'A', summary: 'запись, перенос и напоминание за день и за час, просьба об отзыве; салоны, барбершопы, стоматологии, автосервисы' }, product('admin')),
+  make({ id: 'admin', name: '', pillar: 'A', summary: 'запись, перенос и напоминание за день и за час, просьба об отзыве; салоны, барбершопы, стоматологии, автосервисы' }, product('admin')),
   make(
-    { id: 'receptionist', name: 'ИИ-приёмщик заявок', pillar: 'R', summary: 'отвечает в Telegram, WhatsApp и Instagram в любое время, задаёт уточняющие вопросы, передаёт менеджеру готовую карточку заявки; учебные центры, магазины' },
+    { id: 'receptionist', name: '', pillar: 'R', summary: 'отвечает в Telegram, WhatsApp и Instagram в любое время, задаёт уточняющие вопросы, передаёт менеджеру готовую карточку заявки; учебные центры, магазины' },
     product('intake'),
     true,
   ),
-  make({ id: 'automation', name: 'Автоматизация рутины', pillar: 'Z', summary: 'Google Sheets, CRM, мессенджеры, отчёты и рассылки по расписанию; кафе и доставка' }, product('automation')),
+  make({ id: 'automation', name: '', pillar: 'Z', summary: 'Google Sheets, CRM, мессенджеры, отчёты и рассылки по расписанию; кафе и доставка' }, product('automation')),
   make(
-    { id: 'content', name: 'Контент по подписке', pillar: 'C', summary: 'посты, карточки и ролики выходят по плану, владелец только утверждает; наш собственный конвейер как живая демонстрация' },
+    { id: 'content', name: '', pillar: 'C', summary: 'посты, карточки и ролики выходят по плану, владелец только утверждает; наш собственный конвейер как живая демонстрация' },
     () => {
       const c = planOf('content');
       return { from: c.setup, monthly: c.monthly };
     },
   ),
-  make({ id: 'miniapp', name: 'Telegram Mini App', pillar: 'M', summary: 'каталог, корзина, запись и лояльность в одном окне Telegram, без установки и регистрации' }, product('miniapp')),
+  make({ id: 'miniapp', name: '', pillar: 'M', summary: 'каталог, корзина, запись и лояльность в одном окне Telegram, без установки и регистрации' }, product('miniapp')),
   make(
-    { id: 'agent', name: 'Личный ИИ-агент (Dono и Polly)', pillar: 'D', summary: 'Dono: личный ассистент студента (дедлайны, календарь, напоминания). Polly: учитель языка. Оба готовые продукты Fir Tech; показ только на примерных данных' },
+    { id: 'agent', name: '', pillar: 'D', summary: 'Dono: личный ассистент студента (дедлайны, календарь, напоминания). Polly: учитель языка. Оба готовые продукты Fir Tech; показ только на примерных данных' },
     () => {
       const d = planOf('dono');
       const p = planOf('polly');
       return { from: Math.min(d.setup, p.setup), monthly: Math.min(d.monthly, p.monthly) };
     },
   ),
-  make({ id: 'implementation', name: 'Внедрение ИИ под ключ', pillar: 'X', summary: 'разбор процессов компании и подключение агентов к её инструментам' }, product('aiteam')),
-  make({ id: 'site', name: 'Сайт под ключ', pillar: 'X', summary: 'лендинг или сайт компании с формой заявки в Telegram, русская и английская версии; магазины, студии, клиники' }, product('site')),
+  make({ id: 'implementation', name: '', pillar: 'X', summary: 'разбор процессов компании и подключение агентов к её инструментам' }, product('aiteam')),
+  make({ id: 'site', name: '', pillar: 'X', summary: 'лендинг или сайт компании с формой заявки в Telegram, русская и английская версии; магазины, студии, клиники' }, product('site')),
 ];
+
+/** The names come from the one map of product names (`@fir/core`), read at the moment of use (the live title of the price list first). */
+const NAME_OF: Record<DirectionId, string> = { admin: 'adminbot', receptionist: 'intake', automation: 'automation', content: 'content', miniapp: 'miniapp', agent: 'agent', implementation: 'aiteam', site: 'site' };
+for (const d of DIRECTIONS) Object.defineProperty(d, 'name', { get: () => productName(NAME_OF[d.id], 'ru'), enumerable: true, configurable: true });
 
 export function priceLine(d: Direction): string {
   const extra = d.supportMonthly ? ` (сопровождение от $${d.supportMonthly} в месяц)` : '';

@@ -136,14 +136,14 @@ describe('welcome and language', () => {
     expect(welcome.html).toMatch(/Polly/);
     expect(welcome.html).not.toContain('!');
     expect(welcome.html.length).toBeLessThan(700);
-    expect(welcome.html).toContain('Строим бота-администратора для записи, ИИ-приёмщика заявок, автоматизацию, Mini Apps, личных агентов и внедряем ИИ в компании');
+    expect(welcome.html).toContain('Я ИИ-менеджер заявок Fir Tech. Что мы делаем: ИИ-администратор, ИИ-менеджер заявок, Автоматизация процессов, Контент на автопилоте, Telegram Mini App, Персональный ИИ-ассистент, ИИ-отдел под ключ');
     expect(buttonTexts(welcome.buttons)).toEqual(['💬 Обсудить проект', '🧩 Продукты', '🧾 Я уже клиент', '👤 Позвать человека', '🧪 Попробовать демо', '🇬🇧 English']);
     for (const t of buttonTexts(welcome.buttons)) expect((t.match(/\p{Extended_Pictographic}/gu) ?? []).length).toBeLessThanOrEqual(1);
 
     await w.engine.onButton(ME, 'm:lang', welcome.id);
     const edited = w.transport.edits.at(-1)!;
     expect(edited.messageId).toBe(welcome.id);
-    expect(edited.html).toContain('We build a booking assistant bot');
+    expect(edited.html).toContain('I am the Fir Tech AI lead manager. What we do: AI booking assistant, AI lead manager');
     expect(buttonTexts(edited.buttons)).toContain('🇷🇺 Русский');
     expect(w.engine.store.get(CLIENT)!.lang).toBe('en');
     await w.engine.onCommand(ME, 'start', '');
@@ -651,22 +651,22 @@ describe('products in the chat', () => {
       expect(p.pairs.length).toBeGreaterThan(0);
       if (PRODUCT_IDS.includes(id as never)) expect(p.kinds.length).toBeGreaterThan(0);
     }
-    expect(catalogueText('ru')).toContain('Бот-администратор для услуг');
-    expect(catalogueText('en')).toContain('Booking assistant bot');
+    expect(catalogueText('ru')).toContain('ИИ-администратор');
+    expect(catalogueText('en')).toContain('AI booking assistant');
   });
 
   it('the LLM system prompt carries the catalogue and the price rule', () => {
     const sys = systemPrompt('Инструкции', 'ru');
-    expect(sys).toContain('ИИ-приёмщик заявок 24/7');
+    expect(sys).toContain('ИИ-менеджер заявок');
     expect(sys).toContain('Dono: $150 + $15/мес');
     expect(sys).toContain('Подбери продукт');
     expect(systemPrompt('x', 'en')).toContain('Polly: $100 + $10/month');
     // every product line carries its site price
-    expect(sys).toContain('Бот-администратор для услуг (от $290)');
-    expect(sys).toContain('ИИ-приёмщик заявок 24/7 (от $220)');
+    expect(sys).toContain('ИИ-администратор (от $290)');
+    expect(sys).toContain('ИИ-менеджер заявок (от $220)');
     expect(sys).toContain('Telegram Mini App (от $660)');
-    expect(sys).toContain('Внедрение ИИ в компанию (от $550)');
-    expect(sys).toContain('Контент на автопилоте по подписке (от $90 + $60/мес)');
+    expect(sys).toContain('ИИ-отдел под ключ (от $550)');
+    expect(sys).toContain('Контент на автопилоте (от $90 + $60/мес)');
   });
 
   it('«Продукты» shows a list in place, a card per product, and «Обсудить» starts the intake with the product chosen', async () => {
@@ -677,11 +677,11 @@ describe('products in the chat', () => {
     const list = w.transport.edits.at(-1)!;
     expect(list.messageId).toBe(welcome);
     expect(buttonTexts(list.buttons)).toHaveLength(8);
-    expect(buttonTexts(list.buttons)[0]).toContain('Бот-администратор для услуг');
+    expect(buttonTexts(list.buttons)[0]).toContain('ИИ-администратор');
     expect(list.buttons!.flat()[0]!.data).toBe('p:admin');
     await w.engine.onButton(ME, 'p:admin', welcome);
     const card = w.transport.edits.at(-1)!;
-    expect(card.html).toContain('Бот-администратор для услуг');
+    expect(card.html).toContain('ИИ-администратор');
     expect(card.html).toContain('Для кого');
     expect(card.html).toContain('барбершопы');
     expect(card.html).toContain('Что внутри');
@@ -693,8 +693,8 @@ describe('products in the chat', () => {
     await w.engine.onButton(ME, 'b:mid', w.card());
     await w.engine.onButton(ME, 'h:none', w.card());
     const lead = w.leadTasks()[0]!.meta.lead as Record<string, unknown>;
-    expect(lead).toMatchObject({ product: 'Бот-администратор для услуг', service: 'bots' });
-    expect(String(lead.message)).toContain('Продукт: Бот-администратор для услуг');
+    expect(lead).toMatchObject({ product: 'ИИ-администратор', service: 'bots' });
+    expect(String(lead.message)).toContain('Продукт: ИИ-администратор');
   });
 
   it('intake step 1 offers the products as buttons and stores the chosen one; the agent card shows only the public prices', async () => {
@@ -722,11 +722,11 @@ describe('products in the chat', () => {
     await w.engine.onButton(ME, 'm:discuss', w.card());
     await w.engine.onText(ME, 'У меня барбершоп, клиенты пишут в директ');
     const step2 = w.transport.last(CLIENT)!;
-    expect(step2.html).toContain('Для барбершопа обычно подходит «Бот-администратор для услуг»');
+    expect(step2.html).toContain('Для барбершопа обычно подходит «ИИ-администратор»');
     expect(step2.html).toContain('Контент на автопилоте');
     expect(step2.html).toContain('2 из 4');
     expect(nicheHint('ru', 'кафе в центре')).toContain('Telegram Mini App');
-    expect(nicheHint('en', 'we run a dental clinic')).toContain('Booking assistant bot');
+    expect(nicheHint('en', 'we run a dental clinic')).toContain('AI booking assistant');
     expect(nicheHint('ru', 'что-то непонятное')).toBe('');
   });
 

@@ -163,8 +163,8 @@ describe('lead enrichment on the cards', () => {
 
   it('a lead from the chat brings its own enrichment: the three lines, the family, the niche, the score, the link of the conversation', async () => {
     w = await drillWorld({ flow: true });
-    const enrichment = { summary: ['Бизнес: салон красоты; задача: вечерние заявки.', 'Подходит: Бот-администратор для услуг; каналы: instagram; срок: не назван.', 'Предложено: сборку по ссылке; контакт оставил; вопросов в диалоге: 2.'], productFamily: 'admin', niche: 'салон красоты', intentScore: 71, builderLink: '/ru/builder?b=k.salon~p.adminbot' };
-    const task = w.sales.createLeadTask({ name: 'Посетитель веб-чата', contact: '@chat_lead', service: 'bots', product: 'Бот-администратор для услуг', budget: '', message: 'Задача (словами клиента): вечерние заявки', estimate: '', locale: 'ru', slot: '', source: 'web', enrichment }, 'bots');
+    const enrichment = { summary: ['Бизнес: салон красоты; задача: вечерние заявки.', 'Подходит: ИИ-администратор; каналы: instagram; срок: не назван.', 'Предложено: сборку по ссылке; контакт оставил; вопросов в диалоге: 2.'], productFamily: 'admin', niche: 'салон красоты', intentScore: 71, builderLink: '/ru/builder?b=k.salon~p.adminbot' };
+    const task = w.sales.createLeadTask({ name: 'Посетитель веб-чата', contact: '@chat_lead', service: 'bots', product: 'ИИ-администратор', budget: '', message: 'Задача (словами клиента): вечерние заявки', estimate: '', locale: 'ru', slot: '', source: 'web', enrichment }, 'bots');
     await w.beat();
     const lead = w.db.prepare('SELECT id FROM li_leads WHERE task_id = ?').get(task) as { id: number };
     const row = ((await w.adm('GET', '/admin/crm/leads')).json.items as any[]).find((l) => l.id === lead.id);

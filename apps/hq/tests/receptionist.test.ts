@@ -166,11 +166,11 @@ describe('the lead of a conversation: enrichment on the card', () => {
     expect(done.reply).toMatch(/Записал, менеджер напишет/);
     expect(w.leads).toHaveLength(1);
     const lead = w.leads[0]!;
-    expect(lead).toMatchObject({ contact: '@dilnoza_salon', service: 'bots', product: 'Бот-администратор для услуг', source: 'web', estimate: '' });
+    expect(lead).toMatchObject({ contact: '@dilnoza_salon', service: 'bots', product: 'ИИ-администратор', source: 'web', estimate: '' });
     const e = lead.enrichment as { summary: string[]; productFamily: string; niche: string; intentScore: number; builderLink: string };
     expect(e.summary).toHaveLength(3);
     expect(e.summary[0]).toMatch(/Бизнес: салон красоты; задача: вечерние заявки/);
-    expect(e.summary[1]).toMatch(/Подходит: Бот-администратор для услуг; каналы: instagram/);
+    expect(e.summary[1]).toMatch(/Подходит: ИИ-администратор; каналы: instagram/);
     expect(e.summary[2]).toMatch(/Предложено: сборку по ссылке, созвон; контакт оставил/);
     expect(e).toMatchObject({ productFamily: 'admin', niche: 'салон красоты' });
     expect(e.intentScore).toBeGreaterThanOrEqual(60);
@@ -207,7 +207,7 @@ describe('the lead of a conversation: enrichment on the card', () => {
     const call = await w.say('Давайте созвонимся', { clientEmail: 'anvar@example.com', cabinetId: 'sb-1', clientName: 'Анвар' });
     expect(call).toMatchObject({ state: 'done', leadCreated: true });
     expect(w.leads).toHaveLength(1);
-    expect(w.leads[0]).toMatchObject({ contact: 'anvar@example.com', name: 'Анвар', clientEmail: 'anvar@example.com', cabinetId: 'sb-1', clientName: 'Анвар', product: 'Бот-администратор для услуг' });
+    expect(w.leads[0]).toMatchObject({ contact: 'anvar@example.com', name: 'Анвар', clientEmail: 'anvar@example.com', cabinetId: 'sb-1', clientName: 'Анвар', product: 'ИИ-администратор' });
     expect((w.leads[0]!.enrichment as { builderLink: string }).builderLink).toMatch(/^\/ru\/builder\?b=k\.salon/);
     // asked once: a second call request makes no second lead
     await w.say('И ещё раз про созвон', { clientEmail: 'anvar@example.com', cabinetId: 'sb-1', clientName: 'Анвар' });

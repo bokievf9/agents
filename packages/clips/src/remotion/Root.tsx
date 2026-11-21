@@ -6,11 +6,11 @@ import { Clip, type ClipProps } from './Clip';
 
 // Studio preview defaults: estimate voice length at ~2.5 words per second.
 const demo: ClipScript = {
-  title: 'ИИ-приёмщик',
+  title: 'ИИ-менеджер заявок',
   hook: 'Клиент пишет в 2 ночи. Кто отвечает?',
   scenes: [
     { voice: 'Клиент пишет в два часа ночи. Кто отвечает?', subtitle: 'Клиент пишет ночью' },
-    { voice: 'ИИ-приёмщик отвечает за секунды и записывает на удобное время.', subtitle: 'Отвечает за секунды' },
+    { voice: 'ИИ-менеджер заявок отвечает за секунды и записывает на удобное время.', subtitle: 'Отвечает за секунды' },
   ],
   cta: 'Подробнее на firtech.pro',
   theme: 'dark',

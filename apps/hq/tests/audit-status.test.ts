@@ -122,7 +122,7 @@ function auditLlm(): MockLlm {
     req.system.includes('free website audit')
       ? JSON.stringify({
           findings: Array.from({ length: 5 }, (_, i) => ({ problem: `Находка ${i + 1}: клиенты теряются`, fix: `Исправление ${i + 1}` })),
-          closing: 'Наш «Бот-администратор» принимает заявки сам. Напишите в @firtech_bot.',
+          closing: 'Наш «ИИ-администратор» принимает заявки сам. Напишите в @firtech_bot.',
         })
       : base.complete(req) as unknown as string,
   );

@@ -1,4 +1,4 @@
-import { getPrices, planOf, supportMonthly, usd, type ProductKey } from '@fir/core';
+import { getPrices, planOf, productName, supportMonthly, usd, type ProductKey } from '@fir/core';
 
 /**
  * The offers of a commercial proposal. Names, timelines and scope live here; the dollar amounts never do: they are read
@@ -51,7 +51,7 @@ const content = () => {
 
 const META: Record<DirectionId, Meta> = {
   admin: {
-    id: 'admin', title: 'Telegram-бот-администратор', timeline: '5-7 рабочих дней',
+    id: 'admin', get title() { return productName('adminbot', 'ru'); }, timeline: '5-7 рабочих дней',
     scope: [
       'Диалоги бота: приветствие, услуги, цены, ответы на частые вопросы',
       'Запись клиента: выбор услуги, даты и времени, подтверждение',
@@ -62,7 +62,7 @@ const META: Record<DirectionId, Meta> = {
     ],
   },
   receptionist: {
-    id: 'receptionist', title: 'ИИ-приёмщик заявок', timeline: '7 рабочих дней',
+    id: 'receptionist', get title() { return productName('intake', 'ru'); }, timeline: '7 рабочих дней',
     scope: [
       'Подключение каналов: Telegram, а также WhatsApp или Instagram по договорённости',
       'ИИ отвечает на типовые вопросы по вашему прайсу и описанию услуг',
@@ -73,7 +73,7 @@ const META: Record<DirectionId, Meta> = {
     ],
   },
   automation: {
-    id: 'automation', title: 'Автоматизация рутины', timeline: '5-10 рабочих дней',
+    id: 'automation', get title() { return productName('automation', 'ru'); }, timeline: '5-10 рабочих дней',
     scope: [
       'Разбор вашего процесса и список шагов, которые автоматизируем',
       'Подключение источников данных: формы, таблицы, мессенджеры',
@@ -84,7 +84,7 @@ const META: Record<DirectionId, Meta> = {
     ],
   },
   content: {
-    id: 'content', title: 'Контент-поддержка', timeline: 'первые материалы за 3-5 рабочих дней',
+    id: 'content', get title() { return productName('content', 'ru'); }, timeline: 'первые материалы за 3-5 рабочих дней',
     scope: [
       'Контент-план на месяц под вашу нишу и аудиторию',
       'Тексты постов и сценарии коротких видео',
@@ -94,7 +94,7 @@ const META: Record<DirectionId, Meta> = {
     ],
   },
   miniapp: {
-    id: 'miniapp', title: 'Мини-приложение в Telegram', timeline: '14-21 рабочий день',
+    id: 'miniapp', get title() { return productName('miniapp', 'ru'); }, timeline: '14-21 рабочий день',
     scope: [
       'Каталог или список услуг с карточками и фото',
       'Корзина или оформление заявки внутри Telegram',
@@ -106,7 +106,7 @@ const META: Record<DirectionId, Meta> = {
     ],
   },
   agent: {
-    id: 'agent', title: 'Личный ИИ-агент под вашу задачу', timeline: '10-14 рабочих дней',
+    id: 'agent', get title() { return productName('agent', 'ru'); }, timeline: '10-14 рабочих дней',
     scope: [
       'Описание задачи агента и границ его работы',
       'Подключение к вашим данным и инструментам',
@@ -117,7 +117,7 @@ const META: Record<DirectionId, Meta> = {
     ],
   },
   implementation: {
-    id: 'implementation', title: 'Внедрение ИИ в процессы', timeline: '14-21 рабочий день',
+    id: 'implementation', get title() { return productName('aiteam', 'ru'); }, timeline: '14-21 рабочий день',
     scope: [
       'Аудит процессов и список точек для ИИ',
       'План внедрения по приоритетам',
@@ -128,7 +128,7 @@ const META: Record<DirectionId, Meta> = {
     ],
   },
   site: {
-    id: 'site', title: 'Сайт', timeline: '7-10 рабочих дней',
+    id: 'site', get title() { return productName('site', 'ru'); }, timeline: '7-10 рабочих дней',
     scope: [
       'Структура и дизайн под вашу нишу, адаптация под телефон',
       'Тексты и блоки: услуги, цены, отзывы, контакты',

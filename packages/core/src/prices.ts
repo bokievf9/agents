@@ -34,12 +34,24 @@ export const pricesSchema = z
     // The site's shape: `{kind:'from', from}`, `{kind:'plans', plans}` or `{kind:'quote'}`. A bare number or `{from}` is read too
     // (our own normalised copy, older shapes). Normalised below to the HQ keys.
     products: z.record(z.string(), z.unknown()),
+    // our own normalised copy keeps the live names (see `product-names.ts`)
+    titles: z.record(z.string(), z.object({ ru: z.string().optional(), en: z.string().optional() })).optional(),
   })
   .transform((p, ctx) => {
     // site id -> HQ key
     const ID: Record<string, string> = { receptionist: 'intake', implementation: 'aiteam' };
     const products: Record<string, number> = {};
+    // live product names: `products.<id>.title` as a string (Russian) or `{ ru, en }` (the site may publish them; `product-names.ts` reads them first)
+    const titles: Record<string, { ru?: string; en?: string }> = { ...(p.titles ?? {}) };
     for (const [id, v] of Object.entries(p.products)) {
+      const t = v && typeof v === 'object' ? (v as { title?: unknown }).title : undefined;
+      const named = typeof t === 'string' ? { ru: t } : t && typeof t === 'object' ? (t as { ru?: unknown; en?: unknown }) : undefined;
+      if (named) {
+        const entry: { ru?: string; en?: string } = {};
+        if (typeof named.ru === 'string' && named.ru.trim()) entry.ru = named.ru.trim().slice(0, 80);
+        if (typeof (named as { en?: unknown }).en === 'string' && (named as { en: string }).en.trim()) entry.en = (named as { en: string }).en.trim().slice(0, 80);
+        if (entry.ru || entry.en) titles[ID[id] ?? id] = entry;
+      }
       let from: number | undefined;
       if (typeof v === 'number') from = v;
       else if (v && typeof v === 'object' && typeof (v as { from?: unknown }).from === 'number') from = (v as { from: number }).from;
@@ -53,7 +65,7 @@ export const pricesSchema = z
     for (const k of PRODUCT_KEYS) if (!(k in products)) ctx.addIssue({ code: 'custom', message: `products.${k} is missing` });
     for (const id of ['dono', 'polly']) if (!p.agentPlans.some((x) => x.id === id)) ctx.addIssue({ code: 'custom', message: `agentPlans.${id} is missing` });
     if (!p.contentPlans.some((x) => x.id === 'content')) ctx.addIssue({ code: 'custom', message: 'contentPlans.content is missing' });
-    return { ...p, products, stages: normalizeStages(p.stages, (m, x) => log('warn', m, x)) };
+    return { ...p, products, titles, stages: normalizeStages(p.stages, (m, x) => log('warn', m, x)) };
   });
 export type Prices = z.infer<typeof pricesSchema>;
 

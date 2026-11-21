@@ -1,4 +1,4 @@
-import { detectText, errMsg, formatSlot, log, smallProjectMaxUsd, tryComplete, type LlmClient } from '@fir/core';
+import { detectText, errMsg, formatSlot, log, productList, productName, smallProjectMaxUsd, tryComplete, type LlmClient } from '@fir/core';
 import { isPriceQuestion } from '@fir/worker-lead-intake';
 import { z } from 'zod';
 import {
@@ -287,7 +287,9 @@ export const LEAD_DONE = {
 const SLOT_ASK: Record<NonNullable<ReturnType<typeof nextSlot>>, string> = {
   niche: 'какой у собеседника бизнес и чем он занимается',
   pain: 'что сейчас мешает или теряется (заявки, запись, ответы ночью, рутина, повторяющиеся вопросы)',
-  product: 'какой формат ему ближе: бот-администратор, приёмщик заявок, автоматизация рутины, контент по подписке, Mini App или личный агент',
+  get product() {
+    return `какой формат ему ближе: ${productList('ru')}`;
+  },
   channels: 'где его клиенты пишут сейчас (Instagram, Telegram, сайт, звонки, сарафанное радио)',
   timeline: 'к какому сроку это нужно (срочно, в течение месяца, без спешки)',
   budget: 'на какой бюджет он ориентируется (можно мягко, он вправе не отвечать)',
@@ -310,7 +312,8 @@ export function receptionistPrompt(instructions: string, lang: Lang, q: QState, 
     '',
     '## Правила этого ответа',
     `- Язык ответа: ${language}. Тон студии: спокойно, на «вы», предметно, коротко.`,
-    '- Ты ИИ-менеджер заявок Fir Tech: реальный рабочий приёмщик. Не выдавай себя за человека, но и не начинай с этого.',
+    `- Ты «${productName('intake', lang)} Fir Tech»: реальный рабочий менеджер по заявкам, а не демо. Если спросят, кто ты, так и называйся: «${productName('intake', lang)} Fir Tech». Не выдавай себя за человека, но и не начинай с этого.`,
+    '- Продукты называй только их именами из списка выше, слово «бот» в названии ИИ-продукта не используй.',
     '- Обычный текст без markdown, списков, эмодзи и длинных тире; не длиннее 500 символов, 1-3 предложения. Без оборотов «не X, а Y», без перечислений «без A, без B», без стоковых фраз.',
     `- Уже известно: ${slotsKnown(q)}.`,
     mode === 'answer'

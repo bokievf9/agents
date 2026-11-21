@@ -1,4 +1,4 @@
-import { migrate, type Db } from '@fir/core';
+import { migrate, productList, productName, type Db } from '@fir/core';
 import { guessNiche, type Lead } from '@fir/worker-lead-intake';
 
 /**
@@ -36,13 +36,17 @@ export const isBlocking = (gaps: Gap[]): boolean => gaps.includes('scope') || (g
 
 const Q: Record<'ru' | 'en', Record<Gap, string>> = {
   ru: {
-    scope: 'Что именно вам нужно: бот-администратор для записи, приёмщик заявок, автоматизация рутины, Mini App, сайт или что-то другое?',
+    get scope() {
+      return `Что именно вам нужно: ${productList('ru')}, сайт или что-то другое?`;
+    },
     niche: 'Чем занимается ваш бизнес (ниша, город, примерный размер)?',
     goal: 'Какую задачу это должно решать в первую очередь: что сейчас теряется или отнимает время?',
     channel: 'Где клиенты пишут вам сейчас: Instagram, Telegram, сайт, звонки?',
   },
   en: {
-    scope: 'What exactly do you need: a booking bot, a request receptionist, workflow automation, a Mini App, a website or something else?',
+    get scope() {
+      return `What exactly do you need: ${productList('en')}, a website or something else?`;
+    },
     niche: 'What does your business do (field, city, rough size)?',
     goal: 'What should it solve first: what gets lost or takes your time now?',
     channel: 'Where do clients write to you now: Instagram, Telegram, your website, phone calls?',
@@ -61,7 +65,9 @@ export function questionsMessage(lang: 'ru' | 'en', name: string, questions: str
 }
 
 const ASSUME: Record<Gap, string> = {
-  scope: 'состав работ: стандартный пакет продукта, который назван в заявке (или ИИ-приёмщик заявок), без дополнительных частей',
+  get scope() {
+    return `состав работ: стандартный пакет продукта, который назван в заявке (или «${productName('intake', 'ru')}»), без дополнительных частей`;
+  },
   niche: 'ниша: типовой малый бизнес в сфере услуг',
   goal: 'главная задача: приём и обработка обращений клиентов без потерь',
   channel: 'каналы: сайт и Telegram',

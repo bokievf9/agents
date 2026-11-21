@@ -1,4 +1,4 @@
-import type { Button } from '@fir/core';
+import { productList, productName, type Button } from '@fir/core';
 import { isCatalogueId, KIND_LABELS, PRODUCT_IDS, PRODUCTS, publicPrices, startingPrices, type CatalogueId } from './products.js';
 
 export type Lang = 'ru' | 'en';
@@ -101,20 +101,14 @@ interface Texts {
 /** Labels for every need key: the catalogue names for products, `extra` for site, other and the old bot and app keys. */
 function needLabels(lang: 'ru' | 'en', extra: Record<'site' | 'other' | 'bot' | 'app', string>, emoji = true): Record<Need, string> {
   const out = { ...extra } as Record<string, string>;
-  for (const id of PRODUCT_IDS) out[id] = emoji ? `${PRODUCTS[id].emoji} ${SHORT[lang][id]}` : PRODUCTS[id].name[lang];
+  for (const id of PRODUCT_IDS) out[id] = emoji ? `${PRODUCTS[id].emoji} ${PRODUCTS[id].name[lang]}` : PRODUCTS[id].name[lang];
   return out as Record<Need, string>;
 }
 
-/** Shorter button labels of the products (the full names are on the cards). */
-const SHORT: Record<'ru' | 'en', Record<string, string>> = {
-  ru: { admin: 'Бот-администратор', receptionist: 'ИИ-приёмщик заявок', automation: 'Автоматизация', content: 'Контент по подписке', miniapp: 'Mini App', agent: 'Личный агент', ai: 'ИИ в компанию' },
-  en: { admin: 'Booking bot', receptionist: 'AI request handler', automation: 'Automation', content: 'Content subscription', miniapp: 'Mini App', agent: 'Personal agent', ai: 'AI for company' },
-};
-
 const RU: Texts = {
   welcome: (name) =>
-    `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Строим бота-администратора для записи, ИИ-приёмщика заявок, автоматизацию, Mini Apps, личных агентов и внедряем ИИ в компании.\n\n` +
-    'Наши собственные боты работают каждый день: Dono ведёт учёбу студента, Polly учит языкам. Этот чат тоже наша работа: так выглядит ИИ-приёмщик заявок.\n\nЧем помочь?',
+    `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Я ${productName('intake', 'ru')} Fir Tech. Что мы делаем: ${productList('ru')}.\n\n` +
+    `Наши собственные ассистенты работают каждый день: Dono ведёт учёбу студента, Polly учит языкам. Этот чат тоже наша работа: так выглядит ${productName('intake', 'ru')}.\n\nЧем помочь?`,
   menu: { discuss: '💬 Обсудить проект', products: '🧩 Продукты', client: '🧾 Я уже клиент', human: '👤 Позвать человека', lang: '🇬🇧 English', demo: '🧪 Попробовать демо' },
   productsTitle: '<b>Продукты Fir Tech</b>',
   productsIntro: 'Выберите, что интересно: расскажу, для кого это и что внутри.',
@@ -150,7 +144,7 @@ const RU: Texts = {
   slow: 'Сообщений много, я передал разговор команде. Человек ответит здесь.',
   slotPicked: (slot) => `<b>Записал звонок</b>\n${esc(slot)}. Подтвердим время здесь, в этом чате.`,
   help:
-    '<b>Что умеет этот бот</b>\n/start: начало и меню\n/demo: демо бота-администратора для салона\n/audit &lt;сайт&gt;: бесплатный аудит в течение рабочего дня\n/human: позвать человека\n/lang: English\n\nМожно просто написать вопрос: отвечу сразу или передам команде.',
+    '<b>Что умеет этот бот</b>\n/start: начало и меню\n/demo: демо «' + productName('adminbot', 'ru') + '» для салона\n/audit &lt;сайт&gt;: бесплатный аудит в течение рабочего дня\n/human: позвать человека\n/lang: English\n\nМожно просто написать вопрос: отвечу сразу или передам команде.',
   stale: 'Уже неактуально',
   priceNote: 'Стоимость и сроки назовём после короткого разговора с командой.',
   langSwitched: 'Русский',
@@ -158,8 +152,8 @@ const RU: Texts = {
 
 const EN: Texts = {
   welcome: (name) =>
-    `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. We build a booking assistant bot, an AI request handler, automation, Mini Apps and personal agents, and bring AI into companies.\n\n` +
-    'Our own bots work every day: Dono runs a student’s studies, Polly teaches languages. This chat is our work too: this is what an AI request handler looks like.\n\nHow can we help?',
+    `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. I am the Fir Tech ${productName('intake', 'en')}. What we do: ${productList('en')}.\n\n` +
+    `Our own assistants work every day: Dono runs a student’s studies, Polly teaches languages. This chat is our work too: this is what an ${productName('intake', 'en')} looks like.\n\nHow can we help?`,
   menu: { discuss: '💬 Discuss a project', products: '🧩 Products', client: '🧾 I am a client', human: '👤 Talk to a person', lang: '🇷🇺 Русский', demo: '🧪 Try the demo' },
   productsTitle: '<b>Fir Tech products</b>',
   productsIntro: 'Pick what interests you: I will tell you who it is for and what is inside.',
@@ -195,7 +189,7 @@ const EN: Texts = {
   slow: 'That is a lot of messages, so I passed the conversation to the team. A person will answer here.',
   slotPicked: (slot) => `<b>Call noted</b>\n${esc(slot)}. We will confirm the time here, in this chat.`,
   help:
-    '<b>What this bot does</b>\n/start: start and menu\n/demo: demo of the booking bot for a salon\n/audit &lt;site&gt;: free audit within a working day\n/human: talk to a person\n/lang: Русский\n\nYou can also just type a question: I answer right away or pass it to the team.',
+    '<b>What this bot does</b>\n/start: start and menu\n/demo: demo of the ' + productName('adminbot', 'en') + ' for a salon\n/audit &lt;site&gt;: free audit within a working day\n/human: talk to a person\n/lang: Русский\n\nYou can also just type a question: I answer right away or pass it to the team.',
   stale: 'No longer relevant',
   priceNote: 'We will name the price and timing after a short talk with the team.',
   langSwitched: 'English',
@@ -272,7 +266,7 @@ export const haveButtons = (lang: Lang): Button[][] => {
 export const COMMANDS: Record<Lang, { command: string; description: string }[]> = {
   ru: [
     { command: 'start', description: 'Начало и меню' },
-    { command: 'demo', description: 'Демо: бот-администратор для салона' },
+    { command: 'demo', description: `Демо: ${productName('adminbot', 'ru')} для салона` },
     { command: 'audit', description: 'Бесплатный аудит сайта' },
     { command: 'human', description: 'Позвать человека' },
     { command: 'lang', description: 'English' },
@@ -280,7 +274,7 @@ export const COMMANDS: Record<Lang, { command: string; description: string }[]> 
   ],
   en: [
     { command: 'start', description: 'Start and menu' },
-    { command: 'demo', description: 'Demo: booking bot for a salon' },
+    { command: 'demo', description: `Demo: ${productName('adminbot', 'en')} for a salon` },
     { command: 'audit', description: 'Free site audit' },
     { command: 'human', description: 'Talk to a person' },
     { command: 'lang', description: 'Русский' },
@@ -300,12 +294,12 @@ export const PROFILE: Record<Lang, { short: string; description: string }> = {
   ru: {
     short: 'Fir Tech: сайты, Telegram-боты, приложения и автоматизация. Расскажите о задаче: ответ за 5 минут, круглосуточно.',
     description:
-      'Здесь можно обсудить проект с Fir Tech: сайт, Telegram-бот, приложение или автоматизацию. Три коротких вопроса, и команда вернётся с предложением. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.\n\nЭтот бот тоже наша работа: так выглядит ИИ-приёмщик заявок для вашего бизнеса.',
+      'Здесь можно обсудить проект с Fir Tech: сайт, Telegram-бот, приложение или автоматизацию. Три коротких вопроса, и команда вернётся с предложением. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.\n\nЭтот чат тоже наша работа: так выглядит ' + productName('intake', 'ru') + ' для вашего бизнеса.',
   },
   en: {
     short: 'Fir Tech: websites, Telegram bots, apps and automation. Tell us about your task: reply within 5 minutes, 24/7.',
     description:
-      'Discuss a project with Fir Tech: a website, a Telegram bot, an app or automation. Three short questions, and the team comes back with a proposal. First reply within 5 minutes, around the clock; prices and timing are confirmed by the founder.\n\nThis bot is our work too: this is what an AI request handler for your business looks like.',
+      'Discuss a project with Fir Tech: a website, a Telegram bot, an app or automation. Three short questions, and the team comes back with a proposal. First reply within 5 minutes, around the clock; prices and timing are confirmed by the founder.\n\nThis chat is our work too: this is what an ' + productName('intake', 'en') + ' for your business looks like.',
   },
 };
 

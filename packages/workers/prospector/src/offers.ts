@@ -1,4 +1,4 @@
-import { getPrices, usd, type ProductKey } from '@fir/core';
+import { getPrices, productName, usd, type ProductKey } from '@fir/core';
 
 /**
  * The three offers Prospector sells first. Names live here; the dollar amounts come from the site's price list
@@ -12,18 +12,21 @@ export interface Offer {
   readonly fromUsd: number;
 }
 
-const offer = (id: OfferId, title: string, key: ProductKey): Offer => ({
+/** `product`: the id in the one map of product names (`@fir/core` `product-names.ts`); the name is read at the moment of use, the live title of the price list first. */
+const offer = (id: OfferId, product: string, key: ProductKey): Offer => ({
   id,
-  title,
+  get title() {
+    return productName(product, 'ru');
+  },
   get fromUsd() {
     return getPrices().products[key]!;
   },
 });
 
 export const OFFERS: Record<OfferId, Offer> = {
-  admin: offer('admin', 'бот-администратор в Telegram', 'admin'),
-  receptionist: offer('receptionist', 'ИИ-приёмщик заявок', 'intake'),
-  miniapp: offer('miniapp', 'мини-приложение в Telegram', 'miniapp'),
+  admin: offer('admin', 'adminbot', 'admin'),
+  receptionist: offer('receptionist', 'intake', 'intake'),
+  miniapp: offer('miniapp', 'miniapp', 'miniapp'),
 };
 
 const KEYWORDS: [RegExp, OfferId][] = [
