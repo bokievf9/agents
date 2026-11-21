@@ -14,6 +14,7 @@ import { createPultContent } from './pult-content.js';
 import { createMetrics, SiteEvents } from './pult-events.js';
 import { createHub } from './pult-hub.js';
 import { createPultCrm, fail, ok } from './pult-crm.js';
+import type { Calls } from './calls.js';
 import { createChats } from './chats.js';
 import { createReview } from './review.js';
 import { createPultTrends } from './pult-trends.js';
@@ -45,6 +46,8 @@ export interface PultDeps {
   tools?: AppTools | undefined;
   /** The cabinet's documents: a КП, a смета or a contract already sent to the client is revised in place (`review.ts`). */
   cabinet?: Pick<CabDocs, 'reviseDelivered' | 'revisable'> & Partial<Pick<CabDocs, 'resend' | 'ownerList'>> | undefined;
+  /** P-18/P-19: the call bookings behind the lead's «Созвон» (`calls.ts`). */
+  calls?: Calls | undefined;
 }
 
 export function createPult(d: PultDeps) {

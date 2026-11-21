@@ -240,7 +240,7 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
     cabinetTicket: (x: any) => support.cabinetTicket(x.id, x.name, x.text, x.telegram, x.leadId),
     reloadPrices: () => { reloads.n++; return reloads.fail ? Promise.reject(new Error('site down')) : Promise.resolve({ source: 'fetched' as const, updatedAt: '2026-11-21' }); },
     acceptStage: (pid, no) => Promise.resolve(production.acceptStage(pid, no, 'client')),
-    billing, marketing, tools: tools as any, rendersDir, onRoutinesChange: () => undefined, ...(cabinet ? { cabinet } : {}),
+    billing, marketing, tools: tools as any, rendersDir, onRoutinesChange: () => undefined, ...(cabinet ? { cabinet } : {}), calls: callBook,
     client: { send: (chatId: number, text: string) => { toClient.push({ chatId, text }); return Promise.resolve(); } } as any,
     webReply: (sessionId: string, text: string) => { toWeb.push({ sessionId, text }); return webChat.store.queueOwnerReply(sessionId, text); },
   });

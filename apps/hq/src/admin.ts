@@ -5,6 +5,7 @@ import { openBuilderTasks } from './bridge.js';
 import type { Director } from './director.js';
 import { createCrm } from './admin-crm.js';
 import type { CabinetApi } from './cabinet-api.js';
+import type { Calls } from './calls.js';
 import { createPult } from './pult.js';
 import type { BillingWorker } from '@fir/worker-billing';
 import type { ClientChannel } from './client/channel.js';
@@ -45,6 +46,8 @@ export interface AdminDeps {
   tools?: AppTools;
   /** Cabinet v3 (2026-11-22): documents, threads, uploads, the playground (`cabinet-api.ts`); its owner-side hooks are bound here. */
   cabinet?: CabinetApi;
+  /** P-18/P-19 (2026-11-22): the call bookings (`calls.ts`): the Пульт's «Созвон» books the site's window and tells the client. */
+  calls?: Calls;
 }
 
 export interface AdminRequest {
@@ -105,7 +108,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   const history = createDirectorHistory(hq.db, now);
   const pult = createPult({
     hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply,
-    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange, tools: d.tools, ...(d.cabinet ? { cabinet: d.cabinet.docs } : {}),
+    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange, tools: d.tools, ...(d.cabinet ? { cabinet: d.cabinet.docs } : {}), ...(d.calls ? { calls: d.calls } : {}),
   });
 
   const maxTaskId = () => (hq.db.prepare('SELECT COALESCE(MAX(id), 0) m FROM tasks').get() as { m: number }).m;

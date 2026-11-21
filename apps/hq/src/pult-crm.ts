@@ -5,6 +5,7 @@ import { PmStore } from '@fir/worker-project-manager';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import type { CabDocs } from './cab-docs.js';
+import type { Calls } from './calls.js';
 import type { createCrm } from './admin-crm.js';
 import { recordManagerReply } from './cabinet.js';
 import type { ClientChannel } from './client/channel.js';
@@ -26,6 +27,8 @@ export interface PultCrmDeps {
   webReply?: ((sessionId: string, text: string) => boolean) | undefined;
   /** The cabinet documents (P-07): the owner's list with the email outcome and «Отправить снова». */
   cabinet?: Partial<Pick<CabDocs, 'resend' | 'ownerList'>> | undefined;
+  /** P-18/P-19: the call bookings (the site's window, the client's channel, the reminders). Absent: `call` only writes `chosen_slot`, as before. */
+  calls?: Calls | undefined;
 }
 
 const iso = (ms: number | null | undefined) => (ms === null || ms === undefined ? null : new Date(ms).toISOString());
@@ -34,7 +37,9 @@ export const fail = (status: number, error: string, extra: Record<string, unknow
 
 const leadPost = z.object({ stage: z.string().max(20).optional(), note: z.string().max(2000).optional(), lost_reason: z.string().max(500).optional() }).strict();
 const replyBody = z.object({ text: z.string().trim().min(1).max(2000) }).strict();
-const callBody = z.object({ at: z.string().max(40) }).strict();
+/** `at` alone books (or moves) the call; `action` confirms, moves (with `at`) or cancels it (P-18, P-19). */
+const CALL_ACTIONS = ['book', 'confirm', 'reschedule', 'cancel'] as const;
+const callBody = z.object({ at: z.string().max(40).optional(), action: z.enum(CALL_ACTIONS).optional() }).strict();
 const PROJECT_STATUSES = ['draft', 'active', 'done', 'paused'] as const;
 const projectBody = z.discriminatedUnion('action', [
   z.object({ action: z.literal('complete_milestone'), milestoneId: z.number().int().positive() }).strict(),
@@ -127,15 +132,42 @@ export function createPultCrm(d: PultCrmDeps) {
     return ok({ sent, via });
   }
 
-  function leadCall(id: number, body: unknown): AdminReply {
+  async function leadCall(id: number, body: unknown): Promise<AdminReply> {
     const row = leadRow(id);
     if (!row) return fail(404, 'not_found');
     const parsed = callBody.safeParse(body ?? {});
-    const at = parsed.success ? Date.parse(parsed.data.at) : NaN;
-    if (!parsed.success || !Number.isFinite(at)) return fail(400, 'invalid');
-    db.prepare('UPDATE li_leads SET chosen_slot = ? WHERE id = ?').run(at, id);
-    hq.log('owner', 'lead_call', 'lead', String(id), iso(at) ?? '');
-    return ok({ item: { ...views.lead(id)!, callAt: iso(at) } });
+    if (!parsed.success) return fail(400, 'invalid', { allowed: CALL_ACTIONS });
+    const action = parsed.data.action ?? 'book';
+    const at = parsed.data.at !== undefined ? Date.parse(parsed.data.at) : NaN;
+    if ((action === 'book' || action === 'reschedule') && !Number.isFinite(at)) return fail(400, 'invalid', { allowed: CALL_ACTIONS });
+    const bookingView = () => {
+      const b = d.calls?.of(id);
+      return b ? { id: b.id, at: iso(b.at), state: b.state, site: b.site || null } : null;
+    };
+    if (!d.calls) {
+      if (action !== 'book') return fail(503, 'unavailable');
+      db.prepare('UPDATE li_leads SET chosen_slot = ? WHERE id = ?').run(at, id);
+      hq.log('owner', 'lead_call', 'lead', String(id), iso(at) ?? '');
+      return ok({ item: { ...views.lead(id)!, callAt: iso(at) } });
+    }
+    // P-18: the owner's call goes to the site (the window stops being offered) and the client hears the time by his channel; P-19: a confirmation or a move too
+    let told: string[];
+    if (action === 'book') {
+      const r = await d.calls.book(id, at, 'pult', { tell: true });
+      if (!r) return fail(404, 'not_found');
+      told = r.told;
+    } else if (action === 'reschedule') {
+      const r = d.calls.of(id) ? await d.calls.reschedule(id, at) : await d.calls.book(id, at, 'pult', { tell: true });
+      if (!r) return fail(404, 'not_found');
+      told = r.told;
+    } else {
+      if (!d.calls.of(id)) return fail(409, 'no_call', { allowed: ['book'] });
+      const r = action === 'confirm' ? await d.calls.confirm(id) : await d.calls.cancel(id);
+      told = r?.told ?? [];
+    }
+    hq.log('owner', 'lead_call', 'lead', String(id), action);
+    const b = d.calls.of(id);
+    return ok({ item: { ...views.lead(id)!, callAt: b ? iso(b.at) : null }, booking: bookingView(), told });
   }
 
   // ---- invoices ----

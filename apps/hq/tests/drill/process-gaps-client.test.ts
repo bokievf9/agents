@@ -254,3 +254,56 @@ describe('P-06: the first reply offers the two nearest free windows of the site'
   }, 60_000);
 });
 
+describe('P-18: a call set from the Пульт books the window on the site and tells the client', () => {
+  it('cabinet lead: the site gets the window, the lead thread has the time, an email goes; the same time again changes nothing', async () => {
+    const { cid, leadId } = await cabinetLead();
+    w.emails.length = 0;
+    const r = await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { at: new Date(SLOT_A).toISOString() });
+    expect(r.status, r.text).toBe(200);
+    expect(r.json).toMatchObject({ item: { callAt: new Date(SLOT_A).toISOString() }, booking: { at: new Date(SLOT_A).toISOString(), state: 'pending', site: 'booked' }, told: ['cabinet', 'email'] });
+    expect(w.site.bookings).toEqual([expect.objectContaining({ at: SLOT_A, leadId, source: 'pult', contact: EMAIL })]);
+    expect((await leadThread(cid, leadId)).some((t) => /^Созвон назначен: четверг, 19 ноября[^.]*10:00\./.test(t))).toBe(true);
+    expect(mails('Созвон с Fir Tech назначен')).toHaveLength(1);
+    const again = await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { at: new Date(SLOT_A).toISOString() });
+    expect(again.json.told).toEqual([]);
+    expect(w.site.bookings).toHaveLength(1);
+    // a bad body
+    expect((await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { at: 'когда-нибудь' })).status).toBe(400);
+    expect((await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { action: 'confirm', extra: 1 })).status).toBe(400);
+    expect((await w.adm('POST', '/admin/crm/leads/99999/call', { at: new Date(SLOT_A).toISOString() })).status).toBe(404);
+  }, 60_000);
+
+  it('a Telegram lead hears the time in the client bot', async () => {
+    w = await drillWorld({ flow: true });
+    const taskId = w.sales.createLeadTask({ name: 'Bot Lead', contact: '@bot_lead', service: 'bots', budget: '', message: 'Нужен бот для кафе', estimate: '', locale: 'ru', slot: '', source: 'telegram', chatId: 4242 }, 'bots');
+    await w.beat();
+    const leadId = (w.db.prepare('SELECT id FROM li_leads WHERE task_id = ?').get(taskId) as { id: number }).id;
+    const r = await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { at: new Date(SLOT_B).toISOString() });
+    expect(r.json.told).toEqual(['telegram']);
+    expect(w.toClient.at(-1)).toMatchObject({ chatId: 4242, text: expect.stringMatching(/^Созвон назначен: пятница, 20 ноября/) });
+  }, 60_000);
+});
+
+describe('P-19: confirming or moving a call reaches the client by email and the cabinet thread', () => {
+  it('confirm, reschedule, cancel: each one line in the thread and one email; without a call 409', async () => {
+    const { cid, leadId } = await cabinetLead();
+    expect((await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { action: 'confirm' })).status).toBe(409);
+    await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { at: new Date(SLOT_A).toISOString() });
+    w.emails.length = 0;
+    const ok = await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { action: 'confirm' });
+    expect(ok.json).toMatchObject({ booking: { state: 'confirmed' }, told: ['cabinet', 'email'] });
+    expect(mails('Созвон с Fir Tech подтверждён')).toHaveLength(1);
+    expect((await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { action: 'confirm' })).json.told).toEqual([]);
+    const moved = await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { action: 'reschedule', at: new Date(SLOT_B).toISOString() });
+    expect(moved.json).toMatchObject({ booking: { at: new Date(SLOT_B).toISOString(), state: 'pending', site: 'booked' }, told: ['cabinet', 'email'] });
+    expect(mails('Созвон с Fir Tech перенесён')).toHaveLength(1);
+    expect(mails('Созвон с Fir Tech перенесён')[0]!.text).toMatch(/пятница, 20 ноября[^)]*\(было четверг, 19 ноября/);
+    const thread = await leadThread(cid, leadId);
+    expect(thread.filter((t) => /^Созвон (подтверждён|перенесён)/.test(t))).toHaveLength(2);
+    expect(leadOf().chosen_slot).toBe(SLOT_B);
+    const off = await w.adm('POST', `/admin/crm/leads/${leadId}/call`, { action: 'cancel' });
+    expect(off.json).toMatchObject({ booking: null, told: ['cabinet', 'email'] });
+    expect(mails('Созвон с Fir Tech отменён')).toHaveLength(1);
+  }, 60_000);
+});
+
