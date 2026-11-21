@@ -29,7 +29,9 @@ export const SEED_BUDGETS: Record<(typeof DEPT_BUDGET_KEYS)[number], number> = {
 export const SEED_SOURCE = 'seed 2026-11-23';
 
 export const NOTICE_SETTING_TYPES = ['client', 'lead', 'approval', 'payment', 'stage', 'signed', 'call', 'chat', 'human'] as const;
-export const NOTICE_SETTING_ALERTS = ['lost_lead', 'email_failed', 'llm', 'budget', 'service'] as const;
+export const NOTICE_SETTING_ALERTS = ['lost_lead', 'email_failed', 'llm', 'budget', 'service', 'human'] as const;
+/** How much the owner wants to hear from the lead manager (Fira): ask_me = every doubt, policy = the escalation policy, autopilot = only a person asked for, anger, legal. */
+export const AUTOPILOT_MODES = ['ask_me', 'policy', 'autopilot'] as const;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings_log (
@@ -78,6 +80,7 @@ const patchBody = z.object({
   kp: z.object({ validDays: z.number().int().min(1).max(90), defaultLang: z.enum(['ru', 'en']) }).partial().strict(),
   playground: z.object({ draftMsgsPerDay: z.number().int().min(1).max(2000), liveMsgsPerDay: z.number().int().min(1).max(2000) }).partial().strict(),
   service: z.object({ tgApprovalCards: bool, tgGroupReports: bool }).partial().strict(),
+  autopilot: z.object({ leadManager: z.enum(AUTOPILOT_MODES) }).partial().strict(),
 }).partial().strict();
 
 export type SettingsPatch = z.infer<typeof patchBody>;
@@ -132,6 +135,10 @@ export function createSettings(d: SettingsDeps) {
     return m ? { from: `${m[1]!.padStart(2, '0')}:${m[2]}`, to: `${m[3]!.padStart(2, '0')}:${m[4]}` } : null;
   };
   const approvalsOf = (kind: string) => (db.prepare("SELECT COUNT(*) n FROM decisions WHERE kind = ? AND decision IN ('approve', 'auto')").get(kind) as { n: number }).n;
+  const autopilotMode = (): (typeof AUTOPILOT_MODES)[number] => {
+    const v = hq.setting('autopilot.leadManager');
+    return (AUTOPILOT_MODES as readonly string[]).includes(v) ? (v as (typeof AUTOPILOT_MODES)[number]) : 'policy';
+  };
   const round = (n: number) => Math.round(n * 100) / 100;
 
   /** The whole answer: the settings with their effective values, the usage next to the limits, and what needs a restart. */
@@ -164,6 +171,7 @@ export function createSettings(d: SettingsDeps) {
         kp: { validDays: sv.kpValidDays(), defaultLang: hq.setting('kp_lang') === 'en' ? 'en' : 'ru' },
         playground: { draftMsgsPerDay: intOr(hq.setting('pg_limit_draft'), 50), liveMsgsPerDay: intOr(hq.setting('pg_limit_live'), 500) },
         service: { tgApprovalCards: sv.tgApprovalCards, tgGroupReports: sv.tgGroupReports },
+        autopilot: { leadManager: autopilotMode() },
       },
       usage: { deptMonthUsd: monthUsd, clientLlmToday: d.limiters()[0]?.llmToday ?? 0, monthStartedAt: new Date(zonedToMs(p.y, p.mo, 1, 0, 0, hq.tz)).toISOString() },
       restartRequired: restartKeys.length > 0, restartKeys,
@@ -257,6 +265,8 @@ export function createSettings(d: SettingsDeps) {
       if (sr.tgApprovalCards !== undefined) kv('flag.tg_approval_cards', s1(sr.tgApprovalCards), 'service.tgApprovalCards', s1(sv.tgApprovalCards));
       if (sr.tgGroupReports !== undefined) kv('flag.tg_group_reports', s1(sr.tgGroupReports), 'service.tgGroupReports', s1(sv.tgGroupReports));
     }
+    const ap = p.autopilot;
+    if (ap?.leadManager !== undefined) kv('autopilot.leadManager', ap.leadManager, 'autopilot.leadManager', autopilotMode());
     return out;
   }
 

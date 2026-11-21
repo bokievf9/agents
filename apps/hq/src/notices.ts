@@ -20,7 +20,7 @@ export const NOTICE_TYPES: readonly NoticeType[] = ['client', 'lead', 'approval'
 const SWITCH: Partial<Record<NoticeType, string>> = { client: 'client', lead: 'lead', approval: 'approval', payment: 'payment', stage_ready: 'stage', stage_accepted: 'stage', signed: 'signed', call: 'call', human: 'human', chat: 'chat' };
 
 /** Alerts that are reminders (Telegram); the rest stay in the Пульт and count in the morning line. */
-export const TG_ALERT_KINDS: ReadonlySet<AlertKind> = new Set<AlertKind>(['lost_lead', 'email_failed', 'llm', 'budget', 'service']);
+export const TG_ALERT_KINDS: ReadonlySet<AlertKind> = new Set<AlertKind>(['lost_lead', 'email_failed', 'llm', 'budget', 'service', 'human']);
 
 const UNGROUPED: ReadonlySet<NoticeType> = new Set<NoticeType>(['payment', 'human', 'alert', 'summary']);
 export const GROUP_MS = 5 * 60_000;
@@ -147,7 +147,7 @@ export class OwnerNotices {
     if (!TG_ALERT_KINDS.has(o.kind ?? 'other')) return false;
     if (this.d.hq.setting(`notice.alert.${o.kind ?? 'other'}`) === '0') return false;
     const line = o.short?.trim() || text.split('\n')[0]!;
-    return this.push('alert', line, this.d.links.to(o.kind === 'lost_lead' ? 'leads' : o.kind === 'email_failed' ? 'chats' : 'company'));
+    return this.push('alert', line, this.d.links.to(o.kind === 'lost_lead' ? 'leads' : o.kind === 'email_failed' || o.kind === 'human' ? 'chats' : 'company'));
   }
 
   // ---- out ----

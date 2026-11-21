@@ -377,6 +377,15 @@ if (cfg.firaLeadManager) startFiraLeadManager({ hq, db });
 const webChat = cfg.webChatToken
   ? new WebChatEngine({
       db, now: hq.now, tz: () => hq.tz, llm: clientLlm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate, demoUsage, demoRequireClient: cfg.demoRequireClient,
+      // VIP: a cabinet client with a project (through his own leads only: the registration name pulls nothing in)
+      hasProject: (email) => {
+        try {
+          return Boolean(db.prepare('SELECT 1 x FROM pm_projects p JOIN li_leads l ON l.id = p.lead_id JOIN cab_clients c ON c.id = l.client_id WHERE c.email = ? LIMIT 1').get(email.trim().toLowerCase()));
+        } catch (e) {
+          log('warn', 'vip check failed', { err: errMsg(e) });
+          return false;
+        }
+      },
       onLost: (source, reason, info) => lost.record(source, reason, info), gatewayDown, siteOrigin: cfg.siteUrl, slots: freeSlots,
     })
   : null;

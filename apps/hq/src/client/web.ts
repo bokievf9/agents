@@ -95,6 +95,8 @@ export interface WebChatDeps {
   llmTimeoutMs?: number;
   /** Menu buttons («Обсудить проект», a product card) start the conversation with the receptionist (default true). false: they start the scripted 3-step intake, as when the model is off. */
   conversation?: boolean;
+  /** True for a signed-in cabinet client who has a project (the receptionist's `client.vip`: the owner hears his questions). */
+  hasProject?: (email: string) => boolean;
   /** Booking and cap of the demo per signed-in client (`demo-usage.ts`); absent: the demo is anonymous as before. */
   demoUsage?: DemoUsage;
   /** True: a demo request without a known client is refused (`login_required`). Default false until the site sends the identity everywhere. */
@@ -462,7 +464,7 @@ export class WebChatEngine {
         },
         ...(this.d.gatewayDown ? { gatewayDown: this.d.gatewayDown } : {}), ...(this.d.llmTimeoutMs !== undefined ? { timeoutMs: this.d.llmTimeoutMs } : {}),
       },
-      { lang, text, q: q0, turns: this.history.turns(s.id), conversationId: `web-${s.id}`, ...(s.draft.identity ? { client: { email: s.draft.identity.email, name: s.draft.identity.name ?? s.draft.identity.email } } : {}) },
+      { lang, text, q: q0, turns: this.history.turns(s.id), conversationId: `web-${s.id}`, ...(s.draft.identity ? { client: { email: s.draft.identity.email, name: s.draft.identity.name ?? s.draft.identity.email, ...(this.d.hasProject?.(s.draft.identity.email) ? { vip: true } : {}) } } : {}) },
     );
     if (used) this.store.update(s.id, { llmAnswers: s.llmAnswers + used });
     switch (out.kind) {

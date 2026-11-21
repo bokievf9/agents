@@ -198,3 +198,21 @@ describe('GET and PATCH /admin/settings', () => {
     expect((await mk(false).handle({ method: 'GET', path: '/admin/settings', query: new URLSearchParams(), body: null })).status).toBe(503);
   });
 });
+
+describe('autopilot.leadManager and the human alert (Fira hooks)', () => {
+  it('defaults to policy, accepts the three modes, rejects others, journals the change; the human alert reaches Telegram', async () => {
+    const { settings, patch, notices, w } = setup();
+    expect((settings.get().body as any).settings.autopilot).toEqual({ leadManager: 'policy' });
+    const r = patch({ autopilot: { leadManager: 'autopilot' } });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ changed: ['autopilot.leadManager'] });
+    expect(w.hq.setting('autopilot.leadManager')).toBe('autopilot');
+    expect(settings.history()[0]).toMatchObject({ key: 'autopilot.leadManager', old: 'policy', new: 'autopilot' });
+    expect(patch({ autopilot: { leadManager: 'ask_me' } }).status).toBe(200);
+    expect(patch({ autopilot: { leadManager: 'yolo' } }).status).toBe(400);
+    expect(w.hq.setting('autopilot.leadManager')).toBe('ask_me');
+    expect(await notices.alert('Нужен человек: вопрос о скидке', { kind: 'human' })).toBe(true);
+    patch({ notices: { alerts: { human: false } } });
+    expect(await notices.alert('Нужен человек', { kind: 'human' })).toBe(false);
+  });
+});

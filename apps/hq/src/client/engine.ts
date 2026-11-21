@@ -540,7 +540,7 @@ export class ClientEngine implements ClientChannel {
         llm: this.d.llm, instructions: this.d.instructions, gate: this.limiter, now: this.d.now, tz: this.d.tz,
         ...(this.d.gatewayDown ? { gatewayDown: this.d.gatewayDown } : {}), ...(this.d.llmTimeoutMs !== undefined ? { timeoutMs: this.d.llmTimeoutMs } : {}),
       },
-      { lang: chat.lang, text, q: chat.draft.q ?? newQ(), turns: this.turns(chat.chatId), channel: 'telegram' },
+      { lang: chat.lang, text, q: chat.draft.q ?? newQ(), turns: this.turns(chat.chatId), channel: 'telegram', conversationId: `tg-${chat.chatId}` },
     );
     switch (out.kind) {
       case 'fallback':
