@@ -194,29 +194,33 @@ export class SalesHead implements ApprovalEditor {
     // what the client already has travels with the chain: the contract and the invoice carry the same conditions line as the КП
     const infra = { ...(typeof pack.hasDomain === 'boolean' ? { hasDomain: pack.hasDomain } : {}), ...(typeof pack.hasHosting === 'boolean' ? { hasHosting: pack.hasHosting } : {}) };
     const product = productOfDirection(direction);
-    const dueAts = planStageDates(product, stages.map((x) => x.share), hq.now(), hq.tz);
-    const project = new PmStore(hq.db, hq.now).reserve({ client, what, product, leadId: lead?.id ?? null, packId, stages, dueAts });
     // the client of a cabinet lead accepts the КП and signs the contract himself: the chain has the client's two steps in the middle
     const cabinetClient = this.cabinet && lead ? this.cabinet.clientOfLead(lead.id) : null;
+    // P-10: a cabinet lead's project is reserved when the CLIENT accepts the КП (`CabDocs.accept`), not now: the Пульт never shows «готовим» for an
+    // unanswered КП. The old chain (no cabinet) reserves at once, as before. `{project}` in the chain lines is filled in when the project exists.
+    const reservation = { client, what, product, leadId: lead?.id ?? null, packId, stages };
+    const project = cabinetClient === null ? new PmStore(hq.db, hq.now).reserve({ ...reservation, dueAts: planStageDates(product, stages.map((x) => x.share), hq.now(), hq.tz) }) : null;
+    const projectRef = project ? `#${project.id}` : '{project}';
     const line = (here: 'contract' | 'invoice') => cabinetClient !== null
-      ? `Цепочка: КП #${packId} (утверждено, у клиента) → клиент принял → договор${here === 'contract' ? ' (эта карточка)' : ''} → клиент подписал → счёт этапа 1${here === 'invoice' ? ' (эта карточка)' : ''} → проект #${project.id} стартует после оплаты этапа 1`
-      : `Цепочка: КП #${packId} (утверждено) → договор${here === 'contract' ? ' (эта карточка)' : ''} → счёт этапа 1${here === 'invoice' ? ' (эта карточка)' : ''} → проект #${project.id} стартует после оплаты этапа 1`;
+      ? `Цепочка: КП #${packId} (утверждено, у клиента) → клиент принял → договор${here === 'contract' ? ' (эта карточка)' : ''} → клиент подписал → счёт этапа 1${here === 'invoice' ? ' (эта карточка)' : ''} → проект ${projectRef} стартует после оплаты этапа 1`
+      : `Цепочка: КП #${packId} (утверждено) → договор${here === 'contract' ? ' (эта карточка)' : ''} → счёт этапа 1${here === 'invoice' ? ' (эта карточка)' : ''} → проект ${projectRef} стартует после оплаты этапа 1`;
     // the owner edited the contract inside the pending pack: Back Office drafts from his text, not from the template (untouched: the template stays)
     const editedContract = pack.contractEdited === true && typeof pack.contract === 'string' && pack.contract.trim() ? { contractText: pack.contract } : {};
-    const contractMeta = { action: 'doc', type: 'contract', client, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project.id, priceUsd: totalUsd, stages, ...(monthlyUsd > 0 ? { monthlyUsd } : {}), ...infra, ...editedContract };
+    const contractMeta = { action: 'doc', type: 'contract', client, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project?.id ?? null, priceUsd: totalUsd, stages, ...(monthlyUsd > 0 ? { monthlyUsd } : {}), ...infra, ...editedContract };
     const invoiceMeta = {
       action: 'kp_invoice', client, amountUsd: first.amountUsd, totalUsd, what: `Этап 1 из ${stages.length}: «${first.title.ru}», КП #${packId}: ${offer.title}`, packId, leadId: lead?.id ?? null,
-      projectId: project.id, stageNo: 1, stageCount: stages.length, chain: line('invoice'), ...infra,
+      projectId: project?.id ?? null, stageNo: 1, stageCount: stages.length, chain: line('invoice'), ...infra,
     };
     if (this.cabinet && cabinetClient !== null && lead) {
       this.cabinet.onQuoteApproved({
-        clientId: cabinetClient, leadId: lead.id, projectId: project.id, packId, client, totalUsd,
-        kpText: typeof pack.kp === 'string' ? pack.kp : '', estimateText: typeof pack.estimate === 'string' ? pack.estimate : '', contractMeta, invoiceMeta,
+        clientId: cabinetClient, leadId: lead.id, projectId: null, packId, client, totalUsd,
+        kpText: typeof pack.kp === 'string' ? pack.kp : '', estimateText: typeof pack.estimate === 'string' ? pack.estimate : '', contractMeta, invoiceMeta, reservation,
       });
-      hq.log(HEAD_ID, 'kp_chain', 'pack', String(packId), `project ${project.id}, sent to the client`);
-      void this.d.reporter.post(SALES, `КП #${packId} утверждено (${client}) и отправлено клиенту в кабинет и на почту: проект #${project.id} (готовим), этапов: ${stages.length}. Договор появится карточкой, когда клиент примет КП; счёт этапа 1 ($${first.amountUsd}), когда подпишет договор.`);
+      hq.log(HEAD_ID, 'kp_chain', 'pack', String(packId), 'sent to the client, project on acceptance');
+      void this.d.reporter.post(SALES, `КП #${packId} утверждено (${client}) и отправлено клиенту в кабинет и на почту, этапов: ${stages.length}. Проект резервируется и договор появится карточкой, когда клиент примет КП; счёт этапа 1 ($${first.amountUsd}), когда подпишет договор.`);
       return;
     }
+    if (!project) return;
     hq.createTask({ title: `Договор: ${client}`, dept: 'backoffice', creator: 'head', priority: 1, meta: contractMeta });
     hq.wake('backoffice-head', 'task');
     hq.createTask({ title: `Счёт этапа 1: ${client}`, dept: 'support', creator: 'head', priority: 1, meta: invoiceMeta });

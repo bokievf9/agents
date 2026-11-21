@@ -44,7 +44,15 @@ async function toQuote(lead: Record<string, unknown> = LEAD) {
   const cab = (await w.adm('GET', `/admin/clients/by-email?email=${encodeURIComponent(EMAIL)}`)).json;
   const cid = cab.client.id as number;
   const quote = ((await w.adm('GET', `/admin/clients/${cid}/documents`)).json.items as any[]).find((d) => d.kind === 'quote');
-  return { leadId: leadId as number, cid, quote, projectId: cab.projects[0].id as number };
+  // the project is reserved only when the client accepts the КП (P-10, 2026-11-22)
+  expect(cab.projects).toEqual([]);
+  return { leadId: leadId as number, cid, quote };
+}
+/** The client accepts the КП: the project is reserved now; returns its id. */
+async function acceptQuote(cid: number, quoteId: number): Promise<number> {
+  expect((await w.adm('POST', `/admin/clients/${cid}/documents/${quoteId}/accept`)).status).toBe(200);
+  const cab = (await w.adm('GET', `/admin/clients/by-email?email=${encodeURIComponent(EMAIL)}`)).json;
+  return cab.projects[0].id as number;
 }
 const threadMsgs = async (cid: number, id: string) => (await w.adm('GET', `/admin/clients/${cid}/threads/${id}/messages`)).json.items as any[];
 const unreadOf = async (cid: number, id: string) => ((await w.adm('GET', `/admin/clients/${cid}/threads`)).json.items as any[]).find((t) => t.id === id)?.unread as number;
@@ -66,7 +74,8 @@ describe('the builder link: delivery and site need', () => {
 
 describe('every stage step reaches the client: thread line, unread flag, email, act', () => {
   it('ready for acceptance, accepted with the next stage, the last one closes the project with an act; nothing twice, nothing without a cabinet', async () => {
-    const { cid, projectId } = await toQuote();
+    const { cid, quote } = await toQuote();
+    const projectId = await acceptQuote(cid, quote.id);
     const pm = new PmStore(w.db, w.hq.now);
     const stages = pm.stageMilestones(projectId);
     expect(stages.length).toBeGreaterThan(1);

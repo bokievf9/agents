@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { inflateSync } from 'node:zlib';
-import { errMsg, log, markdownToPdfDoc, zonedParts, type Db, type Tools } from '@fir/core';
+import { errMsg, log, markdownToPdfDoc, parseStages, zonedParts, type Db, type PaymentStage, type Tools } from '@fir/core';
+import { planStageDates, PmStore, type Product } from '@fir/worker-project-manager';
 import type { Hq } from '@fir/hq';
 import type { BillingWorker } from '@fir/worker-billing';
 import { fillTemplate, loadTemplate } from '@fir/worker-documents';
@@ -272,7 +273,8 @@ export interface CabDocsDeps {
 export interface QuoteApproval {
   clientId: number;
   leadId: number;
-  projectId: number;
+  /** The reserved project; null when it is reserved on the client's acceptance (P-10: `reservation`). */
+  projectId: number | null;
   packId: number;
   client: string;
   totalUsd: number;
@@ -281,6 +283,8 @@ export interface QuoteApproval {
   /** The task metas of the next two steps (the contract, the invoice of stage 1): made after the client accepts and signs. */
   contractMeta: Record<string, unknown>;
   invoiceMeta: Record<string, unknown>;
+  /** P-10: what `PmStore.reserve` needs when the client accepts (the stage dates are planned from that day). */
+  reservation?: { client: string; what: string; product: Product; leadId: number | null; packId: number; stages: PaymentStage[] };
 }
 
 interface ClientRow { id: number; email: string; name: string; locale: string }
@@ -594,7 +598,8 @@ export class CabDocs {
     if (dup) return { quoteId: dup.id };
     const quote = this.insert({
       client_id: q.clientId, kind: 'quote', title: 'Коммерческое предложение', number: `КП-${q.packId}`, lead_id: q.leadId, project_id: q.projectId, pack_id: q.packId, state: 'awaiting_client',
-      src: 'ps_quote', src_id: q.packId, amount_usd: q.totalUsd, body: q.kpText, meta: JSON.stringify({ contract: q.contractMeta, invoice: q.invoiceMeta, client: q.client }),
+      src: 'ps_quote', src_id: q.packId, amount_usd: q.totalUsd, body: q.kpText,
+      meta: JSON.stringify({ contract: q.contractMeta, invoice: q.invoiceMeta, client: q.client, ...(q.reservation ? { reservation: q.reservation } : {}) }),
     });
     const est = this.insert({
       client_id: q.clientId, kind: 'other', title: 'Смета', number: `КП-${q.packId}`, lead_id: q.leadId, project_id: q.projectId, pack_id: q.packId, state: 'issued', src: 'ps_estimate', src_id: q.packId,
@@ -907,8 +912,24 @@ export class CabDocs {
     if (r.kind !== 'quote' || r.state !== 'awaiting_client') return failR(409, 'not_awaiting', { state: this.liveState(r) });
     const t = this.d.now();
     if (this.db.prepare("UPDATE cab_documents SET state = 'accepted', accepted_at = ? WHERE id = ? AND state = 'awaiting_client'").run(t, r.id).changes !== 1) return failR(409, 'not_awaiting');
-    const meta = JSON.parse(r.meta || '{}') as { contract?: Record<string, unknown>; client?: string };
+    const meta = JSON.parse(r.meta || '{}') as { contract?: Record<string, unknown>; invoice?: Record<string, unknown>; client?: string; reservation?: QuoteApproval['reservation'] };
     const hq = this.d.hq;
+    // P-10: the project is reserved now that the client said yes (stage dates from today); the contract and the invoice to come carry its id
+    if (meta.reservation && r.project_id === null) {
+      try {
+        const res = meta.reservation;
+        const stages = parseStages(res.stages) ?? [];
+        const project = new PmStore(this.db, this.d.now).reserve({ ...res, stages, dueAts: planStageDates(res.product, stages.map((x) => x.share), t, hq.tz) });
+        const fill = (m: Record<string, unknown> | undefined) => (m ? { ...m, projectId: project.id, ...(typeof m.chain === 'string' ? { chain: m.chain.replace('{project}', `#${project.id}`) } : {}) } : m);
+        meta.contract = fill(meta.contract);
+        meta.invoice = fill(meta.invoice);
+        this.db.prepare('UPDATE cab_documents SET meta = ? WHERE id = ?').run(JSON.stringify(meta), r.id);
+        this.db.prepare('UPDATE cab_documents SET project_id = ? WHERE client_id = ? AND pack_id IS ? AND project_id IS NULL').run(project.id, c.id, r.pack_id);
+        hq.log('documents', 'project_reserved', 'project', String(project.id), `pack ${res.packId}`);
+      } catch (e) {
+        log('warn', 'project reservation failed', { doc: r.id, err: errMsg(e) });
+      }
+    }
     if (meta.contract) {
       hq.createTask({ title: `Договор: ${meta.client ?? c.name ?? c.email}`, dept: 'backoffice', creator: 'head', priority: 1, meta: meta.contract });
       hq.wake('backoffice-head', 'task');

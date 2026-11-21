@@ -266,3 +266,37 @@ describe('P-11: the client declines or does not answer the КП', () => {
     expect(await tick()).toBe(0);
   }, 60_000);
 });
+
+describe('P-10: the project of a cabinet lead is reserved when the client accepts the КП', () => {
+  it('approved КП: no project yet; accepted: a draft project with its stages, the contract card names it; a declined КП never makes one', async () => {
+    const { cid } = await leadWithQuote();
+    const projects = () => new PmStore(w.db, w.hq.now).projects() as any[];
+    expect(projects()).toEqual([]);
+    expect(((await w.adm('GET', '/admin/crm/projects')).json.items as any[])).toEqual([]);
+    const quote = (await docs(cid)).find((d) => d.kind === 'quote');
+    expect(quote.projectId).toBeNull();
+    expect((await w.adm('POST', `/admin/clients/${cid}/documents/${quote.id}/accept`)).status).toBe(200);
+    const [p] = projects();
+    expect(p).toMatchObject({ status: 'draft' });
+    const pm = new PmStore(w.db, w.hq.now);
+    expect(pm.stageMilestones(p.id).length).toBeGreaterThan(1);
+    // the stage dates count from the acceptance
+    expect(Math.min(...pm.stageMilestones(p.id).map((m) => m.dueAt))).toBeGreaterThan(w.clock.t);
+    expect((await docs(cid)).filter((d) => d.kind === 'quote' || d.kind === 'other').every((d) => d.projectId === p.id)).toBe(true);
+    const contractTask = w.hq.tasks({ dept: 'backoffice', limit: 50 }).find((t) => t.meta.action === 'doc')!;
+    expect(contractTask.meta.projectId).toBe(p.id);
+    expect(String(contractTask.meta.chain)).toContain(`проект #${p.id} стартует`);
+    expect(String(contractTask.meta.chain)).not.toContain('{project}');
+    // the invoice of stage 1 (proposed after the signature) carries the same project
+    const quoteMeta = JSON.parse((w.db.prepare('SELECT meta FROM cab_documents WHERE id = ?').get(quote.id) as any).meta);
+    expect(quoteMeta.invoice.projectId).toBe(p.id);
+    expect(quoteMeta.invoice.chain).toContain(`проект #${p.id}`);
+  }, 60_000);
+
+  it('a declined КП leaves no project behind', async () => {
+    const { cid } = await leadWithQuote();
+    const quote = (await docs(cid)).find((d) => d.kind === 'quote');
+    expect((await w.adm('POST', `/admin/clients/${cid}/documents/${quote.id}/reject`, { reason: 'не сейчас' })).status).toBe(200);
+    expect(new PmStore(w.db, w.hq.now).projects()).toEqual([]);
+  }, 60_000);
+});
