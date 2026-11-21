@@ -181,3 +181,48 @@ describe('P-03: the website chat never asks an anonymous visitor for a contact; 
     expect(JSON.parse(task.meta).lead.slot).toBe(new Date(SLOT_B).toISOString());
   }, 60_000);
 });
+
+const leadOf = () => w.db.prepare('SELECT id, chosen_slot FROM li_leads ORDER BY id DESC LIMIT 1').get() as { id: number; chosen_slot: number | null };
+const bookingOf = (leadId: number) => w.db.prepare("SELECT * FROM call_bookings WHERE lead_id = ? AND state != 'cancelled'").get(leadId) as any;
+const leadThread = async (cid: number, leadId: number) => ((await w.adm('GET', `/admin/clients/${cid}/threads/lead-${leadId}/messages`)).json.items as any[]).map((m) => m.text as string);
+
+describe('P-04: a lead from the website chat with a picked window books it on the site', () => {
+  async function chatLead(answer: 'booked' | 'not_accepted' | 'taken' | 'failed') {
+    w = await drillWorld({ flow: true });
+    w.site.slots = [SLOT_A, SLOT_B];
+    w.site.answer = answer;
+    const who = { clientEmail: EMAIL, cabinetId: 'sb-gaps-c', clientName: 'Gaps' };
+    await chat('book-session-0001', 'давайте созвонимся', who);
+    expect((await chat('book-session-0001', '2', who)).leadCreated).toBe(true);
+    await w.beat();
+    await w.beat();
+    return leadOf();
+  }
+
+  it('the site takes it: one booking, chosen_slot filled, the window is not offered again', async () => {
+    const lead = await chatLead('booked');
+    expect(lead.chosen_slot).toBe(SLOT_B);
+    expect(w.site.bookings).toEqual([{ at: SLOT_B, leadId: lead.id, name: 'Gaps', contact: EMAIL, locale: 'ru', source: 'chat' }]);
+    expect(bookingOf(lead.id)).toMatchObject({ at: SLOT_B, state: 'pending', source: 'chat', site_state: 'booked' });
+    expect(w.hq.tasks({ dept: 'sales', limit: 100 }).some((t) => t.meta.action === 'call_confirm')).toBe(false);
+    // the next visitor is not offered the held window
+    const other = await chat('book-session-0002', 'давайте созвонимся');
+    expect(other.reply).toMatch(/ближайшие окна для созвона: четверг, 19 ноября[^.]*10:00\./);
+    expect(other.reply).not.toContain('20 ноября');
+    // a heartbeat more books nothing twice
+    await w.beat();
+    expect(w.site.bookings).toHaveLength(1);
+  }, 60_000);
+
+  it('the site does not take it: the window still rides in the lead and the owner gets «подтвердить созвон»', async () => {
+    const lead = await chatLead('not_accepted');
+    expect(lead.chosen_slot).toBe(SLOT_B);
+    expect(bookingOf(lead.id)).toMatchObject({ site_state: 'not_accepted' });
+    await w.beat();
+    const task = w.hq.tasks({ dept: 'sales', limit: 100 }).find((t) => t.meta.action === 'call_confirm')!;
+    expect(task).toBeDefined();
+    expect(task.status).toBe('done');
+    expect(w.ownerSaw()).toMatch(new RegExp(`Созвон с лидом #${lead.id}: пятница, 20 ноября[^.]*14:00 \\(Asia/Dushanbe\\), сайт не принял бронь\\. Подтвердите время клиенту`));
+  }, 60_000);
+});
+

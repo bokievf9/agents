@@ -45,6 +45,8 @@ export interface ClientSinks {
   findClient(query: string): string | null;
   /** The call slots offered to the lead of a task (for a «1» / «2» answer). */
   leadSlots(taskId: number): { leadId: number; slots: number[] } | null;
+  /** P-04: the picked window becomes the lead's call booking in HQ (the site's window, the reminders). Absent: the owner line only, as before. */
+  bookCall?(leadId: number, at: number): Promise<void>;
   /** `/audit <url>`: the same path as `POST /audit` (contact is the chat's username, or `tg:<chatId>` with `chatId` for direct delivery). */
   createAudit?(a: { url: string; contact: string; name?: string; locale: Lang; chatId: number }): Promise<AuditOutcome>;
 }
@@ -484,6 +486,7 @@ export class ClientEngine implements ClientChannel {
     if (!lead || lead.slots.length < 2 || slot === undefined) return false;
     await this.say(chat.chatId, T[chat.lang].slotPicked(formatSlot(slot, this.d.tz(), chat.lang)));
     this.store.update(chat.chatId, { summary: `${chat.summary} · выбрал звонок` });
+    await this.sinks.bookCall?.(lead.leadId, slot).catch((e) => log('warn', 'client bot call booking failed', { lead: lead.leadId, err: errMsg(e) }));
     await this.notifyOwner(`📞 <b>Лид #${lead.leadId} выбрал звонок</b> · ${this.who(chat)}\n${esc(formatSlot(slot, this.d.tz(), 'ru'))}. Подтвердите: /reply ${chat.chatId} текст`, chat.chatId);
     return true;
   }

@@ -41,7 +41,8 @@ import { BuilderBridge, RestGithubClient } from './bridge.js';
 import { ClientBot } from './client/bot.js';
 import { RateLimiter } from './client/sanitize.js';
 import { WebChatEngine } from './client/web.js';
-import { siteSlots } from './client/site-slots.js';
+import { siteBooker, siteSlots } from './client/site-slots.js';
+import { Calls } from './calls.js';
 import { FALLBACK_INSTRUCTIONS } from './client/prompt.js';
 import { clientSinks } from './client/sinks.js';
 import { gatewayGate } from './client/shared.js';
@@ -178,13 +179,17 @@ const support = new SupportHead({
   onboarding: new OnboardingWorker(), messenger, ownerId: cfg.ownerId, ...(clientBot ? { client: clientBot } : {}),
 });
 director.onSupportCommand = (name, args) => support.onCommand(name, args);
+// the site's free call windows (`GET /api/slots`, one request a minute at most) minus the ones HQ already holds: the chat's offer and the first reply (P-06)
+const siteFree = siteSlots(cfg.siteUrl);
+const callsRef: { current: Calls | null } = { current: null };
+const freeSlots = async (): Promise<number[]> => (callsRef.current ? callsRef.current.freeOf(await siteFree()) : siteFree());
 const sales = new SalesHead({
   hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter, batchSize: cfg.batchSize, slotHours: cfg.slotHours, replyLevel: cfg.replyLevel,
   referralReward: cfg.referralReward, kpValidDays: cfg.kpValidDays,
   ...(clientBot ? { client: clientBot } : {}), lost,
 });
 const auditGate = new AuditGate(hq.now);
-clientBot?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix, audit: { marketing, gate: auditGate } }));
+clientBot?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix, audit: { marketing, gate: auditGate }, calls: { book: (...a) => callsRef.current ? callsRef.current.book(...a) : Promise.resolve(null) } }));
 director.onSalesReply = (id, text) => sales.startReply(id, text);
 director.onSalesCommand = (name, arg) => sales.salesCommand(name, arg);
 director.editors.set('sales:reply', sales); // the owner's text after /reply <id>
@@ -200,6 +205,14 @@ const cabinet = buildCabinet({
   tools: () => toolsFor(hq, tools, { agentId: 'documents', dept: BACKOFFICE, messenger, ownerId: cfg.ownerId }),
 });
 sales.cabinet = cabinet.docs;
+// P-02/P-04/P-18/P-19/P-20 (2026-11-22): the call bookings live in HQ; the window goes to the site, the client hears it by his channel, reminders a day and an hour before
+const calls = new Calls({
+  hq, siteBook: siteBooker(cfg.siteUrl, cfg.siteBookingToken), mail: cabinet.mail,
+  notifyOwner: (text) => void channel.notify('message', text).catch((e) => log('warn', 'call notice to the owner failed', { err: errMsg(e) })),
+});
+calls.client = clientBot;
+sales.calls = calls;
+callsRef.current = calls;
 backoffice.cabinet = cabinet.docs;
 support.cabinet = cabinet.docs;
 production.cabinet = cabinet.docs;
@@ -315,10 +328,11 @@ const chatGate = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDa
 const webChat = cfg.webChatToken
   ? new WebChatEngine({
       db, now: hq.now, tz: () => hq.tz, llm: clientLlm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate,
-      onLost: (source, reason, info) => lost.record(source, reason, info), gatewayDown, siteOrigin: cfg.siteUrl, slots: siteSlots(cfg.siteUrl),
+      onLost: (source, reason, info) => lost.record(source, reason, info), gatewayDown, siteOrigin: cfg.siteUrl, slots: freeSlots,
     })
   : null;
-webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix }));
+webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix, calls }));
+if (webChat) calls.webReply = (sessionId, text) => webChat.store.queueOwnerReply(sessionId, text);
 
 const admin = cfg.adminToken
   ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: COMMAND_NAMES, drill: (arg) => drill.command(arg), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),

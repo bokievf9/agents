@@ -9,9 +9,10 @@ import type { SupportHead } from '../heads/support.js';
 import { AuditStore, submitAudit, type AuditGate } from '../audit-shared.js';
 import type { MarketingHead } from '../heads/marketing.js';
 import type { ClientSinks } from './engine.js';
+import type { Calls } from '../calls.js';
 
 /** The client bot's way into the company: leads to Sales, tickets to Support, lookups in their stores. */
-export function clientSinks(d: { hq: Hq; sales: Pick<SalesHead, 'createLeadTask'>; support: Pick<SupportHead, 'clientTicket'>; invoicePrefix: string; audit?: { marketing: Pick<MarketingHead, 'requestAudit'>; gate: AuditGate } }): ClientSinks {
+export function clientSinks(d: { hq: Hq; sales: Pick<SalesHead, 'createLeadTask'>; support: Pick<SupportHead, 'clientTicket'>; invoicePrefix: string; audit?: { marketing: Pick<MarketingHead, 'requestAudit'>; gate: AuditGate }; calls?: Pick<Calls, 'book'> }): ClientSinks {
   const base = { db: d.hq.db, now: d.hq.now };
   return {
     createLead: (lead, service) => {
@@ -55,6 +56,7 @@ export function clientSinks(d: { hq: Hq; sales: Pick<SalesHead, 'createLeadTask'
           },
         }
       : {}),
+    ...(d.calls ? { bookCall: async (leadId: number, at: number) => void (await d.calls!.book(leadId, at, 'bot')) } : {}),
     leadSlots: (taskId) => {
       const lead = leadStoreFor(base).byTask(taskId);
       return lead ? { leadId: lead.id, slots: lead.slots } : null;

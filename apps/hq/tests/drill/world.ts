@@ -43,6 +43,8 @@ import { createWebhook } from '../../src/webhook.js';
 import { resolveMedia } from '@fir/worker-publisher';
 import { UPLOAD_TYPES } from '@fir/core';
 import { buildCabinet } from '../../src/cabinet-api.js';
+import { Calls } from '../../src/calls.js';
+import type { SiteBooking, SiteBookingRequest } from '../../src/client/site-slots.js';
 import { toolsFor, type AppTools } from '../../src/tools.js';
 import { RateLimiter } from '../../src/client/sanitize.js';
 import { instructionsDir, NOW, OWNER, routedLlm } from '../helpers.js';
@@ -143,7 +145,11 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const payWatch = new PaymentWatcher({ addresses: billing.chainAddresses(), get: (url: string) => { chainGets.push(url); return chain.fail ? Promise.reject(new Error('indexer 503')) : Promise.resolve({ data: [] }); }, keys: {}, tolerancePct: 1 } as any);
   const support = new SupportHead({ hq, tools, llm: llm as any, reporter, monitor, finance: new FinanceWorker({ fixedCosts: { droplet: 30 } }), cs: new CustomerSupportWorker({ slaHours: 4 }), billing, payWatch, onboarding: new OnboardingWorker(), messenger: channel, ownerId: OWNER } as any);
   director.onSupportCommand = (name, args) => support.onCommand(name, args);
-  const sales = new SalesHead({ hq, tools, llm: llm as any, queue, messenger: channel, ownerId: OWNER, reporter, batchSize: 3, slotHours: ['10:00', '14:00'], replyLevel: 1, referralReward: '10%', kpValidDays: 14, lost } as any);
+  // the site's call windows (`GET /api/slots`) and its booking route (`POST /api/slots`) as HQ sees them: tests put free windows (UTC ms) and the answer here
+  const site = { slots: [] as number[], bookings: [] as SiteBookingRequest[], answer: 'booked' as SiteBooking };
+  const callsRef: { current: Calls | null } = { current: null };
+  const freeSlots = () => Promise.resolve((callsRef.current ? callsRef.current.freeOf(site.slots) : site.slots).filter((x) => x > t()));
+  const sales = new SalesHead({ hq, tools, llm: llm as any, queue, messenger: channel, ownerId: OWNER, reporter, batchSize: 3, slotHours: ['10:00', '14:00'], replyLevel: 1, referralReward: '10%', kpValidDays: 14, lost, freeSlots } as any);
   const auditGate = new AuditGate(t);
   director.onSalesReply = (id, text) => sales.startReply(id, text);
   director.onSalesCommand = (name, arg) => sales.salesCommand(name, arg);
@@ -163,6 +169,12 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
         tools: () => toolsFor(hq, cabTools, { agentId: 'documents', dept: 'backoffice', messenger: channel, ownerId: OWNER }),
       })
     : undefined;
+  const callBook = new Calls({
+    hq, mail: cabinet?.mail, notifyOwner: (text) => void channel.notify('message', text),
+    siteBook: (b) => { site.bookings.push(b); return Promise.resolve(site.answer); },
+  });
+  callsRef.current = callBook;
+  sales.calls = callBook;
   if (cabinet) {
     sales.cabinet = cabinet.docs;
     backoffice.cabinet = cabinet.docs;
@@ -212,16 +224,16 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const counter = { get: (k: string) => hq.setting(k) || undefined, set: (k: string, v: string) => hq.setSetting(k, v) };
   const gatewayDown = gatewayGate(() => state.down, t);
   const chatGate = new RateLimiter(1, 300, t, () => hq.tz, counter);
-  // the site's call windows (`GET /api/slots`) as the receptionist sees them; tests put free windows here (UTC ms)
-  const site = { slots: [] as number[] };
   const webChat = new WebChatEngine({
     db, now: t, tz: () => hq.tz, llm: llm as any, instructions: FALLBACK_INSTRUCTIONS, quietHours: '22:00-08:00', gate: chatGate,
-    onLost: (s: any, r: any, i: any) => lost.record(s, r, i), gatewayDown, slots: () => Promise.resolve(site.slots.filter((x) => x > t())),
+    onLost: (s: any, r: any, i: any) => lost.record(s, r, i), gatewayDown, slots: freeSlots,
   } as any);
-  webChat.connect(clientSinks({ hq, sales, support, invoicePrefix: 'FT' }));
+  webChat.connect(clientSinks({ hq, sales, support, invoicePrefix: 'FT', calls: callBook }));
+  callBook.webReply = (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text);
   const reloads = { n: 0, fail: false };
   const toWeb: { sessionId: string; text: string }[] = [];
   const toClient: { chatId: number; text: string }[] = [];
+  callBook.client = { send: (chatId: number, text: string) => { toClient.push({ chatId, text }); return Promise.resolve(); } };
   const commandNames = COMMAND_NAMES;
   const admin = createAdmin({
     hq, queue, director, channel, ownerId: OWNER, now: t, commandNames, drill: (a) => drill.command(a),
@@ -299,7 +311,7 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const close = () => new Promise<void>((res) => (url ? webhook.close(() => res()) : res()));
   return {
     bot, api, press, say, settle, clock, db, tg, hq, queue, channel, llm, calls, state, director, marketing, support, sales, production, backoffice, drill, billing, payWatch, chain, chainGets, admin, webhook, url, http, adm,
-    cabinet, emails, emailFail, site, heartbeat, beat, decide, cmd, alerts, posted, lost, webChat, reloads, toWeb, toClient, tools, fetched, rendersDir, dataDir, sleeps, outbox, ownerSaw, close, startRoutines: () => startRoutines(hq),
+    cabinet, callBook, emails, emailFail, site, heartbeat, beat, decide, cmd, alerts, posted, lost, webChat, reloads, toWeb, toClient, tools, fetched, rendersDir, dataDir, sleeps, outbox, ownerSaw, close, startRoutines: () => startRoutines(hq),
   };
 }
 export type DrillWorld = Awaited<ReturnType<typeof drillWorld>>;

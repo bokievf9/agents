@@ -20,6 +20,7 @@ import {
 } from '@fir/worker-presales';
 import { z } from 'zod';
 import type { CabDocs } from '../cab-docs.js';
+import type { Calls } from '../calls.js';
 import { assumptionsFor, CLARIFY_WAIT_MS, ClarifyStore, gapsOf, isBlocking, questionsFor, questionsMessage, type Clarification } from '../clarify.js';
 import { ensureCabinetTables, recordManagerReply } from '../cabinet.js';
 import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
@@ -66,8 +67,8 @@ export interface SalesDeps {
   lost?: LostLeads;
 }
 
-type Action = 'lead' | 'batch' | 'followups' | 'reply' | 'stats' | 'kp' | 'referral_reminders' | 'kp_declined' | 'none';
-const ACTIONS: Action[] = ['lead', 'batch', 'followups', 'reply', 'stats', 'kp', 'referral_reminders', 'kp_declined'];
+type Action = 'lead' | 'batch' | 'followups' | 'reply' | 'stats' | 'kp' | 'referral_reminders' | 'kp_declined' | 'call_confirm' | 'none';
+const ACTIONS: Action[] = ['lead', 'batch', 'followups', 'reply', 'stats', 'kp', 'referral_reminders', 'kp_declined', 'call_confirm'];
 const splitSchema = z.object({ action: z.enum(['batch', 'followups', 'stats', 'none']) });
 const reviewSchema = z.object({ ok: z.boolean(), issues: z.array(z.string()).max(10).default([]) });
 
@@ -154,6 +155,8 @@ export class SalesHead implements ApprovalEditor {
    * else is drafted until he accepts it and signs the contract; without it (or for a lead without a cabinet) the old chain runs: contract and invoice at once.
    */
   cabinet: CabDocs | null = null;
+  /** P-04 (2026-11-22): set by the app. A lead that came with a call window gets its booking (the site's `POST /api/slots`, else «подтвердить созвон»). */
+  calls: Calls | null = null;
 
   constructor(private readonly d: SalesDeps) {
     this.prospector = d.prospector ?? new ProspectorWorker({ ...(d.batchSize !== undefined ? { batchSize: d.batchSize } : {}) });
@@ -481,6 +484,14 @@ export class SalesHead implements ApprovalEditor {
       await this.d.messenger.send(this.d.ownerId, text);
       return void (await this.d.reporter.post(SALES, `КП ${String(task.meta.number ?? '')}: клиент ${discuss ? 'хочет обсудить' : 'отклонил'} (задача #${task.id}).`));
     }
+    if (action === 'call_confirm') {
+      // P-04: a call window the site has not got (it does not take a booking from HQ, or it was taken): the owner confirms the time with the client himself
+      const leadId = Number(task.meta.leadId) || null;
+      const text = `Созвон с лидом #${leadId ?? '?'}: ${oneLine(task.body, 300)} Подтвердите время клиенту: Пульт, лид, «Подтвердить созвон» (или перенесите на другое окно).`;
+      this.hq.complete(task.id, HEAD_ID, text);
+      await this.d.messenger.send(this.d.ownerId, text);
+      return void (await this.d.reporter.post(SALES, `Созвон лида #${leadId ?? '?'} ждёт подтверждения владельца (задача #${task.id}).`));
+    }
     if (action === 'referral_reminders') {
       const res = await this.runOnce(task.id, this.referral, REFERRAL_ID, []);
       if (!res.ok) return void this.hq.block(task.id, HEAD_ID, res.error ?? 'сбой напоминаний');
@@ -595,9 +606,27 @@ export class SalesHead implements ApprovalEditor {
       if (created) await this.report(taskId, `Рекомендация ${describeReferral(referral)}, выплата после первой оплаты клиента (10% сметы, USDT). Счёт отмечается: /paid <номер счёта>.`);
     }
     if (lead.temperature === 'hot') await this.hq.alert(`Горячий лид #${lead.id} (${lead.niche || 'ниша не ясна'}). Карточка с контактом в пачке на одобрение, /approve.`);
+    await this.bookChosen(taskId, lead);
     // a cabinet lead with gaps is asked first; its КП follows the answers (or 24 hours)
     if (await this.clarifyIfNeeded(taskId, lead)) return;
     await this.startKpFor(taskId, lead);
+  }
+
+  /**
+   * P-02/P-04: the window the lead came with becomes a booking in HQ. The site's form booked it on the site already (`form`); a window from the website chat or
+   * the client bot goes to the site now (`POST /api/slots`), and a window the site does not take becomes «подтвердить созвон» for the owner. Once per lead.
+   */
+  private async bookChosen(taskId: number, lead: Lead): Promise<void> {
+    if (!this.calls || lead.chosenSlot === null || lead.chosenSlot <= this.hq.now() || this.calls.of(lead.id)) return;
+    const task = this.hq.task(taskId);
+    if (!task || task.tags.includes('drill')) return;
+    const raw = (task.meta.lead ?? {}) as Record<string, unknown>;
+    const source = typeof raw.sessionId === 'string' ? 'chat' : typeof raw.chatId === 'number' ? 'bot' : 'form';
+    try {
+      await this.calls.book(lead.id, lead.chosenSlot, source, { siteBooked: source === 'form' });
+    } catch (e) {
+      log('warn', 'call booking failed', { lead: lead.id, err: errMsg(e) });
+    }
   }
 
   /** A qualified lead (service and budget or estimate) gets its КП by itself, once; `/kp` stays for the rest and for a redo. */
