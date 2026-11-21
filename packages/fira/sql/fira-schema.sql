@@ -122,6 +122,7 @@ create table if not exists messages (
   foreign key (company_id, conversation_id) references conversations(company_id, id) on delete cascade
 );
 
+-- HQ keeps the same columns in its SQLite as fira_lessons (apps/hq/src/fira-lessons.ts) until Supabase is wired
 create table if not exists lessons (
   id bigint generated always as identity primary key,
   company_id text not null references companies(id) on delete cascade,

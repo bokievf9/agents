@@ -2,14 +2,15 @@ import { errMsg, log, schedule, type Db } from '@fir/core';
 import { escalationModeOf } from '@fir/fira';
 import type { Hq } from '@fir/hq';
 import { ensureCabinetTables } from './cabinet.js';
-import { createFiraLead, registerFiraLead, type FiraLead, type FiraLeadOptions } from './client/fira-lead.js';
+import { createFiraLead, registerFiraLead, type FiraLead } from './client/fira-lead.js';
+import { harvestLessons, SqliteLessons } from './fira-lessons.js';
 
 /**
  * `FIRA_LEAD_MANAGER=on`: the lead manager of the web chat and the client bot answers through Fira (`client/fira-lead.ts`). Escalations go to the owner as
  * `hq.alert(kind: 'human')` (the Пульт; Telegram once `notices.ts` lets the kind through), the mode is the setting `autopilot.leadManager`
- * (`ask_me | policy | autopilot`, default `policy`), the leak guard knows the names of the cabinet's clients, the company pack is loaded again every night.
+ * (`ask_me | policy | autopilot`, default `policy`), the leak guard knows the names of the cabinet's clients, the company pack is loaded again every night, the owner's corrections become lessons every hour (`fira-lessons.ts`).
  */
-export function startFiraLeadManager(o: { hq: Hq; db: Db; lessons?: FiraLeadOptions['lessons'] }): FiraLead {
+export function startFiraLeadManager(o: { hq: Hq; db: Db }): FiraLead {
   const { hq, db } = o;
   ensureCabinetTables(db);
   let names: { at: number; list: string[] } = { at: 0, list: [] };
@@ -24,12 +25,24 @@ export function startFiraLeadManager(o: { hq: Hq; db: Db; lessons?: FiraLeadOpti
     }
     return names.list;
   };
+  // the owner's corrections (review center, thread answers) become lessons: now and every hour
+  const lessons = new SqliteLessons(db);
+  const harvest = async (): Promise<void> => {
+    try {
+      const n = await harvestLessons(db, lessons, hq.now());
+      if (n) log('info', 'fira lessons harvested', { added: n });
+    } catch (e) {
+      log('warn', 'fira lessons harvest failed', { err: errMsg(e) });
+    }
+  };
+  void harvest();
+  schedule('fira-lessons', '5 * * * *', hq.tz, harvest);
   const fira = createFiraLead({
     now: hq.now,
     mode: () => escalationModeOf(hq.setting('autopilot.leadManager')),
     escalate: (e) => hq.alert(e.line, { kind: 'human', short: e.short }),
     clientNames,
-    ...(o.lessons ? { lessons: o.lessons } : {}),
+    lessons,
   });
   registerFiraLead(fira);
   schedule('fira-knowledge', '30 3 * * *', hq.tz, async () => {
