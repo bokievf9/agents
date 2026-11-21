@@ -24,7 +24,7 @@ interface Probe {
   /** `?` = the stuck threshold (ms before now). The count of items waiting longer than `stuckMs`. */
   stuck: string;
   /** `?` = window start. One row `{at, text}`: the newest failure. */
-  lastFailure?: string;
+  lastFailure?: string; // SQL returning (at, text): the text is a kind or a code, never a body of an error, a title or a client's words
   stuckMs?: number;
 }
 interface StepDef extends Probe { id: string; title: string; hint: string }
@@ -34,12 +34,12 @@ const NOT_DRILL = "tags NOT LIKE '%drill%'";
 const taskDone = (worker: string): string => `SELECT MAX(updated_at) FROM tasks WHERE assignee_id = '${worker}' AND status = 'done' AND ${NOT_DRILL}`;
 const taskBlocked = (worker: string): string => `SELECT COUNT(*) FROM tasks WHERE assignee_id = '${worker}' AND status = 'blocked' AND tags NOT LIKE '%builder%' AND ${NOT_DRILL} AND updated_at >= ?`;
 const taskBlockedLast = (worker: string): string =>
-  `SELECT t.updated_at AS at, COALESCE((SELECT body FROM task_events e WHERE e.task_id = t.id AND e.kind = 'error' ORDER BY e.id DESC LIMIT 1), t.title) AS text FROM tasks t WHERE t.assignee_id = '${worker}' AND t.status = 'blocked' AND t.tags NOT LIKE '%builder%' AND t.${NOT_DRILL} AND t.updated_at >= ? ORDER BY t.updated_at DESC LIMIT 1`;
+  `SELECT t.updated_at AS at, CASE WHEN EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = t.id AND e.kind = 'error') THEN 'task error' ELSE 'task blocked' END AS text FROM tasks t WHERE t.assignee_id = '${worker}' AND t.status = 'blocked' AND t.tags NOT LIKE '%builder%' AND t.${NOT_DRILL} AND t.updated_at >= ? ORDER BY t.updated_at DESC LIMIT 1`;
 const taskOpen = (worker: string): string => `SELECT COUNT(*) FROM tasks WHERE assignee_id = '${worker}' AND status IN ('inbox','assigned','running') AND ${NOT_DRILL} AND created_at < ?`;
 const none = 'SELECT 0';
 const mailFailedCount = (kind: string): string => `SELECT COUNT(*) FROM cab_documents WHERE kind = '${kind}' AND mail_state = 'failed' AND created_at >= ?`;
 const mailFailedLast = (kind: string): string =>
-  `SELECT created_at AS at, COALESCE(NULLIF(mail_error, ''), 'письмо не ушло') AS text FROM cab_documents WHERE kind = '${kind}' AND mail_state = 'failed' AND created_at >= ? ORDER BY id DESC LIMIT 1`;
+  `SELECT created_at AS at, 'письмо не ушло' AS text FROM cab_documents WHERE kind = '${kind}' AND mail_state = 'failed' AND created_at >= ? ORDER BY id DESC LIMIT 1`;
 const mailRetry = (kind: string): string => `SELECT COUNT(*) FROM cab_documents WHERE kind = '${kind}' AND (delivered_at IS NULL OR mail_state = 'failed') AND created_at < ?`;
 const docLast = (kind: string): string => `SELECT MAX(delivered_at) FROM cab_documents WHERE kind = '${kind}'`;
 
@@ -136,7 +136,7 @@ export const CHAINS: ChainDef[] = [
       {
         id: 'mail', title: 'Письма ушли', hint: 'Resend: сбои пишутся в журнал и раз в час владельцу',
         last: 'SELECT MAX(delivered_at) FROM cab_documents', failures: 'SELECT COUNT(*) FROM email_failures WHERE at >= ?',
-        lastFailure: "SELECT at, kind || ': ' || reason AS text FROM email_failures WHERE at >= ? ORDER BY id DESC LIMIT 1",
+        lastFailure: "SELECT at, kind AS text FROM email_failures WHERE at >= ? ORDER BY id DESC LIMIT 1",
         stuck: "SELECT COUNT(*) FROM cab_documents WHERE kind IN ('quote','contract','invoice','act') AND delivered_at IS NULL AND created_at < ?", stuckMs: HOUR,
       },
     ],
@@ -149,14 +149,14 @@ export const CHAINS: ChainDef[] = [
         id: 'routines', title: 'Рутины по расписанию', hint: 'Каждая включённая рутина отрабатывает и не зависает',
         last: 'SELECT MAX(last_run_at) FROM routines WHERE enabled = 1',
         failures: `SELECT COUNT(*) FROM tasks WHERE routine_id IS NOT NULL AND status = 'blocked' AND ${NOT_DRILL} AND updated_at >= ?`,
-        lastFailure: `SELECT updated_at AS at, title AS text FROM tasks WHERE routine_id IS NOT NULL AND status = 'blocked' AND ${NOT_DRILL} AND updated_at >= ? ORDER BY updated_at DESC LIMIT 1`,
+        lastFailure: `SELECT updated_at AS at, 'routine task blocked' AS text FROM tasks WHERE routine_id IS NOT NULL AND status = 'blocked' AND ${NOT_DRILL} AND updated_at >= ? ORDER BY updated_at DESC LIMIT 1`,
         stuck: `SELECT COUNT(*) FROM tasks WHERE routine_id IS NOT NULL AND status IN ('inbox','assigned','running') AND ${NOT_DRILL} AND created_at < ?`, stuckMs: 6 * HOUR,
       },
       {
         id: 'approvals', title: 'Одобрения исполняются', hint: 'Решение владельца доходит до действия',
         last: "SELECT MAX(created_at) FROM task_approvals WHERE state = 'executed' AND task_id IN (SELECT id FROM tasks WHERE " + NOT_DRILL + ')',
         failures: "SELECT COUNT(*) FROM task_approvals WHERE state = 'failed' AND created_at >= ? AND task_id IN (SELECT id FROM tasks WHERE " + NOT_DRILL + ')',
-        lastFailure: "SELECT created_at AS at, summary AS text FROM task_approvals WHERE state = 'failed' AND created_at >= ? AND task_id IN (SELECT id FROM tasks WHERE " + NOT_DRILL + ') ORDER BY id DESC LIMIT 1',
+        lastFailure: "SELECT created_at AS at, 'approval failed' AS text FROM task_approvals WHERE state = 'failed' AND created_at >= ? AND task_id IN (SELECT id FROM tasks WHERE " + NOT_DRILL + ') ORDER BY id DESC LIMIT 1',
         stuck: "SELECT COUNT(*) FROM task_approvals WHERE state IN ('queued','asked') AND created_at < ? AND task_id IN (SELECT id FROM tasks WHERE " + NOT_DRILL + ')', stuckMs: 2 * DAY,
       },
     ],

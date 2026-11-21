@@ -47,7 +47,8 @@ describe('GET /admin/processes', () => {
     const lead = stepOf(r.json, 'client', 'lead');
     expect(lead.health).toBe('fail');
     expect(lead.failures7d).toBe(1);
-    expect(lead.lastFailure.text).toContain('шаблон');
+    expect(lead.lastFailure.text).toBe('task error');
+    expect(JSON.stringify(r.json)).not.toContain('шаблон');
     expect(r.json.chains[0].health).toBe('fail');
 
     // paid step: an issued invoice past its due date is stuck, a paid one is the last success
