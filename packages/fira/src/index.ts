@@ -3,6 +3,7 @@ export * from './packs.js';
 export * from './compile.js';
 export * from './stores.js';
 export * from './knowledge.js';
+export * from './company-pack.js';
 export * from './guards.js';
 export * from './tools.js';
 export * from './lessons.js';

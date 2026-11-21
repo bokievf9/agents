@@ -97,7 +97,8 @@ describe('packs on disk', () => {
     const hits: string[] = [];
     let n = 0;
     for (const dir of ['role-packs', 'niche-packs', 'company-packs', 'evals']) {
-      for (const f of readdirSync(join(PACKAGE_DIR, dir), { recursive: true }) as string[]) {
+      // the generated company pack (`company-packs/firtech/`) mirrors documents that have their own checks (the site's copy test, HQ's names test)
+      for (const f of readdirSync(join(PACKAGE_DIR, dir))) {
         if (!/\.(md|json)$/.test(f)) continue;
         n++;
         const text = readFileSync(join(PACKAGE_DIR, dir, f), 'utf8');
