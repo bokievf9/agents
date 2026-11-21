@@ -21,8 +21,24 @@ export const BUILDER_KINDS = [
 export type BuilderKind = (typeof BUILDER_KINDS)[number];
 
 /** Product ids of the builder (no hyphen: they travel as `p.adminbot-site`). */
-export const BUILDER_PRODUCTS = ['adminbot', 'intake', 'automation', 'content', 'miniapp', 'agent', 'aiteam', 'site', 'bot', 'app'] as const;
+export const BUILDER_PRODUCTS = ['personal', 'company', 'adminbot', 'intake', 'automation', 'content', 'miniapp', 'aiteam', 'site', 'bot', 'app'] as const;
 export type BuilderProduct = (typeof BUILDER_PRODUCTS)[number];
+
+/**
+ * The flagships' options (chunk `f.<product>.<id-id>`, the site's `flagshipOptionIds`; the order below is the site's, unknown ids are dropped). Personal AI: the services it
+ * connects and a voice and a long memory (they set the level); AI company: departments and parts (the exact sum comes from the quote).
+ */
+export const FLAGSHIP_PRODUCTS = ['personal', 'company'] as const;
+export type FlagshipProduct = (typeof FLAGSHIP_PRODUCTS)[number];
+export const PERSONAL_SERVICES = ['mail', 'calendar', 'tasks', 'study', 'notes', 'messengers'] as const;
+export const PERSONAL_EXTRAS = ['voice', 'memory'] as const;
+export const COMPANY_DEPTS = ['sales', 'marketing', 'support', 'production', 'backoffice'] as const;
+export const COMPANY_PARTS = ['pult', 'knowledge', 'channels', 'training'] as const;
+export const FLAGSHIP_OPTION_IDS: Record<FlagshipProduct, readonly string[]> = {
+  personal: [...PERSONAL_SERVICES, ...PERSONAL_EXTRAS],
+  company: [...COMPANY_DEPTS, ...COMPANY_PARTS],
+};
+export type FlagshipOptions = Partial<Record<FlagshipProduct, string[]>>;
 
 export const BUILD_EXTRAS = ['support', 'seo', 'design'] as const;
 export const BUILD_GOALS = ['leads', 'sales', 'booking', 'routine', 'brand'] as const;
@@ -63,6 +79,8 @@ export interface Build {
   delivery?: DeliveryChannel[];
   /** Does the agent get a site: `z.no`. */
   siteNeed?: SiteNeed;
+  /** Options of the flagships: `f.personal.mail-calendar-voice`, `f.company.sales-pult`. */
+  options?: FlagshipOptions;
   details?: BuildDetails;
 }
 
@@ -85,6 +103,17 @@ function fromBase64Url(value: string): string | undefined {
 function keepKnown<T extends string>(raw: string, known: readonly T[]): T[] {
   const ids = raw.split('-').filter((id): id is T => (known as readonly string[]).includes(id));
   return [...new Set(ids)];
+}
+
+/** Product ids of a `p.` chunk: the retired `agent` reads as `personal` (the site's rule), unknown ids drop, the first spelling of each id wins. */
+function keepProducts(raw: string): BuilderProduct[] {
+  return keepKnown(raw.split('-').map((id) => (id === 'agent' ? 'personal' : id)).join('-'), BUILDER_PRODUCTS);
+}
+
+/** The picked options of one flagship in the site's order of ids (not the order they were given in). */
+function keepOptions(product: FlagshipProduct, ids: readonly string[]): string[] {
+  const known = FLAGSHIP_OPTION_IDS[product];
+  return known.filter((id) => ids.includes(id));
 }
 
 function oneOf<T extends string>(value: string, known: readonly T[]): T | undefined {
@@ -119,6 +148,7 @@ export function encodeBuild(build: Build): string {
   if (build.channels?.length) parts.push(`c.${build.channels.join('-')}`);
   if (build.delivery) parts.push(`l.${build.delivery.length ? build.delivery.join('-') : 'none'}`);
   if (build.siteNeed) parts.push(`z.${build.siteNeed}`);
+  for (const id of FLAGSHIP_PRODUCTS) if (build.options?.[id]?.length) parts.push(`f.${id}.${build.options[id]!.join('-')}`);
   const d = build.details;
   if (d && (d.pages || d.langs?.length || d.has?.length || d.deadline)) {
     parts.push(`d.${[d.pages ? String(d.pages) : '_', list(d.langs), list(d.has), d.deadline ?? '_'].join('.')}`);
@@ -139,7 +169,7 @@ export function decodeBuild(value: string | null | undefined): Build | null {
       const kind = oneOf(second, BUILDER_KINDS);
       if (kind) build.kind = kind;
     } else if (head === 'p') {
-      const products = keepKnown(second, BUILDER_PRODUCTS);
+      const products = keepProducts(second);
       if (products.length) build.products = products;
     } else if (head === 'x') {
       build.extras = keepKnown(second, BUILD_EXTRAS);
@@ -155,6 +185,10 @@ export function decodeBuild(value: string | null | undefined): Build | null {
     } else if (head === 'z') {
       const need = oneOf(second, SITE_NEEDS);
       if (need) build.siteNeed = need;
+    } else if (head === 'f') {
+      const product = oneOf(second, FLAGSHIP_PRODUCTS);
+      const picked = product ? keepOptions(product, third.split('-')) : [];
+      if (product && picked.length) build.options = { ...build.options, [product]: picked };
     } else if (head === 'd') {
       const pages = clampPages(Number(second));
       if (pages) details.pages = pages;
@@ -177,7 +211,7 @@ export function decodeBuild(value: string | null | undefined): Build | null {
     }
   }
   if (Object.keys(details).length) build.details = details;
-  const has = build.extras.length > 0 || build.kind || build.products || build.goals || build.channels || build.delivery || build.siteNeed || build.details;
+  const has = build.extras.length > 0 || build.kind || build.products || build.goals || build.channels || build.delivery || build.siteNeed || build.options || build.details;
   return has ? build : null;
 }
 
@@ -185,7 +219,7 @@ export function decodeBuild(value: string | null | undefined): Build | null {
 export function cleanBuild(b: Build): Build {
   const out: Build = { extras: b.extras.filter((x) => (BUILD_EXTRAS as readonly string[]).includes(x)) };
   if (b.kind && (BUILDER_KINDS as readonly string[]).includes(b.kind)) out.kind = b.kind;
-  const products = keepKnown((b.products ?? []).join('-'), BUILDER_PRODUCTS);
+  const products = keepProducts((b.products ?? []).join('-'));
   if (products.length) out.products = products;
   const goals = keepKnown((b.goals ?? []).join('-'), BUILD_GOALS);
   if (goals.length) out.goals = goals;
@@ -193,6 +227,11 @@ export function cleanBuild(b: Build): Build {
   if (channels.length) out.channels = channels;
   if (b.delivery) out.delivery = keepKnown(b.delivery.join('-'), DELIVERY_CHANNELS);
   if (b.siteNeed && (SITE_NEEDS as readonly string[]).includes(b.siteNeed)) out.siteNeed = b.siteNeed;
+  for (const id of FLAGSHIP_PRODUCTS) {
+    const picked = keepOptions(id, b.options?.[id] ?? []);
+    // a flagship that is not in the build takes its options with it (the site's rule); with no products named the options stay
+    if (picked.length && (!out.products || out.products.includes(id))) out.options = { ...out.options, [id]: picked };
+  }
   const d = b.details;
   if (d) {
     const det: BuildDetails = {};
@@ -232,9 +271,9 @@ export function buildFromText(text: string): { code: string; build: Build } | nu
   return build ? { code, build } : null;
 }
 
-/** HQ catalogue id (the chat's product list) -> the builder's product id. `agent` and the classics keep their names. */
+/** HQ catalogue id (the chat's product list) -> the builder's product id. The retired `agent` is `personal`. */
 export const BUILDER_PRODUCT_OF: Record<string, BuilderProduct> = {
-  admin: 'adminbot', receptionist: 'intake', automation: 'automation', content: 'content', miniapp: 'miniapp', agent: 'agent', ai: 'aiteam', site: 'site', bot: 'bot', app: 'app',
+  admin: 'adminbot', receptionist: 'intake', automation: 'automation', content: 'content', miniapp: 'miniapp', agent: 'personal', personal: 'personal', company: 'company', implementation: 'aiteam', ai: 'aiteam', site: 'site', bot: 'bot', app: 'app',
 };
 
 /** Words that name a builder kind. First match wins, so the narrower kinds come first. */

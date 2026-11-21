@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BUILDER_KINDS, buildFromText, builderPath, cleanBuild, decodeBuild, encodeBuild, kindFromText, type Build,
+  BUILDER_KINDS, BUILDER_PRODUCT_OF, buildFromText, builderPath, cleanBuild, decodeBuild, encodeBuild, kindFromText, type Build,
 } from '../src/client/builder-link.js';
 
 /**
@@ -10,7 +10,7 @@ import {
 const FULL: Build = {
   extras: ['support', 'seo', 'design'],
   kind: 'dentist',
-  products: ['adminbot', 'intake', 'automation', 'content', 'miniapp', 'agent', 'aiteam', 'site', 'bot', 'app'],
+  products: ['personal', 'company', 'adminbot', 'intake', 'automation', 'content', 'miniapp', 'aiteam', 'site', 'bot', 'app'],
   goals: ['leads', 'sales', 'booking', 'routine', 'brand'],
   channels: ['instagram', 'telegram', 'search', 'word'],
   details: {
@@ -20,7 +20,7 @@ const FULL: Build = {
   },
 };
 const FULL_CODE =
-  'x.support-seo-design~k.dentist~p.adminbot-intake-automation-content-miniapp-agent-aiteam-site-bot-app~g.leads-sales-booking-routine-brand~c.instagram-telegram-search-word~d.20.ru-en-tj-uz.logo-texts-photos-domain-hosting.asap'
+  'x.support-seo-design~k.dentist~p.personal-company-adminbot-intake-automation-content-miniapp-aiteam-site-bot-app~g.leads-sales-booking-routine-brand~c.instagram-telegram-search-word~d.20.ru-en-tj-uz.logo-texts-photos-domain-hosting.asap'
   + '~u.aHR0cHM6Ly9leGFtcGxlLmNvbS92ZXJ5L2xvbmcvcGF0aC9hYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE'
   + '~u.0LrQsNGE0LUudGov0LzQtdC90Y4'
   + '~w.0J3Rg9C20LXQvSDRgNCw0LfQtNC10Lsg0YEg0LzQtdC90Y4sINC00L7RgdGC0LDQstC60L7QuSDQv9C-INCz0L7RgNC-0LTRgyDQuCDQvtC_0LvQsNGC0L7QuSDQutCw0YDRgtC-0LkuINCd0YPQttC10L0g0YDQsNC30LTQtdC7INGBINC80LXQvdGOLCDQtNC-0YHRgtCw0LLQutC-0Lkg0L_QviDQs9C-0YDQvtC00YMg0Lgg0L7Qv9C70LDRgtC-0Lkg0LrQsNGA0YLQvtC5LiDQndGD0LbQtdC9INGA0LDQt9C00LXQuyDRgSDQvNC10L3Rjiwg0LTQvtGB0YLQsNCy0LrQvtC5INC_0L4g0LPQvtGA0L7QtNGDINC4INC-0L_Qu9Cw0YLQvtC5INC60LDRgNGC0L7QuS4g0J3Rg9C20LXQvSDRgNCw0LfQtNC10Lsg0YEg0LzQtdC90Y4sINC00L7RgdGC0LDQstC60L7QuSDQv9C-INCz0L7RgNC-0LTRgyDQuCDQvtC_0LvQsNGC0L7QuSDQutCw0YDRgtC-0LkuINCd0YPQttC10L0g0YDQsNC30LTQtdC7INGBINC80LXQvdGOLCDQtNC-0YHRgtCw0LLQutC-0Lkg0L_QviDQs9C-0YDQvtC00YMg0Lgg0L7Qv9C70LDRgtC-0Lkg0LrQsNGA0YLQvtC5LiDQndGD0LbQtdC9';
@@ -29,6 +29,22 @@ describe('builder link: the site\'s encoding, ported', () => {
   it('every field of the brief encodes exactly like the site and survives the round trip (the site\'s long-text and 20-page limits included)', () => {
     expect(encodeBuild(FULL)).toBe(FULL_CODE);
     expect(decodeBuild(FULL_CODE)).toEqual(FULL);
+  });
+
+  it('the flagships: p.personal / p.company, the f.<product>.<ids> chunk after z. in the site\'s order, the old p.agent reads as personal', () => {
+    const b: Build = { extras: [], kind: 'coffee', products: ['personal', 'company'], siteNeed: 'no', options: { personal: ['mail', 'calendar', 'voice'], company: ['sales', 'pult', 'training'] } };
+    expect(encodeBuild(b)).toBe('k.coffee~p.personal-company~z.no~f.personal.mail-calendar-voice~f.company.sales-pult-training');
+    expect(decodeBuild(encodeBuild(b))).toEqual(b);
+    // ids are put in the site's order, unknown ones and a wrong product are dropped
+    expect(decodeBuild('p.personal~f.personal.voice-hack-mail~f.company.nope~f.other.mail')).toEqual({ extras: [], products: ['personal'], options: { personal: ['mail', 'voice'] } });
+    // the retired agent: p.agent is personal, and a link that names both does not repeat it
+    expect(decodeBuild('p.agent')).toEqual({ extras: [], products: ['personal'] });
+    expect(decodeBuild('p.agent-personal-site')).toEqual({ extras: [], products: ['personal', 'site'] });
+    expect(builderPath('ru', { extras: [], products: ['agent' as never] })).toBe('/ru/builder?b=p.personal');
+    // a flagship that is not in the build takes its options with it
+    expect(encodeBuild(cleanBuild({ extras: [], products: ['company'], options: { personal: ['mail'], company: ['sales'] } }))).toBe('p.company~f.company.sales');
+    expect(BUILDER_PRODUCT_OF.agent).toBe('personal');
+    expect(BUILDER_PRODUCT_OF.company).toBe('company');
   });
 
   it('small builds: the chunk order and the separators are the site\'s', () => {

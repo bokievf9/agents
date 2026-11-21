@@ -10,17 +10,23 @@ describe('the map of product names', () => {
     expect(productNames('automation')).toEqual({ ru: 'Автоматизация процессов', en: 'Process automation' });
     expect(productName('content', 'ru')).toBe('Контент на автопилоте');
     expect(productName('miniapp', 'en')).toBe('Telegram Mini App');
-    expect(productName('agent', 'ru')).toBe('Персональный ИИ-ассистент');
+    expect(productName('personal', 'ru')).toBe('Персональный ИИ');
+    expect(productName('personal', 'en')).toBe('Personal AI');
+    expect(productName('company', 'ru')).toBe('ИИ-компания');
+    expect(productName('company', 'en')).toBe('AI company');
+    // the retired `agent` is a synonym of `personal`
+    expect(productName('agent', 'ru')).toBe('Персональный ИИ');
+    expect(canonicalProductId('agent')).toBe('personal');
     for (const id of ['aiteam', 'ai', 'implementation']) expect(productName(id, 'ru')).toBe('ИИ-отдел под ключ');
     expect(productName('aiteam', 'en')).toBe('AI department turnkey');
     expect(productName('unknown-id', 'ru')).toBe('unknown-id');
     expect(canonicalProductId('receptionist')).toBe('intake');
-    expect(PRODUCT_NAMES.map((n) => n.id)).toEqual(['adminbot', 'intake', 'automation', 'content', 'miniapp', 'agent', 'aiteam', 'site', 'bot', 'app']);
+    expect(PRODUCT_NAMES.map((n) => n.id)).toEqual(['personal', 'company', 'adminbot', 'intake', 'automation', 'content', 'miniapp', 'aiteam', 'site', 'bot', 'app']);
   });
 
   it('no AI product name carries the word «бот»; the classics (delivery formats) may', () => {
     for (const n of PRODUCT_NAMES.filter((x) => !['site', 'bot', 'app'].includes(x.id))) expect(`${n.ru} ${n.en}`, n.id).not.toMatch(/бот|\bbot\b/i);
-    expect(productList('ru')).toBe('ИИ-администратор, ИИ-менеджер заявок, Автоматизация процессов, Контент на автопилоте, Telegram Mini App, Персональный ИИ-ассистент, ИИ-отдел под ключ');
+    expect(productList('ru')).toBe('Персональный ИИ, ИИ-компания, ИИ-администратор, ИИ-менеджер заявок, Автоматизация процессов, Контент на автопилоте, Telegram Mini App, ИИ-отдел под ключ');
     expect(productList('en', { classics: true })).toMatch(/Website, Telegram bot, App$/);
   });
 

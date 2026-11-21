@@ -39,7 +39,7 @@ const t = (id: string, ru: string, en: string, share: number) => ({ id, title: {
 
 export const DEFAULT_STAGE_TEMPLATES: StageTemplate[] = [
   {
-    id: 'site', title: { ru: 'Сайт', en: 'Website' }, products: ['site', 'websites', 'landing', 'company', 'shop'],
+    id: 'site', title: { ru: 'Сайт', en: 'Website' }, products: ['site', 'websites', 'landing', 'shop'],
     shares: [t('structure', 'Структура и первый экран', 'Structure and first screen', 30), t('pages', 'Все страницы и наполнение', 'All pages and content', 40), t('launch', 'Запуск, SEO, передача', 'Launch, SEO, handover', 30)],
   },
   {
@@ -55,6 +55,10 @@ export const DEFAULT_STAGE_TEMPLATES: StageTemplate[] = [
     shares: [t('design', 'Дизайн и прототип', 'Design and prototype', 25), t('core', 'Основной функционал', 'Core features', 25), t('full', 'Все экраны и тесты', 'All screens and tests', 25), t('launch', 'Публикация и передача', 'Publishing and handover', 25)],
   },
   { id: 'small', title: { ru: 'Малый проект', en: 'Small project' }, products: [], shares: [t('start', 'Старт', 'Start', 50), t('launch', 'Запуск', 'Launch', 50)] },
+  {
+    id: 'company', title: { ru: 'ИИ-компания', en: 'AI company' }, products: ['company'],
+    shares: [t('map', 'Карта компании и Директор', 'Company map and the Director', 25), t('depts', 'Первые отделы на ваших данных', 'First departments on your data', 25), t('pult', 'Пульт, база знаний и каналы', 'Control panel, knowledge base and channels', 25), t('launch', 'Обучение команды и запуск', 'Team training and launch', 25)],
+  },
 ];
 
 /**

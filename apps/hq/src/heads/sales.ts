@@ -95,7 +95,7 @@ const oneLine = (s: string, n: number) => s.replace(/\s+/g, ' ').trim().slice(0,
 
 /** What a project of this direction is for the Production head (milestones and the ТЗ depend on it). */
 const PRODUCT_OF_DIRECTION: Record<DirectionId, Product> = {
-  admin: 'bot', receptionist: 'bot', automation: 'automation', content: 'automation', miniapp: 'app', agent: 'automation', implementation: 'automation', site: 'site',
+  admin: 'bot', receptionist: 'bot', automation: 'automation', content: 'automation', miniapp: 'app', agent: 'automation', personal: 'automation', company: 'automation', implementation: 'automation', site: 'site',
 };
 export const productOfDirection = (direction: unknown): Product => (typeof direction === 'string' && isDirectionId(direction) ? PRODUCT_OF_DIRECTION[direction] : 'site');
 

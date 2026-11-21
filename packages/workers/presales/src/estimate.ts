@@ -1,4 +1,5 @@
-import { getPrices, type Prices } from '@fir/core';
+import { getPrices, productName, type Prices } from '@fir/core';
+import { flagshipLine, flagshipOptionsIn } from './flagships.js';
 import { z } from 'zod';
 import type { DirectionId } from './offers.js';
 import type { PackageLine, PackageQuote } from './package.js';
@@ -177,14 +178,17 @@ const EXTRA_RU: Record<string, string> = { seo: 'Карты, SEO и аналит
 const BUILD_EXTRAS = ['support', 'seo', 'design', 'rescue', 'crm', 'internal'] as const;
 const SERVICES = ['websites', 'bots', 'apps', 'automation'] as const;
 /** The products of the build that have no price in the site (`productCatalog[...].priced === false`). */
-const UNPRICED_PRODUCTS = ['content', 'agent'];
-const PRODUCT_IDS = ['adminbot', 'intake', 'automation', 'content', 'miniapp', 'agent', 'aiteam', 'site', 'bot', 'app'];
+const UNPRICED_PRODUCTS = ['content'];
+/** The flagships (2026-11-22) are «по смете» too: their line carries the plan, never the one-time total (`flagshipLine`). */
+const FLAGSHIPS = ['personal', 'company'] as const;
+const PRODUCT_IDS = ['personal', 'company', 'adminbot', 'intake', 'automation', 'content', 'miniapp', 'aiteam', 'site', 'bot', 'app'];
 const PRODUCT_RU: Record<string, string> = {
   adminbot: 'ИИ-администратор', intake: 'ИИ-менеджер заявок', automation: 'Автоматизация процессов', content: 'Контент на автопилоте', miniapp: 'Telegram Mini App',
-  agent: 'Персональный ИИ-ассистент', aiteam: 'ИИ-отдел под ключ', site: 'Сайт', bot: 'Telegram-бот', app: 'Приложение',
+  personal: 'Персональный ИИ', company: 'ИИ-компания', aiteam: 'ИИ-отдел под ключ', site: 'Сайт', bot: 'Telegram-бот', app: 'Приложение',
 };
 
-const keep = (list: string, known: readonly string[]): string[] => [...new Set(list.split('-').filter((x) => known.includes(x)))];
+/** `agent` is the retired id of `personal`: an old link still reads. */
+const keep = (list: string, known: readonly string[]): string[] => [...new Set(list.split('-').map((x) => (x === 'agent' ? 'personal' : x)).filter((x) => known.includes(x)))];
 
 /** The `?b=` code of a builder link or a bare code found in a text; the part `b=` stops at the first character a code does not have. */
 export function builderCodeIn(text: string): string | null {
@@ -235,7 +239,10 @@ export function priceBuilderCode(code: string, p: Prices = getPrices()): Builder
   }
   const subtotal = sum(lines);
   const discountUsd = lines.length >= 2 ? round10((subtotal * (p.bundleDiscountPercent ?? 10)) / 100) : 0;
-  const onRequest = products.filter((id) => UNPRICED_PRODUCTS.includes(id)).map((id) => PRODUCT_RU[id] ?? id);
+  const onRequest = [
+    ...FLAGSHIPS.filter((id) => products.includes(id)).map((id) => flagshipLine(id, productName(id, 'ru', p), flagshipOptionsIn(code, id), p)),
+    ...products.filter((id) => UNPRICED_PRODUCTS.includes(id)).map((id) => PRODUCT_RU[id] ?? id),
+  ];
   return finish({ lines, discountUsd, totalUsd: subtotal - discountUsd, monthlyUsd, onRequest, kinds }, 'link');
 }
 

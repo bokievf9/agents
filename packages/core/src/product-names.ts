@@ -15,12 +15,14 @@ export interface ProductNames {
 }
 
 export const PRODUCT_NAMES: readonly ProductNames[] = [
+  // the flagships first (the site's order, 2026-11-22); the old `agent` product is `personal` now (see ALIAS)
+  { id: 'personal', ru: 'Персональный ИИ', en: 'Personal AI' },
+  { id: 'company', ru: 'ИИ-компания', en: 'AI company' },
   { id: 'adminbot', ru: 'ИИ-администратор', en: 'AI booking assistant' },
   { id: 'intake', ru: 'ИИ-менеджер заявок', en: 'AI lead manager' },
   { id: 'automation', ru: 'Автоматизация процессов', en: 'Process automation' },
   { id: 'content', ru: 'Контент на автопилоте', en: 'Content on autopilot' },
   { id: 'miniapp', ru: 'Telegram Mini App', en: 'Telegram Mini App' },
-  { id: 'agent', ru: 'Персональный ИИ-ассистент', en: 'Personal AI assistant' },
   { id: 'aiteam', ru: 'ИИ-отдел под ключ', en: 'AI department turnkey' },
   // the classics are delivery formats, not AI products
   { id: 'site', ru: 'Сайт', en: 'Website' },
@@ -30,9 +32,10 @@ export const PRODUCT_NAMES: readonly ProductNames[] = [
 
 /** Every spelling of an id (builder, chat catalogue, price key, the site's new page ids) -> the canonical id. */
 const ALIAS: Record<string, string> = {
+  personal: 'personal', agent: 'personal', company: 'company',
   adminbot: 'adminbot', admin: 'adminbot',
   intake: 'intake', receptionist: 'intake',
-  automation: 'automation', content: 'content', miniapp: 'miniapp', agent: 'agent',
+  automation: 'automation', content: 'content', miniapp: 'miniapp',
   aiteam: 'aiteam', ai: 'aiteam', implementation: 'aiteam',
   site: 'site', bot: 'bot', app: 'app',
 };

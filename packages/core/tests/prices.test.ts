@@ -14,7 +14,7 @@ const reply = (body: unknown, status = 200): typeof fetch => (() => Promise.reso
 
 describe('the bundled fallback snapshot', () => {
   it('has the site shape and today\'s numbers', () => {
-    expect(Object.keys(fallbackJson).sort()).toEqual(['agentPlans', 'catalog', 'contentPlans', 'currency', 'extraPrice', 'products', 'referralPercent', 'smallProjectMaxUsd', 'stages', 'startingPrice', 'updatedAt']);
+    expect(Object.keys(fallbackJson).sort()).toEqual(['catalog', 'companyPlan', 'contentPlans', 'currency', 'extraPrice', 'personalPlans', 'products', 'referralPercent', 'smallProjectMaxUsd', 'stages', 'startingPrice', 'updatedAt']);
     expect(parsePrices(fallbackJson)).not.toBeNull();
     const p = FALLBACK_PRICES;
     expect(p.currency).toBe('USD');
@@ -27,8 +27,12 @@ describe('the bundled fallback snapshot', () => {
     expect(p.catalog.automation).toEqual({ variants: { integration: 200, crm: 450, assistant: 500 }, addons: { sheets: 50, alerts: 30, training: 50, support: 90 } });
     expect(p.extraPrice.support).toEqual({ from: 20, monthly: true });
     expect([p.extraPrice.seo!.from, p.extraPrice.design!.from, p.extraPrice.rescue!.from]).toEqual([50, 90, 60]);
-    expect(planOf('dono')).toEqual({ setup: 150, monthly: 15 });
-    expect(planOf('polly')).toEqual({ setup: 100, monthly: 10 });
+    expect(planOf('basic')).toEqual({ setup: 290, monthly: 29 });
+    expect(planOf('plus')).toEqual({ setup: 490, monthly: 49 });
+    expect(planOf('max')).toEqual({ setup: 790, monthly: 79 });
+    expect(planOf('company')).toEqual({ setup: 1490, monthly: 149 });
+    expect(p.companyByQuote).toBe(true);
+    expect(() => planOf('dono')).toThrow(/no plan/); // retired, the site dropped it
     expect(planOf('content')).toEqual({ setup: 90, monthly: 60 });
     expect(p.referralPercent).toBe(10);
     expect(supportMonthly()).toBe(20);
@@ -55,16 +59,29 @@ describe('the bundled fallback snapshot', () => {
     expect(parsePrices({ ...live, products: { ...live.products, receptionist: { kind: 'from', from: -1 } } })).toBeNull();
   });
 
+  it('reads personalPlans / companyPlan from the top level or from products.<id>.plans, and agentPlans is optional', () => {
+    const base = { ...fallbackJson } as Record<string, unknown>;
+    delete base.personalPlans; delete base.companyPlan; // only products.personal / products.company carry them
+    const p = parsePrices(base)!;
+    expect(planOf('plus', p)).toEqual({ setup: 490, monthly: 49 });
+    expect(planOf('company', p)).toEqual({ setup: 1490, monthly: 149 });
+    expect(parsePrices(p)?.companyPlan).toEqual({ id: 'company', setup: 1490, monthly: 149 }); // the normalised copy parses again
+    // the old list (Dono/Polly, no flagships) still parses; the flagships are just absent
+    const old = parsePrices({ ...fallbackJson, personalPlans: undefined, companyPlan: undefined, agentPlans: [{ id: 'dono', setup: 150, monthly: 15 }], products: { ...fallbackJson.products, personal: undefined, company: undefined } })!;
+    expect(old.personalPlans).toEqual([]);
+    expect(old.companyPlan).toBeUndefined();
+    expect(planOf('dono', old)).toEqual({ setup: 150, monthly: 15 });
+  });
+
   it('allowedAmounts is every amount of the list and nothing else', () => {
     const a = allowedAmounts(FALLBACK_PRICES);
-    for (const n of [290, 220, 230, 660, 550, 150, 100, 800, 90, 60, 15, 10, 20, 2000, 1200, 700, 40]) expect(a.has(n), String(n)).toBe(true);
+    for (const n of [290, 220, 230, 660, 550, 150, 100, 800, 90, 60, 29, 49, 79, 490, 790, 1490, 149, 20, 2000, 1200, 700, 40]) expect(a.has(n), String(n)).toBe(true);
     for (const stale of [250 + 50, 300, 400, 500 + 1, 25, 800 + 1]) expect(a.has(stale), String(stale)).toBe(false);
   });
 
   it('is validated: a broken shape is rejected', () => {
     expect(parsePrices({ ...fallbackJson, currency: 'EUR' })).toBeNull();
     expect(parsePrices({ ...fallbackJson, products: { admin: { kind: 'from', from: 1 } } })).toBeNull();
-    expect(parsePrices({ ...fallbackJson, agentPlans: [] })).toBeNull();
     expect(parsePrices({ ...fallbackJson, products: { ...fallbackJson.products, admin: { kind: 'from', from: -5 } } })).toBeNull();
     expect(parsePrices(null)).toBeNull();
     // a product may be `{ from }` too

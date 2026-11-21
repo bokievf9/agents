@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { detectInfrastructure, log, usd, type Button, type KindSpec, type Payload } from '@fir/core';
 import type { ApprovalState, Task, TaskApproval, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
 import { leadStoreFor, type Lead } from '@fir/worker-lead-intake';
-import { buildDocs, draftWording, exactLabel, stagesOf, type Brief } from './docs.js';
+import { buildDocs, draftWording, exactLabel, PILOT_DIRECTIONS, stagesOf, type Brief } from './docs.js';
 import { builderEstimate } from './estimate.js';
 import { bundleOffer, guessDirection, OFFERS } from './offers.js';
 import { builderTotal, quotePackage } from './package.js';
@@ -120,7 +120,9 @@ export class PresalesWorker implements Worker {
     const offer = built ? bundleOffer(built.directions, guessed) : guessed;
     const quote = built ? built.quote : quotePackage(offer.id, offer.title, `${brief.request} ${brief.niche} ${brief.estimate ?? ''}`);
     const wording = await draftWording(ctx.llm, this.prompt, brief, offer);
-    const docs = buildDocs(this.templates, offer, quote, brief, wording, { validDays: this.validDays }, ctx.now(), ctx.tz);
+    // the pilot block of a flagship's КП: only when the package asks for it (`meta.pilot: true`, set by the owner), never by itself
+    const pilot = task.meta.pilot === true && PILOT_DIRECTIONS.includes(offer.id);
+    const docs = buildDocs(this.templates, offer, quote, brief, wording, { validDays: this.validDays }, ctx.now(), ctx.tz, { pilot });
     const saved = storeFor(ctx).createPack(brief.leadId, offer.id, docs);
     const packId = saved[0]!.packId;
     // the numbers the sales chain needs after the approval (contract, invoice for the prepayment, the project): the exact price of the package
@@ -132,6 +134,7 @@ export class PresalesWorker implements Worker {
       kp: saved[0]!.body, estimate: saved[1]!.body, contract: saved[2]!.body,
       client: brief.client, what: offer.title, totalUsd: quote.totalUsd, stages, prepayUsd, prepayPercent: stages[0]!.share, timeline: offer.timeline,
       ...(quote.monthlyUsd ? { monthlyUsd: quote.monthlyUsd } : {}),
+      ...(PILOT_DIRECTIONS.includes(offer.id) ? { pilot } : {}),
       ...(brief.hasDomain != null ? { hasDomain: brief.hasDomain } : {}), ...(brief.hasHosting != null ? { hasHosting: brief.hasHosting } : {}),
     };
     const who = brief.leadId ? `лид #${brief.leadId} ${brief.client}` : 'по запросу владельца';

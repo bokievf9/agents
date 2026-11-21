@@ -56,11 +56,12 @@ describe('llms.txt and the services table', () => {
   });
 
   it('every direction price from the table must appear in the site text', () => {
-    expect(checkServices('от $290 от $220 от $230 от $90 от $660 от $100 от $550 от $150')).toEqual([]);
+    // the personal AI direction (`agent`) starts at the first Персональный ИИ plan, $290 (the same figure as the administrator)
+    expect(checkServices('от $290 от $220 от $230 от $90 от $660 от $550 от $150')).toEqual([]);
     const missing = checkServices('от $290 от $220 от $230 от $90 от $660 от $150');
-    expect(missing.map((f) => f.key)).toEqual(['service_missing:agent', 'service_missing:implementation']);
-    expect(missing[0]!.problem).toContain('от $100');
-    expect(checkServices('290 USD 220$ 230 $ 90 $ 660 $ 100 $ 550 $ 150')).toEqual([]);
+    expect(missing.map((f) => f.key)).toEqual(['service_missing:implementation']);
+    expect(missing[0]!.problem).toContain('от $550');
+    expect(checkServices('290 USD 220$ 230 $ 90 $ 660 $ 550 $ 150')).toEqual([]);
   });
 
   it('sitemap: same host only, no nested sitemaps, capped', () => {

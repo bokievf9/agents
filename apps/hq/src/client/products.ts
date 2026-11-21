@@ -4,12 +4,14 @@
  * the plain ways to order. No dollar amount is typed here: every price is read from the site's price list at the moment
  * of use (`getPrices()` in @fir/core, firtech.pro/api/prices), see `priceOf` and `startingPrices`.
  */
-import { getPrices, planOf, productNames, usd, type ProductKey } from '@fir/core';
+import { companyPlan, getPrices, personalPlans, planOf, productNames, usd, type ProductKey } from '@fir/core';
 
 export type PLang = 'ru' | 'en';
 type L<T> = Record<PLang, T>;
 
-export const PRODUCT_IDS = ['admin', 'receptionist', 'automation', 'content', 'miniapp', 'agent', 'ai'] as const;
+/** The flagships first (the site's order, 2026-11-22), then the products by one job each. The retired `agent` is `personal` (see `PRODUCTS.agent` below). */
+export const PRODUCT_IDS = ['personal', 'company', 'admin', 'receptionist', 'automation', 'content', 'miniapp', 'ai'] as const;
+export const FLAGSHIP_IDS = ['personal', 'company'] as const;
 export const CLASSIC_IDS = ['site', 'bot', 'app'] as const;
 export type ProductId = (typeof PRODUCT_IDS)[number];
 export type ClassicId = (typeof CLASSIC_IDS)[number];
@@ -139,23 +141,41 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
     pairs: ['automation', 'content'],
     demo: { ru: 'Покажем прототип мини-приложения на звонке.', en: 'We will show a mini app prototype on a call.' },
   },
-  agent: {
-    id: 'agent', emoji: '🧠',
+  personal: {
+    id: 'personal', emoji: '🧠',
     /** From the one map of product names (`@fir/core` `product-names.ts`), the live title of the price list first. */
     get name() {
-      return productNames('agent');
+      return productNames('personal');
     },
     benefit: {
-      ru: 'Персональный ассистент в Telegram: ведёт задания и сроки, почту, календарь и напоминания. Под вашу задачу сделаем такого же.',
-      en: 'A personal assistant in Telegram: runs assignments and deadlines, mail, calendar and reminders. We can build one for your task.',
+      ru: 'Ваш личный ИИ в Telegram: собирает утреннюю сводку, разбирает почту, помнит обещания и находит время на дела. Работает на вас одного.',
+      en: 'Your own AI in Telegram: builds a morning summary, sorts the mail, remembers promises and finds time for your tasks. It works for you alone.',
     },
-    kinds: ['student', 'school'],
+    kinds: ['student', 'company', 'cafe'],
     inside: {
-      ru: ['Задания, дедлайны, почта и календарь в одном плане', 'Короткие уроки, повторение, разговорная практика', 'Свой агент под ваши задачи по запросу'],
-      en: ['Assignments, deadlines, mail and calendar in one plan', 'Short lessons, spaced repetition, speaking practice', 'Your own agent for your tasks on request'],
+      ru: ['Почта, календарь и задачи в одном плане дня', 'Голос и долгая память, если нужны', 'Подключаем только те сервисы, которые вам нужны'],
+      en: ['Mail, calendar and tasks in one plan of the day', 'Voice and a long memory when you want them', 'Only the services you need are connected'],
     },
-    pairs: ['ai'],
-    demo: { ru: 'Такие ассистенты работают у нас каждый день, покажем вживую.', en: 'Such assistants run for us every day, we can show them live.' },
+    pairs: ['company'],
+    demo: { ru: 'Покажем демо Персонального ИИ на примере владельца кофейни: во вкладке «Персональный ИИ» в чате.', en: 'We will show the Personal AI demo on a coffee shop owner: the “Personal AI” tab in the chat.' },
+  },
+  company: {
+    id: 'company', emoji: '🏛️',
+    /** From the one map of product names (`@fir/core` `product-names.ts`), the live title of the price list first. */
+    get name() {
+      return productNames('company');
+    },
+    benefit: {
+      ru: 'Компания на агентах, как у Fir Tech: Директор и отделы из ИИ работают на ваших данных, а вы управляете из Пульта.',
+      en: 'A company of agents like Fir Tech\'s own: a Director and AI departments work on your data, and you run it from a control panel.',
+    },
+    kinds: ['company', 'realestate', 'clinic'],
+    inside: {
+      ru: ['Карта компании и Директор', 'Отделы на ваших данных: продажи, маркетинг, поддержка, производство, бэк-офис', 'Пульт, база знаний, каналы и обучение команды'],
+      en: ['A company map and a Director', 'Departments on your data: sales, marketing, support, production, back office', 'A control panel, a knowledge base, channels and team training'],
+    },
+    pairs: ['personal', 'ai'],
+    demo: { ru: 'Покажем, как устроена наша собственная компания на агентах, на звонке.', en: 'We will show how our own company of agents is built, on a call.' },
   },
   ai: {
     id: 'ai', emoji: '🏢',
@@ -225,14 +245,24 @@ export const PRODUCTS: Record<CatalogueId, Product> = {
   },
 };
 
+/**
+ * The retired `agent` (the old «Персональный ИИ-ассистент») answers as `personal`: a button of an old chat message (`p:agent`) and a stored state still resolve. It is an alias,
+ * not a member of `PRODUCT_IDS`, so no list or prompt shows it twice.
+ */
+(PRODUCTS as Record<string, Product>).agent = PRODUCTS.personal;
 export const isCatalogueId = (s: string): s is CatalogueId => Object.prototype.hasOwnProperty.call(PRODUCTS, s);
+/** `agent` -> `personal`; any other id as it is. */
+export const currentId = <T extends string>(id: T): T | 'personal' => (id === 'agent' ? 'personal' : id);
 export const isProductId = (s: string): s is ProductId => (PRODUCT_IDS as readonly string[]).includes(s);
 
 const PRICE_KEY: Partial<Record<CatalogueId, ProductKey>> = {
   admin: 'admin', receptionist: 'intake', automation: 'automation', miniapp: 'miniapp', ai: 'aiteam', site: 'site', bot: 'bot', app: 'app',
 };
 
-/** The public price of a product, from the site's price list: «от $N», «от $N + $M/мес», both agents for «agent». */
+/** «$N 490»: thousands with a space, as the owner writes the flagship prices. */
+export const usdSpaced = (n: number): string => `$${String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}`;
+
+/** The public price of a product, from the site's price list: «от $N», «от $N + $M/мес»; the flagships by their plans. */
 export function priceOf(id: CatalogueId, lang: PLang): string {
   const month = lang === 'ru' ? '/мес' : '/month';
   const from = lang === 'ru' ? 'от' : 'from';
@@ -240,24 +270,40 @@ export function priceOf(id: CatalogueId, lang: PLang): string {
     const c = planOf('content');
     return `${from} ${usd(c.setup)} + ${usd(c.monthly)}${month}`;
   }
-  if (id === 'agent') return publicPrices(lang);
+  if (id === 'personal' || (id as string) === 'agent') return personalPrice(lang);
+  if (id === 'company') return companyPrice(lang);
   const key = PRICE_KEY[id];
   return `${from} ${usd(key ? getPrices().products[key]! : 0)}`;
 }
 
-/** Dono and Polly: setup plus a monthly fee, from the price list. */
-export function publicPrices(lang: PLang): string {
-  const d = planOf('dono');
-  const p = planOf('polly');
+/** Персональный ИИ: «от N + M/мес» (the cheapest level), or an empty string when the site has not published the plans. */
+export function personalPrice(lang: PLang): string {
+  const first = personalPlans()[0];
+  if (!first) return '';
   const month = lang === 'ru' ? '/мес' : '/month';
-  return `Dono: ${usd(d.setup)} + ${usd(d.monthly)}${month}. Polly: ${usd(p.setup)} + ${usd(p.monthly)}${month}.`;
+  return `${lang === 'ru' ? 'от' : 'from'} ${usdSpaced(first.setup)} + ${usdSpaced(first.monthly)}${month}`;
 }
 
-/** One line with the starting price of every product that is for sale (not the personal agents): for the answer to a direct question about prices. */
+/** ИИ-компания: «от N + M/мес, точно по смете». */
+export function companyPrice(lang: PLang): string {
+  const c = companyPlan();
+  if (!c) return '';
+  const month = lang === 'ru' ? '/мес' : '/month';
+  return `${lang === 'ru' ? 'от' : 'from'} ${usdSpaced(c.setup)} + ${usdSpaced(c.monthly)}${month}${lang === 'ru' ? ', точно по смете' : ', the exact sum by quote'}`;
+}
+
+/** The levels of Персональный ИИ, for the card: «Старт N + M/мес, Плюс N + M/мес, Максимум N + M/мес» (ids as the site names them). */
+export function personalLevels(lang: PLang): string {
+  const names: Record<string, L<string>> = { basic: { ru: 'Старт', en: 'Start' }, plus: { ru: 'Плюс', en: 'Plus' }, max: { ru: 'Максимум', en: 'Max' } };
+  const month = lang === 'ru' ? '/мес' : '/month';
+  return personalPlans().map((p) => `${names[p.id]?.[lang] ?? p.id} ${usdSpaced(p.setup)} + ${usdSpaced(p.monthly)}${month}`).join(', ');
+}
+
+/** One line with the starting price of every product that is for sale, the flagships first: for the answer to a direct question about prices. */
 export function startingPrices(lang: PLang): string {
-  const ids: CatalogueId[] = [...PRODUCT_IDS, ...CLASSIC_IDS].filter((i) => i !== 'agent');
-  const list = ids.map((id) => `${PRODUCTS[id].name[lang]} ${priceOf(id, lang)}`).join('; ');
-  // no personal products (Dono, Polly) in a public list, and no closing full stop: the callers add theirs
+  const ids: CatalogueId[] = [...PRODUCT_IDS, ...CLASSIC_IDS];
+  const list = ids.map((id) => ({ id, price: priceOf(id, lang) })).filter((x) => x.price).map((x) => `${PRODUCTS[x.id].name[lang]} ${x.price}`).join('; ');
+  // no closing full stop: the callers add theirs
   return lang === 'ru' ? `Цены на сайте, в долларах: ${list}` : `Prices as on the site, in USD: ${list}`;
 }
 
@@ -274,7 +320,7 @@ const KINDS: Kind[] = [
   { id: 'shop', re: /магазин|одежд|e-?commerce|\bshop\b|\bstore\b/i, product: 'miniapp', hint: { ru: 'магазина', en: 'a shop' } },
   { id: 'school', re: /школ|курс[ыаов]?\b|репетитор|учебн|academy|school|courses?\b|tutor/i, product: 'receptionist', hint: { ru: 'школы или курсов', en: 'a school or courses' } },
   { id: 'realestate', re: /недвижим|риелтор|real estate|realtor/i, product: 'receptionist', hint: { ru: 'недвижимости', en: 'real estate' } },
-  { id: 'student', re: /студент|универ|student|university/i, product: 'agent', hint: { ru: 'студента', en: 'a student' } },
+  { id: 'student', re: /студент|универ|student|university/i, product: 'personal', hint: { ru: 'студента', en: 'a student' } },
   { id: 'company', re: /база знаний|knowledge base|служб[аыу] поддержки|support team|документ/i, product: 'ai', hint: { ru: 'компании с базой знаний', en: 'a company with a knowledge base' } },
 ];
 

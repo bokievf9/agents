@@ -1,4 +1,6 @@
 import { getPrices, planOf, type Prices } from '@fir/core';
+import { builderCodeIn } from './estimate.js';
+import { COMPANY_DEFAULT, FLAGSHIP_OPTION_RU, flagshipOptionsIn, PERSONAL_DEFAULT, PERSONAL_LEVEL_RU, personalLevel, type PersonalLevel } from './flagships.js';
 import type { DirectionId } from './offers.js';
 
 /**
@@ -47,7 +49,16 @@ function sitePackage(text: string, p: Prices): PackageQuote {
   return { totalUsd: sum(lines), monthlyUsd: null, lines };
 }
 
-const POLLY = /polly|полли|поли(?![\p{L}])|языков\p{L}+ учител|учител\p{L}* язык|изуч\p{L}+ язык|language teacher/iu;
+/** The Персональный ИИ plan of a build: the level its options give and that plan of the price list (the cheapest one when the site publishes none by id). */
+export function personalPlanFor(text: string, p: Prices): { level: PersonalLevel; options: string[]; plan: { setup: number; monthly: number } } {
+  const named = flagshipOptionsIn(builderCodeIn(text), 'personal');
+  const options = named.length ? named : PERSONAL_DEFAULT;
+  const level = personalLevel(options);
+  const plans = [...(p.personalPlans ?? [])].sort((a, b) => a.setup - b.setup);
+  const chosen = plans.find((x) => x.id === level) ?? plans[0];
+  if (!chosen) throw new Error('prices: the list has no personalPlans');
+  return { level, options, plan: { setup: chosen.setup, monthly: chosen.monthly } };
+}
 
 /**
  * The package of a direction and its exact price. `title` is the direction's name in the proposal (the single line of a product).
@@ -65,9 +76,18 @@ export function quotePackage(id: DirectionId, title: string, text: string, p: Pr
       const c = planOf('content', p);
       return { totalUsd: c.setup, monthlyUsd: c.monthly, lines: [{ label: `${title}: настройка каналов и контент-план`, usd: c.setup }] };
     }
+    // a subscription: the plan of the level the build gives, one stage «Настройка» (the monthly fee is paid in advance and is not a stage); `agent` is the retired id of `personal`
+    case 'personal':
     case 'agent': {
-      const plan = planOf(POLLY.test(text) ? 'polly' : 'dono', p);
-      return { totalUsd: plan.setup, monthlyUsd: plan.monthly, lines: [{ label: `${title}: настройка`, usd: plan.setup }] };
+      const { level, plan } = personalPlanFor(text, p);
+      return { totalUsd: plan.setup, monthlyUsd: plan.monthly, lines: [{ label: `${title}, уровень «${PERSONAL_LEVEL_RU[level]}»: настройка`, usd: plan.setup }] };
+    }
+    // the AI company: the plan is «from», the exact sum is fixed in the estimate; four stages and the monthly fee
+    case 'company': {
+      const plan = planOf('company', p);
+      const options = flagshipOptionsIn(builderCodeIn(text), 'company');
+      const parts = (options.length ? options : COMPANY_DEFAULT).map((o) => FLAGSHIP_OPTION_RU[o] ?? o).join(', ');
+      return { totalUsd: plan.setup, monthlyUsd: plan.monthly, lines: [{ label: `${title} (${parts}): внедрение, от этой суммы, точная по смете`, usd: plan.setup }] };
     }
   }
 }

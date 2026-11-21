@@ -44,5 +44,5 @@ export function parseBuilderPlan(...texts: string[]): BuilderPlan {
 
 /** The playground agent is part of the sale: the build lists the Fir Tech playground as a delivery place, or it is an agent product without a site. */
 export function wantsPlayground(plan: BuilderPlan, direction: string | null | undefined): boolean {
-  return Boolean(plan.delivery?.includes('playground')) || (direction === 'agent' && plan.siteNeed === 'no');
+  return Boolean(plan.delivery?.includes('playground')) || ((direction === 'agent' || direction === 'personal') && plan.siteNeed === 'no');
 }

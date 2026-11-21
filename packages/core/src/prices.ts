@@ -25,7 +25,11 @@ export const pricesSchema = z
     startingPrice: z.object({ websites: amount, bots: amount, apps: amount, automation: amount }),
     catalog: z.object({ websites: catalogEntry, bots: catalogEntry, apps: catalogEntry, automation: catalogEntry }),
     extraPrice: z.record(z.string(), z.object({ from: amount.nullable(), page: z.string().optional(), monthly: z.boolean().optional() })),
-    agentPlans: z.array(plan),
+    // The retired Dono/Polly plans (2026-11-22): the site drops them, so they are optional here and nothing requires them.
+    agentPlans: z.array(plan).optional(),
+    // The flagships (2026-11-22): `personalPlans` basic/plus/max (setup + monthly), `companyPlan` (setup + monthly, the price is «from», the exact sum by quote).
+    personalPlans: z.array(plan).optional(),
+    companyPlan: plan.optional(),
     contentPlans: z.array(plan),
     referralPercent: z.number().min(0).max(100),
     // Payment by stages (2026-11-21): templates and the small-project threshold; the built-in copy (`stage-templates.ts`) is used when the site has not published them yet.
@@ -57,7 +61,7 @@ export const pricesSchema = z
       let from: number | undefined;
       if (typeof v === 'number') from = v;
       else if (v && typeof v === 'object' && typeof (v as { from?: unknown }).from === 'number') from = (v as { from: number }).from;
-      // kind 'plans' (content, agent) comes from contentPlans/agentPlans, kind 'quote' has no price
+      // kind 'plans' (content, personal, company) comes from contentPlans/personalPlans/companyPlan, kind 'quote' has no price
       if (from !== undefined && Number.isFinite(from) && from >= 0) products[ID[id] ?? id] = from;
       else if (from !== undefined) ctx.addIssue({ code: 'custom', message: `products.${id} is not a valid price` });
     }
@@ -65,9 +69,19 @@ export const pricesSchema = z
     products.bot ??= p.startingPrice.bots;
     products.app ??= p.startingPrice.apps;
     for (const k of PRODUCT_KEYS) if (!(k in products)) ctx.addIssue({ code: 'custom', message: `products.${k} is missing` });
-    for (const id of ['dono', 'polly']) if (!p.agentPlans.some((x) => x.id === id)) ctx.addIssue({ code: 'custom', message: `agentPlans.${id} is missing` });
+    // the flagships' plans: the top-level fields, else the `plans` of `products.personal` / `products.company` (the site publishes both)
+    const plansOf = (id: string): unknown[] => {
+      const v = p.products[id];
+      const list = v && typeof v === 'object' ? (v as { plans?: unknown }).plans : undefined;
+      return Array.isArray(list) ? list : [];
+    };
+    const okPlans = (l: unknown[]) => l.flatMap((x) => { const r = plan.safeParse(x); return r.success ? [r.data] : []; });
+    const personalPlans = p.personalPlans ?? okPlans(plansOf('personal'));
+    const companyPlan = p.companyPlan ?? okPlans(plansOf('company'))[0];
+    const byQuote = Boolean(p.products.company && typeof p.products.company === 'object' && (p.products.company as { byQuote?: unknown }).byQuote) || undefined;
     if (!p.contentPlans.some((x) => x.id === 'content')) ctx.addIssue({ code: 'custom', message: 'contentPlans.content is missing' });
-    return { ...p, bundleDiscountPercent: p.bundleDiscountPercent ?? 10, products, titles, stages: normalizeStages(p.stages, (m, x) => log('warn', m, x)) };
+    const out = { ...p, agentPlans: p.agentPlans ?? [], personalPlans, bundleDiscountPercent: p.bundleDiscountPercent ?? 10, products, titles, stages: normalizeStages(p.stages, (m, x) => log('warn', m, x)), companyByQuote: byQuote ?? Boolean(companyPlan) };
+    return companyPlan ? { ...out, companyPlan } : out;
   });
 export type Prices = z.infer<typeof pricesSchema>;
 
@@ -97,10 +111,18 @@ export interface SubscriptionPlan {
   setup: number;
   monthly: number;
 }
-export function planOf(id: 'dono' | 'polly' | 'content', p: Prices = current): SubscriptionPlan {
-  const x = [...p.agentPlans, ...p.contentPlans].find((q) => q.id === id)!;
+export type PlanId = 'dono' | 'polly' | 'content' | 'basic' | 'plus' | 'max' | 'company';
+/** A plan of the list by id: the content plan, a Персональный ИИ level (`basic`/`plus`/`max`), the ИИ-компания plan (`company`, «from», the exact sum by quote) or a retired Dono/Polly plan. */
+export function planOf(id: PlanId, p: Prices = current): SubscriptionPlan {
+  const x = [...(p.agentPlans ?? []), ...p.contentPlans, ...(p.personalPlans ?? []), ...(p.companyPlan ? [p.companyPlan] : [])].find((q) => q.id === id);
+  if (!x) throw new Error(`prices: no plan "${id}" in the list`);
   return { setup: x.setup, monthly: x.monthly };
 }
+
+/** The Персональный ИИ levels of the list, cheapest first (empty when the site has not published them). */
+export const personalPlans = (p: Prices = current): Array<SubscriptionPlan & { id: string }> => [...(p.personalPlans ?? [])].sort((a, b) => a.setup - b.setup);
+/** The ИИ-компания plan, or undefined. */
+export const companyPlan = (p: Prices = current): (SubscriptionPlan & { id: string }) | undefined => p.companyPlan;
 
 /** Monthly support, USD (the site's `extraPrice.support`). */
 export const supportMonthly = (p: Prices = current): number => p.extraPrice.support?.from ?? 0;
@@ -117,7 +139,7 @@ export function allowedAmounts(p: Prices = current): Set<number> {
   for (const n of Object.values(p.startingPrice)) add(n);
   for (const c of Object.values(p.catalog)) for (const n of [...Object.values(c.variants), ...Object.values(c.addons)]) add(n);
   for (const e of Object.values(p.extraPrice)) add(e.from);
-  for (const q of [...p.agentPlans, ...p.contentPlans]) {
+  for (const q of [...(p.agentPlans ?? []), ...p.contentPlans, ...(p.personalPlans ?? []), ...(p.companyPlan ? [p.companyPlan] : [])]) {
     add(q.setup);
     add(q.monthly);
   }

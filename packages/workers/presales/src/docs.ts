@@ -59,6 +59,25 @@ export function fillMarks(text: string, o: Offer, q: PackageQuote): string {
   return text.replace(MARK, (_m, k: string) => (k.toLowerCase() === 'цена' ? exactLabel(q) : o.timeline));
 }
 
+/** The flagships (2026-11-22): the products that may carry the pilot block. */
+export const PILOT_DIRECTIONS = ['personal', 'company', 'agent'];
+const PILOT_HEAD = '## Пилот';
+const PILOT_TEXT = [
+  PILOT_HEAD,
+  'Первый пилот этого проекта выполняем бесплатно, в обмен на ваш кейс и отзыв о работе. Условия пилота (что входит, срок, какой кейс и в каком виде отзыв) записываем до начала работ. Объём пилота определяет Fir Tech.',
+].join('\n');
+
+/**
+ * The optional block «пилот бесплатно за кейс и отзыв» of a flagship's КП (the package field `pilot: true`; the owner switches it in the review center). No automation: the text
+ * only names the trade and says the terms are written down before the start. `on` false takes the block out again. Idempotent either way.
+ */
+export function withPilot(kp: string, on: boolean): string {
+  const without = kp.replace(new RegExp(`\\n*${PILOT_HEAD}\\n[\\s\\S]*?(?=\\n## |$)`), '').replace(/([^\n])\n## /g, '$1\n\n## ');
+  if (!on) return without;
+  const at = without.indexOf('\n## Срок действия');
+  return at === -1 ? `${without.trimEnd()}\n\n${PILOT_TEXT}\n` : `${without.slice(0, at).trimEnd()}\n\n${PILOT_TEXT}\n${without.slice(at)}`;
+}
+
 const oneLine = (s: string, n: number) => s.replace(/\s+/g, ' ').trim().slice(0, n);
 const BLANK = '____________';
 
@@ -95,20 +114,24 @@ export function stageTable(stages: PaymentStage[]): string {
 /** A price line: the bundle discount of a builder estimate is negative. */
 export const signed = (n: number): string => (n < 0 ? `-${usd(-n)}` : usd(n));
 
-export function priceTable(q: PackageQuote): string {
+/** The sentence under the price of a flagship whose exact sum is fixed in the estimate (the ИИ-компания): the plan is «from», the stages and the monthly fee follow it. */
+export const BY_QUOTE_NOTE = 'Сумма внедрения указана по плану «от»: точную сумму фиксируем в Смете до подписания договора, этапы и ежемесячный платёж считаются от неё.';
+
+export function priceTable(q: PackageQuote, byQuote = false): string {
   const rows: [string, string][] = [
     ...q.lines.map((l): [string, string] => [l.label, signed(l.usd)]),
     ...(q.lines.length > 1 ? [['Итого', usd(q.totalUsd)] as [string, string]] : []),
     ...(q.monthlyUsd ? [['Ежемесячно (подписка)', `${usd(q.monthlyUsd)} в месяц`] as [string, string]] : []),
     ['Сопровождение (по желанию)', `${usd(supportMonthlyUsd())} в месяц`],
   ];
-  return ['| Позиция | Стоимость, USD |', '|---|---|', ...rows.map(([a, b]) => `| ${a} | ${b} |`)].join('\n');
+  const table = ['| Позиция | Стоимость, USD |', '|---|---|', ...rows.map(([a, b]) => `| ${a} | ${b} |`)].join('\n');
+  return byQuote ? `${table}\n\n${BY_QUOTE_NOTE}` : table;
 }
 
 const paymentTerms = (stages: PaymentStage[]) => `${paymentLine(stages)} Способы оплаты: ${PAYMENT_METHODS}. Реквизиты вы получите в смете. ${guaranteeLine()}`;
 
 /** Builds the three documents from the templates. Prices come from the price list through `q` only. */
-export function buildDocs(tpl: Templates, o: Offer, q: PackageQuote, b: Brief, w: Wording, terms: PresalesTerms, now: number, tz: string): NewDoc[] {
+export function buildDocs(tpl: Templates, o: Offer, q: PackageQuote, b: Brief, w: Wording, terms: PresalesTerms, now: number, tz: string, opts: { pilot?: boolean } = {}): NewDoc[] {
   const stages = stagesOf(o, q);
   const client = b.client || BLANK;
   const date = fmtDate(now, tz);
@@ -117,12 +140,14 @@ export function buildDocs(tpl: Templates, o: Offer, q: PackageQuote, b: Brief, w
   const scope = w.scope.map(fill);
   const conditions = costsLine({ hasDomain: b.hasDomain ?? null, hasHosting: b.hasHosting ?? null });
   const assumed = b.assumptions?.length ? `\n\nДопущения (клиент не ответил на уточняющие вопросы, подтвердим их до договора):\n${b.assumptions.map((a) => `- ${a}`).join('\n')}` : '';
-  const kp = render(tpl.kp, {
+  const kpBase = render(tpl.kp, {
     client, date, valid_until: validUntil, valid_days: String(terms.validDays), title: o.title,
     context: fill(w.context), problem: fill(w.problem), solution: fill(w.solution), scope: bullets(scope),
-    timeline: o.timeline, price_table: priceTable(q), stage_table: stageTable(stages), payment_terms: paymentTerms(stages), conditions: `${conditions}${assumed}`,
+    timeline: o.timeline, price_table: priceTable(q, o.byQuote), stage_table: stageTable(stages), payment_terms: paymentTerms(stages), conditions: `${conditions}${assumed}`,
     support: `После запуска можно подключить сопровождение: ${usd(supportMonthlyUsd())} в месяц (правки, мониторинг, помощь). Решение вы принимаете после запуска.`,
   });
+  // the pilot block only for a flagship, and only when the package says so
+  const kp = opts.pilot && PILOT_DIRECTIONS.includes(o.id) ? withPilot(kpBase, true) : kpBase;
   const estimate = render(tpl.estimate, {
     client, title: o.title, date, valid_until: validUntil, conditions: `${conditions}${assumed}`, stage_table: stageTable(stages), payment_terms: paymentLine(stages),
     line_items: ['| № | Позиция | Стоимость |', '|---|---|---|', ...scope.map((s, i) => `| ${i + 1} | ${s} | входит |`)].join('\n'),
@@ -135,7 +160,7 @@ export function buildDocs(tpl: Templates, o: Offer, q: PackageQuote, b: Brief, w
   });
   const contract = render(tpl.contract, {
     client, title: o.title, date, timeline: o.timeline, price: exactLabel(q),
-    price_note: 'цена точная для состава работ из Сметы, в долларах США', stage_table: stageTable(stages), payment_methods: PAYMENT_METHODS,
+    price_note: o.byQuote ? 'сумма внедрения по Смете: в долларах США, фиксируется в Смете до подписания договора' : 'цена точная для состава работ из Сметы, в долларах США', stage_table: stageTable(stages), payment_methods: PAYMENT_METHODS,
     support_price: `${usd(supportMonthlyUsd())} в месяц`, conditions,
   });
   return [

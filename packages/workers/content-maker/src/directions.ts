@@ -1,4 +1,4 @@
-import { allowedAmounts, getPrices, planOf, productName, supportMonthly, type ProductKey } from '@fir/core';
+import { allowedAmounts, getPrices, personalPlans, planOf, productName, supportMonthly, type ProductKey } from '@fir/core';
 
 /**
  * Service directions of the content plan (pillars). Names and summaries live here; every dollar amount comes from the
@@ -10,7 +10,7 @@ export type DirectionId = 'admin' | 'receptionist' | 'automation' | 'content' | 
 export interface Direction {
   id: DirectionId;
   name: string;
-  /** Content-plan pillar letter (A, R, Z, C, M), 'D' for the Dono/Polly line, 'X' for the rest. */
+  /** Content-plan pillar letter (A, R, Z, C, M), 'D' for the Персональный ИИ line (direction id `agent`, the site's `personal`), 'X' for the rest. */
   pillar: string;
   /** Starting (setup) price in USD, from the price list. */
   readonly from: number;
@@ -53,11 +53,10 @@ export const DIRECTIONS: Direction[] = [
   ),
   make({ id: 'miniapp', name: '', pillar: 'M', summary: 'каталог, корзина, запись и лояльность в одном окне Telegram, без установки и регистрации' }, product('miniapp')),
   make(
-    { id: 'agent', name: '', pillar: 'D', summary: 'Dono: личный ассистент студента (дедлайны, календарь, напоминания). Polly: учитель языка. Оба готовые продукты Fir Tech; показ только на примерных данных' },
+    { id: 'agent', name: '', pillar: 'D', summary: 'Персональный ИИ: личный помощник владельца в Telegram, утренняя сводка, почта, календарь, задачи и обещания, три уровня по числу подключённых сервисов; свои Dono и Polly у основателя как живые кейсы, показ только на примерных данных' },
     () => {
-      const d = planOf('dono');
-      const p = planOf('polly');
-      return { from: Math.min(d.setup, p.setup), monthly: Math.min(d.monthly, p.monthly) };
+      const first = personalPlans()[0];
+      return { from: first?.setup ?? 0, monthly: first?.monthly };
     },
   ),
   make({ id: 'implementation', name: '', pillar: 'X', summary: 'разбор процессов компании и подключение агентов к её инструментам' }, product('aiteam')),

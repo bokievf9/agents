@@ -2,10 +2,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { MockLlm, OffLlm, openDb, productList, type LlmClient, type LlmRequest } from '@fir/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { decodeBuild } from '../src/client/builder-link.js';
+import { builderPath, decodeBuild } from '../src/client/builder-link.js';
 import { DEMO_TURNS, personaSystem } from '../src/client/persona.js';
 import {
-  enrichmentOf, findContact, intentScore, MAX_QUALIFY_TURNS, merge, needReply, newQ, nextSlot, normalizeQ, parseModel, priceProducts, summaryLines, wantsPerson, type QState,
+  buildOf, enrichmentOf, findContact, intentScore, MAX_QUALIFY_TURNS, merge, needReply, newQ, nextSlot, normalizeQ, parseModel, priceAnswer, priceProducts, summaryLines, wantsPerson, type QState,
 } from '../src/client/receptionist.js';
 import { PRODUCT_IDS, PRODUCTS } from '../src/client/products.js';
 import { RateLimiter } from '../src/client/sanitize.js';
@@ -439,6 +439,25 @@ describe('the demo tab: persona', () => {
     expect((await w.say('hi', { persona: 'salon', locale: 'en', sessionId: 'visitor-9004-abcd' })).reply).toMatch(/The demo is not available/);
   });
 
+  it('the flagship demo (persona=personal): a coffee shop owner\'s assistant, in memory, no lead, no contact, no booking talk, nothing stored', async () => {
+    const w = world({ turns: (req) => (/личный ИИ-помощник одного человека/.test(req.system) ? 'Доброе утро. Сегодня три встречи, первая в 10:00 с поставщиком.' : 'не та персона') });
+    const r = await w.say('Что у меня сегодня?', { persona: 'personal' });
+    expect(r).toMatchObject({ ok: true, state: 'chat', demo: true });
+    expect(r.reply).toMatch(/три встречи/);
+    const sys = w.calls()[0]!.system;
+    expect(sys).toMatch(/владельца кофейни «Утро»/);
+    expect(sys).toMatch(/Прайс Азизу до среды/); // the facts of the scenario of the site
+    expect(sys).toMatch(/вымышленных данных/);
+    expect(sys).toMatch(/не спрашивай и не проси оставить/);
+    expect(sys).not.toMatch(/Свободные окна|На какое время вас записать/); // it is not a booking receptionist
+    expect(personaSystem('personal', 'en', NOW, 'Asia/Dushanbe')).toMatch(/English/);
+    await w.say('Меня зовут Анвар, +992 90 123 45 67', { persona: 'personal' });
+    expect(w.leads).toEqual([]);
+    expect(w.tickets).toEqual([]);
+    expect(w.engine.store.count()).toBe(0);
+    expect(chatSchema.safeParse({ sessionId: SID, locale: 'ru', text: 'привет', persona: 'personal' }).success).toBe(true);
+  });
+
   it('the schema: persona is one of the niches, `text` and `message` both carry the words, one of them is required', () => {
     const ok = { sessionId: SID, locale: 'ru' };
     expect(chatSchema.safeParse({ ...ok, message: 'привет', persona: 'clinic' }).success).toBe(true);
@@ -598,6 +617,19 @@ describe('several products in one dialogue (the builder allows several)', () => 
     expect(merge(start([]), { reply: '', extract: { product: 'content' } }, 'расскажите').products).toEqual(['content']);
   });
 
+  it('the flagships: «вся компания» and «личный помощник» fill the list, their options travel in the builder link, an old `agent` state reads as `personal`', () => {
+    const q1 = merge(newQ(), { reply: '', extract: { kind: 'coffee', pain: 'всё на мне' } }, 'У меня кофейня, нужен личный помощник: почта, календарь и голос');
+    expect(q1.products).toEqual(['personal']);
+    expect(q1.options).toEqual({ personal: ['mail', 'calendar', 'voice'] });
+    expect(builderPath('ru', buildOf(q1))).toBe('/ru/builder?b=k.coffee~p.personal~f.personal.mail-calendar-voice');
+    const q2 = merge(q1, { reply: '', extract: {} }, 'и ещё хочу всю компанию на агентах: продажи и пульт');
+    expect(q2.products).toEqual(['personal', 'company']);
+    expect(builderPath('ru', buildOf(q2))).toBe('/ru/builder?b=k.coffee~p.personal-company~f.personal.mail-calendar-voice~f.company.sales-pult');
+    // the retired product id of an older saved state
+    expect(normalizeQ({ ...newQ(), products: ['agent' as never, 'site'] }).products).toEqual(['personal', 'site']);
+    expect(normalizeQ({ ...newQ(), product: 'agent' } as unknown as QState).products).toEqual(['personal']);
+  });
+
   it('a state saved with the single `product` is read as a one-item list', () => {
     const old = { ...newQ(), product: 'admin' } as unknown as QState;
     expect(normalizeQ(old).products).toEqual(['admin']);
@@ -605,10 +637,14 @@ describe('several products in one dialogue (the builder allows several)', () => 
     expect(normalizeQ({ ...newQ(), product: 'bot', kind: 'salon' } as unknown as QState).products).toEqual(['admin']);
   });
 
-  it('the price answer covers the listed products, three at most; one product keeps its companions; the personal agent is never named', () => {
+  it('the price answer covers the listed products, three at most; one product keeps its companions; the flagships are named with their plans', () => {
     expect(priceProducts({ products: ['admin', 'site'] })).toEqual(['admin', 'site']);
     expect(priceProducts({ products: ['admin', 'content', 'miniapp', 'site'] })).toEqual(['admin', 'content', 'miniapp']);
-    expect(priceProducts({ products: ['agent', 'site'] })).not.toContain('agent');
+    expect(priceProducts({ products: ['personal', 'site'] })).toEqual(['personal', 'site']);
+    expect(priceProducts({ products: ['company'] })[0]).toBe('company');
+    expect(priceAnswer('ru', { products: ['personal', 'company'] })).toContain('Персональный ИИ от $290 + $29/мес; ИИ-компания от $1 490 + $149/мес, точно по смете.');
+    expect(priceAnswer('en', { products: ['personal'] })).toContain('Personal AI from $290 + $29/month');
+    expect(priceAnswer('ru', { products: ['personal', 'site'] })).not.toMatch(/Dono|Polly/);
     expect(priceProducts({ products: ['admin'] })).toHaveLength(3);
     expect(priceProducts({})).toHaveLength(3);
     expect(needReply({ ...newQ(), products: ['admin', 'site'] }, 'ru', true)).toBe('Для этого подойдут «ИИ-администратор», «Сайт».');

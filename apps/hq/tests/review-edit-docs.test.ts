@@ -28,6 +28,33 @@ function cabinetWorld() {
   return { p, docs: real, pdfs };
 }
 
+describe('the pilot block of a flagship\'s КП: the owner\'s switch in the review center', () => {
+  it('`pilot: true` puts the block into the КП, `false` takes it out; only for Персональный ИИ and ИИ-компании; the pack field follows; nothing automatic', async () => {
+    const p = reviewWorld();
+    const lead = p.lead('Анна');
+    const kp = '# КП\n\n## Стоимость\nтаблица\n\n## Срок действия\n14 дней';
+    const x = await p.propose('sales', 'presales_pack', { ...PACK, direction: 'company', kp, pilot: false, leadId: lead.id }, 'пакет', { release: true });
+    new PresalesStore(p.w.db, p.t).createPack(lead.id, 'company', [{ kind: 'kp', title: 'КП', body: kp }]);
+    const on = await p.act(x.id, { action: 'edit', pilot: true });
+    expect(on.json.ok).toBe(true);
+    expect(on.json.item.text.body).toContain('## Пилот');
+    expect(on.json.item.text.body).toContain('Условия пилота');
+    expect(on.json.item.text.body.indexOf('## Пилот')).toBeLessThan(on.json.item.text.body.indexOf('## Срок действия'));
+    const core = p.w.hq.approvalLink(x.linkId)!.approvalId!;
+    expect(p.w.queue.get(core)!.payload).toMatchObject({ pilot: true });
+    expect((p.w.db.prepare("SELECT body FROM ps_documents WHERE kind = 'kp'").get() as any).body).toContain('## Пилот');
+    expect((await p.act(x.id, { action: 'edit', pilot: true })).json.error).toBe('not_applied'); // already in
+    const off = await p.act(x.id, { action: 'edit', pilot: false });
+    expect(off.json.item.text.body).toBe(kp);
+    expect(p.w.queue.get(core)!.payload).toMatchObject({ pilot: false });
+    // an ordinary product has no pilot block
+    const y = await p.propose('sales', 'presales_pack', { ...PACK, packId: 2, direction: 'admin', kp, leadId: lead.id }, 'пакет 2', { release: true });
+    expect((await p.act(y.id, { action: 'edit', pilot: true })).json.error).toBe('not_applicable');
+    // no `pilot` and no `text`: still invalid
+    expect((await p.act(x.id, { action: 'edit', doc: 'kp' })).json.error).toBe('invalid');
+  });
+});
+
 describe('КП, смета and договор are editable before the approval', () => {
   it('doc + text replaces that document of the pack, the card stays pending, v2 is the owner, the stored draft follows', async () => {
     const p = reviewWorld();
