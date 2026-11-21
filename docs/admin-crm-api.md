@@ -774,3 +774,6 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 Журнал: таблица `settings_log` (`at`, `key`, `old`, `new`, `source`): ключ в той же записи, что в `changed` (`schedule.summaryTime`, `limits.deptBudgetUsd.sales`, `trust.levels.lead_reply`...), `source` `owner` или `seed 2026-11-23`; значения только настроек, текстов клиентов нет. Первичные лимиты (marketing 25, sales 20, support 15, production 15, backoffice 10, director 5, USD в месяц, бюджет API 100 USD) пишутся один раз при старте, если у всех голов 0 (метка `limits_seeded`: лимит, который владелец позже вернул в 0, остаётся 0).
 
 Ассистент HQ-бота: «какие настройки?» читает эти же значения (инструмент `company_settings`, только чтение), «поставь сводку на 9:30» не меняет ничего и отвечает ссылкой `…/admin/office?panel=company&tab=settings`.
+
+## Демо по клиенту (2026-11-23)
+`GET /admin/crm/clients/:id` теперь несёт `demoUsage` (30 дней: `days`, `messages`, `tokensIn`, `tokensOut`, `usd`, `today`, `bySource[{source, messages, usd}]`; нули, если демо не было). Учёт, лимит и поля ответа демо: `public-api.md`, «Демо только для вошедших и учёт по клиенту».

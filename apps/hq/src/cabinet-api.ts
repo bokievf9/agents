@@ -4,6 +4,7 @@ import type { BillingWorker } from '@fir/worker-billing';
 import { CabDocs } from './cab-docs.js';
 import { CabThreads } from './cab-threads.js';
 import { ClientMail } from './client-mail.js';
+import type { DemoUsage } from './demo-usage.js';
 import { Playground } from './playground.js';
 import { addReview } from './reviews.js';
 
@@ -42,6 +43,9 @@ export interface CabinetDeps {
   gate?: { llmAllowed(): boolean; llmUsed(): void } | undefined;
   /** How long a КП stands (`KP_VALID_DAYS`): the quote expires after it (P-11). */
   kpValidDays?: number | (() => number) | undefined;
+  /** «Демо только для вошедших»: booking and cap of the demo per client (`demo-usage.ts`) and the switch that refuses an anonymous demo. */
+  demoUsage?: DemoUsage | undefined;
+  demoRequireClient?: boolean | undefined;
 }
 
 /** Builds the three modules of the cabinet and the dispatcher; the heads get `docs` (`sales.cabinet = cabinet.docs`, ...). */
@@ -61,7 +65,7 @@ export function buildCabinet(o: CabinetDeps): CabinetApi {
     db: o.hq.db, now, tz: () => o.hq.tz, llm: o.llm, secret: o.secret ?? o.mediaSecret, gate: o.gate, uploadText: (cid, uid) => threads.uploadText(cid, uid), notifyOwner,
     // P-21: the handoff of a client's agent goes to the client (his agent thread); the owner only hears the fact
     handoff: (clientId, agentId) => notifyOwner(`Агент #${agentId} клиента ${clientId} передал разговор посетителя владельцу агента (тред агента в кабинете клиента)`),
-    journal: (agent, action, detail) => o.hq.log(agent, action, 'agent', detail), siteUrl: o.siteUrl,
+    journal: (agent, action, detail) => o.hq.log(agent, action, 'agent', detail), siteUrl: o.siteUrl, demoUsage: o.demoUsage, demoRequireClient: o.demoRequireClient,
   });
   ref.pg = playground;
   docs.attachPlayground(playground);

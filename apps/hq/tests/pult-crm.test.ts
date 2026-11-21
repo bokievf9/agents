@@ -265,6 +265,14 @@ describe('GET /admin/crm/clients/:id (client 360)', () => {
     expect(kinds).toEqual(expect.arrayContaining(['lead', 'invoice', 'payment', 'ticket', 'message']));
     expect(r.json.touches.length).toBeLessThanOrEqual(30);
     expect(r.json.leads.some((x: any) => x.name === 'Чужой')).toBe(false);
+    // «Демо только для вошедших»: the demo use of 30 days (zeros first, then what `demo_usage` holds for this client only)
+    expect(r.json.demoUsage).toMatchObject({ days: 30, messages: 0, usd: 0, bySource: [] });
+    const { DemoUsage } = await import('../src/demo-usage.js');
+    const du = new DemoUsage({ db: p.w.hq.db, now: p.t, tz: () => 'Asia/Dushanbe' });
+    await du.metered(1, 'persona:salon', async () => 'x');
+    await du.metered(2, 'persona:shop', async () => 'x');
+    const again = await p.call('GET', `/admin/crm/clients/${row.id}`);
+    expect(again.json.demoUsage).toMatchObject({ messages: 1, today: 1, bySource: [{ source: 'persona:salon', messages: 1 }] });
   });
 
   it('a client without an account is c:<name>; unknown ids are 404', async () => {

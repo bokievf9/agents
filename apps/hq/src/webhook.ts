@@ -390,6 +390,8 @@ export function createWebhook(
           const out = await chat.handle(parsed.data, visitorIp(req, true));
           if (out.kind === 'rate_limited') return json(res, 429, { ok: false, error: 'rate_limited' });
           if (out.kind === 'unavailable') return json(res, 503, { ok: false, error: 'unavailable' });
+          if (out.kind === 'login_required') return json(res, 401, { ok: false, error: 'login_required' });
+          if (out.kind === 'limit') return json(res, 429, out.body);
           return json(res, 200, out.body);
         }
         if (req.method !== 'POST' || req.url !== '/lead' || !token) return json(res, 404, { ok: false });

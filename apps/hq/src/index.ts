@@ -26,6 +26,7 @@ import { createWebhook } from './webhook.js';
 import { registerCabinetLead } from './cabinet.js';
 import { AuditGate, AuditStore, submitAudit } from './audit-shared.js';
 import { blogApi } from './blog.js';
+import { DemoUsage, tapLlm } from './demo-usage.js';
 import { payApi } from './pay.js';
 import { cachedStatus } from './status.js';
 import { createAdmin } from './admin.js';
@@ -129,7 +130,10 @@ if (directLlm) {
 // `client-bot`, department sales; a customer is waiting, so the money limit alerts but never silences it). The daily call cap
 // lives in HQ settings, so a deploy does not reset it.
 const gatewayDown = gatewayGate(() => llm.down, Date.now); // visitors get the scripted answer while the gateway is down; one call a minute probes it
-const clientLlm = meterLlm(llm, hq, { agentId: 'client-bot', urgent: true });
+// «Демо только для вошедших»: every demo message is booked to the signed-in client (`demo_usage`: calls, tokens, money) and capped per day; the tap sees the usage of the
+// model calls made inside one demo message (outside it the client is the same as before).
+const demoUsage = new DemoUsage({ db, now: hq.now, tz: () => hq.tz, limit: () => { const v = Number(hq.setting('demo_daily_per_client')); return v > 0 ? v : cfg.demoDailyPerClient; } });
+const clientLlm = tapLlm(meterLlm(llm, hq, { agentId: 'client-bot', urgent: true }));
 const counter = { get: (k: string) => hq.setting(k) || undefined, set: (k: string, v: string) => hq.setSetting(k, v) };
 
 // Department reports: into the topics of the HQ group only with TG_GROUP_REPORTS=on, and then by the HQ bot itself. Off (the default), a report stays
@@ -222,7 +226,7 @@ const backoffice = new BackofficeHead({
 // Cabinet v3 (2026-11-22): the client's documents (accept, sign), threads and uploads, the playground of agents. The heads hand the owner's approvals to it.
 const chatGateForAgents = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
 const cabinet = buildCabinet({
-  hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents, kpValidDays: startVals.kpValidDays,
+  hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents, demoUsage, demoRequireClient: cfg.demoRequireClient, kpValidDays: startVals.kpValidDays,
   tools: () => toolsFor(hq, tools, { agentId: 'documents', dept: BACKOFFICE, messenger, ownerId: cfg.ownerId }),
 });
 sales.cabinet = cabinet.docs;
@@ -256,7 +260,7 @@ const drill = new Drill({
 director.onDrillCommand = (arg) => drill.command(arg);
 director.onTopicsCommand = async () => (await topicManager.ensure()).text;
 if (cfg.tgGroupReports) director.summaryLines.push(() => topicManager.summaryNote());
-director.summaryLines.push(() => production.overdueLine(), () => backoffice.pendingLine(), () => lost.summaryLine(), () => emailFailures.summaryLine());
+director.summaryLines.push(() => demoUsage.summaryLine(), () => production.overdueLine(), () => backoffice.pendingLine(), () => lost.summaryLine(), () => emailFailures.summaryLine());
 
 installOwnerGlue(bot, { ownerId: cfg.ownerId, channel, queue, director, marketing, sales, topicManager, assistant, links, cards: cfg.tgApprovalCards });
 
@@ -355,7 +359,7 @@ for (const dept of hq.departments()) {
 const chatGate = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
 const webChat = cfg.webChatToken
   ? new WebChatEngine({
-      db, now: hq.now, tz: () => hq.tz, llm: clientLlm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate,
+      db, now: hq.now, tz: () => hq.tz, llm: clientLlm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate, demoUsage, demoRequireClient: cfg.demoRequireClient,
       onLost: (source, reason, info) => lost.record(source, reason, info), gatewayDown, siteOrigin: cfg.siteUrl, slots: freeSlots,
     })
   : null;

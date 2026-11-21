@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, 
 import { tryJson, zonedParts, type Db, type LlmClient } from '@fir/core';
 import { z } from 'zod';
 import { addThreadMessage, ensureCabinetTables } from './cabinet.js';
+import type { DemoUsage } from './demo-usage.js';
 
 /**
  * The playground (2026-11-22): an agent instance per cabinet client, for those who do not need a website. Its persona is built from the answers of the
@@ -296,10 +297,19 @@ const patchBody = z.object({
     siteWidget: z.string().trim().max(200).regex(/^https?:\/\/[a-z0-9.-]+(:\d+)?$/i).nullable().optional(),
   }).optional(),
 }).strict();
+/** «Демо только для вошедших»: the signed-in client a demo request names (the site fills them from the Supabase session, never from the browser). */
+const identity = {
+  demo: z.boolean().optional().catch(undefined),
+  clientId: z.string().trim().min(1).max(64).optional().catch(undefined),
+  clientEmail: z.string().trim().toLowerCase().max(254).email().optional().catch(undefined),
+  cabinetId: z.string().trim().min(1).max(64).optional().catch(undefined),
+  clientName: z.string().trim().max(120).optional().catch(undefined),
+};
 const chatBody = z.object({
   conversationId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).optional(), text: z.string().trim().min(1).max(1000),
   /** «Демо на ваших данных»: the key of the lead's demo link opens his draft agent without the agent token. */
   demoKey: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/).optional(),
+  ...identity,
 });
 const knowledgeBody = z.object({ title: z.string().trim().min(1).max(120).optional(), text: z.string().trim().min(1).max(8000).optional(), uploadId: z.string().min(8).max(64).optional() })
   .refine((b) => b.text !== undefined || b.uploadId !== undefined, { message: 'text or uploadId' });
@@ -329,6 +339,10 @@ export interface PlaygroundDeps {
   journal?: ((agentName: string, action: string, detail: string) => void) | undefined;
   /** The site (`SITE_URL`): the lead's demo link `<site>/<ru|en>/demo/<publicId>?k=<key>` («демо на ваших данных»). */
   siteUrl?: string | undefined;
+  /** Booking and cap of the demo per signed-in client (`demo-usage.ts`); absent: the demo is anonymous as before. */
+  demoUsage?: DemoUsage | undefined;
+  /** True: a demo request without a known client is refused (401 `login_required`). */
+  demoRequireClient?: boolean | undefined;
 }
 
 interface DemoSession { turns: { role: 'user' | 'assistant'; content: string }[]; last: number }
@@ -704,8 +718,15 @@ export class Playground {
     if (demo) {
       const parsed = chatBody.safeParse(o.body ?? {});
       if (!parsed.success) return failR(400, 'invalid');
-      const r = await this.chat(a, { conversationId: parsed.data.conversationId ?? `d-${randomBytes(9).toString('base64url')}`, text: parsed.data.text, channel: 'demo' });
-      const out = 'error' in r ? failR(r.error === 'limit_reached' ? 429 : 503, r.error) : okR({ reply: r.reply, conversationId: r.conversationId, usedTools: r.usedTools, mode: 'demo' });
+      const who = this.demoClient(parsed.data);
+      if (who === 'login_required') return { ...failR(401, 'login_required'), allowOrigin: '*' };
+      const run = () => this.chat(a, { conversationId: parsed.data.conversationId ?? `d-${randomBytes(9).toString('base64url')}`, text: parsed.data.text, channel: 'demo' });
+      const m = who === null ? { ok: true as const, value: await run() } : await this.d.demoUsage!.metered(who, `agent:${a.public_id}`, run);
+      // the client's day cap is spent: the same 429 as the agent's own cap, with the usage fields
+      if (!m.ok) return { ...failR(429, 'limit_reached', this.d.demoUsage!.fields(who as number)), allowOrigin: '*' };
+      const r = m.value;
+      const usage = who === null ? {} : this.d.demoUsage!.fields(who);
+      const out = 'error' in r ? failR(r.error === 'limit_reached' ? 429 : 503, r.error, usage) : okR({ reply: r.reply, conversationId: r.conversationId, usedTools: r.usedTools, mode: 'demo', ...usage });
       return { ...out, allowOrigin: '*' };
     }
     if (!a || !good) return failR(401, 'unauthorized');
@@ -718,6 +739,14 @@ export class Playground {
     const r = await this.chat(a, { conversationId: conv, text: parsed.data.text, channel: 'widget' });
     const out = 'error' in r ? failR(r.error === 'limit_reached' ? 429 : 503, r.error) : okR({ reply: r.reply, conversationId: r.conversationId, usedTools: r.usedTools });
     return { ...out, ...(site ? { allowOrigin: site } : {}) };
+  }
+
+  /** The client a demo request names: his id, null (anonymous demo, allowed unless `demoRequireClient`) or `login_required`. */
+  private demoClient(b: { clientEmail?: string | undefined; cabinetId?: string | undefined; clientId?: string | undefined; clientName?: string | undefined }): number | 'login_required' | null {
+    const du = this.d.demoUsage;
+    if (!du) return null;
+    const id = du.resolveClient({ email: b.clientEmail, cabinetId: b.cabinetId ?? b.clientId, name: b.clientName });
+    return id ?? (this.d.demoRequireClient ? 'login_required' : null);
   }
 
   private async chat(a: AgentRow, o: { conversationId: string; text: string; channel: 'cabinet' | 'widget' | 'demo' }): Promise<ChatOut | { error: string }> {
@@ -853,12 +882,21 @@ export class Playground {
    */
   async chatDemo(niche: string, body: unknown): Promise<PgReply> {
     if (!(NICHES as readonly string[]).includes(niche)) return failR(404, 'not_found');
-    const parsed = z.object({ sessionId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/), text: z.string().trim().min(1).max(500) }).safeParse(body ?? {});
+    const parsed = z.object({ sessionId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/), text: z.string().trim().min(1).max(500), ...identity }).safeParse(body ?? {});
     if (!parsed.success) return failR(400, 'invalid');
+    const who = this.demoClient(parsed.data);
+    if (who === 'login_required') return failR(401, 'login_required');
+    if (who === null) return this.chatDemoRun(niche, parsed.data);
+    const m = await this.d.demoUsage!.metered(who, `agent:demo-${niche}`, () => this.chatDemoRun(niche, parsed.data));
+    if (!m.ok) return failR(429, 'limit_reached', this.d.demoUsage!.fields(who));
+    return m.value.status === 200 ? { ...m.value, body: { ...m.value.body, ...this.d.demoUsage!.fields(who) } } : m.value;
+  }
+
+  private async chatDemoRun(niche: string, parsed: { sessionId: string; text: string }): Promise<PgReply> {
     const t = this.d.now();
     for (const [k, v] of this.demo) if (t - v.last > 20 * 60_000) this.demo.delete(k);
     if (this.demo.size > 2000) this.demo.clear();
-    const key = `${niche}:${parsed.data.sessionId}`;
+    const key = `${niche}:${parsed.sessionId}`;
     const s = this.demo.get(key) ?? { turns: [], last: t };
     if (s.turns.length >= HISTORY_TURNS * 2) return failR(429, 'session_limit');
     const spec = DEMOS[niche as Niche];
@@ -868,12 +906,12 @@ export class Playground {
       agent: fake, conv: key, tools: ['faq_search', 'booking_slots', 'book_slot', 'capture_lead', 'handoff_human'], knowledge: spec.faq, used: [], store: false,
       capture: () => undefined, book: () => undefined, handoff: () => undefined, slots: () => slotsFor(t, this.d.tz()),
     };
-    const out = await this.think(ctx, persona, s.turns, parsed.data.text);
-    s.turns.push({ role: 'user', content: parsed.data.text }, { role: 'assistant', content: out.reply });
+    const out = await this.think(ctx, persona, s.turns, parsed.text);
+    s.turns.push({ role: 'user', content: parsed.text }, { role: 'assistant', content: out.reply });
     s.last = this.d.now();
     this.demo.set(key, s);
     this.d.db.prepare("INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1").run(`pg.demo.${this.day()}`);
-    return okR({ reply: out.reply, conversationId: parsed.data.sessionId, usedTools: out.usedTools });
+    return okR({ reply: out.reply, conversationId: parsed.sessionId, usedTools: out.usedTools });
   }
 }
 
