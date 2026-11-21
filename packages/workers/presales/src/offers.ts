@@ -1,4 +1,5 @@
-import { getPrices, planOf, productName, supportMonthly, usd, type ProductKey } from '@fir/core';
+import { getPrices, personalPlans, planOf, productName, supportMonthly, usd, type ProductKey } from '@fir/core';
+import { builderCodeIn } from './estimate.js';
 
 /**
  * The offers of a commercial proposal. Names, timelines and scope live here; the dollar amounts never do: they are read
@@ -8,7 +9,8 @@ import { getPrices, planOf, productName, supportMonthly, usd, type ProductKey } 
  * Timelines: site 7-10 days, bot 5-7, receptionist 7, mini app 14-21 are the owner's (COMPANY.md); the rest are
  * working estimates, the owner corrects them in the card before sending.
  */
-export const DIRECTION_IDS = ['admin', 'receptionist', 'automation', 'content', 'miniapp', 'agent', 'implementation', 'site'] as const;
+/** The flagships first (2026-11-22). `agent` is the retired direction of the personal assistants: stored packs and leads keep it, it is offered as `personal`. */
+export const DIRECTION_IDS = ['personal', 'company', 'admin', 'receptionist', 'automation', 'content', 'miniapp', 'implementation', 'site', 'agent'] as const;
 export type DirectionId = (typeof DIRECTION_IDS)[number];
 
 export interface Offer {
@@ -19,6 +21,8 @@ export interface Offer {
   readonly fromUsd: number;
   /** Monthly fee in USD for subscriptions (content, personal agents), from the site's price list. */
   readonly monthlyUsd?: number;
+  /** The flagship whose exact sum is fixed in the estimate (the plan is «from»). */
+  byQuote?: boolean;
   /** Timeline text for the proposal. */
   timeline: string;
   /** Default scope (used when the model's scope is missing or breaks the rules), 5-8 bullets. */
@@ -40,16 +44,19 @@ const priced = (m: Meta, price: () => { from: number; monthly?: number }): Offer
   },
 });
 const personal = () => {
-  const d = planOf('dono');
-  const p = planOf('polly');
-  return { from: Math.min(d.setup, p.setup), monthly: Math.min(d.monthly, p.monthly) };
+  const first = personalPlans()[0];
+  return { from: first?.setup ?? 0, monthly: first?.monthly };
+};
+const company = () => {
+  const c = planOf('company');
+  return { from: c.setup, monthly: c.monthly };
 };
 const content = () => {
   const c = planOf('content');
   return { from: c.setup, monthly: c.monthly };
 };
 
-const META: Record<DirectionId, Meta> = {
+const META_BY_ID: Record<Exclude<DirectionId, 'agent'>, Meta> = {
   admin: {
     id: 'admin', get title() { return productName('adminbot', 'ru'); }, timeline: '5-7 рабочих дней',
     scope: [
@@ -105,15 +112,26 @@ const META: Record<DirectionId, Meta> = {
       'Тестирование на телефонах и запуск',
     ],
   },
-  agent: {
-    id: 'agent', get title() { return productName('agent', 'ru'); }, timeline: '10-14 рабочих дней',
+  personal: {
+    id: 'personal', get title() { return productName('personal', 'ru'); }, timeline: '5-7 рабочих дней',
     scope: [
-      'Описание задачи агента и границ его работы',
-      'Подключение к вашим данным и инструментам',
-      'Сценарии и проверки: что агент делает сам, что согласует с вами',
-      'Журнал действий агента',
-      'Тест на реальных примерах',
-      'Запуск и инструкция по работе',
+      'Разбор вашего дня: какие сервисы подключаем (почта, календарь, задачи, учёба, заметки, мессенджеры)',
+      'Подключение выбранных сервисов к вашему личному ИИ в Telegram',
+      'Утренняя сводка: письма, встречи, дела и сроки на день',
+      'Обещания и поручения: ИИ помнит, что вы пообещали, и напоминает',
+      'Правила: что ИИ делает сам, что согласует с вами, чего не делает никогда',
+      'Тест на ваших реальных делах, запуск и инструкция',
+    ],
+  },
+  company: {
+    id: 'company', get title() { return productName('company', 'ru'); }, timeline: '4-6 недель, четыре этапа', byQuote: true,
+    scope: [
+      'Карта компании: процессы, роли, источники данных, и Директор из ИИ',
+      'Первые отделы на ваших данных (продажи, маркетинг, поддержка, производство или бэк-офис по выбору)',
+      'Пульт владельца: задачи, одобрения, отчёты и журнал в одном месте',
+      'База знаний компании и каналы клиентов',
+      'Уровни доверия: что агенты делают сами, что только после вашего одобрения',
+      'Обучение команды, тестовый период и запуск',
     ],
   },
   implementation: {
@@ -140,7 +158,15 @@ const META: Record<DirectionId, Meta> = {
   },
 };
 
+// the retired `agent` direction is the personal AI under its old id (stored packs and leads still carry it)
+const META: Record<DirectionId, Meta> = {
+  ...META_BY_ID,
+  agent: { id: 'agent', get title() { return productName('personal', 'ru'); }, timeline: META_BY_ID.personal.timeline, scope: META_BY_ID.personal.scope },
+};
+
 const PRICE: Record<DirectionId, () => { from: number; monthly?: number }> = {
+  personal,
+  company,
   admin: product('admin'),
   receptionist: product('intake'),
   automation: product('automation'),
@@ -166,7 +192,9 @@ const SERVICE: Record<string, DirectionId> = { bots: 'admin', websites: 'site', 
 const KEYWORDS: [RegExp, DirectionId][] = [
   [/mini ?app|мини-?прилож/i, 'miniapp'],
   [/приём?щик|приемщик|ии-?(ассистент|менеджер)|whatsapp|instagram/i, 'receptionist'],
-  [/агент/i, 'agent'],
+  [/вся компани|всю компани|все отделы|ии-?компани|компани\p{L}* на агентах|директор из ии|whole company|ai company/iu, 'company'],
+  [/персональн\p{L}* ии|личн\p{L}* (ассистент|помощник|ии)|для себя|personal ai/iu, 'personal'],
+  [/агент/i, 'personal'],
   [/внедрен/i, 'implementation'],
   [/контент|smm|посты/i, 'content'],
   [/автоматиз|таблиц|crm|интеграц/i, 'automation'],
@@ -175,8 +203,12 @@ const KEYWORDS: [RegExp, DirectionId][] = [
 ];
 
 export function guessDirection(parts: { source?: string; service?: string; text?: string }): DirectionId {
-  if (parts.source && isDirectionId(parts.source)) return parts.source;
+  if (parts.source && isDirectionId(parts.source)) return parts.source === 'agent' ? 'personal' : parts.source;
   const text = parts.text ?? '';
+  // a build that names only a flagship (`p.personal`, `p.company`): the link in the text says it (an old `p.agent` is `personal`)
+  const products = (builderCodeIn(text) ?? '').split('~').find((c) => c.startsWith('p.'))?.slice(2).split('-') ?? [];
+  const flagship = products.find((x) => x === 'company') ?? products.find((x) => x === 'personal' || x === 'agent');
+  if (flagship && products.every((x) => ['personal', 'company', 'agent'].includes(x))) return flagship === 'company' ? 'company' : 'personal';
   for (const [re, id] of KEYWORDS) if (re.test(text)) return id;
   return (parts.service && SERVICE[parts.service]) || 'admin';
 }

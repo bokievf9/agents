@@ -2,7 +2,8 @@ import { allowedAmounts as sitePrices, costsLine, FALLBACK_PRICES, MockLlm, open
 import type { Task, WorkerCtx } from '@fir/hq';
 import { leadStoreFor } from '@fir/worker-lead-intake';
 import { describe, expect, it } from 'vitest';
-import { fillMarks, fallbackWording, wordingOk, type Wording } from '../src/docs.js';
+import { fillMarks, fallbackWording, withPilot, wordingOk, type Wording } from '../src/docs.js';
+import { priceBuilderCode } from '../src/estimate.js';
 import { builderTotal, quotePackage } from '../src/package.js';
 import { DIRECTION_IDS, guessDirection, OFFERS, priceLabel, supportMonthlyUsd } from '../src/offers.js';
 import { splitMessage } from '../src/split.js';
@@ -110,7 +111,7 @@ describe('prices come from the price list only', () => {
       r.lead({ origin: id });
       await r.run({ leadId: 1 });
       const p = r.staged[0]!.payload;
-      expect(p.direction).toBe(id);
+      expect(p.direction).toBe(id === 'agent' ? 'personal' : id); // the retired `agent` is offered as `personal`
       for (const doc of [p.kp, p.estimate, p.contract] as string[]) {
         const found = amounts(doc);
         expect(found.length).toBeGreaterThan(0);
@@ -152,7 +153,9 @@ describe('direction choice', () => {
   it('fills marks only from the table', () => {
     expect(fillMarks('[цена] / [срок]', OFFERS.site, quotePackage('site', OFFERS.site.title, ''))).toBe('$150 / 7-10 рабочих дней');
     expect(priceLabel(OFFERS.content)).toBe('от $90 + $60 в месяц');
-    expect(priceLabel(OFFERS.agent)).toBe('от $100 + $10 в месяц');
+    expect(priceLabel(OFFERS.agent)).toBe('от $290 + $29 в месяц');
+    expect(priceLabel(OFFERS.personal)).toBe('от $290 + $29 в месяц');
+    expect(priceLabel(OFFERS.company)).toBe('от $1490 + $149 в месяц');
     expect(fallbackWording({ leadId: null, client: 'X', niche: '', request: '' }, OFFERS.site).scope).toEqual(OFFERS.site.scope);
   });
   it('template without a value for a variable is a bug', () => {
@@ -322,10 +325,17 @@ describe('exact figures (owner decision 2026-11-19): one price for the chosen pa
     expect(p.kp).toContain('Настройка ($90) оплачивается до начала работ; ежемесячная плата, если она есть, вносится вперёд за месяц.');
   });
 
-  it('subscriptions give an exact setup and an exact monthly fee; Polly by its words, Dono otherwise', () => {
+  it('subscriptions give an exact setup and an exact monthly fee; the Персональный ИИ plan follows the level of the build', () => {
     expect(quotePackage('content', 'Контент', '')).toMatchObject({ totalUsd: 90, monthlyUsd: 60 });
-    expect(quotePackage('agent', 'Агент', 'хочу учителя языков Polly')).toMatchObject({ totalUsd: 100, monthlyUsd: 10 });
-    expect(quotePackage('agent', 'Агент', 'помощник для учёбы')).toMatchObject({ totalUsd: 150, monthlyUsd: 15 });
+    // no options: the default two services, the first level; the retired `agent` quotes like `personal`
+    expect(quotePackage('personal', 'Персональный ИИ', 'помощник для учёбы')).toMatchObject({ totalUsd: 290, monthlyUsd: 29 });
+    expect(quotePackage('agent', 'Агент', 'помощник для учёбы')).toMatchObject({ totalUsd: 290, monthlyUsd: 29 });
+    const at = (f: string) => quotePackage('personal', 'Персональный ИИ', `Сборка: https://firtech.pro/ru/builder?b=p.personal~f.personal.${f}`);
+    expect(at('mail-calendar')).toMatchObject({ totalUsd: 290, monthlyUsd: 29 });
+    expect(at('mail-calendar-tasks')).toMatchObject({ totalUsd: 490, monthlyUsd: 49 });
+    expect(at('mail-voice')).toMatchObject({ totalUsd: 490, monthlyUsd: 49 });
+    expect(at('mail-calendar-tasks-study-notes')).toMatchObject({ totalUsd: 790, monthlyUsd: 79 });
+    expect(at('mail-memory')).toMatchObject({ totalUsd: 790, monthlyUsd: 79 });
   });
 
   it('a subscription proposal shows the monthly fee in the table and in the contract', async () => {
@@ -398,5 +408,94 @@ describe('the conditions line: domain, hosting, server and paid third-party serv
     const r2 = rig();
     await r2.run({ text: 'Нужен сайт для кафе' });
     expect(r2.staged[0]!.payload.kp).toContain(costsLine());
+  });
+});
+
+describe('the flagships (2026-11-22): Персональный ИИ and ИИ-компания through the whole chain', () => {
+  it('the drill: lead -> КП, смета, договор for each flagship; the amounts are the plans, the stages the templates', async () => {
+    for (const [origin, total, monthly, stageShares] of [['personal', 290, 29, [100]], ['company', 1490, 149, [25, 25, 25, 25]]] as const) {
+      const r = rig();
+      r.lead({ origin });
+      await r.run({ leadId: 1 });
+      const p = r.staged[0]!.payload;
+      expect(p).toMatchObject({ direction: origin, totalUsd: total, monthlyUsd: monthly });
+      expect((p.stages as { share: number }[]).map((x) => x.share)).toEqual(stageShares);
+      expect(p.prepayUsd).toBe(stageShares[0] === 100 ? total : Math.round(total * 0.25));
+      for (const doc of [p.kp, p.estimate, p.contract] as string[]) {
+        expect(doc, origin).toContain(`$${total}`);
+        expect(doc, origin).toContain(`$${monthly}`);
+        expect(doc, origin).not.toMatch(/Dono|Polly/);
+      }
+    }
+  });
+
+  it('ИИ-компания: four stages with the owner\'s names, the monthly row and the «по смете» note; the contract says the sum is fixed in the estimate', async () => {
+    const r = rig();
+    r.lead({ origin: 'company' });
+    await r.run({ leadId: 1 });
+    const p = r.staged[0]!.payload;
+    for (const title of ['Карта компании и Директор', 'Первые отделы на ваших данных', 'Пульт, база знаний и каналы', 'Обучение команды и запуск']) expect(p.kp).toContain(title);
+    expect(p.kp).toContain('Ежемесячно (подписка) | $149 в месяц');
+    expect(p.kp).toContain('точную сумму фиксируем в Смете');
+    expect(p.contract).toContain('фиксируется в Смете до подписания договора');
+    expect(p.contract).not.toContain('цена точная для состава работ');
+  });
+
+  it('Персональный ИИ: one stage «Настройка» and the monthly fee, no «по смете» note', async () => {
+    const r = rig();
+    r.lead({ origin: 'personal' });
+    await r.run({ leadId: 1 });
+    const p = r.staged[0]!.payload;
+    expect((p.stages as { id: string }[]).map((x) => x.id)).toEqual(['setup']);
+    expect(p.kp).not.toContain('точную сумму фиксируем в Смете');
+    expect(p.kp).toContain('Настройка ($290) оплачивается до начала работ');
+  });
+
+  it('a lead whose build names only a flagship gets it from the link (the old p.agent too)', () => {
+    expect(guessDirection({ text: 'Сборка: https://firtech.pro/ru/builder?b=k.coffee~p.company~f.company.sales-pult' })).toBe('company');
+    expect(guessDirection({ text: 'Сборка: https://firtech.pro/ru/builder?b=p.personal' })).toBe('personal');
+    expect(guessDirection({ text: 'Сборка: https://firtech.pro/ru/builder?b=p.agent' })).toBe('personal');
+    expect(guessDirection({ source: 'agent' })).toBe('personal');
+    expect(guessDirection({ text: 'хотим всю компанию на агентах' })).toBe('company');
+    expect(guessDirection({ text: 'нужен личный помощник' })).toBe('personal');
+    // a mixed build is not a flagship-only one: the priced parts decide
+    expect(guessDirection({ text: 'Сборка: https://firtech.pro/ru/builder?b=p.personal-site', service: 'websites' })).toBe('site');
+  });
+
+  it('a builder estimate lists the flagship «по смете» with its plan and keeps it out of the one-time total', () => {
+    const e = priceBuilderCode('p.personal-site~f.personal.mail-calendar-voice~websites.landing')!;
+    expect(e.quote.totalUsd).toBe(150);
+    expect(e.onRequest).toEqual(['Персональный ИИ (Почта, Календарь, Голос; Плюс: $490 + $49/мес)']);
+    const c = priceBuilderCode('p.company-site~f.company.sales-pult~websites.landing')!;
+    expect(c.onRequest[0]).toBe('ИИ-компания (Продажи, Пульт; от $1 490 + $149/мес, точная сумма по смете)');
+    expect(priceBuilderCode('p.agent-site~websites.landing')!.onRequest[0]).toMatch(/^Персональный ИИ \(Почта, Календарь; Старт: \$290 \+ \$29\/мес\)$/);
+  });
+
+  it('the pilot block: only in a flagship\'s КП and only when the package says so; the terms are written before the start, nothing is automatic', async () => {
+    const without = rig();
+    without.lead({ origin: 'company' });
+    await without.run({ leadId: 1 });
+    expect(without.staged[0]!.payload.kp).not.toContain('## Пилот');
+    expect(without.staged[0]!.payload.pilot).toBe(false);
+    const withIt = rig();
+    withIt.lead({ origin: 'company' });
+    await withIt.run({ leadId: 1, pilot: true });
+    const kp = withIt.staged[0]!.payload.kp as string;
+    expect(withIt.staged[0]!.payload.pilot).toBe(true);
+    expect(kp).toContain('## Пилот');
+    expect(kp).toContain('бесплатно, в обмен на ваш кейс и отзыв');
+    expect(kp).toContain('Условия пилота');
+    expect(kp).toContain('записываем до начала работ');
+    expect(kp.indexOf('## Пилот')).toBeLessThan(kp.indexOf('## Срок действия'));
+    // an ordinary product never gets it, even if asked
+    const site = rig();
+    site.lead({ origin: 'site' });
+    await site.run({ leadId: 1, pilot: true });
+    expect(site.staged[0]!.payload.kp).not.toContain('## Пилот');
+    expect('pilot' in site.staged[0]!.payload).toBe(false);
+    // the block goes in and out cleanly
+    expect(withPilot(withPilot(kp, false), true)).toBe(kp);
+    expect(withPilot(kp, false)).not.toContain('Пилот');
+    expect(withPilot(withPilot(kp, true), true)).toBe(kp);
   });
 });
