@@ -68,7 +68,7 @@ const NIGHT_RU: Record<NoticeType, string> = {
 };
 const SOURCE_RU: Record<string, string> = {
   site: 'сайт', form: 'сайт', lead: 'сайт', web: 'веб-чат', chat: 'веб-чат', telegram: 'Telegram', bot: 'Telegram', cabinet: 'кабинет', builder: 'сборка проекта',
-  audit: 'аудит', referral: 'рекомендация', owner: 'вручную', prospector: 'Разведчик',
+  audit: 'аудит', referral: 'рекомендация', owner: 'вручную', prospector: 'Prospector',
 };
 
 /** Phones, emails and handles never reach Telegram, even inside an alert written elsewhere. */

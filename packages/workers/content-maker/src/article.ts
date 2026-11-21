@@ -5,7 +5,7 @@ import { lintText } from './lint.js';
  * Blog article in the format of the site (firtech/src/content/blog/types.ts): one object per article, RU and EN side by
  * side, blocks `p`, `h2`, `list`, `callout`, `cta`. The rules mirror firtech/tests/blog.test.mjs and the «Blog» section
  * of firtech/CLAUDE.md: no long dashes, no dollar amounts (prices only through the site's `price.*` tokens, and an
- * article says «цену назовёт конструктор»), no percentages, 600-1300 words per language (RU is asked for 700-1200).
+ * article says «цену назовёт «Сборка проекта»»), no percentages, 600-1300 words per language (RU is asked for 700-1200).
  */
 const listItem = z.union([z.string().min(1), z.object({ title: z.string().min(1), text: z.string().min(1) })]);
 export const blockSchema = z.discriminatedUnion('type', [
@@ -56,11 +56,11 @@ export function contentIssues(c: ArticleContent, lang: 'ru' | 'en'): string[] {
   const [min, max] = lang === 'ru' ? [700, 1200] : [600, 1300];
   if (words < min || words > max) out.push(`${lang}: ${words} слов, нужно ${min}-${max}`);
   if (c.blocks.filter((b) => b.type === 'h2').length < 4) out.push(`${lang}: меньше четырёх заголовков h2`);
-  if (!c.blocks.some((b) => b.type === 'cta')) out.push(`${lang}: нет блока cta со ссылкой на конструктор`);
+  if (!c.blocks.some((b) => b.type === 'cta')) out.push(`${lang}: нет блока cta со ссылкой на «Сборку проекта»`);
   if (faqItems(c) !== 3) out.push(`${lang}: в разделе частых вопросов должно быть ровно 3 вопроса (список из элементов title и text)`);
   const text = articleText(c);
   if (/[–—]/.test(text)) out.push(`${lang}: длинное тире`);
-  if (/\$\s?\d|\d\s?(?:\$|usd|долл)/i.test(text)) out.push(`${lang}: сумма в долларах (цен в статье нет, только «цену назовёт конструктор»)`);
+  if (/\$\s?\d|\d\s?(?:\$|usd|долл)/i.test(text)) out.push(`${lang}: сумма в долларах (цен в статье нет, только «цену назовёт «Сборка проекта»»)`);
   if (/\d+\s?%/.test(text)) out.push(`${lang}: процент (на сайте процент разрешён только для скидки пакета, статья его не пишет)`);
   if (lang === 'ru') for (const i of lintText(text, { noPrices: true, cta: false })) if (!['цена в тексте: в этом материале цен нет'].includes(i)) out.push(`ru: ${i}`);
   return out;

@@ -40,7 +40,7 @@ const RU: WebTexts = {
     return `Демо продукта «${productName('adminbot', 'ru')}» на примере вымышленного «Салона Лайм»: выбираете услугу, мастера, день и время, ассистент записывает вас, через минуту присылает напоминание, предлагает перенести, отменить или оставить отзыв. Записи не настоящие. Демо работает в Telegram: https://t.me/firtech_bot?start=demo_salon`;
   },
   get welcome() {
-    return `Здравствуйте. Я ${productName('intake', 'ru')} Fir Tech: так же я могу принимать клиентов вашего бизнеса. Что мы делаем: ${productList('ru')}. Собрать проект и увидеть цену можно в конструкторе: https://firtech.pro/ru/builder. Чем помочь?`;
+    return `Здравствуйте. Я ${productName('intake', 'ru')} Fir Tech: так же я могу принимать клиентов вашего бизнеса. Что мы делаем: ${productList('ru')}. Собрать проект и увидеть цену можно в «Сборке проекта»: https://firtech.pro/ru/builder. Чем помочь?`;
   },
   get welcomeShort() {
     return `Здравствуйте. Я ${productName('intake', 'ru')} Fir Tech.`;

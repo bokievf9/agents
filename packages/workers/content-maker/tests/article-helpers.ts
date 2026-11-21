@@ -20,7 +20,7 @@ export function contentOf(lang: 'ru' | 'en', over: Record<string, unknown> = {})
       { type: 'h2' as const, text: h[0]! }, para(s, 4),
       { type: 'h2' as const, text: h[1]! }, para(s, 4), { type: 'list' as const, items: [s.split('. ')[0]!, s.split('. ')[1]!] },
       { type: 'h2' as const, text: h[2]! }, para(s, 4),
-      { type: 'cta' as const, text: lang === 'ru' ? 'Подберите состав, цену назовёт конструктор.' : 'Pick the parts, the builder names the price.' },
+      { type: 'cta' as const, text: lang === 'ru' ? 'Подберите состав, цену назовёт «Сборка проекта».' : 'Pick the parts, the builder names the price.' },
       { type: 'h2' as const, text: h[3]! }, para(s, 4),
       { type: 'h2' as const, text: h[4]! },
       { type: 'list' as const, items: [1, 2, 3].map((n) => ({ title: lang === 'ru' ? `Вопрос ${n}?` : `Question ${n}?`, text: s })) },

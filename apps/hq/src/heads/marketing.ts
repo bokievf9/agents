@@ -236,7 +236,7 @@ export class MarketingHead implements ApprovalEditor {
       execute: (payload) => {
         const p = payload as unknown as SeoProposalPayload;
         const t = d.hq.createTask({ title: `SEO: ${p.title}`.slice(0, 200), body: `${p.change}\nСтраница: ${p.page}`, dept: MARKETING, creator: 'head', meta: { action: 'seo_fix', key: p.key } });
-        d.hq.block(t.id, HEAD_ID, p.needsBuilder ? 'Нужна правка кода сайта: ждёт строителя' : 'Нужна правка текста: делает владелец или Контент-мейкер', p.needsBuilder ? ['builder'] : []);
+        d.hq.block(t.id, HEAD_ID, p.needsBuilder ? 'Нужна правка кода сайта: ждёт строителя' : 'Нужна правка текста: делает владелец или Content Maker', p.needsBuilder ? ['builder'] : []);
         return Promise.resolve();
       },
     });
@@ -518,7 +518,7 @@ export class MarketingHead implements ApprovalEditor {
     for (const s of specs) {
       this.hq.createTask({ title: s.title, body: s.body ?? '', dept: MARKETING, assigneeId: WORKER_ID, creator: 'head', parentId: task.id, priority: task.priority, meta: s.meta });
     }
-    this.hq.comment(task.id, HEAD_ID, `Разбито на ${specs.length} подзадач для Контент-мейкера`);
+    this.hq.comment(task.id, HEAD_ID, `Разбито на ${specs.length} подзадач для Content Maker`);
     for (const child of this.hq.tasks({ parentId: task.id, status: 'assigned' })) await this.runChild(child).catch((e) => this.crash(child, e));
     await this.finalizeParents();
   }
@@ -1078,7 +1078,7 @@ export class MarketingHead implements ApprovalEditor {
       if (!scope) return 'Не понял платформу. Напишите /profile (все три), /profile instagram, /profile youtube или /profile tiktok.';
       const t = this.hq.createTask({ title: `Старт-кит профилей: ${kitLabel(scope)}`, body: '', dept: MARKETING, creator: 'owner', meta: { action: 'profile', platform: scope.length === 1 ? scope[0]! : 'all' } });
       this.hq.wake(HEAD_ID, 'task');
-      return `Взял (задача #${t.id}): Контент-мейкер соберёт старт-кит (${kitLabel(scope)}), он придёт в одобрения одной карточкой. ${kitRendersNote(scope).trim()}`;
+      return `Взял (задача #${t.id}): Content Maker соберёт старт-кит (${kitLabel(scope)}), он придёт в одобрения одной карточкой. ${kitRendersNote(scope).trim()}`;
     }
     if (name === 'render') return this.renderCommand(arg);
     if (name === 'trend') {
@@ -1087,15 +1087,15 @@ export class MarketingHead implements ApprovalEditor {
       const r = this.addOwnerLink(url, rest.join(' '));
       if (!r.ok) return `Не взял ссылку: ${r.reason}.`;
       if (r.already) return `Эту ссылку я уже разбираю (ссылка #${r.id}). Смотрите ревью-центр или /tasks marketing.`;
-      return `Взял (ссылка #${r.id}, задача #${r.taskId}): Трендвотчер прочитает страницу, разберёт формат и хук и предложит аналог для Fir Tech. Он придёт в ревью-центр с вашей ссылкой как источником.`;
+      return `Взял (ссылка #${r.id}, задача #${r.taskId}): Trend Scout прочитает страницу, разберёт формат и хук и предложит аналог для Fir Tech. Он придёт в ревью-центр с вашей ссылкой как источником.`;
     }
     const niche = arg.trim();
     const ai = isAiAsk(niche);
-    if (niche && !ai && !findNiche(niche)) return `Не нашёл нишу «${niche.slice(0, 60)}». Напишите как в конструкторе, например: /article барбершоп. /article ии: статья «ИИ для бизнеса». /article без названия: линия сегодняшнего дня.`;
+    if (niche && !ai && !findNiche(niche)) return `Не нашёл нишу «${niche.slice(0, 60)}». Напишите как в «Сборке проекта», например: /article барбершоп. /article ии: статья «ИИ для бизнеса». /article без названия: линия сегодняшнего дня.`;
     const t = this.hq.createTask({ title: `Статья дня${niche ? `: ${niche}` : ''}`, body: niche, dept: MARKETING, creator: 'owner', meta: { action: 'article', ...(niche ? { niche } : {}) } });
     this.hq.wake(HEAD_ID, 'task');
     const what = ai ? ' «ИИ для бизнеса»' : niche ? ` для ниши «${findNiche(niche)!.name}»` : ' сегодняшней линии (ИИ для бизнеса или ниша по дню недели)';
-    return `Взял (задача #${t.id}): Контент-мейкер пишет статью${what}. Карточка «Статья дня» придёт в одобрения; после «Одобрить» она сразу попадает в блог, из неё сделаю карусель и рилс в пакет недели.`;
+    return `Взял (задача #${t.id}): Content Maker пишет статью${what}. Карточка «Статья дня» придёт в одобрения; после «Одобрить» она сразу попадает в блог, из неё сделаю карусель и рилс в пакет недели.`;
   }
 
   /** `/render <id>`: queues the video of an approved reel again (a new job, attempts from 0). */

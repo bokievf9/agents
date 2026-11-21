@@ -119,7 +119,7 @@ describe('Support head', () => {
     const weekly = w.hq.runRoutine('support-weekly')!;
     await w.head.onHeartbeat();
     expect(w.hq.task(daily.id)).toMatchObject({ status: 'done' });
-    expect(w.hq.task(daily.id)!.result).toMatch(/Мониторинг: аптайм за 24 ч 100%.*\nФинансы: вчера/s);
+    expect(w.hq.task(daily.id)!.result).toMatch(/Monitoring: аптайм за 24 ч 100%.*\nФинансы: вчера/s);
     expect(w.hq.task(weekly.id)!.result).toContain('Расходы за месяц на данный момент');
     expect(w.hq.reports(0).map((r) => r.dept)).toEqual(['support', 'support']);
     expect(w.director.morningSummary()).toContain('support:');

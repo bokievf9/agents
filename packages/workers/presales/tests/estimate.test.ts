@@ -177,7 +177,7 @@ describe('the КП of a lead with a builder estimate', () => {
     expect(kp).toContain('| Итого | $820 |');
     expect(kp).not.toMatch(/\$-/);
     expect(p.estimate as string).toContain('| Скидка за набор | -$90 |');
-    expect(r.staged[0]!.summary).toContain('Цена взята из сметы конструктора');
+    expect(r.staged[0]!.summary).toContain('Цена взята из сметы «Сборки проекта»');
     expect(r.staged[0]!.summary).toContain('По смете, без цены (в сумму не входит): Контент на автопилоте');
     expect(r.staged[0]!.summary).not.toContain('Внимание');
   });
@@ -201,6 +201,6 @@ describe('the КП of a lead with a builder estimate', () => {
     await r.run(r.lead('').id);
     expect(r.staged[0]!.payload.direction).toBe('site');
     expect(r.staged[0]!.payload.totalUsd).toBe(150);
-    expect(r.staged[0]!.summary).not.toContain('Цена взята из сметы конструктора');
+    expect(r.staged[0]!.summary).not.toContain('Цена взята из сметы «Сборки проекта»');
   });
 });

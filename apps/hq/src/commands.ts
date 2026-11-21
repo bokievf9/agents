@@ -40,7 +40,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'pause', route: 'director', group: 'more', args: '<отдел>', help: 'поставить отдел на паузу' },
   { name: 'resume', route: 'director', group: 'more', args: '<отдел>', help: 'вернуть отдел в работу' },
   { name: 'kp', route: 'sales', group: 'sales', args: '<лид или описание>', help: 'КП по лиду вручную (по готовому лиду оно делается само: КП, договор и счёт первого этапа одной цепочкой)', menu: 'Продажи: КП по лиду; /reply ответ бизнесу' },
-  { name: 'reply', route: 'director', group: 'sales', args: '<id>', help: 'бизнес ответил на сообщение Разведчика (номер из карточки)' },
+  { name: 'reply', route: 'director', group: 'sales', args: '<id>', help: 'бизнес ответил на сообщение Prospector (номер из карточки)' },
   { name: 'referral', route: 'sales', group: 'sales', args: '<клиент> -> <новый лид>', help: 'записать рекомендацию' },
   { name: 'referrals', route: 'sales', group: 'sales', help: 'рекомендации и выплаты, которые ждут оплаты' },
   { name: 'ticket', route: 'support', group: 'support', args: '<клиент>: <вопрос>', help: 'тикет клиента' },
@@ -91,7 +91,7 @@ export function helpHtml(): string {
   const by = (...g: CommandGroup[]) => COMMANDS.filter((c) => g.includes(c.group) && c.name !== 'start' && c.name !== 'help');
   const section = (key: keyof typeof GROUP_TITLE, list: CommandSpec[]) => (list.length ? ['', `<b>${GROUP_TITLE[key]}</b>`, ...list.map(line)] : []);
   return [
-    '🆘 <b>Директор Fir Tech</b>',
+    '🆘 <b>Fir Tech Director</b>',
     'Пишите задачу обычным текстом: передам отделу и буду править одно сообщение по ходу работы (взял, делает, ждёт вас, готово). Кнопки внизу: одобрения, задачи, статус, отделы, помощь.',
     'Куда что приходит: ответы, карточки на одобрение и «живые» сообщения о задачах здесь, в личке. Отчёты отделов и сводки в группе HQ по темам.',
     'Ваше время (Куала-Лумпур): сводка, пачка на одобрение, недельный дайджест и тихие часы. Рынок и клиенты (Душанбе): часы клиентского бота, слоты звонков, время публикаций.',

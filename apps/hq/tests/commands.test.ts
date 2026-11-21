@@ -108,12 +108,12 @@ describe('/workers: the table of the executors and what wakes them', () => {
     expect(text).toContain('Исполнители (20)');
     // the help does not carry its own hand-counted number (it said 19 while /workers printed 20: drill 2026-11-21)
     expect(helpHtml()).not.toMatch(/\d+ исполнител/);
-    expect(text).toContain('Контент-мейкер (content-maker)');
+    expect(text).toContain('Content Maker (content-maker)');
     expect(text).toContain('рутина marketing-weekly-pack (пн 06:00 Куала-Лумпур)');
     expect(text).toContain('рутина marketing-daily-today (каждый день 09:00 Душанбе)');
-    expect(text).toContain('Пресейл (presales): /kp; лид стал квалифицированным');
-    expect(text).toContain('Мониторинг (monitoring): каждые 5 минут');
-    expect(text).toContain('Рекомендации (referral)');
+    expect(text).toContain('Presales (presales): /kp; лид стал квалифицированным');
+    expect(text).toContain('Monitoring (monitoring): каждые 5 минут');
+    expect(text).toContain('Referral Manager (referral)');
     expect(cronWords({ cron: '30 8 * * 1', tz: 'owner' })).toBe('пн 08:30 Куала-Лумпур');
     expect(cronWords({ cron: '*/5 * * * *', tz: 'company' })).toBe('*/5 * * * * Душанбе');
     const w = world();

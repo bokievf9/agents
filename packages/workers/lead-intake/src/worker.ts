@@ -135,7 +135,7 @@ export function leadCard(l: Lead, tz: string, service: string, slotText: string,
 }
 
 /**
- * Lead intake (Приёмщик лидов): a lead from the site form becomes a card for the owner, a temperature, two call slots
+ * Lead intake (Lead Handler): a lead from the site form becomes a card for the owner, a temperature, two call slots
  * and a first reply draft. Nothing goes out by itself: the reply (and a separate price draft when the client asked
  * about money) are proposed through `ctx.requestApproval`. Action `lead`: `task.meta.lead` holds the form fields.
  * Idempotent per task: a rework reuses the lead row and drafts the answer again with `meta.feedback`.

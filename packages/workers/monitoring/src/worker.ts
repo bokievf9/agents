@@ -83,10 +83,10 @@ export class MonitoringWorker implements Worker {
       store.sample(now, r.id, r.ok);
       if (s.event === 'down') {
         store.openIncident(r.id, s.next.failSince, `${nameOf(r)}: ${r.detail}`);
-        events.push({ kind: 'down', checkId: r.id, text: `Мониторинг: ${nameOf(r)} не в порядке (две проверки подряд). ${r.detail}.` });
+        events.push({ kind: 'down', checkId: r.id, text: `Monitoring: ${nameOf(r)} не в порядке (две проверки подряд). ${r.detail}.` });
       } else if (s.event === 'recovered') {
         store.closeIncident(r.id, now);
-        events.push({ kind: 'recovered', checkId: r.id, text: `Мониторинг: ${nameOf(r)} снова в норме, простой ${fmtDuration(s.downMs ?? 0)}.` });
+        events.push({ kind: 'recovered', checkId: r.id, text: `Monitoring: ${nameOf(r)} снова в норме, простой ${fmtDuration(s.downMs ?? 0)}.` });
       }
     }
     store.prune(now);
@@ -119,12 +119,12 @@ export class MonitoringWorker implements Worker {
 export function dailyLine(store: MonitorStore, now: number): string {
   const since = now - DAY_MS;
   const up = store.uptime(since);
-  if (up.pct === null) return 'Мониторинг: за сутки нет данных.';
+  if (up.pct === null) return 'Monitoring: за сутки нет данных.';
   const inc = store.incidents(since);
   const incText = inc.length
     ? `инцидентов ${inc.length}: ${inc
         .map((i) => `${i.detail.split(':')[0] ?? i.checkId} ${i.endedAt === null ? 'не закончен' : fmtDuration(i.endedAt - i.startedAt)}`)
         .join(', ')}`
     : 'инцидентов нет';
-  return `Мониторинг: аптайм за 24 ч ${up.pct}%, ${incText}.`;
+  return `Monitoring: аптайм за 24 ч ${up.pct}%, ${incText}.`;
 }

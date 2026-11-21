@@ -116,20 +116,20 @@ describe('/drill', () => {
     await w.director.onCommand('drill');
     await w.director.onCommand('drill', 'report');
     const first = w.messenger.last()!.text;
-    expect(first).toContain('⏳ Трендвотчер');
-    expect(first).toContain('✅ Мониторинг');
-    expect(first).toContain('⚠️ Ревьюер');
+    expect(first).toContain('⏳ Trend Scout');
+    expect(first).toContain('✅ Monitoring');
+    expect(first).toContain('⚠️ Reviewer and QA');
     await w.beat();
     w.clock.t += 40_000;
     await w.director.onCommand('drill', 'report');
     const report = w.messenger.last()!.text;
-    expect(report).toMatch(/❌ Трендвотчер, \d+с: Источники не дали данных/); // the stubbed network is down
-    expect(report).toMatch(/✅ Аналитик, \d+с/);
-    expect(report).toMatch(/⚠️ Контент-мейкер/);
+    expect(report).toMatch(/❌ Trend Scout, \d+с: Источники не дали данных/); // the stubbed network is down
+    expect(report).toMatch(/✅ Analyst, \d+с/);
+    expect(report).toMatch(/⚠️ Content Maker/);
     expect(report).toContain('ждёт вас');
-    expect(report).toContain('⚠️ Публикатор: ждёт одобрения клипа');
-    expect(report).toContain('⚠️ Ревьюер: ждёт одобрения ТЗ / строителя');
-    expect(report).toContain('⚠️ Деплойер: ждёт одобрения ТЗ / строителя');
+    expect(report).toContain('⚠️ Publisher: ждёт одобрения клипа');
+    expect(report).toContain('⚠️ Reviewer and QA: ждёт одобрения ТЗ / строителя');
+    expect(report).toContain('⚠️ Deployer: ждёт одобрения ТЗ / строителя');
     expect(report.split('\n').filter((l) => l.startsWith('⏳'))).toHaveLength(0);
     expect(report).toContain('Отклоните их в /approve');
     expect(report).toMatch(/Итого: ✅ \d+, ⚠️ \d+, ❌ \d+, ⏳ 0\./);
@@ -142,7 +142,7 @@ describe('/drill', () => {
     await w.director.onCommand('drill', 'report');
     await w.beat();
     await w.director.onCommand('drill', 'report');
-    expect(w.messenger.last()!.text).toMatch(/✅ Публикатор/);
+    expect(w.messenger.last()!.text).toMatch(/✅ Publisher/);
   });
 
   it('the table always lists every scenario in order: 19 rows, a missing task is visible', async () => {
@@ -152,9 +152,9 @@ describe('/drill', () => {
     await w.director.onCommand('drill', 'report');
     const rows = rowLines(w.messenger.last()!.text);
     expect(rows).toHaveLength(19);
-    expect(rows[0]).toBe('⏳ Трендвотчер: задача не создана');
+    expect(rows[0]).toBe('⏳ Trend Scout: задача не создана');
     expect(rows.filter((r) => r.endsWith('задача не создана'))).toHaveLength(17);
-    expect(rows.findIndex((r) => r.includes('Проектный менеджер'))).toBeGreaterThan(rows.findIndex((r) => r.includes('Приёмщик лидов')));
+    expect(rows.findIndex((r) => r.includes('Project Manager'))).toBeGreaterThan(rows.findIndex((r) => r.includes('Lead Handler')));
     // a full drill: still 19
     await w.director.onCommand('drill', 'clear');
     await w.director.onCommand('drill');

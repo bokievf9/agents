@@ -368,7 +368,7 @@ describe('exact figures (owner decision 2026-11-19): one price for the chosen pa
     });
     await r.run({ leadId: lead3.id });
     expect(r.staged[0]!.payload.totalUsd).toBe(150);
-    expect(r.staged[0]!.summary).toContain('в конструкторе клиент видел итог $1, в КП $150');
+    expect(r.staged[0]!.summary).toContain('в «Сборке проекта» клиент видел итог $1, в КП $150');
   });
 });
 

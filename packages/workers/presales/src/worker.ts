@@ -152,9 +152,9 @@ export class PresalesWorker implements Worker {
     }
     // the client's own builder total is only compared, never used as a price: the lead form is public
     const seen = builderTotal(brief.estimate ?? '');
-    const mismatch = seen !== null && seen !== quote.totalUsd ? ` Внимание: в конструкторе клиент видел итог ${usd(seen)}, в КП ${usd(quote.totalUsd)}: сверьте состав.` : '';
+    const mismatch = seen !== null && seen !== quote.totalUsd ? ` Внимание: в «Сборке проекта» клиент видел итог ${usd(seen)}, в КП ${usd(quote.totalUsd)}: сверьте состав.` : '';
     const priced = built
-      ? ` Цена взята из сметы конструктора (${built.source === 'link' ? 'по ссылке сборки, цены каталога сайта' : 'присланная сметой клиента'}).`
+      ? ` Цена взята из сметы «Сборки проекта» (${built.source === 'link' ? 'по ссылке сборки, цены каталога сайта' : 'присланная сметой клиента'}).`
         + `${built.estimateTotalUsd !== null ? ` Внимание: в смете клиента ${usd(built.estimateTotalUsd)}, по ссылке сборки ${usd(quote.totalUsd)}, берём ссылку: сверьте состав.` : ''}`
         + `${built.onRequest.length ? ` По смете, без цены (в сумму не входит): ${built.onRequest.join(', ')}.` : ''}`
       : '';

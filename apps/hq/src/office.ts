@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { Cron } from 'croner';
 import { z } from 'zod';
-import { zonedParts, zonedToMs } from '@fir/core';
+import { roleTitle, zonedParts, zonedToMs } from '@fir/core';
 import type { Agent, Hq, Task, TaskStatus } from '@fir/hq';
 
 /** `GET /office`: the live picture of the company for firtech.pro/admin/office (contract: docs/office-api.md). No client data. */
@@ -351,10 +351,10 @@ export function buildOffice(hq: Hq, now: number = hq.now(), uptimeSec: number = 
     return {
       id: dept,
       title: DEPT_TITLES[dept] ?? dept,
-      head: head ? (() => { const v = view(head); return { id: head.id, title: head.title, status: v.status, currentTask: v.currentTask, thinking: v.thinking, lastActiveAt: v.lastActiveAt }; })() : null,
+      head: head ? (() => { const v = view(head); return { id: head.id, title: roleTitle(head.id, head.title), status: v.status, currentTask: v.currentTask, thinking: v.thinking, lastActiveAt: v.lastActiveAt }; })() : null,
       workers: agents.filter((a) => a.dept === dept && a.role === 'worker').map((a) => {
         const v = view(a);
-        return { id: a.id, title: a.title, ...v };
+        return { id: a.id, title: roleTitle(a.id, a.title), ...v };
       }),
       tasks: {
         inbox: inDept.filter((t) => t.status === 'inbox').length,
@@ -391,7 +391,7 @@ export function buildOffice(hq: Hq, now: number = hq.now(), uptimeSec: number = 
     quietHours: quiet,
     director: {
       id: 'director',
-      title: director?.title ?? 'Director',
+      title: roleTitle('director'),
       status: directorView ? (directorView.status === 'idle' && pendingApprovals > 0 ? 'waiting' : directorView.status) : sleeping ? 'sleeping' : 'idle',
       lastSummaryAt: iso(lastSummary),
       nextSummaryAt: summaryPattern ? iso(nextOf(summaryPattern, now, hq.ownerTz)) : null,
