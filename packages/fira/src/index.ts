@@ -6,6 +6,7 @@ export * from './knowledge.js';
 export * from './company-pack.js';
 export * from './guards.js';
 export * from './secrecy.js';
+export * from './escalation.js';
 export * from './tools.js';
 export * from './lessons.js';
 export * from './run.js';
