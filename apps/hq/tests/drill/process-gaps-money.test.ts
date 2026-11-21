@@ -1,0 +1,84 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies of the API under test */
+import { afterEach, describe, expect, it } from 'vitest';
+import { EmailFailures } from '../../src/email-failures.js';
+import { TOKENS, drillWorld, type DrillWorld } from './world.js';
+import { useGuard } from './guard.js';
+
+/**
+ * The process gaps of the audit 2026-11-22, package «money and documents» (P-07 … P-15): each `describe` is one gap, driven through the same world as the other
+ * drills (the site's routes, the review API, the owner's commands).
+ */
+const g = useGuard();
+let w: DrillWorld;
+afterEach(async () => {
+  await w?.close();
+  expect(g.errors()).toEqual([]);
+});
+
+const EMAIL = 'gaps.money@example.com';
+const LEAD = { name: 'Gaps Money', contact: '@gaps_money', service: 'bots', budget: '$300-500', message: 'Нужно Mini App для салона', locale: 'ru', source: 'miniapp', clientEmail: EMAIL, cabinetId: 'sb-gaps', clientName: 'Gaps' };
+
+const review = async (kind: string) => ((await w.adm('GET', '/admin/review?status=pending&limit=200')).json.items as any[]).filter((i) => i.kind === kind);
+async function approve(kind: string): Promise<any> {
+  await w.director.sendApprovalBatch(false);
+  const it = (await review(kind))[0];
+  expect(it, `no ${kind} card waits`).toBeDefined();
+  const r = await w.adm('POST', `/admin/review/${it.id}`, { action: 'approve' });
+  expect(r.status, `${kind}: ${r.text.slice(0, 300)}`).toBe(200);
+  return it;
+}
+const docs = async (cid: number) => (await w.adm('GET', `/admin/clients/${cid}/documents`)).json.items as any[];
+async function leadWithQuote(o: { emailFail?: boolean } = {}): Promise<{ cid: number; leadId: number }> {
+  w = await drillWorld({ flow: true });
+  w.emailFail.on = o.emailFail ?? false;
+  for (const k of w.queue.trustTable()) w.queue.setLevel(k.kind, 0);
+  const res = await w.http('POST', '/lead', LEAD, { 'x-lead-token': TOKENS.lead });
+  const { leadId } = (await res.json()) as any;
+  await w.beat();
+  await w.beat();
+  await approve('presales_pack');
+  await w.cabinet!.docs.idle();
+  const cid = (await w.adm('GET', `/admin/clients/by-email?email=${encodeURIComponent(EMAIL)}`)).json.client.id as number;
+  return { cid, leadId };
+}
+
+describe('P-07: an email to the client that did not go', () => {
+  it('marks the document, alerts the owner once an hour, and «Отправить снова» sends it', async () => {
+    const { cid } = await leadWithQuote({ emailFail: true });
+    const quote = (await docs(cid)).find((d) => d.kind === 'quote');
+    // the client still has the paper and the thread line, the Пульт shows the mark
+    const problems = (await w.adm('GET', '/admin/crm/cabinet-docs?problem=1')).json.items as any[];
+    const mark = problems.find((p) => p.id === quote.id);
+    expect(mark).toMatchObject({ kind: 'quote', clientId: cid, mail: { state: 'failed', attempts: 1 }, actions: ['resend'] });
+    expect(mark.problems).toContain('email_failed');
+    // one alert for the hour, no text or address of the client in it
+    const failures = new EmailFailures(w.hq);
+    expect(await failures.flush()).toBe(1);
+    const alert = w.alerts.find((a) => a.startsWith('Письма клиентам не ушли'));
+    expect(alert).toContain('КП КП-');
+    expect(alert).not.toContain(EMAIL);
+    expect(await failures.flush()).toBe(0);
+    // Resend is back: the owner sends it again, the mark is gone, no second line in the thread
+    w.emailFail.on = false;
+    const r = await w.adm('POST', `/admin/crm/cabinet-docs/${quote.id}`, { action: 'resend' });
+    expect(r.status, r.text).toBe(200);
+    expect(r.json.mail).toMatchObject({ state: 'sent', attempts: 2 });
+    expect(w.emails).toHaveLength(1);
+    expect(w.emails[0]).toMatchObject({ to: EMAIL, subject: 'Ваше коммерческое предложение Fir Tech' });
+    expect(((await w.adm('GET', '/admin/crm/cabinet-docs?problem=1')).json.items as any[]).some((p) => p.id === quote.id && p.problems.includes('email_failed'))).toBe(false);
+    // the estimate has no notice of its own; a bad body is refused
+    const est = (await docs(cid)).find((d) => d.kind === 'other');
+    expect((await w.adm('POST', `/admin/crm/cabinet-docs/${est.id}`, { action: 'resend' })).status).toBe(409);
+    expect((await w.adm('POST', `/admin/crm/cabinet-docs/${quote.id}`, { action: 'nope' })).status).toBe(400);
+    expect((await w.adm('POST', '/admin/crm/cabinet-docs/999999', { action: 'resend' })).status).toBe(404);
+  }, 60_000);
+
+  it('a failed resend answers 502 and stays marked', async () => {
+    const { cid } = await leadWithQuote({ emailFail: true });
+    const quote = (await docs(cid)).find((d) => d.kind === 'quote');
+    const r = await w.adm('POST', `/admin/crm/cabinet-docs/${quote.id}`, { action: 'resend' });
+    expect(r.status).toBe(502);
+    expect(r.json.mail).toMatchObject({ state: 'failed', attempts: 2 });
+    expect(new EmailFailures(w.hq).summaryLine()).toContain('Писем клиентам не ушло за сутки: 2');
+  }, 60_000);
+});

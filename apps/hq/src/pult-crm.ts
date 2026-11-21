@@ -4,6 +4,7 @@ import { BillingStore, type BillingWorker, type Invoice } from '@fir/worker-bill
 import { PmStore } from '@fir/worker-project-manager';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
+import type { CabDocs } from './cab-docs.js';
 import type { createCrm } from './admin-crm.js';
 import { recordManagerReply } from './cabinet.js';
 import type { ClientChannel } from './client/channel.js';
@@ -23,6 +24,8 @@ export interface PultCrmDeps {
   client?: Pick<ClientChannel, 'send'> | undefined;
   /** The website chat: queues the owner's text for the visitor's session (true: the session exists and the text waits for the next reply). */
   webReply?: ((sessionId: string, text: string) => boolean) | undefined;
+  /** The cabinet documents (P-07): the owner's list with the email outcome and «Отправить снова». */
+  cabinet?: Partial<Pick<CabDocs, 'resend' | 'ownerList'>> | undefined;
 }
 
 const iso = (ms: number | null | undefined) => (ms === null || ms === undefined ? null : new Date(ms).toISOString());
@@ -40,6 +43,7 @@ const projectBody = z.discriminatedUnion('action', [
   z.object({ action: z.literal('note'), text: z.string().trim().min(1).max(2000) }).strict(),
 ]);
 const INVOICE_ACTIONS = ['remind', 'mark_paid', 'void'] as const;
+const cabDocBody = z.object({ action: z.literal('resend') }).strict();
 const invoiceBody = z.object({ action: z.string().max(20) }).strict();
 const INVOICE_STATUSES = ['draft', 'issued', 'paid', 'void'] as const;
 
@@ -357,6 +361,23 @@ export function createPultCrm(d: PultCrmDeps) {
       if (id === null) return fail(404, 'not_found');
       if (method === 'GET') return projectDetail(id);
       if (method === 'POST') return projectPost(id, body);
+    }
+    // P-07: the cabinet documents as the owner sees them (the email outcome, a missing PDF) and «Отправить снова»
+    if (panel === 'cabinet-docs') {
+      const docs = d.cabinet;
+      if (!docs?.ownerList || !docs.resend) return fail(404, 'not_found');
+      if (idRaw === undefined && method === 'GET') {
+        const cid = query.get('clientId');
+        const limit = Number(query.get('limit') ?? '100');
+        return ok({ items: docs.ownerList({ problem: query.get('problem') === '1', clientId: cid && /^\d+$/.test(cid) ? Number(cid) : null, limit: Number.isFinite(limit) ? limit : 100 }) });
+      }
+      const id = num(idRaw);
+      if (id !== null && seg.length === 2 && method === 'POST') {
+        const b = cabDocBody.safeParse(body ?? {});
+        if (!b.success) return fail(400, 'invalid', { allowed: ['resend'] });
+        return docs.resend(id);
+      }
+      return fail(404, 'not_found');
     }
     if (panel === 'invoices') {
       if (idRaw === undefined && method === 'GET') return invoicesList(query);

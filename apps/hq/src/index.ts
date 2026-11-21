@@ -51,6 +51,7 @@ import { installOwnerGlue } from './glue.js';
 import { createReach } from './reach.js';
 import { appTools, toolsFor } from './tools.js';
 import { installRejectionGuard, keepPolling } from './process-guard.js';
+import { EmailFailures } from './email-failures.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
@@ -59,6 +60,8 @@ const hq = new Hq(db);
 installRejectionGuard(process, (text) => hq.alert(text), { now: Date.now });
 // Requests accepted from visitors that fail before the owner sees them: `lost_lead` rows and one summary alert an hour.
 const lost = new LostLeads(hq);
+// Emails to clients that failed (P-07): a row each, one alert an hour, the mark on the cabinet document.
+const emailFailures = new EmailFailures(hq);
 // Prices come from one place: the site's price list (fetched now and every 15 minutes (PRICES_RELOAD_MS), the last good copy is kept in the
 // database, a bundled snapshot is the last resort). Workers and the client bot read `getPrices()` when they need a number.
 const pricesOpts = { url: cfg.pricesUrl, store: { get: (k: string) => hq.setting(k) || undefined, set: (k: string, v: string) => hq.setSetting(k, v) } };
@@ -211,7 +214,7 @@ const drill = new Drill({
 });
 director.onDrillCommand = (arg) => drill.command(arg);
 director.onTopicsCommand = async () => (await topicManager.ensure()).text;
-director.summaryLines.push(() => topicManager.summaryNote(), () => production.overdueLine(), () => backoffice.pendingLine(), () => lost.summaryLine());
+director.summaryLines.push(() => topicManager.summaryNote(), () => production.overdueLine(), () => backoffice.pendingLine(), () => lost.summaryLine(), () => emailFailures.summaryLine());
 
 installOwnerGlue(bot, { ownerId: cfg.ownerId, channel, queue, director, marketing, sales, topicManager });
 
@@ -279,7 +282,8 @@ const dueTick = async () => {
     await lost.flush();
   } catch (e) {
     log('warn', 'lost leads watch failed', { err: errMsg(e) });
-  }
+  }  // P-07: emails to clients that did not go (КП, contract, invoice, act, stage notices, clarifying questions): one alert an hour
+  await emailFailures.flush().catch((e) => log('warn', 'email failures flush failed', { err: errMsg(e) }));
 };
 void dueTick();
 const dueTimer = setInterval(() => void dueTick(), 30_000);

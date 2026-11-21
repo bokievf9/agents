@@ -24,6 +24,7 @@ import { assumptionsFor, CLARIFY_WAIT_MS, ClarifyStore, gapsOf, isBlocking, ques
 import { ensureCabinetTables, recordManagerReply } from '../cabinet.js';
 import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
 import type { ApprovalEditor } from '../editor.js';
+import { EmailFailures } from '../email-failures.js';
 import type { LostLeads } from '../lost-leads.js';
 import type { Reporter } from '../reporter.js';
 import { toolsFor, type AppTools } from '../tools.js';
@@ -325,6 +326,8 @@ export class SalesHead implements ApprovalEditor {
       how = `thread, email_failed:${errMsg(e)}`;
     }
     this.hq.log(LEADS_ID, 'clarify_sent', 'lead', String(x.leadId), how);
+    // P-07: the owner hears about the email that did not go (one alert an hour); the questions are in the client's thread anyway
+    if (how.includes('email_failed:')) new EmailFailures(this.hq).record('clarify', `лид #${x.leadId}`, how.split('email_failed:')[1]!.slice(0, 60) || 'unknown');
   }
 
   /**

@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { addThreadMessage, ensureCabinetTables, postFromFirTech } from './cabinet.js';
 import type { Playground } from './playground.js';
 import { parseBuilderPlan, wantsPlayground } from './builder-plan.js';
+import { EmailFailures, type EmailKind } from './email-failures.js';
 
 /**
  * Cabinet v3 documents (2026-11-22): what the client sees of the papers and what he does with them. The owner's approval of a quote, a contract or an
@@ -62,11 +63,18 @@ CREATE TABLE IF NOT EXISTS bo_signatures (
 CREATE INDEX IF NOT EXISTS bo_signatures_doc ON bo_signatures (doc_id);
 `;
 
+/** Columns added after the first release (P-07, P-09, P-12): the email outcome of the row and the retry counters. Added once per database. */
+const LATER_COLUMNS: [string, string][] = [
+  ['mail_state', 'TEXT'], ['mail_error', 'TEXT'], ['mail_attempts', 'INTEGER NOT NULL DEFAULT 0'],
+];
+
 const ready = new WeakSet<object>();
 export function ensureDocTables(db: Db): void {
   if (ready.has(db)) return;
   ensureCabinetTables(db);
   db.exec(SCHEMA);
+  const cols = new Set((db.prepare('PRAGMA table_info(cab_documents)').all() as { name: string }[]).map((c) => c.name));
+  for (const [name, type] of LATER_COLUMNS) if (!cols.has(name)) db.exec(`ALTER TABLE cab_documents ADD COLUMN ${name} ${type}`);
   ready.add(db);
 }
 
@@ -74,6 +82,39 @@ export interface DocRow {
   id: number; client_id: number; kind: DocKind; title: string; number: string; lead_id: number | null; project_id: number | null; pack_id: number | null; state: DocState;
   src: string; src_id: number | null; amount_usd: number | null; stage_no: number | null; body: string; pdf_rel: string | null; pdf_sha256: string | null; signed_pdf_rel: string | null;
   meta: string; created_at: number; delivered_at: number | null; accepted_at: number | null; signed_at: number | null;
+  /** The email of the notice: `sent`, `failed`, `off` (no Resend: the thread line is the delivery), null before the first try. */
+  mail_state?: string | null; mail_error?: string | null; mail_attempts?: number;
+}
+
+type Notice = { ru: string; en: string; ruMail: string; enMail: string };
+
+/** The notice of a delivered row (the thread line and the email), the same words on the first sending and on «Отправить снова». Null: the row has no notice of its own (the estimate rides with the КП). */
+export function noticeOf(row: Pick<DocRow, 'kind' | 'number' | 'stage_no' | 'amount_usd'>): Notice | null {
+  if (row.kind === 'quote') {
+    return {
+      ru: 'Коммерческое предложение готово. Откройте раздел «Документы», прочитайте его и нажмите «Принять КП» или задайте вопрос в сообщениях.',
+      en: 'Your commercial proposal is ready. Open Documents, read it and press «Accept», or ask a question in Messages.',
+      ruMail: 'Ваше коммерческое предложение Fir Tech', enMail: 'Your Fir Tech commercial proposal',
+    };
+  }
+  if (row.kind === 'contract') {
+    return {
+      ru: 'Договор готов. Откройте раздел «Документы», прочитайте его и подпишите, нарисовав подпись мышью.',
+      en: 'The contract is ready. Open Documents, read it and sign it by drawing your signature with the mouse.',
+      ruMail: 'Договор Fir Tech готов к подписанию', enMail: 'Your Fir Tech contract is ready to sign',
+    };
+  }
+  if (row.kind === 'act') return { ru: 'Акт сдачи работ готов, он в разделе «Документы».', en: 'The completion certificate is ready in Documents.', ruMail: 'Акт сдачи работ Fir Tech', enMail: 'Your Fir Tech completion certificate' };
+  if (row.kind === 'invoice') {
+    const stage = row.stage_no ? ` (этап ${row.stage_no})` : '';
+    const stageEn = row.stage_no ? ` (stage ${row.stage_no})` : '';
+    return {
+      ru: `Счёт ${row.number}${stage} на $${row.amount_usd} выставлен. Оплатить можно кнопкой «Оплатить» в разделе «Документы» или в проекте.`,
+      en: `Invoice ${row.number}${stageEn} for $${row.amount_usd} has been issued. Pay with the «Pay» button in Documents or in your project.`,
+      ruMail: `Счёт ${row.number} от Fir Tech`, enMail: `Invoice ${row.number} from Fir Tech`,
+    };
+  }
+  return null;
 }
 
 /** What the client does next (the same words for a lead and for a project). `wait`: nothing, we are working. */
@@ -356,25 +397,91 @@ export class CabDocs {
 
   // ---- delivery: the owner's approval is the sending ----
   /** The email half of a notice (a link to the cabinet, never a PDF); returns what happened for the journal: `email`, `email_failed:<why>` or `journal` (no Resend). */
-  private async mail(c: ClientRow, what: { ru: string; en: string; ruMail: string; enMail: string }): Promise<string> {
+  private async mail(c: ClientRow, what: Notice): Promise<string> {
     const en = c.locale === 'en';
     const tools = this.d.tools();
     if (!tools.can('email.send')) return 'journal';
     const hello = en ? `Hello${c.name ? `, ${c.name}` : ''}!` : `Здравствуйте${c.name ? `, ${c.name}` : ''}!`;
-    const sent = await tools.email.send({
-      to: c.email, subject: en ? what.enMail : what.ruMail,
-      text: `${hello}\n\n${en ? what.en : what.ru}\n\n${en ? 'Open your cabinet' : 'Откройте личный кабинет'}: ${this.cabinetUrl(c)}\n\nFir Tech\nhello@firtech.pro`,
-    });
-    return sent.ok ? 'email' : `email_failed:${sent.error}`;
+    try {
+      const sent = await tools.email.send({
+        to: c.email, subject: en ? what.enMail : what.ruMail,
+        text: `${hello}\n\n${en ? what.en : what.ru}\n\n${en ? 'Open your cabinet' : 'Откройте личный кабинет'}: ${this.cabinetUrl(c)}\n\nFir Tech\nhello@firtech.pro`,
+      });
+      return sent.ok ? 'email' : `email_failed:${String(sent.error)}`;
+    } catch (e) {
+      return `email_failed:${errMsg(e).slice(0, 60)}`;
+    }
+  }
+
+  /** What did not go: one row for the owner's hourly alert (P-07). */
+  private get failures(): EmailFailures {
+    return new EmailFailures(this.d.hq);
+  }
+
+  /** The email of a row's notice and its outcome on the row (`mail_state`, P-07): a failure is recorded for the owner's hourly alert. Returns the journal word. */
+  private async mailRow(row: DocRow, c: ClientRow, what: Notice): Promise<string> {
+    const how = await this.mail(c, what);
+    const state = how === 'email' ? 'sent' : how === 'journal' ? 'off' : 'failed';
+    const why = state === 'failed' ? how.slice('email_failed:'.length) || 'unknown' : null;
+    this.db.prepare('UPDATE cab_documents SET mail_state = ?, mail_error = ?, mail_attempts = mail_attempts + 1 WHERE id = ?').run(state, why, row.id);
+    if (state === 'failed') this.failures.record(row.kind as EmailKind, row.number || `документ #${row.id}`, why ?? 'unknown');
+    return how;
   }
 
   /** The email (a link to the cabinet, never the PDF) and the line in the thread; the outcome goes to the journal without any text. */
-  private async notifyClient(row: DocRow, what: { ru: string; en: string; ruMail: string; enMail: string }): Promise<void> {
+  private async notifyClient(row: DocRow, what: Notice): Promise<void> {
     const c = this.client(row.client_id);
     if (!c) return;
     postFromFirTech(this.db, this.d.now(), c.id, row.lead_id, c.locale === 'en' ? what.en : what.ru);
-    const how = await this.mail(c, what);
+    const how = await this.mailRow(row, c, what);
     this.d.hq.log('documents', 'doc_delivered', 'document', String(row.id), `${row.kind} ${how}`);
+  }
+
+  /**
+   * «Отправить снова» (the owner, Пульт): the email of a delivered row is sent again (no second line in the thread: the client has it). 404 unknown row,
+   * 409 `not_sendable` for a row without its own notice (the estimate), 409 `no_email` when Resend is not configured.
+   */
+  async resend(docId: number): Promise<DocReply> {
+    const r = this.row(docId);
+    if (!r) return failR(404, 'not_found');
+    const what = noticeOf(r);
+    const c = this.client(r.client_id);
+    if (!what || !c) return failR(409, 'not_sendable');
+    if (!this.d.tools().can('email.send')) return failR(409, 'no_email');
+    const how = await this.mailRow(r, c, what);
+    this.d.hq.log('owner', 'doc_resent', 'document', String(r.id), `${r.kind} ${how}`);
+    const now = this.row(r.id)!;
+    return how === 'email' ? okR({ mail: this.mailView(now) }) : failR(502, 'email_failed', { mail: this.mailView(now) });
+  }
+
+  private mailView(r: DocRow): { state: string | null; error: string | null; attempts: number } {
+    return { state: r.mail_state ?? null, error: r.mail_error ?? null, attempts: r.mail_attempts ?? 0 };
+  }
+
+  /**
+   * The owner's list of cabinet documents (`GET /admin/crm/cabinet-docs`): newest first, with the email outcome and whether the PDF exists. `problem`: only rows
+   * whose email failed or whose PDF is missing (the Пульт's mark «письмо не ушло» / «нет PDF»).
+   */
+  ownerList(o: { problem?: boolean; clientId?: number | null; limit?: number } = {}): Record<string, unknown>[] {
+    const where: string[] = [];
+    const params: number[] = [];
+    if (o.clientId) { where.push('d.client_id = ?'); params.push(o.clientId); }
+    if (o.problem) where.push("(d.mail_state = 'failed' OR (d.kind != 'invoice' AND d.pdf_rel IS NULL AND d.signed_pdf_rel IS NULL) OR (d.state = 'signed' AND d.signed_pdf_rel IS NULL))");
+    const rows = this.db.prepare(
+      `SELECT d.*, c.name AS client_name, c.email AS client_email FROM cab_documents d JOIN cab_clients c ON c.id = d.client_id ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY d.id DESC LIMIT ?`,
+    ).all(...params, Math.min(Math.max(o.limit ?? 100, 1), 500)) as (DocRow & { client_name: string; client_email: string })[];
+    return rows.map((r) => {
+      const problems = [
+        ...(r.mail_state === 'failed' ? ['email_failed'] : []),
+        ...(r.kind !== 'invoice' && !r.pdf_rel && !r.signed_pdf_rel ? ['no_pdf'] : []),
+        ...(r.state === 'signed' && !r.signed_pdf_rel ? ['no_signed_pdf'] : []),
+      ];
+      return {
+        id: r.id, clientId: r.client_id, client: r.client_name || r.client_email, kind: r.kind, title: r.title, number: r.number || null, leadId: r.lead_id, projectId: r.project_id,
+        state: this.liveState(r), createdAt: iso(r.created_at), deliveredAt: iso(r.delivered_at), mail: this.mailView(r), pdf: Boolean(r.pdf_rel), signedPdf: Boolean(r.signed_pdf_rel),
+        problems, actions: noticeOf(r) ? ['resend'] : [],
+      };
+    });
   }
 
   /**
@@ -395,11 +502,7 @@ export class CabDocs {
     this.track((async () => {
       await this.attachPdf(this.row(quote.id)!);
       await this.attachPdf(this.row(est.id)!);
-      await this.notifyClient(quote, {
-        ru: 'Коммерческое предложение готово. Откройте раздел «Документы», прочитайте его и нажмите «Принять КП» или задайте вопрос в сообщениях.',
-        en: 'Your commercial proposal is ready. Open Documents, read it and press «Accept», or ask a question in Messages.',
-        ruMail: 'Ваше коммерческое предложение Fir Tech', enMail: 'Your Fir Tech commercial proposal',
-      });
+      await this.notifyClient(quote, noticeOf(quote)!);
     })());
     return { quoteId: quote.id };
   }
@@ -426,13 +529,7 @@ export class CabDocs {
       pack_id: Number(task?.meta.packId) || null, state: isContract ? 'awaiting_signature' : 'issued', src: 'bo', src_id: doc.id, body: doc.text,
     });
     await this.attachPdf(row);
-    await this.notifyClient(row, isContract
-      ? {
-        ru: 'Договор готов. Откройте раздел «Документы», прочитайте его и подпишите, нарисовав подпись мышью.',
-        en: 'The contract is ready. Open Documents, read it and sign it by drawing your signature with the mouse.',
-        ruMail: 'Договор Fir Tech готов к подписанию', enMail: 'Your Fir Tech contract is ready to sign',
-      }
-      : { ru: 'Акт сдачи работ готов, он в разделе «Документы».', en: 'The completion certificate is ready in Documents.', ruMail: 'Акт сдачи работ Fir Tech', enMail: 'Your Fir Tech completion certificate' });
+    await this.notifyClient(row, noticeOf(row)!);
     return true;
   }
 
@@ -449,13 +546,7 @@ export class CabDocs {
       state: 'issued', src: 'bl', src_id: inv.id, amount_usd: inv.amount_usd, stage_no: inv.stage_no, body: text,
     });
     await this.attachPdf(row);
-    const stage = inv.stage_no ? ` (этап ${inv.stage_no})` : '';
-    const stageEn = inv.stage_no ? ` (stage ${inv.stage_no})` : '';
-    await this.notifyClient(row, {
-      ru: `Счёт ${inv.number}${stage} на $${inv.amount_usd} выставлен. Оплатить можно кнопкой «Оплатить» в разделе «Документы» или в проекте.`,
-      en: `Invoice ${inv.number}${stageEn} for $${inv.amount_usd} has been issued. Pay with the «Pay» button in Documents or in your project.`,
-      ruMail: `Счёт ${inv.number} от Fir Tech`, enMail: `Invoice ${inv.number} from Fir Tech`,
-    });
+    await this.notifyClient(row, noticeOf(row)!);
     return true;
   }
 
@@ -501,13 +592,16 @@ export class CabDocs {
   }
 
   /** A line from Fir Tech in the project thread (`project-<id>`: the unread flag of the tab follows) and the email; the email runs in the background (`idle()`). */
-  private tellProject(c: ClientRow, projectId: number, what: { ru: string; en: string; ruMail: string; enMail: string }, journal: string): void {
+  private tellProject(c: ClientRow, projectId: number, what: Notice, journal: string): void {
     try {
       addThreadMessage(this.db, this.d.now(), { clientId: c.id, thread: `project-${projectId}`, from: 'manager', text: c.locale === 'en' ? what.en : what.ru });
     } catch (e) {
       log('warn', 'project thread line failed', { err: errMsg(e) });
     }
-    this.track(this.mail(c, what).then((how) => this.d.hq.log('documents', journal, 'project', String(projectId), how)));
+    this.track(this.mail(c, what).then((how) => {
+      this.d.hq.log('documents', journal, 'project', String(projectId), how);
+      if (how.startsWith('email_failed:')) this.failures.record('stage', `проект #${projectId}`, how.slice('email_failed:'.length) || 'unknown');
+    }));
   }
 
   /** A stage is finished and waits for the client: a line in the project thread and an email. */

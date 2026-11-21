@@ -44,7 +44,7 @@ export interface PultDeps {
   /** The agents' toolbox adapters and keys (the `tools` list of `GET /admin/company`). */
   tools?: AppTools | undefined;
   /** The cabinet's documents: a КП, a смета or a contract already sent to the client is revised in place (`review.ts`). */
-  cabinet?: Pick<CabDocs, 'reviseDelivered' | 'revisable'> | undefined;
+  cabinet?: Pick<CabDocs, 'reviseDelivered' | 'revisable'> & Partial<Pick<CabDocs, 'resend' | 'ownerList'>> | undefined;
 }
 
 export function createPult(d: PultDeps) {
