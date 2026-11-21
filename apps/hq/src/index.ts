@@ -50,10 +50,13 @@ import { COMMAND_NAMES, routedTo } from './commands.js';
 import { installOwnerGlue } from './glue.js';
 import { createReach } from './reach.js';
 import { appTools, toolsFor } from './tools.js';
+import { installRejectionGuard } from './process-guard.js';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
 const hq = new Hq(db);
+// P-28: a forgotten promise is an error line and one alert in 10 minutes, never the end of the process (the alert sink is the Director, added below).
+installRejectionGuard(process, (text) => hq.alert(text), { now: Date.now });
 // Requests accepted from visitors that fail before the owner sees them: `lost_lead` rows and one summary alert an hour.
 const lost = new LostLeads(hq);
 // Prices come from one place: the site's price list (fetched now and every 15 minutes (PRICES_RELOAD_MS), the last good copy is kept in the
