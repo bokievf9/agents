@@ -99,6 +99,16 @@ CREATE TABLE IF NOT EXISTS activity (
   detail TEXT,
   at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS instruction_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  at INTEGER NOT NULL,
+  UNIQUE (agent_id, version)
+);
 CREATE TABLE IF NOT EXISTS prices (
   prefix TEXT PRIMARY KEY,
   in_usd REAL NOT NULL DEFAULT 0,
