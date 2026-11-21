@@ -426,7 +426,7 @@ export function createReview(d: ReviewDeps) {
           text: { body: str(payload.kp), documents: docs }, edit: 'pack', editApproved: status === 'approved' && packRevisable(payload), leadId,
           meta: {
             lead: f.lead, client: f.client,
-            pack: { id: num(payload.packId), documentIds: docs.map((x) => x.id).filter((x): x is number => x !== null), direction: str(payload.direction), totalUsd: num(payload.totalUsd), prepayUsd: num(payload.prepayUsd), prepayPercent: num(payload.prepayPercent), stages: Array.isArray(payload.stages) ? payload.stages : null, timeline: str(payload.timeline) || null },
+            pack: { id: num(payload.packId), documentIds: docs.map((x) => x.id).filter((x): x is number => x !== null), direction: str(payload.direction), totalUsd: num(payload.totalUsd), prepayUsd: num(payload.prepayUsd), prepayPercent: num(payload.prepayPercent), stages: Array.isArray(payload.stages) ? payload.stages : null, timeline: str(payload.timeline) || null, ...(typeof payload.pilot === 'boolean' ? { pilot: payload.pilot, monthlyUsd: num(payload.monthlyUsd) } : {}) },
           },
         });
       }
