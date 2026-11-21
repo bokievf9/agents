@@ -284,7 +284,7 @@ export interface QuoteApproval {
   contractMeta: Record<string, unknown>;
   invoiceMeta: Record<string, unknown>;
   /** P-10: what `PmStore.reserve` needs when the client accepts (the stage dates are planned from that day). */
-  reservation?: { client: string; what: string; product: Product; leadId: number | null; packId: number; stages: PaymentStage[] };
+  reservation?: { client: string; what: string; product: Product; leadId: number | null; packId: number; stages: PaymentStage[]; dueProduct?: Product };
 }
 
 interface ClientRow { id: number; email: string; name: string; locale: string }
@@ -919,7 +919,7 @@ export class CabDocs {
       try {
         const res = meta.reservation;
         const stages = parseStages(res.stages) ?? [];
-        const project = new PmStore(this.db, this.d.now).reserve({ ...res, stages, dueAts: planStageDates(res.product, stages.map((x) => x.share), t, hq.tz) });
+        const project = new PmStore(this.db, this.d.now).reserve({ ...res, stages, dueAts: planStageDates(res.dueProduct ?? res.product, stages.map((x) => x.share), t, hq.tz) });
         const fill = (m: Record<string, unknown> | undefined) => (m ? { ...m, projectId: project.id, ...(typeof m.chain === 'string' ? { chain: m.chain.replace('{project}', `#${project.id}`) } : {}) } : m);
         meta.contract = fill(meta.contract);
         meta.invoice = fill(meta.invoice);

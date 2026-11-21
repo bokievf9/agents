@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { PmStore } from '@fir/worker-project-manager';
 import { EmailFailures } from '../../src/email-failures.js';
+import { longestProduct, productDirections } from '../../src/heads/sales.js';
 import { dataUrl, makePng } from '../png.js';
 import { TOKENS, drillWorld, type DrillWorld } from './world.js';
 import { useGuard } from './guard.js';
@@ -299,4 +300,39 @@ describe('P-10: the project of a cabinet lead is reserved when the client accept
     expect((await w.adm('POST', `/admin/clients/${cid}/documents/${quote.id}/reject`, { reason: 'не сейчас' })).status).toBe(200);
     expect(new PmStore(w.db, w.hq.now).projects()).toEqual([]);
   }, 60_000);
+});
+
+describe('P-08: a КП of several products', () => {
+  const CODE = 'websites.company.telegram-cms-language~bots.booking.payments-broadcasts~x.support-seo~p.site-adminbot-content~k.clinic';
+  it('the title of the estimate and every product go to the contract, the invoice and the project; the stage dates follow the longest product', async () => {
+    w = await drillWorld({ flow: true });
+    for (const k of w.queue.trustTable()) w.queue.setLevel(k.kind, 0);
+    const lead = { ...LEAD, clientEmail: undefined, cabinetId: undefined, clientName: undefined, contact: '@bundle_lead', estimate: `Сборка: https://firtech.pro/ru/builder?b=${CODE}` };
+    expect((await w.http('POST', '/lead', lead, { 'x-lead-token': TOKENS.lead })).status).toBe(200);
+    await w.beat();
+    await w.beat();
+    const pack = await approve('presales_pack');
+    expect(pack).toBeDefined();
+    const contract = w.hq.tasks({ dept: 'backoffice', limit: 50 }).find((t) => t.meta.action === 'doc')!;
+    const invoice = w.hq.tasks({ dept: 'support', limit: 50 }).find((t) => t.meta.action === 'kp_invoice')!;
+    expect(contract.meta.products).toEqual(['Сайт', 'ИИ-администратор']);
+    expect(String(contract.meta.what)).toMatch(/^Сайт \+ ИИ-администратор/);
+    expect(String(invoice.meta.what)).toMatch(/КП #\d+: Сайт \+ ИИ-администратор$/);
+    expect(invoice.meta.products).toEqual(['Сайт', 'ИИ-администратор']);
+    const p = new PmStore(w.db, w.hq.now).projects()[0]!;
+    expect(p.what).toMatch(/^Сайт \+ ИИ-администратор/);
+    // the contract text names the package, not one product
+    await w.beat();
+    await w.director.sendApprovalBatch(false);
+    const card = w.queue.pending().find((r) => r.kind === 'bo_document')!;
+    expect(String(card.payload.text)).toContain('Сайт + ИИ-администратор');
+  }, 60_000);
+
+  it('longestProduct: an app inside a package sets the term; productDirections keeps an older pack as one direction', () => {
+    expect(longestProduct(['bot', 'app', 'site'])).toBe('app');
+    expect(longestProduct(['automation', 'bot'])).toBe('bot');
+    expect(longestProduct([])).toBe('site');
+    expect(productDirections(undefined, 'admin')).toEqual(['admin']);
+    expect(productDirections(['site', 'nope', 'site', 'admin'], 'site')).toEqual(['site', 'admin']);
+  });
 });

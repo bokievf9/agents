@@ -94,6 +94,16 @@ const PRODUCT_OF_DIRECTION: Record<DirectionId, Product> = {
 };
 export const productOfDirection = (direction: unknown): Product => (typeof direction === 'string' && isDirectionId(direction) ? PRODUCT_OF_DIRECTION[direction] : 'site');
 
+/** The directions of a pack (`directions`, the most expensive first), unknown ids dropped; an older pack without the list: its one direction. */
+export function productDirections(raw: unknown, main: DirectionId): DirectionId[] {
+  const list = Array.isArray(raw) ? [...new Set(raw.filter((x): x is DirectionId => typeof x === 'string' && isDirectionId(x)))] : [];
+  return list.length ? list : [main];
+}
+
+/** The product with the longest delivery term (app, site, bot, automation): the stage dates of a several-product package follow it. */
+const BY_TERM: Product[] = ['app', 'site', 'bot', 'automation'];
+export const longestProduct = (products: Product[]): Product => BY_TERM.find((p) => products.includes(p)) ?? products[0] ?? 'site';
+
 /**
  * A lead is qualified when it has a service (a catalogue product counts) AND a budget or an estimate from the website's builder:
  * then the КП is made without waiting for `/kp` (owner decision 2026-11-19). A lead without a money signal waits for the owner.
@@ -184,8 +194,14 @@ export class SalesHead implements ApprovalEditor {
     const packId = Number(pack.packId);
     const direction = typeof pack.direction === 'string' && isDirectionId(pack.direction) ? pack.direction : 'site';
     const offer = OFFERS[direction];
+    // P-08: a package of several products (the builder estimate): the title of the estimate («Сайт + ИИ-администратор») and every product go on to the
+    // contract, the invoice and the stage dates; an older pack without the list is one direction as before
+    const directions = productDirections(pack.directions, direction);
+    const title = (directions.length > 1 && typeof pack.what === 'string' && pack.what.trim()) ? pack.what.trim() : offer.title;
     const client = lead?.name || (lead ? `лид #${lead.id}` : `КП #${packId}`);
-    const what = (lead?.task || offer.title).trim() || 'по утверждённому КП';
+    const what = directions.length > 1
+      ? `${title}${lead?.task?.trim() ? `. ${lead.task.trim()}` : ''}`
+      : (lead?.task || offer.title).trim() || 'по утверждённому КП';
     const totalUsd = Number(pack.totalUsd) || offer.fromUsd;
     const monthlyUsd = Number(pack.monthlyUsd) || 0;
     // the stage plan of the КП travels with the pack; an older pack without it gets the plan the price list would give now
@@ -194,21 +210,24 @@ export class SalesHead implements ApprovalEditor {
     // what the client already has travels with the chain: the contract and the invoice carry the same conditions line as the КП
     const infra = { ...(typeof pack.hasDomain === 'boolean' ? { hasDomain: pack.hasDomain } : {}), ...(typeof pack.hasHosting === 'boolean' ? { hasHosting: pack.hasHosting } : {}) };
     const product = productOfDirection(direction);
+    // the stage dates follow the longest product of the package (an app inside a site package takes the app's term)
+    const dueProduct = longestProduct(directions.map(productOfDirection));
     // the client of a cabinet lead accepts the КП and signs the contract himself: the chain has the client's two steps in the middle
     const cabinetClient = this.cabinet && lead ? this.cabinet.clientOfLead(lead.id) : null;
     // P-10: a cabinet lead's project is reserved when the CLIENT accepts the КП (`CabDocs.accept`), not now: the Пульт never shows «готовим» for an
     // unanswered КП. The old chain (no cabinet) reserves at once, as before. `{project}` in the chain lines is filled in when the project exists.
-    const reservation = { client, what, product, leadId: lead?.id ?? null, packId, stages };
-    const project = cabinetClient === null ? new PmStore(hq.db, hq.now).reserve({ ...reservation, dueAts: planStageDates(product, stages.map((x) => x.share), hq.now(), hq.tz) }) : null;
+    const reservation = { client, what, product, leadId: lead?.id ?? null, packId, stages, dueProduct };
+    const project = cabinetClient === null ? new PmStore(hq.db, hq.now).reserve({ ...reservation, dueAts: planStageDates(dueProduct, stages.map((x) => x.share), hq.now(), hq.tz) }) : null;
     const projectRef = project ? `#${project.id}` : '{project}';
     const line = (here: 'contract' | 'invoice') => cabinetClient !== null
       ? `Цепочка: КП #${packId} (утверждено, у клиента) → клиент принял → договор${here === 'contract' ? ' (эта карточка)' : ''} → клиент подписал → счёт этапа 1${here === 'invoice' ? ' (эта карточка)' : ''} → проект ${projectRef} стартует после оплаты этапа 1`
       : `Цепочка: КП #${packId} (утверждено) → договор${here === 'contract' ? ' (эта карточка)' : ''} → счёт этапа 1${here === 'invoice' ? ' (эта карточка)' : ''} → проект ${projectRef} стартует после оплаты этапа 1`;
     // the owner edited the contract inside the pending pack: Back Office drafts from his text, not from the template (untouched: the template stays)
     const editedContract = pack.contractEdited === true && typeof pack.contract === 'string' && pack.contract.trim() ? { contractText: pack.contract } : {};
-    const contractMeta = { action: 'doc', type: 'contract', client, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project?.id ?? null, priceUsd: totalUsd, stages, ...(monthlyUsd > 0 ? { monthlyUsd } : {}), ...infra, ...editedContract };
+    const products = directions.map((d) => OFFERS[d].title);
+    const contractMeta = { action: 'doc', type: 'contract', client, what, products, chain: line('contract'), packId, leadId: lead?.id ?? null, projectId: project?.id ?? null, priceUsd: totalUsd, stages, ...(monthlyUsd > 0 ? { monthlyUsd } : {}), ...infra, ...editedContract };
     const invoiceMeta = {
-      action: 'kp_invoice', client, amountUsd: first.amountUsd, totalUsd, what: `Этап 1 из ${stages.length}: «${first.title.ru}», КП #${packId}: ${offer.title}`, packId, leadId: lead?.id ?? null,
+      action: 'kp_invoice', client, amountUsd: first.amountUsd, totalUsd, what: `Этап 1 из ${stages.length}: «${first.title.ru}», КП #${packId}: ${title}`, products, packId, leadId: lead?.id ?? null,
       projectId: project?.id ?? null, stageNo: 1, stageCount: stages.length, chain: line('invoice'), ...infra,
     };
     if (this.cabinet && cabinetClient !== null && lead) {

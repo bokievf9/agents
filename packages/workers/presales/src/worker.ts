@@ -123,7 +123,8 @@ export class PresalesWorker implements Worker {
     const stages = stagesOf(offer, quote);
     const prepayUsd = stages[0]!.amountUsd;
     const payload: Payload = {
-      packId, leadId: brief.leadId, direction: offer.id, docIds: saved.map((d) => d.id),
+      // P-08: every product of the package travels with it (the most expensive first), not only the direction of the main one
+      packId, leadId: brief.leadId, direction: offer.id, directions: built?.directions.length ? built.directions : [offer.id], docIds: saved.map((d) => d.id),
       kp: saved[0]!.body, estimate: saved[1]!.body, contract: saved[2]!.body,
       client: brief.client, what: offer.title, totalUsd: quote.totalUsd, stages, prepayUsd, prepayPercent: stages[0]!.share, timeline: offer.timeline,
       ...(quote.monthlyUsd ? { monthlyUsd: quote.monthlyUsd } : {}),
