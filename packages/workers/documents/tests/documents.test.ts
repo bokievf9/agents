@@ -26,7 +26,7 @@ describe('offer and contract follow the site terms', () => {
       expect(t).toContain('USDT в сети TRC20 или TON');
       expect(t).toContain('онлайн-кошелёк');
       expect(t).toContain('7 дней');
-      for (const first of ['первый экран', 'первый сценарий в тестовом боте', 'первая связка на тестовых данных', 'первый ответ ассистента по документам', 'первый одобренный материал или первая неделя работы']) {
+      for (const first of ['первый экран', 'первый сценарий на тестовом канале', 'первая связка на тестовых данных', 'первый ответ ассистента по документам', 'первый одобренный материал или первая неделя работы']) {
         expect(t, first).toContain(first);
       }
       for (const product of ['сайт', 'Mini App', 'автоматизация', 'внедрение ИИ', 'подписки']) expect(t, product).toContain(product);
@@ -36,10 +36,21 @@ describe('offer and contract follow the site terms', () => {
       expect(t).toContain('Республика Таджикистан');
       expect(t).toContain('hello@firtech.pro');
     }
-    expect(offer).toContain('@firtech_bot');
-    expect(contract).toContain('@firtech_bot');
+    expect(offer).toContain('чат в Telegram');
+    expect(contract).toContain('чат в Telegram');
     expect(contract).toContain('Fir Tech');
     expect(`${offer}${contract}`).not.toMatch(/ООО|ИП |юридическ/i);
+  });
+});
+
+describe('client documents never say «бот» (owner rule 2026-11-22)', () => {
+  it('offer, contract, act, privacy carry no «бот» and no @firtech_bot', () => {
+    const d = { ...data, what: 'ИИ-агент для записи клиентов' };
+    for (const t of DOC_TYPES) {
+      const text = fillTemplate(loadTemplate(t), d);
+      expect(text, t).not.toMatch(/(^|[^а-яё])бот/i);
+      expect(text, t).not.toMatch(/firtech_bot/i);
+    }
   });
 });
 

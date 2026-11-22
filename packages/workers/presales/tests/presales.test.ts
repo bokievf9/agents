@@ -142,6 +142,14 @@ describe('prices come from the price list only', () => {
   });
 });
 
+describe('client scope wording', () => {
+  it('the scope of the offers has no «бот», «Диалоги бота» or «Админ-панель в Telegram»', () => {
+    for (const o of Object.values(OFFERS)) for (const line of o.scope) {
+      expect(line).not.toMatch(/(^|[^а-яё])бот|Админ-панель в Telegram/i);
+    }
+  });
+});
+
 describe('direction choice', () => {
   it('source is the direction id; otherwise the service field; otherwise keywords in the text', () => {
     expect(guessDirection({ source: 'miniapp', service: 'bots' })).toBe('miniapp');
