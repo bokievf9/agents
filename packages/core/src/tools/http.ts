@@ -78,7 +78,8 @@ export function checkUrl(raw: string, hosts: HostList, internal = false): { url:
 export async function rawRequest(target: string, r: RawRequest, net: NetDeps): Promise<ToolResult<RawResponse>> {
   let cur = target;
   const baseLookup = net.lookup ?? (net.fetch ? () => Promise.resolve(TEST_PUBLIC) : systemLookup);
-  const self = new Set((net.selfIps ?? []).map((x) => x.trim().toLowerCase()).filter(Boolean));
+  // only the free-form fetch of an agent (`hosts: 'public'`) must not knock on this server; a listed host is a system call (the monitor's probe of the site on this same IP)
+  const self = new Set((r.hosts === 'public' ? net.selfIps ?? [] : []).map((x) => x.trim().toLowerCase()).filter(Boolean));
   // a name that resolves to this server counts as a private address (`resolvePublic` refuses 0.0.0.0)
   const lookup = self.size ? async (h: string): Promise<string[]> => ((await baseLookup(h)).some((a) => self.has(a.toLowerCase())) ? ['0.0.0.0'] : baseLookup(h)) : baseLookup;
   for (let hop = 0; ; hop++) {
