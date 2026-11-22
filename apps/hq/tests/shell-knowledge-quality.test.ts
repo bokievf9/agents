@@ -137,6 +137,31 @@ describe('/admin/quality', () => {
     expect((await call('GET', ['ratings'])).json.items).toHaveLength(3);
   });
 
+  it('a bad rating of the ids the Chats and review screens send keeps the answer in `bad` and the client question in `question`', async () => {
+    const { call, db } = setupQ();
+    db.exec(`CREATE TABLE cab_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER, lead_id INTEGER, "from" TEXT, text TEXT, at INTEGER, ticket_id INTEGER, author TEXT);
+      CREATE TABLE cab_tmsgs (id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER, thread TEXT, "from" TEXT, text TEXT, at INTEGER, author TEXT);
+      CREATE TABLE cs_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, answer TEXT);
+      CREATE TABLE li_leads (id INTEGER PRIMARY KEY AUTOINCREMENT, task TEXT);
+      CREATE TABLE approvals (id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT);`);
+    db.prepare("INSERT INTO cab_messages (client_id, lead_id, \"from\", text, at, author) VALUES (1, 1, 'client', 'Сколько стоит сайт?', ?, 'client'), (1, 1, 'manager', 'Дорого.', ?, 'agent')").run(NOW - 5, NOW);
+    db.prepare("INSERT INTO cab_tmsgs (client_id, thread, \"from\", text, at, author) VALUES (1, 'support', 'client', 'Не работает вход', ?, 'client'), (1, 'support', 'manager', 'Не знаю.', ?, 'agent')").run(NOW - 5, NOW);
+    db.prepare("INSERT INTO cs_tickets (text, answer) VALUES ('Где счёт?', 'Не знаю.')").run();
+    db.prepare("INSERT INTO li_leads (task) VALUES ('Нужен сайт для кофейни')").run();
+    db.prepare('INSERT INTO approvals (payload) VALUES (?)').run(JSON.stringify({ leadId: 1, text: 'Ответ лиду' }));
+    for (const [messageId, thread] of [['cab_2', 'l1'], ['ct_2', 'c1'], ['tk_1_a', 't1'], ['rp_1', 'l1'], ['1', 'review']] as const) {
+      expect((await call('POST', ['rate'], { messageId, thread, value: -1, note: 'Плохо, вот как надо.' })).status, messageId).toBe(200);
+    }
+    const byGood = (await call('GET', ['lessons'])).json.items as any[];
+    expect(byGood).toHaveLength(5);
+    const pairs = byGood.map((l) => [l.question, l.bad]).sort();
+    expect(pairs).toContainEqual(['Сколько стоит сайт?', 'Дорого.']);
+    expect(pairs).toContainEqual(['Не работает вход', 'Не знаю.']);
+    expect(pairs).toContainEqual(['Где счёт?', 'Не знаю.']);
+    expect(pairs.filter((p) => p[0] === 'Нужен сайт для кофейни' && p[1] === 'Ответ лиду')).toHaveLength(2);
+    for (const l of byGood) expect(l.question).not.toBe(l.good);
+  });
+
   it('bad bodies are 400; lessons are deleted by id (404 for a missing one)', async () => {
     const { call, db } = setupQ();
     for (const b of [{}, { messageId: 'a', thread: 't', value: 2 }, { messageId: 'a', thread: 't', value: 1, extra: 1 }, { messageId: '', thread: 't', value: 1 }]) expect((await call('POST', ['rate'], b)).status).toBe(400);

@@ -79,15 +79,51 @@ export function createQualityApi(d: ShellQualityDeps) {
     return ok({ items: rows.map((r) => ({ id: String(r.id), messageId: r.message_id, thread: r.thread, value: r.value, note: r.note, at: iso(r.created_at) })) });
   }
 
-  /** Best effort: the rated answer (`ch_messages.id`) and the client's line before it, for the lesson. */
-  function context(messageId: string): { question: string; bad: string } {
-    if (!/^\d{1,9}$/.test(messageId) || !has(db, 'ch_messages')) return { question: '', bad: '' };
-    const m = db.prepare('SELECT chat_id, text, at FROM ch_messages WHERE id = ?').get(Number(messageId)) as { chat_id: number | null; text: string; at: number } | undefined;
-    if (!m) return { question: '', bad: '' };
-    const q = m.chat_id !== null && has(db, 'ch_inbound')
-      ? (db.prepare('SELECT text FROM ch_inbound WHERE chat_id = ? AND at <= ? ORDER BY at DESC, id DESC LIMIT 1').get(m.chat_id, m.at) as { text: string } | undefined)
-      : undefined;
-    return { question: q?.text ?? '', bad: m.text };
+  /**
+   * Best effort: the rated answer (`bad`) and the client's line before it (`question`), for the lesson. The Chats screen sends the ids it
+   * gets from `chats.ts` (`cab_N`, `ct_N`, `rp_N`, `tk_N_a`, `ow_N`), the review screens the approval id (thread `review`); a bare number
+   * is an `ch_messages` row (older callers).
+   */
+  function context(messageId: string, thread: string): { question: string; bad: string } {
+    const none = { question: '', bad: '' };
+    const one = <T>(sql: string, ...args: unknown[]): T | undefined => db.prepare(sql).get(...args) as T | undefined;
+    const earlier = (sql: string, ...args: unknown[]): string => one<{ text: string }>(sql, ...args)?.text ?? '';
+    try {
+      let m: RegExpMatchArray | null;
+      if ((m = /^cab_(\d+)$/.exec(messageId)) && has(db, 'cab_messages')) {
+        const r = one<{ client_id: number; lead_id: number | null; text: string; at: number }>('SELECT client_id, lead_id, text, at FROM cab_messages WHERE id = ?', Number(m[1]));
+        if (!r) return none;
+        return { bad: r.text, question: earlier('SELECT text FROM cab_messages WHERE client_id = ? AND "from" = \'client\' AND at <= ? ORDER BY at DESC, id DESC LIMIT 1', r.client_id, r.at) };
+      }
+      if ((m = /^ct_(\d+)$/.exec(messageId)) && has(db, 'cab_tmsgs')) {
+        const r = one<{ client_id: number; thread: string; text: string; at: number }>('SELECT client_id, thread, text, at FROM cab_tmsgs WHERE id = ?', Number(m[1]));
+        if (!r) return none;
+        return { bad: r.text, question: earlier('SELECT text FROM cab_tmsgs WHERE client_id = ? AND thread = ? AND "from" = \'client\' AND at <= ? ORDER BY at DESC, id DESC LIMIT 1', r.client_id, r.thread, r.at) };
+      }
+      if ((m = /^tk_(\d+)_[aq]$/.exec(messageId)) && has(db, 'cs_tickets')) {
+        const r = one<{ text: string; answer: string | null }>('SELECT text, answer FROM cs_tickets WHERE id = ?', Number(m[1]));
+        return r ? { question: r.text, bad: r.answer ?? '' } : none;
+      }
+      const approval = (m = /^rp_(\d+)$/.exec(messageId)) ? Number(m[1]) : thread === 'review' && /^\d{1,9}$/.test(messageId) ? Number(messageId) : null;
+      if (approval !== null && has(db, 'approvals')) {
+        const r = one<{ payload: string }>('SELECT payload FROM approvals WHERE id = ?', approval);
+        if (!r) return none;
+        const p = JSON.parse(r.payload) as { text?: unknown; leadId?: unknown; ticketId?: unknown; question?: unknown };
+        const bad = typeof p.text === 'string' ? p.text : '';
+        let question = typeof p.question === 'string' ? p.question : '';
+        if (!question && typeof p.leadId === 'number' && has(db, 'li_leads')) question = one<{ task: string }>('SELECT task FROM li_leads WHERE id = ?', p.leadId)?.task ?? '';
+        if (!question && typeof p.ticketId === 'number' && has(db, 'cs_tickets')) question = one<{ text: string }>('SELECT text FROM cs_tickets WHERE id = ?', p.ticketId)?.text ?? '';
+        return { question, bad };
+      }
+      m = /^(?:ow_)?(\d{1,9})$/.exec(messageId);
+      if (!m || !has(db, 'ch_messages')) return none;
+      const row = one<{ chat_id: number | null; text: string; at: number }>('SELECT chat_id, text, at FROM ch_messages WHERE id = ?', Number(m[1]));
+      if (!row) return none;
+      const q = row.chat_id !== null && has(db, 'ch_inbound') ? one<{ text: string }>('SELECT text FROM ch_inbound WHERE chat_id = ? AND at <= ? ORDER BY at DESC, id DESC LIMIT 1', row.chat_id, row.at) : undefined;
+      return { question: q?.text ?? '', bad: row.text };
+    } catch {
+      return none;
+    }
   }
 
   async function rate(body: unknown): Promise<AdminReply> {
@@ -100,7 +136,7 @@ export function createQualityApi(d: ShellQualityDeps) {
     db.prepare('DELETE FROM fira_lessons WHERE ref = ?').run(ref); // a changed rating replaces its earlier lesson
     let lessonId: number | null = null;
     if (value === -1 && note) {
-      const c = context(messageId);
+      const c = context(messageId, thread);
       await lessons.add({ companyId: 'firtech', agentId: '*', roleId: 'lead-manager', question: (c.question || note).slice(0, 500), bad: c.bad.slice(0, 1500), good: note.slice(0, 1500), tag: 'rating', source: 'rating', createdAt: at }, ref);
       lessonId = (db.prepare('SELECT id FROM fira_lessons WHERE ref = ?').get(ref) as { id: number } | undefined)?.id ?? null;
     }
