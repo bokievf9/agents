@@ -532,6 +532,10 @@ describe('implementation is an ИИ-команда', () => {
   it('company stays its own direction; no published agent subscription falls back to the company plan', () => {
     const p = parsePrices(v4)!;
     expect(quotePackage('company', 'ИИ вашей компании', '', p).totalUsd).toBe(1490);
-    expect(quotePackage('implementation', 'ИИ-отдел под ключ', '', FALLBACK_PRICES).totalUsd).toBe(FALLBACK_PRICES.companyPlan!.setup);
+    // the bundled fallback now carries the v4 agent subscription, so a cold start quotes a team
+    expect(quotePackage('implementation', 'ИИ-отдел под ключ', '', FALLBACK_PRICES).totalUsd).toBe(561);
+    // a snapshot without the agent subscription (an old site payload) still falls back to the company plan
+    const noSub = { ...FALLBACK_PRICES, agentSubscription: undefined };
+    expect(quotePackage('implementation', 'ИИ-отдел под ключ', '', noSub).totalUsd).toBe(FALLBACK_PRICES.companyPlan!.setup);
   });
 });

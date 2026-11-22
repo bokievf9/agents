@@ -14,7 +14,7 @@ const GOOD = `<!doctype html><html lang="ru"><head>
 <link rel="alternate" hreflang="ru" href="https://firtech.pro/ru"><link rel="alternate" hreflang="en" href="https://firtech.pro/en">
 <meta property="og:title" content="Fir Tech">
 <script type="application/ld+json">{"@type":"Organization"}</script>
-</head><body><h1>Боты и ИИ-агенты</h1><p>Бот-администратор от $290, приёмщик заявок от $220, автоматизация от $230, контент от $90, Mini App от $660, агент от $100, внедрение от $1490, сайт от $150.</p></body></html>`;
+</head><body><h1>Боты и ИИ-агенты</h1><p>Бот-администратор от $290, приёмщик заявок от $220, автоматизация от $230, контент от $90, Mini App от $660, агент от $100, внедрение от $561, сайт от $150.</p></body></html>`;
 
 const BAD = `<html><head><title>Hi</title></head><body><h1>A</h1><h1>B</h1><script>var price = "$999"</script></body></html>`;
 
@@ -57,11 +57,11 @@ describe('llms.txt and the services table', () => {
 
   it('every direction price from the table must appear in the site text', () => {
     // the personal AI direction (`agent`) starts at the first Персональный ИИ plan, $290 (the same figure as the administrator)
-    expect(checkServices('от $290 от $220 от $230 от $90 от $660 от $1490 от $150')).toEqual([]);
+    expect(checkServices('от $290 от $220 от $230 от $90 от $660 от $561 от $150')).toEqual([]);
     const missing = checkServices('от $290 от $220 от $230 от $90 от $660 от $150');
     expect(missing.map((f) => f.key)).toEqual(['service_missing:implementation']);
-    expect(missing[0]!.problem).toContain('от $1490');
-    expect(checkServices('290 USD 220$ 230 $ 90 $ 660 $ 1490 $ 150')).toEqual([]);
+    expect(missing[0]!.problem).toContain('от $561');
+    expect(checkServices('290 USD 220$ 230 $ 90 $ 660 $ 561 $ 150')).toEqual([]);
   });
 
   it('sitemap: same host only, no nested sitemaps, capped', () => {

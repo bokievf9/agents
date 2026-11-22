@@ -13,8 +13,20 @@ const memStore = (): PriceStore & { data: Map<string, string> } => {
 const reply = (body: unknown, status = 200): typeof fetch => (() => Promise.resolve(new Response(JSON.stringify(body), { status }))) as unknown as typeof fetch;
 
 describe('the bundled fallback snapshot', () => {
+  it('carries the v4 defaults, passes the schema and prices a team without the site', () => {
+    const parsed = parsePrices(fallbackJson);
+    expect(parsed).not.toBeNull();
+    const p = FALLBACK_PRICES;
+    expect(p.personalPlans?.map((x) => x.byokMonthly)).toEqual([14, 34, 59]);
+    expect(p.companyPlan?.byokMonthly).toBe(104);
+    expect(p.agentSubscription).toEqual({ setup: 220, monthly: 39, byokMonthly: 19 });
+    expect(p.teamDiscountPercent).toBe(15);
+    expect(p.companyPerEmployee).toBe(9);
+    expect(teamPrice('sales', p)).toEqual({ agents: 3, setup: 561, monthly: 99, byokMonthly: 48 });
+  });
+
   it('has the site shape and today\'s numbers', () => {
-    expect(Object.keys(fallbackJson).sort()).toEqual(['catalog', 'companyPlan', 'contentPlans', 'currency', 'extraPrice', 'personalPlans', 'products', 'referralPercent', 'smallProjectMaxUsd', 'stages', 'startingPrice', 'updatedAt']);
+    expect(Object.keys(fallbackJson).sort()).toEqual(['agentSubscription', 'catalog', 'companyPerEmployee', 'companyPlan', 'contentPlans', 'currency', 'extraPrice', 'personalPlans', 'products', 'referralPercent', 'smallProjectMaxUsd', 'stages', 'startingPrice', 'teamDiscountPercent', 'updatedAt']);
     expect(parsePrices(fallbackJson)).not.toBeNull();
     const p = FALLBACK_PRICES;
     expect(p.currency).toBe('USD');
@@ -27,10 +39,10 @@ describe('the bundled fallback snapshot', () => {
     expect(p.catalog.automation).toEqual({ variants: { integration: 200, crm: 450, assistant: 500 }, addons: { sheets: 50, alerts: 30, training: 50, support: 90 } });
     expect(p.extraPrice.support).toEqual({ from: 20, monthly: true });
     expect([p.extraPrice.seo!.from, p.extraPrice.design!.from, p.extraPrice.rescue!.from]).toEqual([50, 90, 60]);
-    expect(planOf('basic')).toEqual({ setup: 290, monthly: 29 });
-    expect(planOf('plus')).toEqual({ setup: 490, monthly: 49 });
-    expect(planOf('max')).toEqual({ setup: 790, monthly: 79 });
-    expect(planOf('company')).toEqual({ setup: 1490, monthly: 149 });
+    expect(planOf('basic')).toEqual({ setup: 290, monthly: 29, byokMonthly: 14 });
+    expect(planOf('plus')).toEqual({ setup: 490, monthly: 49, byokMonthly: 34 });
+    expect(planOf('max')).toEqual({ setup: 790, monthly: 79, byokMonthly: 59 });
+    expect(planOf('company')).toEqual({ setup: 1490, monthly: 149, byokMonthly: 104 });
     expect(p.companyByQuote).toBe(true);
     expect(() => planOf('dono')).toThrow(/no plan/); // retired, the site dropped it
     expect(planOf('content')).toEqual({ setup: 90, monthly: 60 });
@@ -126,7 +138,7 @@ describe('the live v4 payload of firtech.pro/api/prices', () => {
     expect(teamPrice('marketing', p)).toEqual({ agents: 5, setup: 935, monthly: 166, byokMonthly: 81 });
     const a = allowedAmounts(p);
     for (const n of [561, 99, 48, 935, 166, 81]) expect(a.has(n)).toBe(true);
-    expect(teamPrice('sales', FALLBACK_PRICES)).toBeUndefined();
+    expect(teamPrice('sales', FALLBACK_PRICES)).toEqual({ agents: 3, setup: 561, monthly: 99, byokMonthly: 48 });
   });
   it('carries setup + monthly + BYOK, the agent subscription and the team discount', () => {
     const p = parsePrices(v4)!;

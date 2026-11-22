@@ -132,7 +132,7 @@ describe('pack generation', () => {
 
   it('lint flags banned constructs, foreign prices and a missing firtech.pro', () => {
     expect(lintText('Это не бот, это сотрудник. firtech.pro')).toContain('оборот «это не X»');
-    expect(lintText('Бот за $99. firtech.pro').some((i) => i.startsWith('цена не из справки'))).toBe(true);
+    expect(lintText('Бот за $77. firtech.pro').some((i) => i.startsWith('цена не из справки'))).toBe(true);
     expect(lintText('Бот от $250. firtech.pro')).toEqual([]);
     // current site prices pass, the stale ones of the old table fail
     for (const ok of ['Бот-администратор от $290', 'Приёмщик от $220', 'Mini App от $660', 'ИИ-компания от $1490', 'Контент от $90 и $60 в месяц', 'Персональный ИИ $290 + $29 в месяц', 'ИИ-компания $1490 + $149 в месяц']) {

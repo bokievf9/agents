@@ -330,22 +330,33 @@
     {
       "id": "basic",
       "setup": 290,
-      "monthly": 29
+      "monthly": 29,
+      "byokMonthly": 14
     },
     {
       "id": "plus",
       "setup": 490,
-      "monthly": 49
+      "monthly": 49,
+      "byokMonthly": 34
     },
     {
       "id": "max",
       "setup": 790,
-      "monthly": 79
+      "monthly": 79,
+      "byokMonthly": 59
     }
   ],
   "companyPlan": {
     "id": "company",
     "setup": 1490,
-    "monthly": 149
-  }
+    "monthly": 149,
+    "byokMonthly": 104
+  },
+  "agentSubscription": {
+    "setup": 220,
+    "monthly": 39,
+    "byokMonthly": 19
+  },
+  "teamDiscountPercent": 15,
+  "companyPerEmployee": 9
 }

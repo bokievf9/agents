@@ -673,7 +673,7 @@ describe('products in the chat', () => {
     expect(sys).toContain('ИИ-администратор (от $290)');
     expect(sys).toContain('ИИ-менеджер заявок (от $220)');
     expect(sys).toContain('Telegram Mini App (от $660)');
-    expect(sys).toContain('ИИ-отдел под ключ (от $1 490 + $149/мес, точно по смете)');
+    expect(sys).toContain('ИИ-отдел под ключ (от $561 + $99/мес)');
     expect(sys).toContain('Контент на автопилоте (от $90 + $60/мес)');
   });
 
@@ -757,7 +757,7 @@ describe('products in the chat', () => {
     expect(sanitizeAnswer('Mini App от $660, внедрение ИИ от $1490.', NOTE).removed).toBe(0);
     expect(sanitizeAnswer('Приёмщик заявок стоит $300.', NOTE).text).toBe(NOTE);
     expect(sanitizeAnswer('Приёмщик заявок стоит $220 за 3 дня.', NOTE).text).toBe(NOTE);
-    for (const bad of ['Персональный ИИ стоит $200 + $15/мес.', 'Бот-администратор стоит $99.', 'Polly: $100 + $10/мес.', 'Сайт от 300 долларов.']) {
+    for (const bad of ['Персональный ИИ стоит $200 + $15/мес.', 'Бот-администратор стоит $77.', 'Polly: $100 + $10/мес.', 'Сайт от 300 долларов.']) {
       const r = sanitizeAnswer(bad, NOTE);
       expect(r.removed, bad).toBe(1);
       expect(r.text).toBe(NOTE);
