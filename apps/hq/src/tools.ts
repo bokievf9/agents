@@ -40,13 +40,13 @@ export async function renderPngFrame(frame: unknown): Promise<Uint8Array> {
 }
 
 /** The process-wide adapters and keys, from the HQ config. */
-export function appTools(hq: Hq, llm: LlmClient, cfg: Pick<Config, 'dataDir' | 'rendersDir' | 'knowledgeDir' | 'mediaSecret' | 'igPublicBase' | 'braveSearchKey' | 'resendApiKey' | 'emailFrom' | 'gscServiceAccountJson' | 'gscSiteUrl' | 'youtubeApiKey' | 'youtubeChannelId' | 'ytOauthClientJson' | 'ytRefreshToken' | 'trongridApiKey' | 'toncenterApiKey'> & Partial<Pick<Config, 'openverseClientId' | 'openverseClientSecret'>>): AppTools {
+export function appTools(hq: Hq, llm: LlmClient, cfg: Pick<Config, 'dataDir' | 'rendersDir' | 'knowledgeDir' | 'mediaSecret' | 'igPublicBase' | 'braveSearchKey' | 'resendApiKey' | 'emailFrom' | 'gscServiceAccountJson' | 'gscSiteUrl' | 'youtubeApiKey' | 'youtubeChannelId' | 'ytOauthClientJson' | 'ytRefreshToken' | 'trongridApiKey' | 'toncenterApiKey'> & Partial<Pick<Config, 'selfIps'>> & Partial<Pick<Config, 'openverseClientId' | 'openverseClientSecret'>>): AppTools {
   // read-only views of the Shell CRM: no hooks, so nothing a tool does can write through it
   const crm = createCrm(hq.db, hq.now);
   const quota = new PublishStore(hq.db);
   return {
     config: {
-      dataDir: cfg.dataDir, rendersDir: cfg.rendersDir, knowledgeDir: cfg.knowledgeDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase,
+      dataDir: cfg.dataDir, rendersDir: cfg.rendersDir, knowledgeDir: cfg.knowledgeDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, selfIps: cfg.selfIps,
       braveSearchKey: cfg.braveSearchKey, resendApiKey: cfg.resendApiKey, emailFrom: cfg.emailFrom, gscServiceAccountJson: cfg.gscServiceAccountJson, gscSiteUrl: cfg.gscSiteUrl,
       youtubeApiKey: cfg.youtubeApiKey, youtubeChannelId: cfg.youtubeChannelId, ytOauthClientJson: cfg.ytOauthClientJson, ytRefreshToken: cfg.ytRefreshToken,
       trongridApiKey: cfg.trongridApiKey, toncenterApiKey: cfg.toncenterApiKey, openverseClientId: cfg.openverseClientId, openverseClientSecret: cfg.openverseClientSecret,

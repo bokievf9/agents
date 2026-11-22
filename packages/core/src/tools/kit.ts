@@ -17,6 +17,8 @@ export interface ToolsConfig {
   /** Public `/media/` links: `MEDIA_SECRET` (else `WEB_CHAT_TOKEN`) and the public base (`IG_PUBLIC_BASE`, e.g. https://hq.firtech.pro/media). */
   mediaSecret?: string | undefined;
   mediaBase?: string | undefined;
+  /** This server's own addresses (`PUBLIC_IP`, `SELF_IPS`): the HTTP tools never fetch them (P2-10). */
+  selfIps?: readonly string[] | undefined;
   braveSearchKey?: string | undefined;
   resendApiKey?: string | undefined;
   /** Sender of `email.send`, e.g. `Fir Tech <hello@firtech.pro>` (a domain verified in Resend). */

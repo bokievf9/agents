@@ -70,7 +70,7 @@ export function createTools(deps: ToolDeps): Tools {
   let files: Files | undefined;
   const k: Kit = {
     deps, cfg, cx, now, tz, cache,
-    net: { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.lookup ? { lookup: deps.lookup } : {}), queue: deps.queue ?? sharedHostQueue },
+    net: { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.lookup ? { lookup: deps.lookup } : {}), queue: deps.queue ?? sharedHostQueue, ...(cfg.selfIps?.length ? { selfIps: cfg.selfIps } : {}) },
     files: () => (files ??= createFiles(k)),
     call: makeCall(cx, deps),
   };

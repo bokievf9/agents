@@ -294,3 +294,15 @@ describe('web.readable: Jina Reader fallback for pages with no text of their own
     expect(net.calls).toHaveLength(0);
   });
 });
+
+describe('P2-10: the HTTP tools never fetch this server itself', () => {
+  const net = fakeNet({ 'https://api.example.com/v1': () => json({ ok: 1 }) });
+  const cfg = { selfIps: ['201.79.122.133'] };
+  it('a name that resolves to PUBLIC_IP/SELF_IPS is blocked, so is a literal self IP; other hosts still work', async () => {
+    const own = tools({ fetch: net.fetch, lookup: () => Promise.resolve(['201.79.122.133']), config: cfg });
+    expect(await own.t.web.getJson('https://api.example.com/v1', H)).toMatchObject({ ok: false, error: 'blocked' });
+    expect(await tools({ fetch: net.fetch, config: cfg }).t.web.getJson('https://201.79.122.133/v1', { hosts: ['201.79.122.133'] })).toMatchObject({ ok: false, error: 'blocked' });
+    expect(await tools({ fetch: net.fetch, config: cfg }).t.web.getJson('https://api.example.com/v1', H)).toEqual({ ok: true, value: { ok: 1 } });
+    expect(await tools({ fetch: net.fetch, lookup: () => Promise.resolve(['201.79.122.133']) }).t.web.getJson('https://api.example.com/v1', H)).toMatchObject({ ok: true });
+  });
+});

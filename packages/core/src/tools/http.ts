@@ -12,6 +12,8 @@ export interface NetDeps {
   fetch?: ToolFetch | undefined;
   lookup?: Lookup | undefined;
   queue: HostQueue;
+  /** This server's own addresses (`PUBLIC_IP`, `SELF_IPS`): a host that is or resolves to one of them is never fetched, like the site crawler (P2-10). */
+  selfIps?: readonly string[] | undefined;
 }
 
 /** Which hosts a call may reach: exact names, or `'public'` (any public address; only for reading pages a search returned or the caller named). */
@@ -75,12 +77,17 @@ export function checkUrl(raw: string, hosts: HostList, internal = false): { url:
  */
 export async function rawRequest(target: string, r: RawRequest, net: NetDeps): Promise<ToolResult<RawResponse>> {
   let cur = target;
-  const lookup = net.lookup ?? (net.fetch ? () => Promise.resolve(TEST_PUBLIC) : systemLookup);
+  const baseLookup = net.lookup ?? (net.fetch ? () => Promise.resolve(TEST_PUBLIC) : systemLookup);
+  const self = new Set((net.selfIps ?? []).map((x) => x.trim().toLowerCase()).filter(Boolean));
+  // a name that resolves to this server counts as a private address (`resolvePublic` refuses 0.0.0.0)
+  const lookup = self.size ? async (h: string): Promise<string[]> => ((await baseLookup(h)).some((a) => self.has(a.toLowerCase())) ? ['0.0.0.0'] : baseLookup(h)) : baseLookup;
   for (let hop = 0; ; hop++) {
     const c = checkUrl(cur, r.hosts, r.internal === true);
     if ('refused' in c) return fail(r.hosts !== 'public' && /not in the list/.test(c.refused) ? 'blocked' : hop === 0 ? 'invalid' : 'blocked', c.refused);
     let pinned: PinnedAddress | undefined;
     if (!r.internal) {
+      const bare = c.url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+      if (self.has(bare)) return fail('blocked', `${c.url.hostname} is this server`);
       const pin = await resolvePublic(c.url.hostname, lookup);
       if (pin === 'blocked') return fail('blocked', `${c.url.hostname} resolves to a private address`);
       if (pin === 'dns') return fail('network', `${c.url.hostname}: DNS lookup failed`);
