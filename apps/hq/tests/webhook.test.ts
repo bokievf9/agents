@@ -125,3 +125,13 @@ describe('required tokens (no fallback to another token)', () => {
     }
   });
 });
+
+describe('webLeadSchema: Персональный ИИ', () => {
+  it('keeps service personal and the validated personal brief, ignores malformed parts', async () => {
+    const { webLeadSchema } = await import('../src/webhook.js');
+    const w = webLeadSchema.parse({ name: 'A', contact: '@alice', service: 'personal', brief: { type: 'personal', tier: 'max', byok: false, hand: ['mail'], tone: { formality: 1, brevity: 2, initiative: 0 }, discovery: { si: 'https://a.b' } } });
+    expect(w.service).toBe('personal');
+    expect(w.brief).toMatchObject({ type: 'personal', tier: 'max', byok: false, hand: ['mail'], discovery: { si: 'https://a.b' } });
+    expect(webLeadSchema.parse({ name: 'A', contact: '@alice', brief: { type: 'personal', tier: 'gold', hand: 5 } }).brief).toEqual({ type: 'personal' });
+  });
+});

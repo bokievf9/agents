@@ -4,7 +4,7 @@ import { leadStoreFor } from '@fir/worker-lead-intake';
 import { describe, expect, it } from 'vitest';
 import { fillMarks, fallbackWording, withPilot, wordingOk, type Wording } from '../src/docs.js';
 import { priceBuilderCode } from '../src/estimate.js';
-import { builderTotal, quotePackage, teamDepartmentIn } from '../src/package.js';
+import { builderTotal, personalTierQuote, quotePackage, teamDepartmentIn } from '../src/package.js';
 import { DIRECTION_IDS, guessDirection, OFFERS, priceLabel, supportMonthlyUsd } from '../src/offers.js';
 import { splitMessage } from '../src/split.js';
 import { render } from '../src/template.js';
@@ -537,5 +537,22 @@ describe('implementation is an ИИ-команда', () => {
     // a snapshot without the agent subscription (an old site payload) still falls back to the company plan
     const noSub = { ...FALLBACK_PRICES, agentSubscription: undefined };
     expect(quotePackage('implementation', 'ИИ-отдел под ключ', '', noSub).totalUsd).toBe(FALLBACK_PRICES.companyPlan!.setup);
+  });
+});
+
+describe('Персональный ИИ lead: the plan of the tier, never a business package', () => {
+  const plans = FALLBACK_PRICES.personalPlans ?? [];
+  it('guessDirection sends service personal to personal even when the text names a business tool', () => {
+    expect(guessDirection({ service: 'personal', text: 'whatsapp бот кафе' })).toBe('personal');
+  });
+  it('personalTierQuote takes the plan of the tier from the list, byok adds the own-key monthly', () => {
+    for (const tier of ['basic', 'plus', 'max'] as const) {
+      const plan = plans.find((x) => x.id === tier)!;
+      const q = personalTierQuote(tier, false, 'Персональный ИИ');
+      expect([q.totalUsd, q.monthlyUsd]).toEqual([plan.setup, plan.monthly]);
+      expect(q.byokMonthlyUsd).toBeUndefined();
+      expect(personalTierQuote(tier, true, 'x').byokMonthlyUsd).toBe(plan.byokMonthly);
+    }
+    expect(personalTierQuote(undefined, undefined, 'x').totalUsd).toBe(plans.find((x) => x.id === 'plus')!.setup);
   });
 });

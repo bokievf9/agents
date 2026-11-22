@@ -1,6 +1,6 @@
 import { DEPARTMENT_AGENTS, getPrices, planOf, teamPrice, type Prices, type TeamDepartment } from '@fir/core';
 import { builderCodeIn } from './estimate.js';
-import { COMPANY_DEFAULT, FLAGSHIP_OPTION_RU, flagshipOptionsIn, PERSONAL_DEFAULT, PERSONAL_LEVEL_RU, personalLevel, type PersonalLevel } from './flagships.js';
+import { COMPANY_DEFAULT, FLAGSHIP_OPTION_RU, flagshipOptionsIn, PERSONAL_DEFAULT, PERSONAL_LEVEL_RU, PERSONAL_TIER_RU, personalLevel, type PersonalLevel } from './flagships.js';
 import type { DirectionId } from './offers.js';
 
 /**
@@ -60,6 +60,20 @@ export function personalPlanFor(text: string, p: Prices): { level: PersonalLevel
   const chosen = plans.find((x) => x.id === level) ?? plans[0];
   if (!chosen) throw new Error('prices: the list has no personalPlans');
   return { level, options, plan: { setup: chosen.setup, monthly: chosen.monthly } };
+}
+
+/**
+ * The Персональный ИИ plan of the level a personal brief chose (`basic` | `plus` | `max`, default `plus`): the live prices of the list, never typed.
+ * `byok` adds the monthly fee with the client's own model key when the list has one.
+ */
+export function personalTierQuote(tier: string | undefined, byok: boolean | undefined, title: string, p: Prices = getPrices()): PackageQuote {
+  const level: PersonalLevel = tier === 'basic' || tier === 'max' ? tier : 'plus';
+  const plans = [...(p.personalPlans ?? [])].sort((a, b) => a.setup - b.setup);
+  const chosen = plans.find((x) => x.id === level) ?? plans.find((x) => x.id === 'plus') ?? plans[0];
+  if (!chosen) throw new Error('prices: the list has no personalPlans');
+  const q: PackageQuote = { totalUsd: chosen.setup, monthlyUsd: chosen.monthly, lines: [{ label: `${title}, уровень «${PERSONAL_TIER_RU[level]}»: настройка`, usd: chosen.setup }] };
+  if (byok && chosen.byokMonthly !== undefined) q.byokMonthlyUsd = chosen.byokMonthly;
+  return q;
 }
 
 /** The department an ИИ-команда request names; sales when it names none. */

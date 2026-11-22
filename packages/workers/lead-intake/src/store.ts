@@ -14,6 +14,8 @@ export interface Enrichment {
   niche: string;
   intentScore: number;
   builderLink: string;
+  /** Персональный ИИ lead only: the tier and the own-key flag of the site's brief. */
+  personal?: { tier?: 'basic' | 'plus' | 'max'; byok?: boolean };
 }
 
 export interface Lead {
@@ -81,7 +83,10 @@ export function parseEnrichment(raw: string | null | undefined): Enrichment | nu
   if (!raw) return null;
   try {
     const e = JSON.parse(raw) as Partial<Enrichment>;
+    const pr = e.personal && typeof e.personal === 'object' ? e.personal : null;
+    const personal = pr ? { ...(pr.tier === 'basic' || pr.tier === 'plus' || pr.tier === 'max' ? { tier: pr.tier } : {}), ...(typeof pr.byok === 'boolean' ? { byok: pr.byok } : {}) } : null;
     return {
+      ...(personal ? { personal } : {}),
       summary: Array.isArray(e.summary) ? e.summary.map(String).slice(0, 3) : [], productFamily: String(e.productFamily ?? ''), niche: String(e.niche ?? ''),
       intentScore: Math.max(0, Math.min(100, Math.round(Number(e.intentScore) || 0))), builderLink: String(e.builderLink ?? ''),
     };

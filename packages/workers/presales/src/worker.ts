@@ -5,7 +5,7 @@ import { leadStoreFor, legalLabel, legalPartyOfLead, type Lead } from '@fir/work
 import { buildDocs, draftWording, exactLabel, PILOT_DIRECTIONS, stagesOf, type Brief } from './docs.js';
 import { builderEstimate } from './estimate.js';
 import { bundleOffer, guessDirection, OFFERS } from './offers.js';
-import { builderTotal, quotePackage } from './package.js';
+import { builderTotal, personalTierQuote, quotePackage } from './package.js';
 import { splitMessage } from './split.js';
 import { DOC_RU, PresalesStore, type PsDocument } from './store.js';
 import { loadTemplates, type Templates } from './template.js';
@@ -118,10 +118,13 @@ export class PresalesWorker implements Worker {
       brief = { leadId: null, client: '____________', niche: '', request: text, estimate: '', ...detectInfrastructure(text) };
     }
     // a builder estimate (several products and extras the client combined) is the price of the КП: the site's quote is the source of truth; without one, one direction from the words
-    const built = builderEstimate({ estimate: brief.estimate, request: brief.request, link: brief.builderLink });
+    // a Персональный ИИ lead: the plan of the tier its brief chose, never a business package or the builder's business estimate
+    const personalLead = brief.leadId !== null ? leadStoreFor(ctx).get(brief.leadId) : undefined;
+    const isPersonal = personalLead !== undefined && (personalLead.service === 'personal' || Boolean(personalLead.enrichment?.personal));
+    const built = isPersonal ? null : builderEstimate({ estimate: brief.estimate, request: brief.request, link: brief.builderLink });
     const guessed = OFFERS[guessDirection({ source, service, text: `${brief.request} ${brief.niche} ${brief.estimate ?? ''}` })];
     const offer = built ? bundleOffer(built.directions, guessed) : guessed;
-    const quote = built ? built.quote : quotePackage(offer.id, offer.title, `${brief.request} ${brief.niche} ${brief.estimate ?? ''}`);
+    const quote = isPersonal ? personalTierQuote(personalLead!.enrichment?.personal?.tier, personalLead!.enrichment?.personal?.byok, offer.title) : built ? built.quote : quotePackage(offer.id, offer.title, `${brief.request} ${brief.niche} ${brief.estimate ?? ''}`);
     const wording = await draftWording(ctx.llm, this.prompt, brief, offer);
     // the pilot block of a flagship's КП: only when the package asks for it (`meta.pilot: true`, set by the owner), never by itself
     const pilot = task.meta.pilot === true && PILOT_DIRECTIONS.includes(offer.id);
@@ -160,7 +163,7 @@ export class PresalesWorker implements Worker {
       : '';
     const summary = [
       `${DOC_RU.kp}, смета и черновик договора #${packId}: ${who}`,
-      `Направление: ${offer.title}, цена ${exactLabel(quote)}${quote.lines.length > 1 ? ` (${quote.lines.map((l) => l.label).join(' + ')})` : ''}. Оплата по этапам (${stages.map((x) => `${x.no}: ${usd(x.amountUsd)}`).join(', ')}), каждый до его начала. КП действует ${this.validDays} дн.${mismatch}${priced}`,
+      `Направление: ${offer.title}, цена ${exactLabel(quote)}${quote.byokMonthlyUsd !== undefined ? ` (со своим ключом модели ${usd(quote.byokMonthlyUsd)}/мес)` : ''}${quote.lines.length > 1 ? ` (${quote.lines.map((l) => l.label).join(' + ')})` : ''}. Оплата по этапам (${stages.map((x) => `${x.no}: ${usd(x.amountUsd)}`).join(', ')}), каждый до его начала. КП действует ${this.validDays} дн.${mismatch}${priced}`,
       'Тексты длинные: «Скопировать документы» пришлёт их сообщениями.',
       ...(cabinet
         ? [

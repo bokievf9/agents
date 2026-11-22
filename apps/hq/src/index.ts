@@ -65,6 +65,7 @@ import { createReach } from './reach.js';
 import { appTools, toolsFor } from './tools.js';
 import { installRejectionGuard, keepPolling } from './process-guard.js';
 import { EmailFailures } from './email-failures.js';
+import { personalBriefMeta } from '@fir/worker-lead-intake';
 
 const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
@@ -433,6 +434,8 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cf
         const id = sales.createLeadTask({
           name, contact, service, budget, message, estimate, locale, slot, source, ...(telegramSent ? { telegramSent: true } : {}),
           ...(hasDomain !== undefined ? { hasDomain } : {}), ...(hasHosting !== undefined ? { hasHosting } : {}),
+          // a Персональный ИИ brief travels to the lead intake worker (the card is built from it); a business brief is not carried
+          ...(brief?.type === 'personal' ? { brief: personalBriefMeta(brief) } : {}),
         }, service);
         if (!clientEmail) return id;
         // a signed-in cabinet client: the account and the lead row exist (and are linked) before the answer goes back to the site

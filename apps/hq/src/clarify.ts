@@ -19,6 +19,8 @@ const GOAL_WORDS = /заявк|запис|клиент|ответ|рутин|п�
 export function gapsOf(l: Pick<Lead, 'niche' | 'task' | 'service' | 'estimate'>, raw: { product?: unknown; message?: unknown } = {}): Gap[] {
   const words = `${l.task} ${typeof raw.message === 'string' ? raw.message : ''} ${l.estimate}`;
   const service = l.service.trim().toLowerCase();
+  // Персональный ИИ: the site's personal brief already says what is wanted; business questions (niche, goal, channel) do not apply
+  if (service === 'personal') return [];
   const hasProduct = typeof raw.product === 'string' && raw.product.trim() !== '';
   const gaps: Gap[] = [];
   if ((service === '' || service === 'unknown' || service === 'other') && !hasProduct) gaps.push('scope');

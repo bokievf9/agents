@@ -4,6 +4,8 @@ import type { Prices } from '@fir/core';
 /** The Персональный ИИ levels by the build (the site's contract): up to two services `basic`; three or four services, or a voice, `plus`; five and more services, or a long memory, `max`. */
 export type PersonalLevel = 'basic' | 'plus' | 'max';
 export const PERSONAL_LEVEL_RU: Record<PersonalLevel, string> = { basic: 'Старт', plus: 'Плюс', max: 'Максимум' };
+/** The levels of a personal brief by their site names (owner 2026-11-22: Спутник / Второй пилот / Второе я). */
+export const PERSONAL_TIER_RU: Record<PersonalLevel, string> = { basic: 'Спутник', plus: 'Второй пилот', max: 'Второе я' };
 export const PERSONAL_SERVICES = ['mail', 'calendar', 'tasks', 'study', 'notes', 'messengers'];
 /** The services a Персональный ИИ takes when the build names none. */
 export const PERSONAL_DEFAULT = ['mail', 'calendar'];

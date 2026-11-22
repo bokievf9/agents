@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { detectInfrastructure, formatSlot, log, placeholderHold, tryComplete, tryJson, zonedParts, zonedToMs, type KindSpec, type Payload } from '@fir/core';
 import type { Task, Worker, WorkerCtx, WorkerResult } from '@fir/hq';
+import { briefFieldsSchema, isPersonalLead, personalOf, personalSummary } from './personal.js';
 import { LeadStore, type Enrichment, type Lang, type Lead } from './store.js';
 import { builderLinkIn, deriveEnrichment, enrichmentLines, guessDeadline, guessNiche, hasMoney, hasPlaceholder, isPriceQuestion, scoreLead, TEMP_RU, tpl } from './text.js';
 
@@ -21,6 +22,8 @@ export const enrichmentSchema = z.object({
   niche: z.string().trim().max(100).default(''),
   intentScore: z.number().min(0).max(100).default(0),
   builderLink: z.string().trim().max(600).default(''),
+  /** Персональный ИИ lead: the tier and the own-key flag of the site's brief (the presales quote reads them). Absent for a business lead. */
+  personal: z.object({ tier: z.enum(['basic', 'plus', 'max']).optional(), byok: z.boolean().optional() }).optional(),
 });
 
 /** The form lead as the webhook puts it into `task.meta.lead` (same fields as the firtech.pro form). */
@@ -50,6 +53,8 @@ export const webLeadSchema = z.object({
   enrichment: enrichmentSchema.optional(),
   /** The visitor asked for a person (or was upset): the card says so. */
   handoff: z.boolean().optional(),
+  /** The site's brief (tolerant): for `type: 'personal'` the personal fields. */
+  brief: briefFieldsSchema.optional().catch(undefined),
 });
 export type WebLead = z.output<typeof webLeadSchema>;
 
@@ -115,13 +120,15 @@ export function nextSlots(now: number, tz: string, hours: [string, string]): [nu
 
 /** Lead card for the owner (what the head puts above the reply draft and into the task result). */
 export function leadCard(l: Lead, tz: string, service: string, slotText: string, viaBot = false, product = '', siteBotCopy = false): string {
+  // a Персональный ИИ lead has no niche: the card shows the personal brief line as the task
+  const personal = l.service === 'personal' || Boolean(l.enrichment?.personal);
   return [
     `Лид #${l.id}: ${TEMP_RU[l.temperature].toUpperCase()}${siteBotCopy ? ' (копия: бот сайта тоже прислал)' : ''}`,
     viaBot ? `Источник: Telegram, клиентский бот (${service})` : `Источник: форма firtech.pro (${service})`,
     `Имя: ${l.name || '-'}`,
     `Контакт: ${l.contact || '-'}`,
     ...(product ? [`Продукт: ${product}`] : []),
-    `Ниша: ${l.niche || 'не выяснена'}`,
+    ...(personal ? [] : [`Ниша: ${l.niche || 'не выяснена'}`]),
     `Задача: ${l.task || 'не выяснена'}`,
     `Срок: ${l.deadline || 'не выяснен'}`,
     ...(l.origin ? [`Метка источника: ${l.origin}`] : []),
@@ -208,6 +215,8 @@ export class LeadIntakeWorker implements Worker {
 
   /** Niche, task and deadline: the model extracts them (strict JSON), plain heuristics when it cannot. */
   private async classify(ctx: WorkerCtx, w: WebLead): Promise<{ niche: string; task: string; deadline: string }> {
+    // Персональный ИИ: no niche is guessed (the estimate text of the site may name a business); the task is the personal brief line
+    if (isPersonalLead(w.service, w.brief)) return { niche: '', task: clip(personalSummary(personalOf(w.brief)), 300), deadline: '' };
     const text = `${w.message} ${w.estimate}`.trim();
     const fallback = {
       niche: guessNiche(text),
@@ -240,7 +249,7 @@ export class LeadIntakeWorker implements Worker {
       tier: 'sonnet',
       maxTokens: 500,
       system: `You write the first reply of Fir Tech studio (websites, Telegram bots, automation) to a person who left a request on the site. Write in ${l.lang === 'ru' ? 'Russian' : 'English'}, polite, at most 4 sentences, no emoji, no markdown, no long dashes. Greet by name, thank for the request, show you understood the task in your own words${product ? ` and mention the product they chose (${product})` : ''}. Never state a price, number of money or deadline yourself. Then include this call proposal exactly as given, line by line:\n${slotsText}${feedback ? `\nThe reviewer asked to fix: ${feedback}` : ''}`,
-      messages: [{ role: 'user', content: `Name: ${l.name}\nBusiness: ${l.niche || 'unknown'}\nTask: ${l.task || 'unknown'}\nProduct: ${product || 'not chosen'}\nPrice asked: ${l.priceAsked ? 'yes (say the team will confirm price and terms)' : 'no'}` }],
+      messages: [{ role: 'user', content: `Name: ${l.name}\n${l.service === 'personal' ? '' : `Business: ${l.niche || 'unknown'}\n`}Task: ${l.task || 'unknown'}\nProduct: ${product || 'not chosen'}\nPrice asked: ${l.priceAsked ? 'yes (say the team will confirm price and terms)' : 'no'}` }],
     });
     const text = draft?.trim();
     const ok = text && text.length >= 40 && text.length <= 900 && !hasMoney(text) && !hasPlaceholder(text) && !/[—–]/.test(text) && slotLines.split('\n').every((s) => text.includes(s));
@@ -267,7 +276,12 @@ export class LeadIntakeWorker implements Worker {
     const lead = store.upsert(task.id, { ...base, temperature, estimate: w.estimate, hasDomain: w.hasDomain ?? seen.hasDomain, hasHosting: w.hasHosting ?? seen.hasHosting });
 
     // the conversation summary: the chat's own, else derived from the lead's words; it is kept on the lead and shown on the card
-    const enrichment: Enrichment = w.enrichment ?? deriveEnrichment({ message: w.message, estimate: w.estimate, service: w.service, product: w.product, niche: c.niche, temperature });
+    const personalBrief = isPersonalLead(w.service, w.brief) ? personalOf(w.brief) ?? undefined : undefined;
+    const isPersonal = isPersonalLead(w.service, w.brief);
+    const derived = deriveEnrichment({ message: w.message, estimate: w.estimate, service: w.service, product: w.product, niche: c.niche, temperature });
+    const enrichment: Enrichment = isPersonal
+      ? { ...derived, summary: [], productFamily: 'Персональный ИИ', niche: '', personal: { ...(personalBrief?.tier ? { tier: personalBrief.tier } : {}), ...(personalBrief?.byok !== undefined ? { byok: personalBrief.byok } : {}) } }
+      : w.enrichment ?? deriveEnrichment({ message: w.message, estimate: w.estimate, service: w.service, product: w.product, niche: c.niche, temperature });
     store.setEnrichment(lead.id, { ...enrichment, niche: enrichment.niche || c.niche, builderLink: enrichment.builderLink || builderLinkIn(w.page) });
     const t = tpl(lang);
     const slotText = chosenSlot ? formatSlot(chosenSlot, ctx.tz, 'ru') : `предложены: ${slots.map((s) => formatSlot(s, ctx.tz, 'ru')).join(' / ')}`;
@@ -276,7 +290,7 @@ export class LeadIntakeWorker implements Worker {
     const route = viaBot ? { chatId: w.chatId } : {};
     const slotLines = chosenSlot ? t.slotChosen(formatSlot(chosenSlot, ctx.tz, lang)) : slots.map((s) => formatSlot(s, ctx.tz, lang)).join('\n');
     const slotsText = chosenSlot ? slotLines : t.slots(formatSlot(slots[0]!, ctx.tz, lang), formatSlot(slots[1]!, ctx.tz, lang));
-    const drafted = await this.draftReply(ctx, lead, slotLines, slotsText, feedback, w.product);
+    const drafted = await this.draftReply(ctx, lead, slotLines, slotsText, feedback, w.product || (isPersonal ? 'Персональный ИИ' : ''));
     let demo: string | null = null;
     if (lead.niche.trim() && this.demoLink) {
       try {
@@ -298,13 +312,13 @@ export class LeadIntakeWorker implements Worker {
           tier: 'sonnet',
           maxTokens: 400,
           system: `You draft a short reply to a client of a web and Telegram-bot studio who asks about price or timing. Write in ${lang === 'ru' ? 'Russian' : 'English'}. Never state a number, price or deadline yourself: put [price] and [term] placeholders for the owner to fill. Two sentences at most, polite, no emoji.`,
-          messages: [{ role: 'user', content: `Business: ${lead.niche || 'unknown'}\nTask: ${lead.task || 'unknown'}\nDeadline wish: ${lead.deadline || 'unknown'}` }],
+          messages: [{ role: 'user', content: `${isPersonal ? '' : `Business: ${lead.niche || 'unknown'}\n`}Task: ${lead.task || 'unknown'}\nDeadline wish: ${lead.deadline || 'unknown'}` }],
         })) ?? t.priceDraft;
       const safe = hasMoney(draft) || !hasPlaceholder(draft) ? t.priceDraft : draft;
       await ctx.requestApproval(
         KIND_PRICE,
         { text: safe, leadId: lead.id, contact: lead.contact, name: lead.name, ...route },
-        `Клиент спрашивает цену или сроки. Лид #${lead.id}: ниша ${lead.niche || '?'}, задача ${lead.task || '?'}, срок ${lead.deadline || '?'}. Нажмите «Править» и впишите цену и срок вместо меток.${viaBot ? ' После одобрения бот отправит текст клиенту сам.' : ''}`,
+        `Клиент спрашивает цену или сроки. Лид #${lead.id}: ${isPersonal ? '' : `ниша ${lead.niche || '?'}, `}задача ${lead.task || '?'}, срок ${lead.deadline || '?'}. Нажмите «Править» и впишите цену и срок вместо меток.${viaBot ? ' После одобрения бот отправит текст клиенту сам.' : ''}`,
       );
     }
     log('info', 'lead processed', { leadId: lead.id, temperature, priceAsked });

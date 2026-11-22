@@ -610,14 +610,14 @@ export class SalesHead implements ApprovalEditor {
     this.hq.log(LEADS_ID, 'lead_notified', 'lead', String(lead.id));
     await this.report(
       taskId,
-      `Лид #${lead.id}: ${TEMP_RU[lead.temperature]}, ниша ${lead.niche || '?'}, задача ${oneLine(lead.task, 80) || '?'}. ${approvals} на одобрение, контакт в карточке.`,
+      `Лид #${lead.id}: ${TEMP_RU[lead.temperature]}, ${lead.service === 'personal' ? '' : `ниша ${lead.niche || '?'}, `}задача ${oneLine(lead.task, 80) || '?'}. ${approvals} на одобрение, контакт в карточке.`,
     );
     const ref = referrerFromSource(lead.origin);
     if (ref) {
       const { referral, created } = this.rstore().propose({ referrer: ref, referred: lead.name || `лид #${lead.id}`, leadId: lead.id, source: 'lead' });
       if (created) await this.report(taskId, `Рекомендация ${describeReferral(referral)}, выплата после первой оплаты клиента (10% сметы, USDT). Счёт отмечается: /paid <номер счёта>.`);
     }
-    if (lead.temperature === 'hot') await this.hq.alert(`Горячий лид #${lead.id} (${lead.niche || 'ниша не ясна'}). Карточка с контактом в пачке на одобрение, /approve.`);
+    if (lead.temperature === 'hot') await this.hq.alert(`Горячий лид #${lead.id} (${lead.service === 'personal' ? 'Персональный ИИ' : lead.niche || 'ниша не ясна'}). Карточка с контактом в пачке на одобрение, /approve.`);
     await this.bookChosen(taskId, lead);
     // a cabinet lead with gaps is asked first; its КП follows the answers (or 24 hours)
     if (await this.clarifyIfNeeded(taskId, lead)) return;

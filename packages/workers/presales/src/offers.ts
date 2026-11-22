@@ -206,6 +206,8 @@ const KEYWORDS: [RegExp, DirectionId][] = [
 ];
 
 export function guessDirection(parts: { source?: string; service?: string; text?: string }): DirectionId {
+  // a Персональный ИИ lead from the site (`service: 'personal'`): never a business direction, whatever words its summary holds
+  if (parts.service === 'personal') return 'personal';
   if (parts.source && isDirectionId(parts.source)) return parts.source === 'agent' ? 'personal' : parts.source;
   const text = parts.text ?? '';
   // a build that names only a flagship (`p.personal`, `p.company`): the link in the text says it (an old `p.agent` is `personal`)
