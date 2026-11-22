@@ -10,6 +10,7 @@ import type { PayApi } from './pay.js';
 import type { FileReply } from './pult-files.js';
 import { EVENT_NAMES } from './pult-events.js';
 import { auditInputSchema, type AuditInput, type AuditOutcome } from './audit-shared.js';
+import { SITE_LEAD_ID, type LeadDedupe } from './lead-dedupe.js';
 import { chatSchema, type ChatOutcome, type ChatRequest } from './client/web.js';
 
 /** Same fields as the firtech.pro form (`../firtech/src/lib/lead.ts` leadSchema); `estimate` is the builder's leadSummary. */
@@ -35,6 +36,8 @@ export const webLeadSchema = z.object({
   clientEmail: z.string().trim().toLowerCase().max(254).email().optional().catch(undefined),
   cabinetId: z.string().trim().min(1).max(64).optional().catch(undefined),
   clientName: z.string().trim().max(120).optional().catch(undefined),
+  /** The site's own id of this lead: a resend with the same id is answered from the first result (`duplicate: true`) and creates nothing. A malformed value is ignored. */
+  siteLeadId: SITE_LEAD_ID.optional().catch(undefined),
 }).transform((d, ctx) => {
   const contact = d.contact.length >= 3 ? d.contact : d.clientEmail ?? '';
   if (contact.length < 3) ctx.addIssue({ code: 'custom', path: ['contact'], message: 'contact is required' });
@@ -163,6 +166,8 @@ export function createWebhook(
   extra: {
     audit?: { token: string; handle: (a: AuditInput) => Promise<AuditOutcome> };
     status?: { get: () => unknown };
+    /** Idempotency of `POST /lead` by `siteLeadId` (`lead-dedupe.ts`); without it every request makes a lead. */
+    leadDedupe?: LeadDedupe;
     /** Public `GET /blog?lang=all` and `GET /blog/:slug` (no token, per-IP rate limit, 60 s cache header). Without it the routes answer 404. */
     blog?: BlogApi;
     /** `POST /events` (header `x-site-token`, site page counters, 120 a minute per visitor IP). Without it the route answers 404. */
@@ -193,6 +198,7 @@ export function createWebhook(
   const auditByIp = new KeyedLimit(10, 3_600_000);
   const leadByIp = new KeyedLimit(20, 3_600_000);
   const eventsByIp = new KeyedLimit(120, 60_000);
+  const leadInFlight = new Map<string, Promise<Record<string, unknown>>>();
   return createServer((req, res) => {
     void (async () => {
       try {
@@ -416,11 +422,27 @@ export function createWebhook(
         if (!parsed.success) return json(res, 400, { ok: false, error: 'invalid' });
         const lead = parsed.data;
         if (lead.website) return json(res, 200, { ok: true }); // honeypot: bots get a normal answer, nothing is stored
-        const made = await onLead(lead);
-        // P-02: HQ is the one channel that tells the owner about a lead (his inbox, the Sales card): `notified: true` lets the site skip its own bot
-        // (it keeps it only for a lead HQ did not take: an error, a timeout, `queued`). A window in `slot` the site already booked becomes HQ's booking.
-        if (typeof made === 'number') return json(res, 200, { ok: true, id: made, notified: true });
-        json(res, 200, { ok: true, id: made.id, ...(made.leadId != null ? { leadId: made.leadId } : {}), notified: true });
+        const dedupe = extra.leadDedupe;
+        const sid = lead.siteLeadId;
+        if (dedupe && sid) {
+          const first = dedupe.find(sid);
+          if (first) return json(res, 200, { ...first, duplicate: true });
+          const pending = leadInFlight.get(sid);
+          if (pending) return json(res, 200, { ...(await pending), duplicate: true });
+        }
+        const work = (async (): Promise<Record<string, unknown>> => {
+          const made = await onLead(lead);
+          return typeof made === 'number' ? { ok: true, id: made, notified: true } : { ok: true, id: made.id, ...(made.leadId != null ? { leadId: made.leadId } : {}), notified: true };
+        })();
+        if (dedupe && sid) leadInFlight.set(sid, work);
+        let reply: Record<string, unknown>;
+        try {
+          reply = await work;
+        } finally {
+          if (sid) leadInFlight.delete(sid);
+        }
+        if (dedupe && sid) dedupe.remember(sid, reply);
+        return json(res, 200, reply);
       } catch (e) {
         log('error', 'webhook failed', { err: errMsg(e) });
         json(res, 500, { ok: false, error: 'internal' });

@@ -292,6 +292,14 @@ export function createSettings(d: SettingsDeps) {
     return db.prepare('SELECT at, key, old, new, source FROM settings_log ORDER BY id DESC LIMIT ?').all(limit) as { at: number; key: string; old: string; new: string; source: string }[];
   }
 
+  /** `GET /admin/settings/log?limit=`: the last entries (1..200, default 50), newest first, only the values of settings. */
+  function logView(query: URLSearchParams): AdminReply {
+    const raw = Number(query.get('limit') ?? 50);
+    const limit = Number.isFinite(raw) ? Math.min(200, Math.max(1, Math.trunc(raw))) : 50;
+    const items = history(limit).map((r) => ({ at: new Date(r.at).toISOString(), key: r.key, old: r.old, new: r.new, source: r.source }));
+    return ok({ items });
+  }
+
   /**
    * The first department limits (owner 2026-11-23, API budget 100 USD a month): written once, when every limit is still 0 (`limits_seeded` marks it, so a limit
    * the owner sets back to 0 later stays 0). The 80% and 100% alerts of `recordCost` then work as they always did.
@@ -309,7 +317,7 @@ export function createSettings(d: SettingsDeps) {
     return any;
   }
 
-  return { get, patch, view, history, seedBudgets };
+  return { get, patch, view, history, logView, seedBudgets };
 }
 
 export type SettingsApi = ReturnType<typeof createSettings>;

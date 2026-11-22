@@ -195,7 +195,26 @@ describe('GET and PATCH /admin/settings', () => {
     const patched = await on.handle({ method: 'PATCH', path: '/admin/settings', query: new URLSearchParams(), body: { kp: { validDays: 21 } } });
     expect(patched.status).toBe(200);
     expect((patched.body as any).changed).toEqual(['kp.validDays']);
+    const lg = await on.handle({ method: 'GET', path: '/admin/settings/log', query: new URLSearchParams('limit=5'), body: null });
+    expect(lg.status).toBe(200);
+    expect((lg.body as any).items[0].key).toBe('kp.validDays');
     expect((await mk(false).handle({ method: 'GET', path: '/admin/settings', query: new URLSearchParams(), body: null })).status).toBe(503);
+  });
+});
+
+describe('GET /admin/settings/log', () => {
+  it('newest first, limit 1..200, ISO time, only setting values; routed through the admin handler', async () => {
+    const { patch, settings } = setup();
+    patch({ calls: { durationMin: 45 } });
+    patch({ autopilot: { leadManager: 'ask_me' } });
+    const r = settings.logView(new URLSearchParams('limit=1'));
+    expect(r.status).toBe(200);
+    const items = (r.body as any).items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toEqual({ at: expect.stringMatching(/^\d{4}-\d\d-\d\dT/), key: 'autopilot.leadManager', old: 'policy', new: 'ask_me', source: 'owner' });
+    expect((settings.logView(new URLSearchParams()).body as any).items.map((i: any) => i.key)).toEqual(['autopilot.leadManager', 'calls.durationMin']);
+    expect((settings.logView(new URLSearchParams('limit=-5')).body as any).items).toHaveLength(1);
+    expect((settings.logView(new URLSearchParams('limit=abc')).body as any).items).toHaveLength(2);
   });
 });
 
