@@ -23,6 +23,7 @@ import { Reporter, type TopicSender } from './reporter.js';
 import { TopicManager } from './topics.js';
 import { resolveMedia } from '@fir/worker-publisher';
 import { createWebhook } from './webhook.js';
+import { leadDedupe } from './lead-dedupe.js';
 import { registerCabinetLead } from './cabinet.js';
 import { AuditGate, AuditStore, submitAudit } from './audit-shared.js';
 import { blogApi } from './blog.js';
@@ -448,6 +449,7 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cf
             }
           : {}),
         status: { get: cachedStatus(db) },
+        leadDedupe: leadDedupe(db, hq.now),
         blog: blogApi(db, hq.now, () => hq.tz),
         pay: payApi(db, billing, hq.now, () => hq.tz),
         ...(cfg.siteEventsToken ? { events: { token: cfg.siteEventsToken, handle: eventsApi(db, hq.now, () => hq.tz).handle } } : {}),

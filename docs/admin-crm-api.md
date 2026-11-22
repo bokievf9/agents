@@ -776,7 +776,8 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
     "calls": { "slotHours": ["11:00", "15:00"], "durationMin": 30, "bufferMin": 0 },
     "kp": { "validDays": 14, "defaultLang": "ru" },
     "playground": { "draftMsgsPerDay": 50, "liveMsgsPerDay": 500 },
-    "service": { "tgApprovalCards": false, "tgGroupReports": false } },
+    "service": { "tgApprovalCards": false, "tgGroupReports": false },
+    "autopilot": { "leadManager": "policy" } },
   "usage": { "deptMonthUsd": { "marketing": 4.2, "sales": 1.1, "support": 0, "production": 0, "backoffice": 0, "director": 0.6 }, "clientLlmToday": 41, "monthStartedAt": "2026-10-31T19:00:00.000Z" },
   "restartRequired": false, "restartKeys": [] }
 ```
@@ -785,6 +786,7 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 - `trust.kinds`: таблица видов действий с уровнем (0: ждёт кнопку, 1: делает сам), `locked` (деньги, цены: поднимает только владелец), `streak` одобрений подряд, `approvals` всего, `threshold` сколько нужно подряд для уровня 1 (`custom`: задан для вида, иначе `defaultThreshold`, иначе `TRUST_THRESHOLD`).
 - `limits.deptBudgetUsd`: **ключ лимитов отделов, USD в месяц** (0 = без лимита), пишется в `agents.budget_usd_month` головы отдела (для `director`: самого Директора и его ассистента), его читает `overBudget`; применяется сразу, алерты 80% и 100% остаются. `usage.deptMonthUsd` расход месяца рядом (`director` это отдел `hq`). `clientLlmDailyCap` дневной потолок ответов модели клиентского бота и чата сайта (0: только шаблоны), `usage.clientLlmToday` сколько израсходовано сегодня.
 - `calls`: `slotHours` два окна по умолчанию (когда сайт не отдал свои), `durationMin` 5..240 и `bufferMin` 0..240: занятый созвон закрывает окна ближе, чем длительность плюс буфер. `kp.validDays` 1..90, `kp.defaultLang` `ru|en` (язык документов по умолчанию, сохраняется; документы клиентов с языком кабинета идут на его языке). `playground`: лимит сообщений в сутки у агента площадки без своего лимита, 1..2000.
+- `autopilot.leadManager` (`ask_me|policy|autopilot`, по умолчанию `policy`): как часто менеджер заявок (Фира) спрашивает владельца. `ask_me` каждое сомнение, `policy` по политике эскалации, `autopilot` только просьба живого человека, гнев, юридическое. Применяется сразу.
 - `service`: флаги `TG_APPROVAL_CARDS` и `TG_GROUP_REPORTS`; смена читается при старте HQ, поэтому после неё `restartRequired: true` и `restartKeys: ["service.tgApprovalCards"]`.
 
 `PATCH /admin/settings`: тело — любое подмножество тех же групп, лишние поля 400 `invalid` (`fields` перечисляет пути), всё или ничего:
@@ -796,11 +798,14 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
   "calls": { "slotHours": ["10:00", "16:30"], "durationMin": 45, "bufferMin": 15 },
   "kp": { "validDays": 30, "defaultLang": "en" },
   "playground": { "draftMsgsPerDay": 20, "liveMsgsPerDay": 800 },
-  "service": { "tgApprovalCards": true } }
+  "service": { "tgApprovalCards": true },
+  "autopilot": { "leadManager": "ask_me" } }
 ```
 Ответ `200 { ok: true, changed: ["schedule.summaryTime", ...], settings, usage, restartRequired, restartKeys }` (то же, что `GET`, плюс `changed`: только ключи, значение которых действительно поменялось). Ошибки: 400 `invalid` (формат, диапазон, неизвестный ключ, часовой пояс не IANA), 422 `unknown_kind` + `kinds` (вид действия не существует; `thresholds: { вид: null }` сбрасывает порог вида), 422 `unknown_department` + `department` (у отдела нет головы), 503 `unavailable` (нет объекта настроек). `levels` это тот же код, что `POST /admin/company/trust/:kind` и `/level`.
 
 Журнал: таблица `settings_log` (`at`, `key`, `old`, `new`, `source`): ключ в той же записи, что в `changed` (`schedule.summaryTime`, `limits.deptBudgetUsd.sales`, `trust.levels.lead_reply`...), `source` `owner` или `seed 2026-11-23`; значения только настроек, текстов клиентов нет. Первичные лимиты (marketing 25, sales 20, support 15, production 15, backoffice 10, director 5, USD в месяц, бюджет API 100 USD) пишутся один раз при старте, если у всех голов 0 (метка `limits_seeded`: лимит, который владелец позже вернул в 0, остаётся 0).
+
+`GET /admin/settings/log?limit=` (2026-11-23) → `{ ok: true, items: [{ at, key, old, new, source }] }`: последние записи `settings_log`, новые первыми, `limit` 1..200 (по умолчанию 50, мусор тоже 50), `at` ISO. `old` и `new` строки-значения настроек (`"1"`/`"0"` для флагов, `""` для сброшенного порога), текстов клиентов нет. 503 `unavailable` без объекта настроек.
 
 Ассистент HQ-бота: «какие настройки?» читает эти же значения (инструмент `company_settings`, только чтение), «поставь сводку на 9:30» не меняет ничего и отвечает ссылкой `…/admin/office?panel=company&tab=settings`.
 
@@ -865,3 +870,6 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 - `routine`: включённые рутины, каждое срабатывание cron по часовому поясу рутины (до 300 на ответ); `detail` cron; `link` `routines:<name>`.
 - `content`: `cm_items` с `planned_date` в диапазоне (кроме отклонённых), `allDay: true`, `at` начало дня; `status` материала; `link` `content:item:<id>`.
 Источник, которого ещё нет в базе, даёт пустой список. Текстов клиентов нет, только имя лида и услуга.
+
+## Идемпотентность заявок: `siteLeadId` (2026-11-23)
+`POST /lead` принимает необязательное `siteLeadId` (строка 8..64 знаков `A-Za-z0-9_.:-`; кривое значение игнорируется, заявка не отвергается). Первый ответ запоминается на 72 часа (таблица `site_lead_ids`: id, время, ответ из id и флагов, текста заявки там нет). Повтор с тем же id (сайт не дождался ответа и шлёт снова) не создаёт лид, задачу и уведомление, а отвечает как на первую заявку плюс `duplicate: true`: `{ ok: true, id, leadId?, notified: true, duplicate: true }`. Два одновременных запроса с одним id дают один лид. Ошибки (400, 429, 500) не запоминаются, повтор после них обработается заново. Без `siteLeadId` поведение прежнее. Код `apps/hq/src/lead-dedupe.ts`, `webhook.ts`.

@@ -110,6 +110,10 @@ export function createPult(d: PultDeps) {
       if (method === 'POST' && seg.length === 1) return trends.post(body);
       return fail(404, 'not_found');
     }
+    if (a === 'settings' && seg.length === 2 && seg[1] === 'log') {
+      if (!d.settings) return fail(503, 'unavailable');
+      return method === 'GET' ? d.settings.logView(query) : fail(405, 'method_not_allowed');
+    }
     if (a === 'settings' && seg.length === 1) {
       if (!d.settings) return fail(503, 'unavailable');
       if (method === 'GET') return d.settings.get();
