@@ -134,6 +134,8 @@ export interface Config extends BaseConfig {
   demoDailyPerClient: number;
   /** `DEMO_REQUIRE_CLIENT=on`: a demo request that names no known client gets 401 `login_required`. */
   demoRequireClient: boolean;
+  /** `KNOWLEDGE_AUTO_IMPORT` (default on): a lead with the client's site in the brief queues the import of that site into his agent's knowledge. `off` stops it. */
+  knowledgeAutoImport: boolean;
   /** age public key (`age1...`) for the nightly backup sent to the owner; unset: sent unencrypted (the message says so). */
   backupAgeRecipient: string | undefined;
 }
@@ -247,6 +249,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     clientLlmDailyCap: Math.round(num(env, 'CLIENT_LLM_DAILY_CAP', 300, 0, 100_000)),
     demoDailyPerClient: Math.round(num(env, 'DEMO_DAILY_PER_CLIENT', 30, 1, 10_000)),
     demoRequireClient: /^(on|1|true|yes)$/i.test(optional(env, 'DEMO_REQUIRE_CLIENT') ?? ''),
+    knowledgeAutoImport: !/^(off|0|false|no)$/i.test(optional(env, 'KNOWLEDGE_AUTO_IMPORT') ?? ''),
     backupAgeRecipient: backupRecipient(optional(env, 'BACKUP_AGE_RECIPIENT')),
     pricesUrl: optional(env, 'PRICES_URL') ?? DEFAULT_PRICES_URL,
     siteUrl: (optional(env, 'SITE_URL') ?? 'https://firtech.pro').replace(/\/$/, ''),

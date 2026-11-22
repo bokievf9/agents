@@ -32,6 +32,8 @@ import { DemoUsage, tapLlm } from './demo-usage.js';
 import { payApi } from './pay.js';
 import { cachedStatus } from './status.js';
 import { createAdmin } from './admin.js';
+import { ClientKnowledge } from './client-knowledge.js';
+import { HashEmbedder, InMemoryKnowledge, voyageFromEnv } from '@fir/fira';
 import { buildCabinet, type CabinetApi } from './cabinet-api.js';
 import { Campaigns } from './campaigns.js';
 import { UPLOAD_TYPES } from '@fir/core';
@@ -230,9 +232,11 @@ const backoffice = new BackofficeHead({
 });
 // Cabinet v3 (2026-11-22): the client's documents (accept, sign), threads and uploads, the playground of agents. The heads hand the owner's approvals to it.
 const chatGateForAgents = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
+// «Знания клиента»: the client's website as knowledge of his agent, its own in-memory store (scope `client-<id>`), never the lead manager's store
+const siteKnowledge = new ClientKnowledge({ db, now: hq.now, knowledge: new InMemoryKnowledge(voyageFromEnv() ?? new HashEmbedder()), autoImport: cfg.knowledgeAutoImport });
 const cabinet = buildCabinet({
   unsubscribeSecret: cfg.unsubscribeSecret,
-  hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents, demoUsage, demoRequireClient: cfg.demoRequireClient, kpValidDays: startVals.kpValidDays,
+  hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents, demoUsage, demoRequireClient: cfg.demoRequireClient, siteKnowledge, kpValidDays: startVals.kpValidDays,
   tools: () => toolsFor(hq, tools, { agentId: 'documents', dept: BACKOFFICE, messenger, ownerId: cfg.ownerId }),
 });
 sales.cabinet = cabinet.docs;
@@ -420,7 +424,7 @@ presenceTimer.unref();
 const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cfg.siteEventsToken || cfg.mediaSecret
   ? createWebhook(
       // the form gets its error when the task cannot be made, but the person's contact is kept for the owner (guardedLead)
-      guardedLead(lost, ({ name, contact, service, budget, message, estimate, locale, slot, source, telegramSent, hasDomain, hasHosting, clientEmail, cabinetId, clientName }) => {
+      guardedLead(lost, ({ name, contact, service, budget, message, estimate, locale, slot, source, telegramSent, hasDomain, hasHosting, clientEmail, cabinetId, clientName, brief }) => {
         const id = sales.createLeadTask({
           name, contact, service, budget, message, estimate, locale, slot, source, ...(telegramSent ? { telegramSent: true } : {}),
           ...(hasDomain !== undefined ? { hasDomain } : {}), ...(hasHosting !== undefined ? { hasHosting } : {}),
@@ -429,6 +433,8 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cf
         // a signed-in cabinet client: the account and the lead row exist (and are linked) before the answer goes back to the site
         try {
           const r = registerCabinetLead(db, hq.now, id, { clientEmail, cabinetId, clientName, name, contact, service, budget, message, estimate, locale, source, hasDomain, hasHosting });
+          // «Знания клиента»: his own site (and Instagram handle) from the brief; the import is queued without blocking the answer
+          if (brief?.discovery && (brief.discovery.si || brief.discovery.ig)) siteKnowledge.onBrief(r.clientId, brief.discovery);
           return { id, leadId: r.leadId };
         } catch (e) {
           log('warn', 'cabinet lead not linked', { task: id, err: errMsg(e) });

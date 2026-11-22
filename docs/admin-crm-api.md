@@ -904,3 +904,23 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 - `POST /admin/quality/rate` `{ messageId, thread, value: 1|-1, note? }` (лишние поля, другое `value` 400 `invalid`) → `{ ok, id, lessonId? }`. Оценка в таблице `fira_ratings` (одна на пару `messageId` + `thread`, повторная заменяет прежнюю и её урок). `-1` с непустым `note` делает урок `source: 'rating'` в `fira_lessons` (`good` = заметка; `question` и `bad` берутся из `ch_messages` и `ch_inbound`, если `messageId` их id, иначе вопрос = заметка).
 - `GET /admin/quality/ratings?limit=` → `{ ok, items: [{ id, messageId, thread, value, note, at }] }`, новые первыми.
 - `GET /admin/quality/eval` → `{ ok, last: { at, runtime: 'fira'|'legacy', lead: { passed, total }, red: { passed, total }, handoffRate, toolRate } | null }`. Итог лежит в настройке `fira.eval.last`; пишет его `pnpm --filter hq fira-compare --record /путь/к/hq.db` (набор заявок и red-team на Fira), без прогонов `last: null`.
+
+## Знания клиента (2026-11-23, ветка `fira-client-import`)
+Сайт самого клиента становится знаниями его агента (песочница и «демо на ваших данных»). Оба маршрута за админ-токеном, как все `/admin/*`; клиент должен
+существовать в `cab_clients`, иначе `404 not_found`.
+
+`POST /admin/clients/:id/knowledge/import` тело `{ url?, maxPages? }`. Без `url` берётся сайт из брифа лида (`brief.discovery.si`). `url`: только `http` и `https`,
+без логина и пароля, иначе `400 invalid_url`; `maxPages` целое 1..30, иначе `400 invalid`. Ответ `202 { ok, jobId, state: 'running', already }`: задача идёт
+в фоне. Пока у клиента идёт задача, повторный POST возвращает её же (`already: true`), ничего не запускается второй раз. Повторный импорт заменяет знания сайта
+этого клиента (те же страницы дают те же строки, дублей нет); если сайт не прочитался, прежние знания остаются, задача `failed`.
+
+`GET /admin/clients/:id/knowledge`: `{ ok, site, instagram, instagramImported: false, state: 'none'|'running'|'done'|'failed', job, pages, chunks, lastAt, errors, items: [{ url, title, chars, fetchedAt }] }`.
+`job`: `{ id, url, origin: 'auto'|'manual', state, pages, chunks, chars, errors, skipped, truncated, error, startedAt, finishedAt }`. `errors`: сумма ошибок всех задач клиента.
+Текстов страниц в ответе нет.
+
+Что читает краулер: только тот же хост (`www.` считается тем же сайтом), `robots.txt` соблюдается (5xx или сеть: не читаем вообще, 404: можно всё), до 30 страниц, до 1,5 МБ текста, 10 с на страницу,
+перенаправления только внутри сайта, адреса не из публичной сети (`127.0.0.1`, `10.*`, `169.254.*`) отказ. HTML в текст с заголовками (`#`), списками, повторы меню и подвалов один раз, одинаковые страницы одна,
+`noindex` пропускается. Чанки идут в хранилище с компанией `client-<id>` и тиром `internal`, в пак Fir Tech никогда. Логи только счётчики.
+
+Автозапуск: заявка с `brief.discovery.si` (адрес сайта клиента) в `POST /lead` от вошедшего клиента ставит импорт в очередь (флаг `KNOWLEDGE_AUTO_IMPORT`, по умолчанию включён; `off` отключает),
+не чаще одной задачи на клиента в час, адрес не `http(s)` не ставится никогда. `brief.discovery.ig` (Instagram) только сохраняется как ник, не читается (TODO: чтение профиля через очередь Agent Reach).

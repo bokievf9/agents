@@ -3,6 +3,7 @@ import type { Hq } from '@fir/hq';
 import type { BillingWorker } from '@fir/worker-billing';
 import { CabDocs } from './cab-docs.js';
 import { CabThreads } from './cab-threads.js';
+import type { ClientKnowledge } from './client-knowledge.js';
 import { ClientMail } from './client-mail.js';
 import type { DemoUsage } from './demo-usage.js';
 import { Playground } from './playground.js';
@@ -19,6 +20,8 @@ export interface CabinetApi {
   docs: CabDocs;
   threads: CabThreads;
   playground: Playground;
+  /** «Знания клиента»: `GET /admin/clients/:id/knowledge`, `POST .../knowledge/import`. Absent: those routes answer 404. */
+  siteKnowledge?: ClientKnowledge;
   /** P-13 and the call, review notices: emails to cabinet clients outside the documents (`client-mail.ts`). Only `buildCabinet` makes it. */
   mail?: ClientMail;
 }
@@ -48,6 +51,8 @@ export interface CabinetDeps {
   /** «Демо только для вошедших»: booking and cap of the demo per client (`demo-usage.ts`) and the switch that refuses an anonymous demo. */
   demoUsage?: DemoUsage | undefined;
   demoRequireClient?: boolean | undefined;
+  /** The imported knowledge of the client's own website (`client-knowledge.ts`). */
+  siteKnowledge?: ClientKnowledge | undefined;
 }
 
 /** Builds the three modules of the cabinet and the dispatcher; the heads get `docs` (`sales.cabinet = cabinet.docs`, ...). */
@@ -67,18 +72,18 @@ export function buildCabinet(o: CabinetDeps): CabinetApi {
     db: o.hq.db, now, tz: () => o.hq.tz, llm: o.llm, secret: o.secret ?? o.mediaSecret, gate: o.gate, uploadText: (cid, uid) => threads.uploadText(cid, uid), notifyOwner,
     // P-21: the handoff of a client's agent goes to the client (his agent thread); the owner only hears the fact
     handoff: (clientId, agentId) => notifyOwner(`Агент #${agentId} клиента ${clientId} передал разговор посетителя владельцу агента (тред агента в кабинете клиента)`),
-    journal: (agent, action, detail) => o.hq.log(agent, action, 'agent', detail), siteUrl: o.siteUrl, demoUsage: o.demoUsage, demoRequireClient: o.demoRequireClient,
+    journal: (agent, action, detail) => o.hq.log(agent, action, 'agent', detail), siteUrl: o.siteUrl, demoUsage: o.demoUsage, demoRequireClient: o.demoRequireClient, siteKnowledge: o.siteKnowledge,
   });
   ref.pg = playground;
   docs.attachPlayground(playground);
-  const api = createCabinetApi({ docs, threads, playground });
-  return { ...api, mail, bind: (h) => void Object.assign(hooks, h) };
+  const api = createCabinetApi({ docs, threads, playground, ...(o.siteKnowledge ? { siteKnowledge: o.siteKnowledge } : {}) });
+  return { ...api, mail, ...(o.siteKnowledge ? { siteKnowledge: o.siteKnowledge } : {}), bind: (h) => void Object.assign(hooks, h) };
 }
 
 const num = (s: string | undefined): number | null => (s !== undefined && /^\d{1,12}$/.test(s) ? Number(s) : null);
 
-export function createCabinetApi(m: { docs: CabDocs; threads: CabThreads; playground: Playground }): CabinetApi {
-  const { docs, threads, playground } = m;
+export function createCabinetApi(m: { docs: CabDocs; threads: CabThreads; playground: Playground; siteKnowledge?: ClientKnowledge }): CabinetApi {
+  const { docs, threads, playground, siteKnowledge } = m;
   return {
     docs, threads, playground, bind: () => undefined,
     route(method, seg, query, body) {
@@ -109,6 +114,11 @@ export function createCabinetApi(m: { docs: CabDocs; threads: CabThreads; playgr
           return post && seg.length === 2 ? Promise.resolve(addReview(docs.db, docs.now(), cid, body, docs.ownerLine)) : null;
         case 'uploads':
           return post && seg.length === 2 ? Promise.resolve(threads.upload(cid, body)) : null;
+        case 'knowledge':
+          if (!siteKnowledge) return null;
+          if (get && seg.length === 2) return Promise.resolve(siteKnowledge.statusRoute(cid));
+          if (post && seg.length === 3 && a === 'import') return Promise.resolve(siteKnowledge.importRoute(cid, body));
+          return null;
         case 'agents': {
           if (seg.length === 2) return get ? Promise.resolve(playground.list(cid)) : post ? Promise.resolve(playground.create(cid, body)) : null;
           const aid = num(a);
