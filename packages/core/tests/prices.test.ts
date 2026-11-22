@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import fallbackJson from '../src/prices.fallback.json' with { type: 'json' };
 import {
-  allowedAmounts, pricesReloadMs, PRICES_REFRESH_MS, FALLBACK_PRICES, getPrices, loadPrices, parsePrices, planOf, PRICES_SETTING, PRODUCT_KEYS, setPrices, startPricesRefresh, supportMonthly, type PriceStore,
+  allowedAmounts, pricesReloadMs, PRICES_REFRESH_MS, FALLBACK_PRICES, getPrices, loadPrices, parsePrices, planOf, PRICES_SETTING, PRODUCT_KEYS, setPrices, startPricesRefresh, supportMonthly, teamMonthly, type PriceStore,
 } from '../src/index.js';
 
 const memStore = (): PriceStore & { data: Map<string, string> } => {
@@ -81,12 +81,55 @@ describe('the bundled fallback snapshot', () => {
 
   it('is validated: a broken shape is rejected', () => {
     expect(parsePrices({ ...fallbackJson, currency: 'EUR' })).toBeNull();
-    expect(parsePrices({ ...fallbackJson, products: { admin: { kind: 'from', from: 1 } } })).toBeNull();
     expect(parsePrices({ ...fallbackJson, products: { ...fallbackJson.products, admin: { kind: 'from', from: -5 } } })).toBeNull();
     expect(parsePrices(null)).toBeNull();
     // a product may be `{ from }` too
     const grown = parsePrices({ ...fallbackJson, products: { ...fallbackJson.products, admin: { from: 295, title: 'x' } } });
     expect(grown?.products.admin).toBe(295);
+  });
+});
+
+describe('the live v4 payload of firtech.pro/api/prices', () => {
+  const v4 = {
+    currency: 'USD', updatedAt: '2026-11-21', startingPrice: { websites: 150, bots: 100, apps: 800, automation: 200 },
+    catalog: fallbackJson.catalog, extraPrice: fallbackJson.extraPrice,
+    personalPlans: [{ id: 'basic', setup: 290, monthly: 29, byokMonthly: 14 }, { id: 'plus', setup: 490, monthly: 59, byokMonthly: 34 }, { id: 'max', setup: 790, monthly: 99, byokMonthly: 59 }],
+    companyPlan: { id: 'company', setup: 1490, monthly: 149, byokMonthly: 104 },
+    agentSubscription: { setup: 220, monthly: 39, byokMonthly: 19 }, teamDiscountPercent: 15, companyPerEmployee: 9,
+    agentPlans: [{ id: 'dono', setup: 150, monthly: 15 }, { id: 'polly', setup: 100, monthly: 10 }],
+    contentPlans: [{ id: 'content', setup: 90, monthly: 60 }], referralPercent: 10, smallProjectMaxUsd: 300, bundleDiscountPercent: 10,
+    products: {
+      personal: { kind: 'plans', plans: [{ id: 'basic', setup: 290, monthly: 29, byokMonthly: 14 }] }, company: { kind: 'plans', plans: [{ id: 'company', setup: 1490, monthly: 149, byokMonthly: 104 }], byQuote: true },
+      admin: { kind: 'from', from: 290 }, receptionist: { kind: 'from', from: 220 }, automation: { kind: 'from', from: 230 },
+      content: { kind: 'plans', plans: [{ id: 'content', setup: 90, monthly: 60 }] }, miniapp: { kind: 'from', from: 660 },
+    },
+  };
+  it('parses without products.implementation / aiteam, keeps the bundled value and warns once', () => {
+    setPrices(FALLBACK_PRICES);
+    const p = parsePrices(v4)!;
+    expect(p).not.toBeNull();
+    expect(p.products).toMatchObject({ admin: 290, intake: 220, automation: 230, miniapp: 660, aiteam: 550, site: 150, bot: 100, app: 800 });
+  });
+  it('carries setup + monthly + BYOK, the agent subscription and the team discount', () => {
+    const p = parsePrices(v4)!;
+    expect(planOf('plus', p)).toEqual({ setup: 490, monthly: 59, byokMonthly: 34 });
+    expect(planOf('company', p)).toEqual({ setup: 1490, monthly: 149, byokMonthly: 104 });
+    expect(p.agentSubscription).toEqual({ setup: 220, monthly: 39, byokMonthly: 19 });
+    expect(p.teamDiscountPercent).toBe(15);
+    expect(p.companyPerEmployee).toBe(9);
+    expect(teamMonthly([39, 39, 39], p)).toBe(99);
+    expect(allowedAmounts(p).has(104)).toBe(true);
+    expect(parsePrices(p)?.companyPlan?.byokMonthly).toBe(104);
+  });
+  it('unknown product keys are ignored, missing ones keep the previous snapshot', async () => {
+    setPrices({ ...FALLBACK_PRICES, products: { ...FALLBACK_PRICES.products, aiteam: 600 } });
+    const r = await loadPrices({ store: memStore(), fetchImpl: reply({ ...v4, products: { ...v4.products, brandNew: { kind: 'quote' } } }) });
+    expect(r.source).toBe('fetched');
+    expect(getPrices().products.aiteam).toBe(600);
+    setPrices(FALLBACK_PRICES);
+  });
+  it('still parses the old shape (with implementation)', () => {
+    expect(parsePrices(fallbackJson)?.products.aiteam).toBe(550);
   });
 });
 

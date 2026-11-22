@@ -15,7 +15,13 @@ const amounts = z.record(z.string(), amount);
 export const PRODUCT_KEYS = ['admin', 'intake', 'automation', 'miniapp', 'aiteam', 'site', 'bot', 'app'] as const;
 export type ProductKey = (typeof PRODUCT_KEYS)[number];
 
-const plan = z.object({ id: z.string().min(1), setup: amount, monthly: amount });
+// `byokMonthly` (v4, 2026-11-22): the monthly price when the client brings their own model key.
+const plan = z.object({ id: z.string().min(1), setup: amount, monthly: amount, byokMonthly: amount.optional() });
+const subscription = z.object({ setup: amount, monthly: amount, byokMonthly: amount.optional() });
+
+// The prices in force; declared before the schema because the schema fills a missing product from it.
+let baseProducts: Record<string, number> | undefined;
+const warned = new Set<string>();
 const catalogEntry = z.object({ variants: amounts, addons: amounts });
 
 export const pricesSchema = z
@@ -31,6 +37,10 @@ export const pricesSchema = z
     personalPlans: z.array(plan).optional(),
     companyPlan: plan.optional(),
     contentPlans: z.array(plan),
+    // v4: one agent's subscription, the team discount (percent off the sum of the agents) and the per-employee price of the company plan.
+    agentSubscription: subscription.optional(),
+    teamDiscountPercent: z.number().min(0).max(100).optional(),
+    companyPerEmployee: amount.optional(),
     referralPercent: z.number().min(0).max(100),
     // Payment by stages (2026-11-21): templates and the small-project threshold; the built-in copy (`stage-templates.ts`) is used when the site has not published them yet.
     stages: z.unknown().optional(),
@@ -65,10 +75,21 @@ export const pricesSchema = z
       if (from !== undefined && Number.isFinite(from) && from >= 0) products[ID[id] ?? id] = from;
       else if (from !== undefined) ctx.addIssue({ code: 'custom', message: `products.${id} is not a valid price` });
     }
+    // unknown keys are ignored; a missing product keeps the previous snapshot value (or the bundled default), one warning lists them
+    const missing: string[] = [];
+    for (const k of PRODUCT_KEYS) {
+      if (k in products || k === 'site' || k === 'bot' || k === 'app') continue;
+      const keep = baseProducts?.[k];
+      if (keep !== undefined) products[k] = keep;
+      missing.push(k);
+    }
+    if (missing.length) {
+      const w = missing.join(',');
+      if (!warned.has(w)) { warned.add(w); log('warn', 'prices: the site did not send some products, keeping the previous values', { missing }); }
+    }
     products.site ??= p.startingPrice.websites;
     products.bot ??= p.startingPrice.bots;
     products.app ??= p.startingPrice.apps;
-    for (const k of PRODUCT_KEYS) if (!(k in products)) ctx.addIssue({ code: 'custom', message: `products.${k} is missing` });
     // the flagships' plans: the top-level fields, else the `plans` of `products.personal` / `products.company` (the site publishes both)
     const plansOf = (id: string): unknown[] => {
       const v = p.products[id];
@@ -86,7 +107,7 @@ export const pricesSchema = z
 export type Prices = z.infer<typeof pricesSchema>;
 
 export const FALLBACK_PRICES: Prices = pricesSchema.parse(fallbackJson);
-
+baseProducts = FALLBACK_PRICES.products;
 let current: Prices = FALLBACK_PRICES;
 
 /** The prices in force right now (synchronous: fresh fetch, last good copy, or the bundled snapshot). */
@@ -97,6 +118,7 @@ export function getPrices(): Prices {
 /** For tests and for the loader. */
 export function setPrices(p: Prices): void {
   current = p;
+  baseProducts = p.products;
 }
 
 export function parsePrices(raw: unknown): Prices | null {
@@ -113,14 +135,22 @@ export interface SubscriptionPlan {
 }
 export type PlanId = 'dono' | 'polly' | 'content' | 'basic' | 'plus' | 'max' | 'company';
 /** A plan of the list by id: the content plan, a Персональный ИИ level (`basic`/`plus`/`max`), the ИИ-компания plan (`company`, «from», the exact sum by quote) or a retired Dono/Polly plan. */
-export function planOf(id: PlanId, p: Prices = current): SubscriptionPlan {
+export function planOf(id: PlanId, p: Prices = current): SubscriptionPlan & { byokMonthly?: number } {
   const x = [...(p.agentPlans ?? []), ...p.contentPlans, ...(p.personalPlans ?? []), ...(p.companyPlan ? [p.companyPlan] : [])].find((q) => q.id === id);
   if (!x) throw new Error(`prices: no plan "${id}" in the list`);
-  return { setup: x.setup, monthly: x.monthly };
+  return x.byokMonthly === undefined ? { setup: x.setup, monthly: x.monthly } : { setup: x.setup, monthly: x.monthly, byokMonthly: x.byokMonthly };
 }
 
 /** The Персональный ИИ levels of the list, cheapest first (empty when the site has not published them). */
 export const personalPlans = (p: Prices = current): Array<SubscriptionPlan & { id: string }> => [...(p.personalPlans ?? [])].sort((a, b) => a.setup - b.setup);
+/** One agent's subscription (setup, monthly, own-key monthly), or undefined when the site has not published it. */
+export const agentSubscription = (p: Prices = current): (SubscriptionPlan & { byokMonthly?: number }) | undefined => p.agentSubscription;
+/** A team's monthly price: the sum of the agents' monthly prices minus the team discount (`teamDiscountPercent`, 0 when absent). */
+export const teamMonthly = (agentMonthlies: number[], p: Prices = current): number => {
+  const sum = agentMonthlies.reduce((a, b) => a + b, 0);
+  return Math.round(sum * (1 - (p.teamDiscountPercent ?? 0) / 100));
+};
+
 /** The ИИ-компания plan, or undefined. */
 export const companyPlan = (p: Prices = current): (SubscriptionPlan & { id: string }) | undefined => p.companyPlan;
 
@@ -142,7 +172,10 @@ export function allowedAmounts(p: Prices = current): Set<number> {
   for (const q of [...(p.agentPlans ?? []), ...p.contentPlans, ...(p.personalPlans ?? []), ...(p.companyPlan ? [p.companyPlan] : [])]) {
     add(q.setup);
     add(q.monthly);
+    add(q.byokMonthly);
   }
+  if (p.agentSubscription) for (const n of [p.agentSubscription.setup, p.agentSubscription.monthly, p.agentSubscription.byokMonthly]) add(n);
+  add(p.companyPerEmployee);
   return s;
 }
 
@@ -185,6 +218,7 @@ export async function loadPrices(opts: LoadPricesOptions = {}): Promise<LoadPric
     const parsed = parsePrices(await res.json());
     if (!parsed) throw new Error('invalid prices payload');
     current = parsed;
+    baseProducts = parsed.products;
     try {
       opts.store?.set(PRICES_SETTING, JSON.stringify({ fetchedAt: new Date(now()).toISOString(), prices: parsed }));
     } catch (e) {
@@ -200,6 +234,7 @@ export async function loadPrices(opts: LoadPricesOptions = {}): Promise<LoadPric
       const cached = parsePrices((JSON.parse(raw) as { prices?: unknown }).prices);
       if (cached) {
         current = cached;
+        baseProducts = cached.products;
         return { source: 'cached', prices: cached };
       }
     }
