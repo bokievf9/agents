@@ -24,7 +24,7 @@ export function pultLinks(siteUrl = 'https://firtech.pro'): PultLinks {
     base,
     to(screen, id) {
       switch (screen) {
-        case 'review': return id === null || id === undefined ? sec('approvals') : `${base}/review?id=ap_${encodeURIComponent(String(id))}`;
+        case 'review': return id === null || id === undefined ? sec('approvals') : sec("approvals", { id: `ap_${id}` });
         case 'leads': return sec('clients', { tab: 'pipeline' });
         case 'lead': return sec('clients', { tab: 'pipeline', focus: id });
         case 'clients': return sec('clients', { tab: 'clients', focus: id });

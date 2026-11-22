@@ -168,7 +168,7 @@ describe('the reminders of the one HQ bot (owner 2026-11-22)', () => {
       'Договор подписан: Анвар (D-7).',
       'Созвон забронирован: Созвон, 19.11 15:00 (ваше время).',
     ]);
-    expect(s.sent()[2]).toContain('https://firtech.pro/admin/review?id=ap_1');
+    expect(s.sent()[2]).toContain('https://firtech.pro/admin/approvals?id=ap_1');
   });
 
   it('noContacts: phones, emails, handles and t.me links never reach Telegram; a stage number or a sum stays', () => {

@@ -101,7 +101,7 @@ describe('the one HQ bot over the whole office', () => {
     expect(overview.approvalsWaiting).toBeGreaterThan(0);
     const lead = (await tools.leads!.run({ id: 1 }, ctx)).value.lead;
     expect(lead).toMatchObject({ id: 1, name: 'Dilnoza Karimova', link: 'https://firtech.pro/admin/clients?tab=pipeline&focus=1' });
-    expect((await tools.pult_link!.run({ screen: 'review', id: 3 }, ctx)).value.url).toBe('https://firtech.pro/admin/review?id=ap_3');
+    expect((await tools.pult_link!.run({ screen: 'review', id: 3 }, ctx)).value.url).toBe('https://firtech.pro/admin/approvals?id=ap_3');
   });
 
   it('a question in the bot: the model calls a tool, the answer goes to Telegram, the spend is in costs, the exchange in the history and the memory', async () => {
