@@ -27,6 +27,7 @@ import { createAnalytics } from './shell-analytics.js';
 import type { SettingsApi } from './settings.js';
 import { createKnowledgeApi, type ShellKnowledgeDeps } from './shell-knowledge.js';
 import { createQualityApi } from './shell-quality.js';
+import { createDashboard } from './shell-dashboard.js';
 
 /**
  * «Shell v3»: the owner workplace routes added on top of `/admin/*` (hub, CRM writes, content, metrics, company).
@@ -83,6 +84,7 @@ export function createShell(d: ShellDeps) {
   const audit = createAudit({ hq: d.hq, db: d.hq.db });
   const knowledge = createKnowledgeApi({ db: d.hq.db, now: d.now, fira: d.fira });
   const quality = createQualityApi({ db: d.hq.db, now: d.now, setting: (k) => d.hq.setting(k) });
+  const dashboard = createDashboard({ hq: d.hq, now: d.now });
   const analytics = createAnalytics({ db: d.hq.db, now: d.now, tz: () => d.hq.tz, numbers: metrics.numbers });
 
   /** `seg`: the path after `/admin/`. null: not a «Shell v3» route. */
@@ -138,6 +140,7 @@ export function createShell(d: ShellDeps) {
     if (a === 'calendar') return method === 'GET' && seg.length === 1 ? calendar.get(query) : fail(404, 'not_found');
     if (a === 'audit') return method === 'GET' && seg.length === 1 ? audit.get(query) : fail(404, 'not_found');
     if (a === 'analytics') return method === 'GET' && seg.length === 1 ? analytics.get(query) : fail(404, 'not_found');
+    if (a === 'dashboard') return method === 'GET' && seg.length === 1 ? dashboard.get(query) : fail(404, 'not_found');
     if (a === 'knowledge') return knowledge.handle(method, seg.slice(1), query, body);
     if (a === 'quality') return quality.handle(method, seg.slice(1), query, body);
     if (a === 'reach') return reach.handle(method, seg, query, body);

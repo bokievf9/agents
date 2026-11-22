@@ -1,6 +1,6 @@
 import { closeSync, existsSync, openSync, readSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
-import type { ApprovalQueue, Payload } from '@fir/core';
+import type { ApprovalQueue, Db, Payload } from '@fir/core';
 import type { Hq, Task, TaskApproval } from '@fir/hq';
 import { BillingStore } from '@fir/worker-billing';
 import { DocStore, DOC_RU as DOC_NAME } from '@fir/worker-documents';
@@ -125,6 +125,15 @@ function pngDims(file: string): { w: number; h: number } | null {
   } catch {
     return null;
   }
+}
+
+/** The cards waiting for the owner, by department and kind: the one query behind `counts` of `GET /admin/review` and the dashboard's approvals block. */
+export function pendingApprovals(db: Db): { dept: string; kind: string; n: number }[] {
+  return db.prepare(
+    `SELECT t.dept dept, t.kind kind, COUNT(*) n FROM task_approvals t LEFT JOIN approvals a ON a.id = t.approval_id
+     WHERE t.kind != 'content_pack' AND ((t.state = 'queued' AND (a.id IS NULL OR a.status IN ('pending','editing'))) OR (t.state = 'asked' AND a.status IN ('pending','editing')))
+     GROUP BY t.dept, t.kind`,
+  ).all() as { dept: string; kind: string; n: number }[];
 }
 
 export function createReview(d: ReviewDeps) {
@@ -582,12 +591,7 @@ export function createReview(d: ReviewDeps) {
   // ---- GET /admin/review ----
   function counts(): Record<string, number> {
     const out: Record<string, number> = Object.fromEntries(REVIEW_DEPTS.map((x) => [x, 0]));
-    const rows = db.prepare(
-      `SELECT t.dept d, COUNT(*) n FROM task_approvals t LEFT JOIN approvals a ON a.id = t.approval_id
-       WHERE t.kind != 'content_pack' AND ((t.state = 'queued' AND (a.id IS NULL OR a.status IN ('pending','editing'))) OR (t.state = 'asked' AND a.status IN ('pending','editing')))
-       GROUP BY t.dept`,
-    ).all() as { d: string; n: number }[];
-    for (const r of rows) out[r.d] = (out[r.d] ?? 0) + r.n;
+    for (const r of pendingApprovals(db)) out[r.dept] = (out[r.dept] ?? 0) + r.n;
     return out;
   }
 

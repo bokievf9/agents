@@ -930,3 +930,22 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 
 Автозапуск: заявка с `brief.discovery.si` (адрес сайта клиента) в `POST /lead` от вошедшего клиента ставит импорт в очередь (флаг `KNOWLEDGE_AUTO_IMPORT`, по умолчанию включён; `off` отключает),
 не чаще одной задачи на клиента в час, адрес не `http(s)` не ставится никогда. `brief.discovery.ig` (Instagram) только сохраняется как ник, не читается (TODO: чтение профиля через очередь Agent Reach).
+
+## Dashboard (2026-11-23, ветка `shell-dash`)
+
+`GET /admin/dashboard?range=today|7d|30d` (по умолчанию `7d`; другое значение: 400 `{error:'invalid', fields:['range']}`). Только чтение, один объект для главной страницы Shell: плитки и три графика. Всё считается из таблиц HQ, только счётчики и суммы, без имён, контактов и текстов. Кэш 30 с на каждый range. `today` - календарный день компании (`tz`), `7d` и `30d` - скользящие окна, заканчивающиеся сейчас (`from`, `to` в ISO).
+
+Каждый блок строится отдельно: нет таблицы или блок упал (в лог `warn`) - блок равен `{available:false}`, остальные целы. Ответ:
+
+- `ok, range, from, to, tz, generatedAt`.
+- `leads {available, new, inWork, won, lost, conversion, perDay:[{day, n}]}`: заявки, созданные в окне. Стадия по `lead-stage.ts` с ручной правкой: `won` = оплачена или проект, `inWork` = qualified, proposal, contract, `lost` = потеряна, `new` = все заявки окна. `conversion` = `won / new`, `null` без заявок. `perDay`: дни компании от начала окна до сегодня.
+- `approvals {available, waiting, byKind:[{kind, label, n}], byDept:[{dept, n}]}`: тот же запрос, что `counts` в `GET /admin/review` (`pendingApprovals` в `review.ts`), поэтому `waiting` = сумма `counts`.
+- `money {available, currency:'USD', paid, pending, overdue, invoices:{paid, pending, overdue}, perWeek:[{week, paid}]}`: `paid` = оплаты окна по `paid_at`; `pending` = выставленные (`issued`) счета со сроком не раньше сегодня; `overdue` = `issued` со сроком раньше сегодня (снимок на сейчас, не зависит от range); черновики не считаются. Суммы `amount_usd` как в `GET /admin/crm/invoices`. `perWeek`: последние 8 ISO-недель, оплаты по дате оплаты.
+- `projects {available, byStage:[{stage, n}], active, closed}`: `stage` = статус проекта (draft, active, paused, done), `closed` = done.
+- `tickets {available, open, overdue, answeredToday, avgFirstResponseMin}`: `overdue` = открытые старше 4 ч (SLA); `avgFirstResponseMin` = среднее время ответа по тикетам, отвеченным в окне, `null` без таковых.
+- `content {available, queue:[{day, planned, approved, published}] на 7 дней вперёд, waitingApproval}`: `planned` = позиции плана дня без отклонённых, `approved` = готовые к публикации, `published` = все площадки опубликованы, `waitingApproval` = ждут решения.
+- `agents {available, activeNow, tasksToday, tasksFailedToday, spendToday, spendMonth, budgetMonth, byDept:[{dept, spendMonth, limit}]}`: USD из таблицы `costs` (как Company); `activeNow` = работники офиса в статусе `working`; `tasksFailedToday` = задачи blocked или rejected, обновлённые сегодня; `budgetMonth` = сумма лимитов отделов, `null` если лимитов нет.
+- `services [{id, title, state: ok|degraded|down|unknown}]`: те же нормализованные данные, что у `/status` (`up` = `ok`).
+- `funnel [{step, n}]`: leads, qualified, proposals, contracts, paid, projects за окно (общая функция `funnelBetween` с недельными цифрами и `GET /admin/analytics`).
+
+Код: `apps/hq/src/shell-dashboard.ts`, тесты `apps/hq/tests/shell-dashboard.test.ts`.

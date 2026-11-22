@@ -111,6 +111,25 @@ export function eventsApi(db: Db, now: () => number, tz: () => string) {
 }
 
 // ---- weekly numbers ----
+/** The funnel of a window [fromMs, toMs): leads and qualified by the cohort, proposals, contracts, payments and projects by what happened in it. Shared by the weekly numbers and the dashboard. */
+export function funnelBetween(db: Db, fromMs: number, toMs: number) {
+  const has = (t: string) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t) !== undefined;
+  const num = (sql: string, ...p: unknown[]) => (db.prepare(sql).get(...p) as { n: number | null } | undefined)?.n ?? 0;
+    let leads = 0;
+    let qualified = 0;
+    if (has('li_leads')) {
+      const rows = db.prepare('SELECT * FROM li_leads WHERE created_at >= ? AND created_at < ?').all(fromMs, toMs) as Parameters<StageContext['derived']>[0][];
+      const ctx = StageContext.load(db);
+      leads = rows.length;
+      qualified = rows.filter((l) => rankOf(ctx.derived(l)) >= rankOf('qualified')).length;
+    }
+    const proposals = has('ps_documents') ? num("SELECT COUNT(*) n FROM ps_documents WHERE kind = 'kp' AND status = 'approved' AND COALESCE(decided_at, created_at) >= ? AND COALESCE(decided_at, created_at) < ?", fromMs, toMs) : 0;
+    const contracts = has('bo_documents') ? num("SELECT COUNT(*) n FROM bo_documents WHERE type = 'contract' AND status != 'rejected' AND created_at >= ? AND created_at < ?", fromMs, toMs) : 0;
+    const paid = has('bl_invoices') ? num("SELECT COUNT(*) n FROM bl_invoices WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?", fromMs, toMs) : 0;
+    const projects = has('pm_projects') ? num("SELECT COUNT(*) n FROM pm_projects WHERE status != 'draft' AND created_at >= ? AND created_at < ?", fromMs, toMs) : 0;
+  return { leads, qualified, proposals, contracts, paid, projects };
+}
+
 export function createMetrics(db: Db, now: () => number, tz: () => string, events: SiteEvents) {
   const has = (t: string) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t) !== undefined;
   const hasCol = (t: string, c: string) => (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).some((x) => x.name === c);
@@ -134,19 +153,7 @@ export function createMetrics(db: Db, now: () => number, tz: () => string, event
       views = snap?.v != null && prev?.v != null ? Math.max(0, snap.v - prev.v) : 0;
     }
 
-    // funnel: leads and qualified by the cohort of the week; proposals, contracts, payments and projects by what happened in the week
-    let leads = 0;
-    let qualified = 0;
-    if (has('li_leads')) {
-      const rows = db.prepare('SELECT * FROM li_leads WHERE created_at >= ? AND created_at < ?').all(fromMs, toMs) as Parameters<StageContext['derived']>[0][];
-      const ctx = StageContext.load(db);
-      leads = rows.length;
-      qualified = rows.filter((l) => rankOf(ctx.derived(l)) >= rankOf('qualified')).length;
-    }
-    const proposals = has('ps_documents') ? num("SELECT COUNT(*) n FROM ps_documents WHERE kind = 'kp' AND status = 'approved' AND COALESCE(decided_at, created_at) >= ? AND COALESCE(decided_at, created_at) < ?", fromMs, toMs) : 0;
-    const contracts = has('bo_documents') ? num("SELECT COUNT(*) n FROM bo_documents WHERE type = 'contract' AND status != 'rejected' AND created_at >= ? AND created_at < ?", fromMs, toMs) : 0;
-    const paid = has('bl_invoices') ? num("SELECT COUNT(*) n FROM bl_invoices WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?", fromMs, toMs) : 0;
-    const projects = has('pm_projects') ? num("SELECT COUNT(*) n FROM pm_projects WHERE status != 'draft' AND created_at >= ? AND created_at < ?", fromMs, toMs) : 0;
+    const { leads, qualified, proposals, contracts, paid, projects } = funnelBetween(db, fromMs, toMs);
     const issuedAt = has('bl_invoices') && hasCol('bl_invoices', 'issued_at') ? 'COALESCE(issued_at, created_at)' : 'created_at';
     const invoicedUsd = has('bl_invoices') ? num(`SELECT COALESCE(SUM(amount_usd), 0) n FROM bl_invoices WHERE status IN ('issued', 'paid') AND ${issuedAt} >= ? AND ${issuedAt} < ?`, fromMs, toMs) : 0;
     const paidUsd = has('bl_invoices') ? num("SELECT COALESCE(SUM(amount_usd), 0) n FROM bl_invoices WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?", fromMs, toMs) : 0;
