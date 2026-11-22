@@ -1,4 +1,4 @@
-import type { Db } from '@fir/core';
+import { serviceName, type Db } from '@fir/core';
 
 /** `GET /admin/hub`: one cheap summary for the office hub (a query per table, 50 inbox rows, cached 5 s). Contract: `docs/admin-crm-api.md` («Shell v3»). */
 export const HUB_DEPTS = ['marketing', 'sales', 'support', 'production', 'backoffice', 'director'] as const;
@@ -52,7 +52,7 @@ export function createHub(db: Db, now: () => number) {
     }
     if (has('li_leads')) {
       for (const r of all<{ id: number; name: string; service: string; created_at: number }>('SELECT id, name, service, created_at FROM li_leads ORDER BY id DESC LIMIT 15')) {
-        push(r.created_at, { id: `lead:${r.id}`, dept: 'sales', kind: 'lead', title: clip(`Заявка: ${r.name || 'без имени'}${r.service ? ` (${r.service})` : ''}`), link: `leads:${r.id}` });
+        push(r.created_at, { id: `lead:${r.id}`, dept: 'sales', kind: 'lead', title: clip(`Заявка: ${r.name || 'без имени'}${r.service ? ` (${serviceName(r.service)})` : ''}`), link: `leads:${r.id}` });
       }
     }
     if (has('bl_invoices')) {

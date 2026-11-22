@@ -40,6 +40,10 @@ const ALIAS: Record<string, string> = {
   site: 'site', bot: 'bot', app: 'app',
 };
 
+/** The lead form's service slugs (`websites`, `bots`, `apps`, `automation`, `ai`) in plain Russian, lower case, for notices and the Inbox; an unknown slug falls back to the product name (or the slug itself). */
+const SERVICE_RU: Record<string, string> = { websites: 'сайт', bots: 'ИИ-агент в Telegram', apps: 'приложение', automation: 'автоматизация', ai: 'ИИ-агент' };
+export const serviceName = (slug: string): string => SERVICE_RU[slug.trim().toLowerCase()] ?? productName(slug, 'ru');
+
 export const canonicalProductId = (id: string): string | undefined => ALIAS[id];
 
 const BY_ID = new Map(PRODUCT_NAMES.map((n) => [n.id, n]));

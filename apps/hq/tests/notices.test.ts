@@ -36,6 +36,24 @@ const lead = (s: ReturnType<typeof setup>, taskId: number, name: string, extra: 
   return s.leads.upsert(taskId, { name, contact: '+992 90 111 22 33', service: 'site', niche: 'салон', task: 'Секретный текст клиента', deadline: '', budget: '', origin: 'site', temperature: 'warm', lang: 'ru', slots: [], chosenSlot: null, priceAsked: false, ...extra } as never);
 };
 
+describe('service keys never reach the owner', () => {
+  it('a lead of service websites / bots / apps / automation reads in plain Russian', async () => {
+    const s = setup();
+    lead(s, 1, 'Старая');
+    await s.notices.scan();
+    lead(s, 2, 'Аудит Тест', { service: 'websites', niche: '', origin: '' });
+    await s.notices.scan();
+    expect(s.sent().join('\n')).toMatch(/Новая заявка #2 «Аудит Тест»: сайт\./);
+    const t = setup();
+    lead(t, 1, 'Старая');
+    await t.notices.scan();
+    lead(t, 3, 'Direct Test', { service: 'bots', niche: '', origin: '' });
+    await t.notices.scan();
+    expect(t.sent().join('\n')).toMatch(/Новая заявка #2 «Direct Test»: ИИ-агент в Telegram\./);
+    expect(`${s.sent().join()}${t.sent().join()}`).not.toMatch(/websites|\bbots\b/);
+  });
+});
+
 describe('the reminders of the one HQ bot (owner 2026-11-22)', () => {
   it('the first scan only marks what exists; a new lead is one short line with a link, no contact and no text of the client', async () => {
     const s = setup();
@@ -162,7 +180,7 @@ describe('the reminders of the one HQ bot (owner 2026-11-22)', () => {
     expect(s.sent().map((m) => m.split('\n')[0])).toEqual([
       'Новый клиент в кабинете: Анвар.',
       'Новая заявка #1 «Созвон»: сайт, салон, ' + s.sent()[1]!.split('\n')[0]!.split(', ').at(-1),
-      'На одобрение: Пакет пресейла, Клиника Шифо.',
+      'На одобрение: Пресейл-пакет, Клиника Шифо.',
       'Этап 1 готов к приёмке: Салон Лола (проект #7).',
       'Этап 2 принят: Салон Лола (проект #7).',
       'Договор подписан: Анвар (D-7).',

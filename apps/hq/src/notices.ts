@@ -1,4 +1,4 @@
-import { errMsg, escapeHtml, log, migrate, productName, zonedParts, type Db } from '@fir/core';
+import { errMsg, escapeHtml, log, migrate, productName, serviceName, zonedParts, type Db } from '@fir/core';
 import type { AlertKind, AlertOpts, Hq } from '@fir/hq';
 import type { ShellLinks, ShellScreen } from './links.js';
 import { kindRu } from './tg.js';
@@ -304,7 +304,7 @@ export class OwnerNotices {
         family = str(e.productFamily);
         niche ||= str(e.niche);
       } catch { /* no enrichment */ }
-      const product = family ? productName(family, 'ru') : r.service ? productName(r.service, 'ru') : '';
+      const product = family ? productName(family, 'ru') : r.service ? serviceName(r.service) : '';
       const parts = [SOURCE_RU[r.origin] ?? r.origin, niche, product].map((x) => x.trim()).filter(Boolean);
       const who = r.name.trim() ? ` «${oneLine(r.name, 40)}»` : '';
       out.push({ type: 'lead', ref: `lead:${r.id}`, text: `Новая заявка #${r.id}${who}: ${parts.join(', ') || 'без деталей'}.`, link: this.d.links.to('lead', r.id), label: `#${r.id}${who}` });

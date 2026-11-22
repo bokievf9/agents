@@ -56,7 +56,7 @@ export const DIRECTOR_PROFILE = {
 export const KIND_RU: Record<string, string> = {
   content_item: 'Контент', article: 'Статья дня', seo_proposal: 'SEO-правка', billing_invoice: 'Счёт', billing_reminder: 'Напоминание об оплате',
   support_answer: 'Ответ клиенту', support_money: 'Деньги клиента', bo_document: 'Документ', lead_reply: 'Ответ лиду',
-  lead_price: 'Цена лиду', onboarding_guide: 'Онбординг', presales_pack: 'Пакет пресейла', pm_spec: 'ТЗ проекта',
+  lead_price: 'Цена лиду', onboarding_guide: 'Онбординг', presales_pack: 'Пресейл-пакет', pm_spec: 'ТЗ проекта',
   pm_client_status: 'Статус клиенту', prospect_first: 'Первое сообщение бизнесу', prospect_followup: 'Дожим бизнеса',
   prospect_reply: 'Ответ бизнесу', referral_reward: 'Награда за рекомендацию', referral_payout: 'Выплата за рекомендацию',
   content_pack: 'Контент: пакет недели', audit: 'Аудит сайта клиенту',

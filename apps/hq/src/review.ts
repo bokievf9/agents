@@ -3,7 +3,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import type { ApprovalQueue, Payload } from '@fir/core';
 import type { Hq, Task, TaskApproval } from '@fir/hq';
 import { BillingStore } from '@fir/worker-billing';
-import { DocStore } from '@fir/worker-documents';
+import { DocStore, DOC_RU as DOC_NAME } from '@fir/worker-documents';
 import { captionOf } from '@fir/worker-publisher';
 import { RenderQueue, SIZES, parseReel, replacePart, splitKit, splitPlatforms, storeFor, type ContentStore, type Item, type ItemType, type Platform, type ReadyRow } from '@fir/worker-content-maker';
 import { analysisText, LinkStore } from '@fir/worker-trend-scout';
@@ -432,7 +432,7 @@ export function createReview(d: ReviewDeps) {
       }
       case 'bo_document': {
         const doc = has('bo_documents') ? views.one<{ id: number; type: string; client: string; version: number; project_id: number | null }>('SELECT id, type, client, version, project_id FROM bo_documents WHERE id = ?', Number(payload.docId)) : undefined;
-        return generic(l, payload, doc ? `Документ ${doc.type}: ${doc.client}, версия ${doc.version}` : 'Документ', { ...(status === 'approved' && doc && docRevisable(doc.id) ? { editApproved: true } : {}), meta: { document: doc ? { id: doc.id, type: doc.type, client: doc.client, version: doc.version, projectId: doc.project_id } : { id: num(payload.docId) } } });
+        return generic(l, payload, doc ? `Документ: ${DOC_NAME[doc.type as keyof typeof DOC_NAME]?.toLowerCase() ?? doc.type}, ${doc.client}, версия ${doc.version}` : 'Документ', { ...(status === 'approved' && doc && docRevisable(doc.id) ? { editApproved: true } : {}), meta: { document: doc ? { id: doc.id, type: doc.type, client: doc.client, version: doc.version, projectId: doc.project_id } : { id: num(payload.docId) } } });
       }
       case 'billing_invoice':
       case 'billing_reminder': {
