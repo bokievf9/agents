@@ -5,7 +5,7 @@ import type { ClientSinks } from './engine.js';
 import { inWindow, linksOnly, RateLimiter } from './sanitize.js';
 import { asksCatalogue } from './needs.js';
 import { clip, GREETING, intakeRecord, TurnHistory } from './shared.js';
-import { DemoChat, isPersona, PERSONAS } from './persona.js';
+import { DemoChat, isPersona, PERSONA_KINDS, PERSONAS } from './persona.js';
 import { isPriceQuestion } from '@fir/worker-lead-intake';
 import type { FiraLeadTurn } from './fira-registry.js';
 import { enrichmentOf, findContact, HANDOFF, LEAD_DONE, loginUrlOf, merge, newQ, productNamesOf, receptionistTurn, SITE_ORIGIN, slotPickedText, wantsPerson, type Cta, type QState } from './receptionist.js';
@@ -30,6 +30,8 @@ export const chatSchema = z.object({
   ref: z.string().trim().regex(/^[a-z0-9_-]{1,32}$/).optional(),
   /** The demo tab: answer in the voice of a fictional business of this niche. A demo session never creates a lead, a ticket or a stored session. */
   persona: z.enum(PERSONAS).optional(),
+  /** Only for `persona: 'personal'`: who the person is (student, founder, ...). An unknown value is ignored (the generic personal assistant answers). */
+  personaKind: z.enum(PERSONA_KINDS).optional().catch(undefined),
   /** The signed-in cabinet account (the site sends them when the visitor is logged in): an existing client is routed to their thread, a lead is linked to the account. A malformed value is ignored. */
   clientEmail: z.string().trim().toLowerCase().max(254).email().optional().catch(undefined),
   cabinetId: z.string().trim().min(1).max(64).optional().catch(undefined),
@@ -205,7 +207,7 @@ export class WebChatEngine {
     const du = this.d.demoUsage;
     const clientId = du ? du.resolveClient({ email: req.clientEmail, cabinetId: req.cabinetId ?? req.clientId, name: req.clientName, locale: req.locale }) : null;
     if (du && clientId === null && this.d.demoRequireClient) return { kind: 'login_required' };
-    const run = () => this.demo.reply(persona, req.sessionId, req.locale, req.message.trim()).catch((e) => {
+    const run = () => this.demo.reply(persona, req.sessionId, req.locale, req.message.trim(), req.personaKind).catch((e) => {
       log('error', 'web chat demo failed', { err: errMsg(e) });
       markDemoUnavailable();
       return null;

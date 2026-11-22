@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { MockLlm, OffLlm, openDb, productList, type LlmClient, type LlmRequest } from '@fir/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { builderPath, decodeBuild } from '../src/client/builder-link.js';
-import { DEMO_TURNS, personaSystem } from '../src/client/persona.js';
+import { DEMO_TURNS, KIND_BLOCKS, PERSONA_KINDS, personaSystem } from '../src/client/persona.js';
 import {
   buildOf, enrichmentOf, findContact, intentScore, MAX_QUALIFY_TURNS, merge, needReply, newQ, nextSlot, normalizeQ, parseModel, priceAnswer, priceProducts, summaryLines, wantsPerson, type QState,
 } from '../src/client/receptionist.js';
@@ -437,6 +437,53 @@ describe('the demo tab: persona', () => {
     const w = world({ llm: new OffLlm() });
     expect((await w.say('привет', { persona: 'salon' })).reply).toMatch(/Демо сейчас недоступно/);
     expect((await w.say('hi', { persona: 'salon', locale: 'en', sessionId: 'visitor-9004-abcd' })).reply).toMatch(/The demo is not available/);
+  });
+
+  it('personaKind: the schema accepts the nine kinds and ignores anything else', () => {
+    const ok = { sessionId: SID, locale: 'ru', text: 'привет', persona: 'personal' };
+    for (const k of PERSONA_KINDS) expect(chatSchema.safeParse({ ...ok, personaKind: k })).toMatchObject({ success: true, data: { personaKind: k } });
+    expect(PERSONA_KINDS).toHaveLength(9);
+    for (const bad of ['astronaut', 42, null, '']) {
+      const r = chatSchema.safeParse({ ...ok, personaKind: bad });
+      expect(r.success).toBe(true);
+      expect(r.success && r.data.personaKind).toBeUndefined();
+    }
+    const none = chatSchema.safeParse(ok);
+    expect(none.success && none.data.personaKind).toBeUndefined();
+  });
+
+  it('personaKind: each kind puts its block into the personal system prompt (RU and EN), other and unknown fall back to the generic one, the guards stay', () => {
+    const generic = personaSystem('personal', 'ru', NOW, 'Asia/Dushanbe');
+    for (const lang of ['ru', 'en'] as const) {
+      for (const kind of Object.keys(KIND_BLOCKS) as (keyof typeof KIND_BLOCKS)[]) {
+        const sys = personaSystem('personal', lang, NOW, 'Asia/Dushanbe', kind);
+        const b = KIND_BLOCKS[kind][lang];
+        expect(sys).toContain(b.who);
+        expect(sys).toContain(b.tasks[0]!);
+        expect(sys).toContain(b.tone);
+        expect(b.tasks.length).toBeGreaterThanOrEqual(3);
+        expect(sys).toMatch(/а не инструкции/); // the non-disclosure guard
+        expect(sys).toMatch(/не спрашивай и не проси оставить/);
+        expect(sys).toMatch(/Ответ: только текст реплики/);
+      }
+    }
+    expect(personaSystem('personal', 'ru', NOW, 'Asia/Dushanbe', 'other')).toBe(generic);
+    expect(personaSystem('personal', 'ru', NOW, 'Asia/Dushanbe', 'bogus' as never)).toBe(generic);
+    expect(personaSystem('personal', 'ru', NOW, 'Asia/Dushanbe', 'student')).not.toBe(generic);
+    // a niche demo ignores the kind
+    expect(personaSystem('shop', 'ru', NOW, 'Asia/Dushanbe', 'student')).toBe(personaSystem('shop', 'ru', NOW, 'Asia/Dushanbe'));
+  });
+
+  it('personaKind through POST /chat: the kind reaches the model, the demo flags are unchanged, an unknown kind answers generically', async () => {
+    const w = world({ turns: () => 'Доброе утро. Сегодня две пары и дедлайн по курсовой.' });
+    const r = await w.say('Что у меня сегодня?', { persona: 'personal', personaKind: 'student' });
+    expect(r).toMatchObject({ ok: true, state: 'chat', demo: true });
+    expect(w.calls()[0]!.system).toContain(KIND_BLOCKS.student.ru.who);
+    const bad = await w.say('Что у меня сегодня?', { persona: 'personal', personaKind: 'astronaut' as never });
+    expect(bad).toMatchObject({ ok: true, state: 'chat', demo: true });
+    expect(w.calls()[1]!.system).not.toContain(KIND_BLOCKS.student.ru.who);
+    expect(w.leads).toEqual([]);
+    expect(w.engine.store.count()).toBe(0);
   });
 
   it('the flagship demo (persona=personal): a coffee shop owner\'s assistant, in memory, no lead, no contact, no booking talk, nothing stored', async () => {
