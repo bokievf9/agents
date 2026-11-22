@@ -517,7 +517,7 @@ describe('receptionist gaps (owner remarks 2026-11-21): need first, right link, 
     const first = await w.say('хочу бота для салона');
     expect(PRODUCT_IDS.filter((id) => first.reply.split('\n\n')[1]!.includes(PRODUCTS[id].name.ru)).length).toBeLessThanOrEqual(1);
     // the greeting in front of it is the short one: no list of the seven products on a first message that names a need
-    expect(first.reply).toMatch(/^Здравствуйте\. Я ИИ-менеджер заявок Fir Tech\.\n\n/);
+    expect(first.reply).toMatch(/^Здравствуйте\. Я Фира, ИИ-ассистент Fir Tech\.\n\n/);
     expect(first.reply).toContain('ИИ-администратор');
     expect(first.reply.match(/\?/g)).toHaveLength(1);
     expect(first.cta).toBeUndefined();

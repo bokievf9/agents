@@ -40,10 +40,10 @@ const RU: WebTexts = {
     return `Демо продукта «${productName('adminbot', 'ru')}» на примере вымышленного «Салона Лайм»: выбираете услугу, мастера, день и время, ассистент записывает вас, через минуту присылает напоминание, предлагает перенести, отменить или оставить отзыв. Записи не настоящие. Демо работает в Telegram: https://t.me/firtech_bot?start=demo_salon`;
   },
   get welcome() {
-    return `Здравствуйте. Я ${productName('intake', 'ru')} Fir Tech: так же я могу принимать клиентов вашего бизнеса. Что мы делаем: ${productList('ru')}. Собрать проект и увидеть цену можно в «Сборке проекта»: https://firtech.pro/ru/builder. Чем помочь?`;
+    return `Здравствуйте. Я Фира, ИИ-ассистент Fir Tech: так же я могу принимать клиентов вашего бизнеса. Что мы делаем: ${productList('ru')}. Собрать проект и увидеть цену можно в «Сборке проекта»: https://firtech.pro/ru/builder. Чем помочь?`;
   },
   get welcomeShort() {
-    return `Здравствуйте. Я ${productName('intake', 'ru')} Fir Tech.`;
+    return `Здравствуйте. Я Фира, ИИ-ассистент Fir Tech.`;
   },
   productsIntro: 'Наши продукты. Выберите, расскажу, для кого это и что внутри.',
   discuss: 'Обсудить',
@@ -70,10 +70,10 @@ const EN: WebTexts = {
     return `A demo of the “${productName('adminbot', 'en')}” on the example of a fictional “Lime Salon”: you pick a service, a master, a day and a time, the assistant books you, sends a reminder a minute later and offers to reschedule, cancel or leave a review. Bookings are not real. The demo runs in Telegram: https://t.me/firtech_bot?start=demo_salon`;
   },
   get welcome() {
-    return `Hello. I am the Fir Tech ${productName('intake', 'en')}: I can receive your business’s clients the same way. What we do: ${productList('en')}. You can put a project together and see the price in the builder: https://firtech.pro/en/builder. How can we help?`;
+    return `Hello. I'm Fira, Fir Tech's AI assistant: I can receive your business’s clients the same way. What we do: ${productList('en')}. You can put a project together and see the price in the builder: https://firtech.pro/en/builder. How can we help?`;
   },
   get welcomeShort() {
-    return `Hello. I am the Fir Tech ${productName('intake', 'en')}.`;
+    return `Hello. I'm Fira, Fir Tech's AI assistant.`;
   },
   productsIntro: 'Our products. Pick one and I will tell you who it is for and what is inside.',
   discuss: 'Discuss',

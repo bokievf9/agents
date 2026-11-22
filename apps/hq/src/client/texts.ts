@@ -114,9 +114,9 @@ const BUILDER_URL = { ru: 'https://firtech.pro/ru/builder', en: 'https://firtech
 
 const RU: Texts = {
   welcome: (name) =>
-    `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Я ${productName('intake', 'ru')} Fir Tech. Что мы делаем: ${productList('ru')}.\n\n` +
+    `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Я Фира, ИИ-ассистент Fir Tech. Что мы делаем: ${productList('ru')}.\n\n` +
     `Можно сразу собрать проект и увидеть цену: ${BUILDER_URL.ru}\n\nЧем помочь?`,
-  welcomeShort: (name) => `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Я ${productName('intake', 'ru')} Fir Tech.`,
+  welcomeShort: (name) => `<b>Fir Tech</b>\nЗдравствуйте${name ? `, ${esc(name)}` : ''}. Я Фира, ИИ-ассистент Fir Tech.`,
   menu: { discuss: '💬 Обсудить проект', products: '🧩 Продукты', client: '🧾 Я уже клиент', human: '👤 Позвать человека', lang: '🇬🇧 English', demo: '🧪 Попробовать демо' },
   productsTitle: '<b>Продукты Fir Tech</b>',
   productsIntro: 'Выберите, что интересно: расскажу, для кого это и что внутри.',
@@ -160,9 +160,9 @@ const RU: Texts = {
 
 const EN: Texts = {
   welcome: (name) =>
-    `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. I am the Fir Tech ${productName('intake', 'en')}. What we do: ${productList('en')}.\n\n` +
+    `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. I'm Fira, Fir Tech's AI assistant. What we do: ${productList('en')}.\n\n` +
     `You can put a project together right away and see the price: ${BUILDER_URL.en}\n\nHow can we help?`,
-  welcomeShort: (name) => `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. I am the Fir Tech ${productName('intake', 'en')}.`,
+  welcomeShort: (name) => `<b>Fir Tech</b>\nHello${name ? `, ${esc(name)}` : ''}. I'm Fira, Fir Tech's AI assistant.`,
   menu: { discuss: '💬 Discuss a project', products: '🧩 Products', client: '🧾 I am a client', human: '👤 Talk to a person', lang: '🇷🇺 Русский', demo: '🧪 Try the demo' },
   productsTitle: '<b>Fir Tech products</b>',
   productsIntro: 'Pick what interests you: I will tell you who it is for and what is inside.',

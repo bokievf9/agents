@@ -193,7 +193,7 @@ describe('products in the web chat', () => {
   it('greeting carries the product line; /btn products lists, product:<id> opens the card, need:<id> starts the intake with the product', async () => {
     const w = world();
     const hi = await w.say('/start');
-    expect(hi.reply).toContain('Я ИИ-менеджер заявок Fir Tech: так же я могу принимать клиентов вашего бизнеса. Что мы делаем: Персональный ИИ, ИИ-компания, ИИ-администратор, ИИ-менеджер заявок');
+    expect(hi.reply).toContain('Я Фира, ИИ-ассистент Fir Tech: так же я могу принимать клиентов вашего бизнеса. Что мы делаем: Персональный ИИ, ИИ-компания, ИИ-администратор, ИИ-менеджер заявок');
     const list = await w.say('/btn products');
     expect(ids(list.buttons)).toEqual(['product:personal', 'product:company', 'product:admin', 'product:receptionist', 'product:automation', 'product:content', 'product:miniapp', 'product:ai', 'product:site']);
     // the flagships' cards carry their plans

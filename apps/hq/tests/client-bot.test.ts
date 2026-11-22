@@ -138,14 +138,14 @@ describe('welcome and language', () => {
     expect(welcome.html).toContain('https://firtech.pro/ru/builder');
     expect(welcome.html).not.toContain('!');
     expect(welcome.html.length).toBeLessThan(700);
-    expect(welcome.html).toContain('Я ИИ-менеджер заявок Fir Tech. Что мы делаем: Персональный ИИ, ИИ-компания, ИИ-администратор, ИИ-менеджер заявок, Автоматизация процессов, Контент на автопилоте, Telegram Mini App, ИИ-отдел под ключ');
+    expect(welcome.html).toContain('Я Фира, ИИ-ассистент Fir Tech. Что мы делаем: Персональный ИИ, ИИ-компания, ИИ-администратор, ИИ-менеджер заявок, Автоматизация процессов, Контент на автопилоте, Telegram Mini App, ИИ-отдел под ключ');
     expect(buttonTexts(welcome.buttons)).toEqual(['💬 Обсудить проект', '🧩 Продукты', '🧾 Я уже клиент', '👤 Позвать человека', '🧪 Попробовать демо', '🇬🇧 English']);
     for (const t of buttonTexts(welcome.buttons)) expect((t.match(/\p{Extended_Pictographic}/gu) ?? []).length).toBeLessThanOrEqual(1);
 
     await w.engine.onButton(ME, 'm:lang', welcome.id);
     const edited = w.transport.edits.at(-1)!;
     expect(edited.messageId).toBe(welcome.id);
-    expect(edited.html).toContain('I am the Fir Tech AI lead manager. What we do: Personal AI, AI company, AI booking assistant, AI lead manager');
+    expect(edited.html).toContain("I'm Fira, Fir Tech's AI assistant. What we do: Personal AI, AI company, AI booking assistant, AI lead manager");
     expect(buttonTexts(edited.buttons)).toContain('🇷🇺 Русский');
     expect(w.engine.store.get(CLIENT)!.lang).toBe('en');
     await w.engine.onCommand(ME, 'start', '');
@@ -172,7 +172,7 @@ describe('welcome and language', () => {
     const msgs = w.transport.to(CLIENT + 1);
     expect(msgs).toHaveLength(2);
     // a first message that names a need: the short greeting, the product list only on «что вы делаете»
-    expect(msgs[0]!.html).toContain('Я ИИ-менеджер заявок Fir Tech.');
+    expect(msgs[0]!.html).toContain('Я Фира, ИИ-ассистент Fir Tech.');
     expect(msgs[0]!.html).not.toContain('Что мы делаем');
     expect(msgs[1]!.html).toContain('делаем Telegram-ботов');
   });

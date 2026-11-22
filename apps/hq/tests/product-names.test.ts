@@ -122,16 +122,16 @@ describe('product names: one map, no «бот» in the name of an AI product', (
     expect(FALLBACK_INSTRUCTIONS).not.toMatch(/Telegram-бот-/);
   });
 
-  it('the receptionist introduces itself as «ИИ-менеджер заявок Fir Tech»: in the welcome and in its prompt', () => {
-    expect(W.ru.welcome).toMatch(/Я ИИ-менеджер заявок Fir Tech/);
-    expect(W.en.welcome).toMatch(/I am the Fir Tech AI lead manager/);
-    expect(T.ru.welcome('')).toMatch(/Я ИИ-менеджер заявок Fir Tech/);
+  it('the receptionist introduces itself as Fira: in the welcome and in its prompt', () => {
+    expect(W.ru.welcome).toMatch(/Я Фира, ИИ-ассистент Fir Tech/);
+    expect(W.en.welcome).toMatch(/I'm Fira, Fir Tech's AI assistant/);
+    expect(T.ru.welcome('')).toMatch(/Я Фира, ИИ-ассистент Fir Tech/);
     const system = receptionistPrompt(readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8'), 'ru', newQ(), 'ask');
-    expect(system).toContain('«ИИ-менеджер заявок Fir Tech»');
+    expect(system).toContain('Ты Фира, ИИ-ассистент Fir Tech');
     expect(system).toMatch(/слово «бот» в названии ИИ-продукта не используй/);
     expect(system).toContain(productName('adminbot', 'ru'));
     expect(system).toContain(productName('intake', 'ru'));
-    expect(readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8')).toContain('«ИИ-менеджер заявок Fir Tech»');
+    expect(readFileSync(join(instructionsDir, 'client-bot.md'), 'utf8')).toContain('Ты Фира, ИИ-ассистент Fir Tech');
   });
 
   it('the client bot does not pitch Dono and Polly: one neutral line that they exist, nothing in the list of products to offer', () => {
