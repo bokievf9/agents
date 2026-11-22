@@ -1,5 +1,5 @@
 import { createReadStream, realpathSync, statSync, type ReadStream } from 'node:fs';
-import { extname, resolve, sep } from 'node:path';
+import { extname, join, resolve, sep } from 'node:path';
 
 /**
  * `GET /admin/files/<path>`: the rendered files of the content calendar (PNG of posts and slides, `reel.mp4`, PDF documents) for the workplace.
@@ -34,7 +34,12 @@ export function parseRange(header: string, size: number): { start: number; end: 
   return { start, end };
 }
 
-export function serveFile(rendersDir: string | undefined, rawPath: string, range?: string): FileReply {
+export interface FileAccess {
+  /** The full admin token may read client documents under `cabinet/`; any other caller (the cabinet token) may not. Default true (the admin token). */
+  allowCabinet?: boolean;
+}
+
+export function serveFile(rendersDir: string | undefined, rawPath: string, range?: string, access: FileAccess = {}): FileReply {
   if (!rendersDir) return deny(404, 'not_found');
   let rel: string;
   try {
@@ -42,8 +47,11 @@ export function serveFile(rendersDir: string | undefined, rawPath: string, range
   } catch {
     return deny(400, 'invalid');
   }
+  // a second decode must change nothing: `%252e%252e`, `%2e%2e` that survived the URL parser, encoded slashes and backslashes are refused
+  if (/%/.test(rel) || /%2e|%2f|%5c/i.test(rawPath)) return deny(400, 'invalid');
   // nothing that could climb out, hide a drive or an absolute path, or break a C string
   if (!rel || rel.includes('\0') || rel.includes('\\') || rel.startsWith('/') || rel.split('/').some((s) => s === '..' || s === '.' || s === '')) return deny(400, 'invalid');
+  if ((access.allowCabinet ?? true) === false && /^cabinet(\/|$)/i.test(rel)) return deny(404, 'not_found');
   const type = TYPES[extname(rel).toLowerCase()];
   if (!type) return deny(400, 'invalid');
   let root: string;
@@ -55,6 +63,7 @@ export function serveFile(rendersDir: string | undefined, rawPath: string, range
     return deny(404, 'not_found');
   }
   if (!file.startsWith(root + sep)) return deny(404, 'not_found');
+  if ((access.allowCabinet ?? true) === false && (file === join(root, 'cabinet') || file.startsWith(join(root, 'cabinet') + sep))) return deny(404, 'not_found');
   let size: number;
   try {
     const st = statSync(file);

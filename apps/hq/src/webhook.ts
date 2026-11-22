@@ -7,7 +7,7 @@ import { errMsg, log } from '@fir/core';
 import type { AdminReply, AdminRequest } from './admin.js';
 import type { BlogApi } from './blog.js';
 import type { PayApi } from './pay.js';
-import type { FileReply } from './shell-files.js';
+import type { FileAccess, FileReply } from './shell-files.js';
 import { EVENT_NAMES } from './shell-events.js';
 import { auditInputSchema, type AuditInput, type AuditOutcome } from './audit-shared.js';
 import { SITE_LEAD_ID, type LeadDedupe } from './lead-dedupe.js';
@@ -162,7 +162,7 @@ export function createWebhook(
     token: string;
     handle: (req: AdminRequest) => Promise<AdminReply>;
     /** `GET /admin/files/<path>` (rendered files of the content calendar, `shell-files.ts`); without it the path is an ordinary 404. */
-    file?: (path: string, range: string | undefined) => FileReply;
+    file?: (path: string, range: string | undefined, access: FileAccess) => FileReply;
   },
   /**
    * `POST /audit` (header `x-lead-token`, the same token as `/lead`) and the public `GET /status` (no token, per-IP rate limit).
@@ -217,7 +217,7 @@ export function createWebhook(
             if (fileHits.length >= 3000) return json(res, 429, { ok: false, error: 'rate_limited' });
             fileHits.push(t);
             const rangeHeader = req.headers.range;
-            const out = admin.file(url.pathname.slice('/admin/files/'.length), typeof rangeHeader === 'string' ? rangeHeader : undefined);
+            const out = admin.file(url.pathname.slice('/admin/files/'.length), typeof rangeHeader === 'string' ? rangeHeader : undefined, { allowCabinet: true });
             if ('json' in out) {
               res.writeHead(out.status, { 'content-type': 'application/json', ...out.headers });
               return void res.end(JSON.stringify(out.json));

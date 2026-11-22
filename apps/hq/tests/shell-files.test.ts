@@ -146,3 +146,26 @@ describe('parseRange', () => {
     for (const bad of ['bytes=0-1,5-6', 'bytes=-', 'bytes=a-b', 'lines=0-1', '']) expect(parseRange(bad, 100)).toBeNull();
   });
 });
+
+describe('P0-1: the cabinet prefix and encoded traversal', () => {
+  it('refuses cabinet/ for a caller without full admin rights and serves it to the admin', () => {
+    const { renders } = fixture();
+    mkdirSync(join(renders, 'cabinet', 'c7'), { recursive: true });
+    writeFileSync(join(renders, 'cabinet', 'c7', 'contract-1.pdf'), '%PDF secret');
+    symlinkSync(join(renders, 'cabinet', 'c7'), join(renders, '7', 'viacab'));
+    expect(serveFile(renders, 'cabinet/c7/contract-1.pdf', undefined, { allowCabinet: true }).status).toBe(200);
+    expect(serveFile(renders, 'cabinet/c7/contract-1.pdf').status).toBe(200);
+    expect(serveFile(renders, 'cabinet/c7/contract-1.pdf', undefined, { allowCabinet: false }).status).toBe(404);
+    expect(serveFile(renders, 'Cabinet/c7/contract-1.pdf', undefined, { allowCabinet: false }).status).not.toBe(200);
+    // a symlink into cabinet/ does not get around it
+    expect(serveFile(renders, '7/viacab/contract-1.pdf', undefined, { allowCabinet: false }).status).toBe(404);
+    // ordinary files stay open
+    expect(serveFile(renders, '7/doc.pdf', undefined, { allowCabinet: false }).status).toBe(200);
+  });
+  it('rejects dot segments however they are encoded', () => {
+    const { renders } = fixture();
+    for (const p of ['7/%2e%2e/secret.png', '%2e%2e/secret.png', '7/..%2fsecret.png', '7%2f..%2fsecret.png', '7/%252e%252e/secret.png', '7/..%5csecret.png', '7/%2E%2E/secret.png', '7/../secret.png', 'cabinet%2fc7/x.pdf']) {
+      expect(serveFile(renders, p, undefined, { allowCabinet: false }).status, p).toBe(400);
+    }
+  });
+});

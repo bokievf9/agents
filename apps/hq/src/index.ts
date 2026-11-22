@@ -453,7 +453,7 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cf
       Date.now,
       cfg.officeToken ? { token: cfg.officeToken, get: cachedOffice(hq) } : undefined,
       webChat && cfg.webChatToken ? { token: cfg.webChatToken, handle: (r, ip) => webChat.handle(r, ip) } : undefined,
-      admin && cfg.adminToken ? { token: cfg.adminToken, handle: (r) => admin.handle(r), file: (path, range) => serveFile(cfg.rendersDir, path, range) } : undefined,
+      admin && cfg.adminToken ? { token: cfg.adminToken, handle: (r) => admin.handle(r), file: (path, range, access) => serveFile(cfg.rendersDir, path, range, access) } : undefined,
       {
         ...(cfg.leadWebhookToken
           ? {
