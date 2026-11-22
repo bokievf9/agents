@@ -4,7 +4,7 @@
  * the plain ways to order. No dollar amount is typed here: every price is read from the site's price list at the moment
  * of use (`getPrices()` in @fir/core, firtech.pro/api/prices), see `priceOf` and `startingPrices`.
  */
-import { companyPlan, getPrices, personalPlans, planOf, productNames, usd, type ProductKey } from '@fir/core';
+import { companyPlan, getPrices, personalPlans, planOf, productNames, teamPrice, usd, type ProductKey } from '@fir/core';
 
 export type PLang = 'ru' | 'en';
 type L<T> = Record<PLang, T>;
@@ -271,8 +271,12 @@ export function priceOf(id: CatalogueId, lang: PLang): string {
     return `${from} ${usd(c.setup)} + ${usd(c.monthly)}${month}`;
   }
   if (id === 'personal' || (id as string) === 'agent') return personalPrice(lang);
-  // the retired turnkey department (`ai`) is priced as the AI company; a team's monthly is `teamMonthly()` of its agents
-  if (id === 'company' || id === 'ai') return companyPrice(lang);
+  if (id === 'company') return companyPrice(lang);
+  // the turnkey department (`ai`) is an ИИ-команда (sales by default): the agents' sum minus the team discount; the AI company's price until the site publishes the agent subscription
+  if (id === 'ai') {
+    const t = teamPrice('sales');
+    return t ? `${from} ${usdSpaced(t.setup)} + ${usdSpaced(t.monthly)}${month}` : companyPrice(lang);
+  }
   const key = PRICE_KEY[id];
   return `${from} ${usd(key ? getPrices().products[key]! : 0)}`;
 }

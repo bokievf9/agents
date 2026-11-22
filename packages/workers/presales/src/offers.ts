@@ -1,4 +1,4 @@
-import { getPrices, personalPlans, planOf, productName, supportMonthly, usd, type ProductKey } from '@fir/core';
+import { getPrices, personalPlans, planOf, productName, supportMonthly, teamPrice, usd, type ProductKey } from '@fir/core';
 import { builderCodeIn } from './estimate.js';
 
 /**
@@ -173,7 +173,10 @@ const PRICE: Record<DirectionId, () => { from: number; monthly?: number }> = {
   content,
   miniapp: product('miniapp'),
   agent: personal,
-  implementation: company,
+  implementation: () => {
+    const t = teamPrice('sales');
+    return t ? { from: t.setup, monthly: t.monthly } : company();
+  },
   site: product('site'),
 };
 

@@ -1,4 +1,4 @@
-import { getPrices, type Prices } from './prices.js';
+import { getPrices, teamPrice, type Prices } from './prices.js';
 import { DEFAULT_SMALL_PROJECT_MAX_USD, DEFAULT_STAGE_TEMPLATES, type PaymentStage, type StageTemplate } from './stage-templates.js';
 
 /**
@@ -17,8 +17,9 @@ export const smallProjectMaxUsd = (p: Prices = getPrices()): number => p.smallPr
 
 /** What a product costs in the list (its standard package, else a catalogue variant); 0 when unknown. */
 function priceOfProduct(id: string, p: Prices): number {
-  // the retired turnkey department (`implementation`, `aiteam`) is priced as the AI company
-  if ((id === 'company' || id === 'implementation' || id === 'aiteam') && p.companyPlan) return p.companyPlan.setup;
+  if (id === 'company' && p.companyPlan) return p.companyPlan.setup;
+  // the turnkey department (`implementation`, `aiteam`) is an ИИ-команда: the default one is sales
+  if (id === 'implementation' || id === 'aiteam') { const t = teamPrice('sales', p); if (t) return t.setup; }
   const direct = p.products[HQ_KEY[id] ?? id];
   if (direct !== undefined) return direct;
   for (const c of Object.values(p.catalog)) if (c.variants[id] !== undefined) return c.variants[id]!;

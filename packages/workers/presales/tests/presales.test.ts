@@ -1,10 +1,10 @@
-import { allowedAmounts as sitePrices, costsLine, FALLBACK_PRICES, MockLlm, openDb, setPrices, stagesFor, type Payload } from '@fir/core';
+import { allowedAmounts as sitePrices, parsePrices, costsLine, FALLBACK_PRICES, MockLlm, openDb, setPrices, stagesFor, type Payload } from '@fir/core';
 import type { Task, WorkerCtx } from '@fir/hq';
 import { leadStoreFor } from '@fir/worker-lead-intake';
 import { describe, expect, it } from 'vitest';
 import { fillMarks, fallbackWording, withPilot, wordingOk, type Wording } from '../src/docs.js';
 import { priceBuilderCode } from '../src/estimate.js';
-import { builderTotal, quotePackage } from '../src/package.js';
+import { builderTotal, quotePackage, teamDepartmentIn } from '../src/package.js';
 import { DIRECTION_IDS, guessDirection, OFFERS, priceLabel, supportMonthlyUsd } from '../src/offers.js';
 import { splitMessage } from '../src/split.js';
 import { render } from '../src/template.js';
@@ -505,5 +505,33 @@ describe('the flagships (2026-11-22): Персональный ИИ and ИИ-к�
     expect(withPilot(withPilot(kp, false), true)).toBe(kp);
     expect(withPilot(kp, false)).not.toContain('Пилот');
     expect(withPilot(withPilot(kp, true), true)).toBe(kp);
+  });
+});
+
+describe('implementation is an ИИ-команда', () => {
+  const v4 = {
+    currency: 'USD', updatedAt: '2026-11-23', startingPrice: { websites: 150, bots: 100, apps: 800, automation: 200 },
+    catalog: { websites: { variants: {}, addons: {} }, bots: { variants: {}, addons: {} }, apps: { variants: {}, addons: {} }, automation: { variants: {}, addons: {} } },
+    extraPrice: {}, contentPlans: [{ id: 'content', setup: 90, monthly: 60 }], referralPercent: 10, products: {},
+    companyPlan: { id: 'company', setup: 1490, monthly: 149, byokMonthly: 104 },
+    agentSubscription: { setup: 220, monthly: 39, byokMonthly: 19 }, teamDiscountPercent: 15,
+  };
+  it('quotes the department of the request (sales by default) as agents minus the team discount', () => {
+    const p = parsePrices(v4)!;
+    expect(teamDepartmentIn('отдел под ключ')).toBe('sales');
+    const sales = quotePackage('implementation', 'ИИ-отдел под ключ', 'хочу ИИ-команду', p);
+    expect(sales).toMatchObject({ totalUsd: 561, monthlyUsd: 99, byokMonthlyUsd: 48 });
+    expect(sales.lines[0]!.label).toContain('ИИ-команда «Продажи» (3 агента');
+    const support = quotePackage('implementation', 'ИИ-отдел под ключ', 'нужна поддержка клиентов', p);
+    expect(support).toMatchObject({ totalUsd: 561, monthlyUsd: 99, byokMonthlyUsd: 48 });
+    expect(support.lines[0]!.label).toContain('ИИ-команда «Поддержка»');
+    const marketing = quotePackage('implementation', 'ИИ-отдел под ключ', 'отдел маркетинга', p);
+    expect(marketing).toMatchObject({ totalUsd: 935, monthlyUsd: 166, byokMonthlyUsd: 81 });
+    expect(marketing.lines[0]!.label).toContain('(5 агентов');
+  });
+  it('company stays its own direction; no published agent subscription falls back to the company plan', () => {
+    const p = parsePrices(v4)!;
+    expect(quotePackage('company', 'ИИ вашей компании', '', p).totalUsd).toBe(1490);
+    expect(quotePackage('implementation', 'ИИ-отдел под ключ', '', FALLBACK_PRICES).totalUsd).toBe(FALLBACK_PRICES.companyPlan!.setup);
   });
 });

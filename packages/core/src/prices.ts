@@ -154,6 +154,38 @@ export const teamMonthly = (agentMonthlies: number[], p: Prices = current): numb
   return Math.round(sum * (1 - (p.teamDiscountPercent ?? 0) / 100));
 };
 
+/** A team's one-time setup: the sum of the agents' setup prices minus the same team discount, rounded the same way as `teamMonthly()`. */
+export const teamSetup = (agentSetups: number[], p: Prices = current): number => teamMonthly(agentSetups, p);
+
+/** The agents a department sells as one ИИ-команда: the roles of its chart row (`role-titles.ts`, those with a `company` title; heads are not sold). */
+export const DEPARTMENT_AGENTS = {
+  sales: ['lead-intake', 'prospector', 'presales'],
+  marketing: ['content-maker', 'trend-scout', 'publisher', 'seo', 'analyst'],
+  support: ['customer-support', 'monitoring', 'billing'],
+  production: ['project-manager', 'reviewer', 'deployer'],
+  backoffice: ['finance', 'documents', 'knowledge'],
+} as const;
+export type TeamDepartment = keyof typeof DEPARTMENT_AGENTS;
+export const TEAM_DEPARTMENTS = Object.keys(DEPARTMENT_AGENTS) as TeamDepartment[];
+
+export interface TeamPrice {
+  agents: number;
+  setup: number;
+  monthly: number;
+  /** Monthly with the client's own model key; absent when the agent subscription has no BYOK price. */
+  byokMonthly?: number;
+}
+/** An ИИ-команда of a department: every agent at `agentSubscription`, setup and monthly (and BYOK) minus `teamDiscountPercent`. Undefined when the site has not published the agent subscription. */
+export function teamPrice(dept: TeamDepartment, p: Prices = current): TeamPrice | undefined {
+  const a = p.agentSubscription;
+  if (!a) return undefined;
+  const n = DEPARTMENT_AGENTS[dept].length;
+  const each = (v: number) => Array<number>(n).fill(v);
+  const out: TeamPrice = { agents: n, setup: teamSetup(each(a.setup), p), monthly: teamMonthly(each(a.monthly), p) };
+  if (a.byokMonthly !== undefined) out.byokMonthly = teamMonthly(each(a.byokMonthly), p);
+  return out;
+}
+
 /** The ИИ-компания plan, or undefined. */
 export const companyPlan = (p: Prices = current): (SubscriptionPlan & { id: string }) | undefined => p.companyPlan;
 
@@ -179,6 +211,10 @@ export function allowedAmounts(p: Prices = current): Set<number> {
   }
   if (p.agentSubscription) for (const n of [p.agentSubscription.setup, p.agentSubscription.monthly, p.agentSubscription.byokMonthly]) add(n);
   add(p.companyPerEmployee);
+  for (const dept of TEAM_DEPARTMENTS) {
+    const t = teamPrice(dept, p);
+    if (t) { add(t.setup); add(t.monthly); add(t.byokMonthly); }
+  }
   return s;
 }
 

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import fallbackJson from '../src/prices.fallback.json' with { type: 'json' };
 import {
-  allowedAmounts, pricesReloadMs, PRICES_REFRESH_MS, FALLBACK_PRICES, getPrices, loadPrices, parsePrices, planOf, PRICES_SETTING, PRODUCT_KEYS, setPrices, startPricesRefresh, supportMonthly, teamMonthly, type PriceStore,
+  allowedAmounts, pricesReloadMs, PRICES_REFRESH_MS, FALLBACK_PRICES, getPrices, loadPrices, parsePrices, planOf, PRICES_SETTING, PRODUCT_KEYS, setPrices, startPricesRefresh, supportMonthly, teamMonthly, teamPrice, teamSetup, type PriceStore,
 } from '../src/index.js';
 
 const memStore = (): PriceStore & { data: Map<string, string> } => {
@@ -117,6 +117,16 @@ describe('the live v4 payload of firtech.pro/api/prices', () => {
     expect(p.products).not.toHaveProperty('aiteam');
     expect(p.products).not.toHaveProperty('implementation');
     expect(Object.values(p.products)).not.toContain(999);
+  });
+  it('an ИИ-команда costs the agents minus the team discount: setup, monthly and BYOK, rounded the same way', () => {
+    const p = parsePrices(v4)!;
+    expect(teamSetup([220, 220, 220], p)).toBe(561);
+    expect(teamPrice('sales', p)).toEqual({ agents: 3, setup: 561, monthly: 99, byokMonthly: 48 });
+    expect(teamPrice('support', p)).toEqual({ agents: 3, setup: 561, monthly: 99, byokMonthly: 48 });
+    expect(teamPrice('marketing', p)).toEqual({ agents: 5, setup: 935, monthly: 166, byokMonthly: 81 });
+    const a = allowedAmounts(p);
+    for (const n of [561, 99, 48, 935, 166, 81]) expect(a.has(n)).toBe(true);
+    expect(teamPrice('sales', FALLBACK_PRICES)).toBeUndefined();
   });
   it('carries setup + monthly + BYOK, the agent subscription and the team discount', () => {
     const p = parsePrices(v4)!;

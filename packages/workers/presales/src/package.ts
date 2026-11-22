@@ -1,4 +1,4 @@
-import { getPrices, planOf, type Prices } from '@fir/core';
+import { DEPARTMENT_AGENTS, getPrices, planOf, teamPrice, type Prices, type TeamDepartment } from '@fir/core';
 import { builderCodeIn } from './estimate.js';
 import { COMPANY_DEFAULT, FLAGSHIP_OPTION_RU, flagshipOptionsIn, PERSONAL_DEFAULT, PERSONAL_LEVEL_RU, personalLevel, type PersonalLevel } from './flagships.js';
 import type { DirectionId } from './offers.js';
@@ -20,6 +20,8 @@ export interface PackageQuote {
   totalUsd: number;
   /** The monthly fee of a subscription package, USD; null when there is none. */
   monthlyUsd: number | null;
+  /** The monthly fee with the client's own model key (an ИИ-команда); absent otherwise. */
+  byokMonthlyUsd?: number;
   lines: PackageLine[];
   /** The stage template products of the builder's most expensive part (`site`, `bot`, `automation`, `app`); absent: the direction's own. */
   stageIds?: string[];
@@ -60,6 +62,27 @@ export function personalPlanFor(text: string, p: Prices): { level: PersonalLevel
   return { level, options, plan: { setup: chosen.setup, monthly: chosen.monthly } };
 }
 
+/** The department an ИИ-команда request names; sales when it names none. */
+export function teamDepartmentIn(text: string): TeamDepartment {
+  if (/маркетинг|marketing/i.test(text)) return 'marketing';
+  if (/поддержк|сопровожден|support/i.test(text)) return 'support';
+  if (/производств|production/i.test(text)) return 'production';
+  if (/бэк-?офис|back-?office/i.test(text)) return 'backoffice';
+  return 'sales';
+}
+const TEAM_DEPT_RU: Record<TeamDepartment, string> = { sales: 'Продажи', marketing: 'Маркетинг', support: 'Поддержка', production: 'Производство', backoffice: 'Бэк-офис' };
+
+/** An ИИ-команда: the department's agents at the agent subscription minus the team discount (setup, monthly, own-key monthly). Without a published agent subscription the AI company plan is quoted. */
+function teamPackage(title: string, text: string, p: Prices): PackageQuote {
+  const dept = teamDepartmentIn(text);
+  const t = teamPrice(dept, p);
+  if (!t) return quotePackage('company', title, text, p);
+  const n = DEPARTMENT_AGENTS[dept].length;
+  const q: PackageQuote = { totalUsd: t.setup, monthlyUsd: t.monthly, lines: [{ label: `${title}: ИИ-команда «${TEAM_DEPT_RU[dept]}» (${n} ${n < 5 ? 'агента' : 'агентов'}, со скидкой за команду): настройка`, usd: t.setup }] };
+  if (t.byokMonthly !== undefined) q.byokMonthlyUsd = t.byokMonthly;
+  return q;
+}
+
 /**
  * The package of a direction and its exact price. `title` is the direction's name in the proposal (the single line of a product).
  * `text` is the lead's request, the niche and the builder's summary, lower or upper case as they came.
@@ -71,8 +94,8 @@ export function quotePackage(id: DirectionId, title: string, text: string, p: Pr
     case 'receptionist': return one(title, p.products.intake!);
     case 'automation': return one(title, p.products.automation!);
     case 'miniapp': return one(title, p.products.miniapp!);
-    // the retired turnkey department is the AI company now
-    case 'implementation': return quotePackage('company', title, text, p);
+    // the turnkey department is an ИИ-команда of one department (sales unless the request names another); `company` only by its own direction
+    case 'implementation': return teamPackage(title, text, p);
     case 'content': {
       const c = planOf('content', p);
       return { totalUsd: c.setup, monthlyUsd: c.monthly, lines: [{ label: `${title}: настройка каналов и контент-план`, usd: c.setup }] };
