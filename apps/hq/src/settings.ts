@@ -296,7 +296,9 @@ export function createSettings(d: SettingsDeps) {
   function logView(query: URLSearchParams): AdminReply {
     const raw = Number(query.get('limit') ?? 50);
     const limit = Number.isFinite(raw) ? Math.min(200, Math.max(1, Math.trunc(raw))) : 50;
-    const items = history(limit).map((r) => ({ at: new Date(r.at).toISOString(), key: r.key, old: r.old, new: r.new, source: r.source }));
+    // defence in depth: every key written here is a plain setting, but a key that names a secret never shows its values
+    const secret = (key: string) => /token|secret|password|passwd|api[_-]?key|private/i.test(key);
+    const items = history(limit).map((r) => ({ at: new Date(r.at).toISOString(), key: r.key, old: secret(r.key) ? '***' : r.old, new: secret(r.key) ? '***' : r.new, source: r.source }));
     return ok({ items });
   }
 

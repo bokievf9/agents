@@ -235,3 +235,15 @@ describe('autopilot.leadManager and the human alert (Fira hooks)', () => {
     expect(await notices.alert('Нужен человек', { kind: 'human' })).toBe(false);
   });
 });
+
+describe('GET /admin/settings/log hides secret-like keys', () => {
+  it('a key that names a token or secret shows *** instead of its values', () => {
+    const { settings, w } = setup();
+    w.hq.db.prepare("INSERT INTO settings_log (at, key, old, new, source) VALUES (?, 'service.botToken', 'old-secret-1', 'new-secret-2', 'owner')").run(w.clock.t);
+    const r = settings.logView(new URLSearchParams({ limit: '5' }));
+    const body = JSON.stringify(r.body);
+    expect(body).toContain('service.botToken');
+    expect(body).not.toContain('old-secret-1');
+    expect(body).not.toContain('new-secret-2');
+  });
+});
