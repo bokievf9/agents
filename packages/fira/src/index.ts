@@ -14,6 +14,7 @@ export * from './firtech-tools.js';
 export * from './exec-assistant.js';
 export * from './adapters/memory.js';
 export * from './adapters/supabase.js';
+export * from './adapters/voyage.js';
 export * from './eval/format.js';
 export * from './eval/judge.js';
 export * from './eval/runner.js';

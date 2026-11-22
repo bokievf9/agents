@@ -1,7 +1,7 @@
 import { errMsg, formatSlot, log, okv, tryChat, tryComplete, turnToolUses } from '@fir/core';
 import {
   applyGuards, builderLink as builderLinkStub, DEFAULT_ESCALATION_MODE, DEMO_PAGE_KINDS, demoLinkDef, escalationOf, firtechGuardContext, InMemoryJournal, InMemoryKnowledge,
-  InMemoryLessons, InMemoryMemory, isProbe, leakGuard, loadCompanyKnowledge, nicheBrief, nicheOfKind, priceList, recordBriefDef, run, specOf,
+  HashEmbedder, InMemoryLessons, InMemoryMemory, isProbe, leakGuard, loadCompanyKnowledge, nicheBrief, nicheOfKind, priceList, recordBriefDef, run, specOf, voyageFromEnv,
   type AgentSpec, type Escalation, type EscalationMode, type FiraTool, type Journal, type Knowledge, type KnowledgeChunk, type Lessons, type Memory, type MemTurn, type Mode, type RunOut, type ToolRegistry,
 } from '@fir/fira';
 import { BUILD_CHANNELS, BUILD_GOALS, BUILDER_KINDS, builderPath, DETAIL_DEADLINES } from './builder-link.js';
@@ -132,7 +132,7 @@ function textOfDone(out: ReceptionistOut, lang: Lang): string {
 }
 
 export function createFiraLead(o: FiraLeadOptions): FiraLead {
-  const knowledge = o.knowledge ?? new InMemoryKnowledge();
+  const knowledge = o.knowledge ?? new InMemoryKnowledge(voyageFromEnv() ?? new HashEmbedder());
   const memory = o.memory ?? new InMemoryMemory();
   const lessons = o.lessons ?? new InMemoryLessons();
   const journal = o.journal ?? new InMemoryJournal(2000);

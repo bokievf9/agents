@@ -164,5 +164,8 @@ export interface Journal {
 /** Turns text into vectors for the «meaning» half of the search. Production: an embeddings API behind the gateway; tests: `HashEmbedder`. */
 export interface Embedder {
   readonly dims: number;
+  /** Vectors of documents (knowledge chunks). */
   embed(texts: string[]): Promise<number[][]>;
+  /** Vectors of questions, when the model tells them from documents (Voyage `input_type: query`); absent: `embed`. */
+  embedQuery?(texts: string[]): Promise<number[][]>;
 }

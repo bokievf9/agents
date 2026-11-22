@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { errMsg, log } from '@fir/core';
 import { cosine, hybrid, MIN_SCORE, wordScore, HashEmbedder } from '../knowledge.js';
 import { tiersFor } from '../stores.js';
 import type {
@@ -6,25 +8,60 @@ import type {
 
 /** In-memory adapters: tests, evals and local runs. Same contracts as Supabase (company isolation, TTL, no texts outside `live`). */
 
-export class InMemoryKnowledge implements Knowledge {
-  private readonly rows = new Map<string, { c: KnowledgeChunk; v: number[] }>();
-  private readonly miss = new Map<string, KnowledgeMiss>();
-  constructor(private readonly embedder: Embedder = new HashEmbedder()) {}
+/** Embedding is skipped when one `add` would send more than this many characters (a runaway pack costs money). */
+export const MAX_EMBED_CHARS = 2_000_000;
 
+const hashOf = (c: KnowledgeChunk): string => createHash('sha256').update(`${c.title}\n${c.text}`).digest('hex').slice(0, 16);
+
+export class InMemoryKnowledge implements Knowledge {
+  /** `v` is null when the chunk has no vector (embedding off, failed or over the cap): it is found by words only. */
+  private readonly rows = new Map<string, { c: KnowledgeChunk; v: number[] | null; h: string }>();
+  private readonly miss = new Map<string, KnowledgeMiss>();
+  constructor(private readonly embedder: Embedder = new HashEmbedder(), private readonly maxEmbedChars = MAX_EMBED_CHARS) {}
+
+  /** Chunks whose title and text did not change keep their vector: a rebuild embeds only what is new or edited. */
   async add(chunks: KnowledgeChunk[]): Promise<number> {
     const keep = chunks.filter((c) => c.tier !== 'secret');
-    const vs = await this.embedder.embed(keep.map((c) => `${c.title}\n${c.text}`));
-    keep.forEach((c, i) => this.rows.set(`${c.companyId}\u0000${c.id}`, { c, v: vs[i]! }));
+    const todo: { c: KnowledgeChunk; h: string; key: string }[] = [];
+    const next = new Map<string, { c: KnowledgeChunk; v: number[] | null; h: string }>();
+    for (const c of keep) {
+      const key = `${c.companyId}\u0000${c.id}`;
+      const h = hashOf(c);
+      const old = this.rows.get(key);
+      if (old && old.h === h && old.v) next.set(key, { c, v: old.v, h });
+      else todo.push({ c, h, key });
+    }
+    const texts = todo.map(({ c }) => `${c.title}\n${c.text}`);
+    const chars = texts.reduce((n, t) => n + t.length, 0);
+    let vs: (number[] | null)[] = todo.map(() => null);
+    if (todo.length && chars > this.maxEmbedChars) {
+      log('warn', 'fira knowledge: embedding skipped, over the cap', { chars, cap: this.maxEmbedChars, chunks: todo.length });
+    } else if (todo.length) {
+      try {
+        vs = await this.embedder.embed(texts);
+      } catch (e) {
+        log('warn', 'fira knowledge: embedding failed, chunks kept for word search', { err: errMsg(e), chunks: todo.length });
+      }
+    }
+    todo.forEach(({ c, h, key }, i) => next.set(key, { c, v: vs[i] ?? null, h }));
+    if (keep.length > 1 || todo.length) log('info', 'fira knowledge added', { chunks: keep.length, embedded: vs.filter(Boolean).length, reused: keep.length - todo.length, chars });
+    for (const [k, v] of next) this.rows.set(k, v);
     return keep.length;
   }
 
   async search(companyId: string, query: string, k: number, o: { audience?: Audience } = {}): Promise<KnowledgeHit[]> {
-    const [q] = await this.embedder.embed([query]);
+    // one embedding of the question per turn; if it fails the turn is searched by words, never an error
+    let q: number[] | null = null;
+    try {
+      q = ((await (this.embedder.embedQuery ?? this.embedder.embed).call(this.embedder, [query]))[0]) ?? null;
+    } catch (e) {
+      log('warn', 'fira knowledge: query embedding failed, words only', { err: errMsg(e) });
+    }
     const tiers = tiersFor(o.audience ?? 'visitor');
     const hits: KnowledgeHit[] = [];
     for (const { c, v } of this.rows.values()) {
       if (c.companyId !== companyId || !tiers.includes(c.tier ?? 'public')) continue;
-      const h = hybrid(wordScore(query, `${c.title} ${c.text}`), cosine(q!, v));
+      const h = hybrid(wordScore(query, `${c.title} ${c.text}`), q && v ? cosine(q, v) : 0);
       if (h.score >= MIN_SCORE) hits.push({ ...c, score: h.score, via: h.via });
     }
     return hits.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, k);
