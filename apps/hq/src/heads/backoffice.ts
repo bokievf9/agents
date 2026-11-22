@@ -246,7 +246,7 @@ export class BackofficeHead {
     if (!ops) return void this.hq.complete(task.id, BACKOFFICE_HEAD_ID, 'Резервное копирование не подключено (нет каталога данных).');
     let r;
     try {
-      r = await makeBackup({ dataDir: ops.dataDir, now: this.hq.now, ageRecipient: ops.ageRecipient, ...(ops.exec ? { exec: ops.exec } : {}) });
+      r = await makeBackup({ dataDir: ops.dataDir, rendersDir: ops.rendersDir, now: this.hq.now, ageRecipient: ops.ageRecipient, ...(ops.exec ? { exec: ops.exec } : {}) });
     } catch (e) {
       this.hq.block(task.id, BACKOFFICE_HEAD_ID, `Бэкап не сделан: ${errMsg(e)}`.slice(0, 300));
       return void (await this.hq.alert(`Резервная копия не сделана: ${errMsg(e).slice(0, 200)}. Задача #${task.id}.`));
@@ -256,6 +256,7 @@ export class BackofficeHead {
     let sent = false;
     if (!r.encrypted) {
       // never send the plain archive (it holds client data): a metadata summary and the warning only; the copy stays on the server
+      log('warn', 'backup not sent: BACKUP_AGE_RECIPIENT is not set', { bytes: r.bytes });
       try {
         await this.d.messenger.send(this.d.ownerId, `Резервная копия Shell: ${r.databases.length} баз, ${mb} МБ. Файл НЕ отправлен: BACKUP_AGE_RECIPIENT не задан, а в архиве базы с клиентами. Копия лежит на сервере в data/backups (хранится 7). Задайте ключ age, и ночная копия будет приходить зашифрованной.`);
       } catch (e) {

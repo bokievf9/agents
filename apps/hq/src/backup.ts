@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -13,6 +13,8 @@ const NAME = /^hq-backup-\d{8}-\d{4}\.tar\.gz(\.age)?$/;
 export interface BackupOptions {
   /** `DATA_DIR`: hq.db and any other SQLite file in it are copied; `renders/` and `backups/` are skipped. */
   dataDir: string;
+  /** `DATA_DIR/renders`: only its `cabinet/` folder (the clients' contract, invoice and signature PDFs) goes into the archive, as `renders/cabinet`; the rest of the renders are rebuildable. Default `<dataDir>/renders`. */
+  rendersDir?: string;
   /** Default `<dataDir>/backups`. */
   backupsDir?: string;
   now?: () => number;
@@ -57,7 +59,7 @@ const stamp = (ms: number): string => {
 
 /**
  * One consistent snapshot of every SQLite file in the data dir (better-sqlite3 `backup()`, safe while HQ writes), tarred and
- * gzipped without `renders/`, encrypted with age when a recipient is set, the newest `keep` archives kept in `backups/`.
+ * gzipped with `renders/cabinet` only (no other renders), encrypted with age when a recipient is set, the newest `keep` archives kept in `backups/`.
  * Polly keeps its own volume and OmniRoute's `storage.sqlite` lives in its own: they are not in HQ's data dir, so they are
  * not in this archive (see the HQ README).
  */
@@ -83,6 +85,9 @@ export async function makeBackup(o: BackupOptions): Promise<BackupResult> {
         db.close();
       }
     }
+    // the clients' PDFs are not rebuildable the same way (the signed copy carries the signature as it was): they travel with the databases
+    const cabinet = join(o.rendersDir ?? join(o.dataDir, 'renders'), 'cabinet');
+    if (existsSync(cabinet)) cpSync(cabinet, join(stage, 'renders', 'cabinet'), { recursive: true });
     await exec('tar', ['-czf', base, '-C', stage, '.']);
   } finally {
     rmSync(stage, { recursive: true, force: true });

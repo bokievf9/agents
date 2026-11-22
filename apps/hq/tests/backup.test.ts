@@ -55,6 +55,20 @@ describe('backup', () => {
     db.close();
   });
 
+  it('P1-6: renders/cabinet (client PDFs) is in the archive, other renders are not', async () => {
+    const { dir, db } = dataDir();
+    mkdirSync(join(dir, 'renders', 'cabinet', 'c7'), { recursive: true });
+    writeFileSync(join(dir, 'renders', 'cabinet', 'c7', 'contract-1-signed.pdf'), '%PDF signed');
+    const r = await makeBackup({ dataDir: dir, now: () => T0 });
+    const list = execFileSync('tar', ['-tzf', r.file]).toString();
+    expect(list).toContain('renders/cabinet/c7/contract-1-signed.pdf');
+    expect(list).not.toContain('reel.mp4');
+    const out = mkdtempSync(join(tmpdir(), 'fir-restore-'));
+    execFileSync('tar', ['-xzf', r.file, '-C', out]);
+    expect(existsSync(join(out, 'renders', 'cabinet', 'c7', 'contract-1-signed.pdf'))).toBe(true);
+    db.close();
+  });
+
   it('encrypts with age when a recipient is set and removes the plain copy', async () => {
     const { dir, db } = dataDir();
     const calls: string[][] = [];
