@@ -74,6 +74,17 @@ describe('the site demo tab (/chat with persona) is booked to the signed-in clie
   });
 });
 
+describe('DEMO_REQUIRE_CLIENT default', () => {
+  it('is on unless the env explicitly says off', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    const base = { HQ_BOT_TOKEN: '1:abc', OWNER_TELEGRAM_ID: '1' };
+    expect(loadConfig(base).demoRequireClient).toBe(true);
+    expect(loadConfig({ ...base, DEMO_REQUIRE_CLIENT: '' }).demoRequireClient).toBe(true);
+    expect(loadConfig({ ...base, DEMO_REQUIRE_CLIENT: 'on' }).demoRequireClient).toBe(true);
+    for (const v of ['off', 'OFF', '0', 'false', 'no']) expect(loadConfig({ ...base, DEMO_REQUIRE_CLIENT: v }).demoRequireClient, v).toBe(false);
+  });
+});
+
 describe('the agent routes', () => {
   it('POST /agent/demo-<niche>/chat books the client, answers the usage, and stops at the cap (429 limit_reached with the fields)', async () => {
     const { pg, db } = world({ limit: 2 });

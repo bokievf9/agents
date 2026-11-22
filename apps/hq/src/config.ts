@@ -132,7 +132,7 @@ export interface Config extends BaseConfig {
   clientLlmDailyCap: number;
   /** Demo messages per signed-in client and day (all demo sources together). */
   demoDailyPerClient: number;
-  /** `DEMO_REQUIRE_CLIENT=on`: a demo request that names no known client gets 401 `login_required`. */
+  /** On unless `DEMO_REQUIRE_CLIENT` is explicitly off/0/false/no: a demo request that names no known client gets 401 `login_required`. */
   demoRequireClient: boolean;
   /** `KNOWLEDGE_AUTO_IMPORT` (default on): a lead with the client's site in the brief queues the import of that site into his agent's knowledge. `off` stops it. */
   knowledgeAutoImport: boolean;
@@ -252,7 +252,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     clientRatePerHour: Math.round(num(env, 'CLIENT_RATE_PER_HOUR', 20, 1, 1000)),
     clientLlmDailyCap: Math.round(num(env, 'CLIENT_LLM_DAILY_CAP', 300, 0, 100_000)),
     demoDailyPerClient: Math.round(num(env, 'DEMO_DAILY_PER_CLIENT', 30, 1, 10_000)),
-    demoRequireClient: /^(on|1|true|yes)$/i.test(optional(env, 'DEMO_REQUIRE_CLIENT') ?? ''),
+    demoRequireClient: !/^(off|0|false|no)$/i.test(optional(env, 'DEMO_REQUIRE_CLIENT') ?? ''),
     knowledgeAutoImport: !/^(off|0|false|no)$/i.test(optional(env, 'KNOWLEDGE_AUTO_IMPORT') ?? ''),
     knowledgeAutoDaily: Math.max(0, Math.floor(Number(optional(env, 'KNOWLEDGE_AUTO_DAILY')) || 20)),
     selfIps: [optional(env, 'PUBLIC_IP'), optional(env, 'SELF_IPS')].flatMap((v) => (v ?? '').split(',')).map((x) => x.trim()).filter(Boolean),
