@@ -41,9 +41,29 @@ function parseAttrs(s: string): Record<string, string> {
 }
 
 /** Tolerant parse: unknown closing tags are ignored, a closing tag closes everything opened after its match. */
-export function parseHtml(html: string): HNode {
+/** The tree never goes deeper than this: a page of 50k unclosed `<div>` stays a flat list of siblings from here on. */
+export const MAX_HTML_DEPTH = 512;
+
+export function parseHtml(input: string): HNode {
+  // markup that opens after the last `>` / `-->` / `]]>` can never close: it is text, and it must not make every `<` scan to the end of the page
+  let html = input;
+  const lt = html.lastIndexOf('>');
+  if (lt < html.length - 1 || lt < 0) html = `${html.slice(0, lt + 1)}${html.slice(lt + 1).replace(/</g, '&lt;')}`;
+  const lc = html.lastIndexOf('-->');
+  if (html.indexOf('<!--', lc < 0 ? 0 : lc) >= 0) html = `${html.slice(0, lc + 1)}${html.slice(lc + 1).replace(/<!--/g, '&lt;!--')}`;
+  const ld = html.lastIndexOf(']]>');
+  if (html.indexOf('<![CDATA[', ld < 0 ? 0 : ld) >= 0) html = `${html.slice(0, ld + 1)}${html.slice(ld + 1).replace(/<!\[CDATA\[/g, '&lt;![CDATA[')}`;
   const root: HNode = { tag: '#root', attrs: {}, children: [], parent: null };
   let cur = root;
+  let depth = 0;
+  // how many elements of each tag are open on the path to `cur`: a closing tag with no open partner walks nothing
+  const open = new Map<string, number>();
+  const up = (): void => {
+    open.set(cur.tag, (open.get(cur.tag) ?? 1) - 1);
+    cur = cur.parent ?? root;
+    depth--;
+  };
+  const noClose = new Set<string>();
   const re = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<![^>]*>|<\?[^>]*>|<(\/?)([a-zA-Z][\w:-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>|[^<]+|</g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html))) {
@@ -54,30 +74,37 @@ export function parseHtml(html: string): HNode {
     }
     const tag = rawName.toLowerCase();
     if (slash) {
-      for (let n: HNode | null = cur; n && n !== root; n = n.parent) {
-        if (n.tag === tag) {
-          cur = n.parent ?? root;
-          break;
-        }
+      if ((open.get(tag) ?? 0) > 0) {
+        while (cur !== root && cur.tag !== tag) up();
+        if (cur !== root) up();
       }
       continue;
     }
-    if (CLOSES_P.has(tag) && cur.tag === 'p') cur = cur.parent ?? root;
-    if (tag === 'li' && cur.tag === 'li') cur = cur.parent ?? root;
+    if (CLOSES_P.has(tag) && cur.tag === 'p') up();
+    if (tag === 'li' && cur.tag === 'li') up();
     const node: HNode = { tag, attrs: parseAttrs(rest ?? ''), children: [], parent: cur };
     cur.children.push(node);
     if (RAW.has(tag)) {
-      // raw text up to the matching close tag
-      const close = new RegExp(`</${tag}\\s*>`, 'ig');
-      close.lastIndex = re.lastIndex;
-      const c = close.exec(html);
-      const text = html.slice(re.lastIndex, c ? c.index : html.length);
+      // raw text up to the matching close tag (a tag that never closes is looked for once)
+      let text = html.slice(re.lastIndex);
+      let next = html.length;
+      if (!noClose.has(tag)) {
+        const close = new RegExp(`</${tag}\\s*>`, 'ig');
+        close.lastIndex = re.lastIndex;
+        const c = close.exec(html);
+        if (c) {
+          text = html.slice(re.lastIndex, c.index);
+          next = close.lastIndex;
+        } else noClose.add(tag);
+      }
       node.children.push(tag === 'title' ? decodeEntities(text) : text);
-      re.lastIndex = c ? close.lastIndex : html.length;
+      re.lastIndex = next;
       continue;
     }
-    if (VOID.has(tag) || /\/\s*$/.test(rest ?? '')) continue;
+    if (VOID.has(tag) || /\/\s*$/.test(rest ?? '') || depth >= MAX_HTML_DEPTH) continue;
     cur = node;
+    depth++;
+    open.set(tag, (open.get(tag) ?? 0) + 1);
   }
   return root;
 }

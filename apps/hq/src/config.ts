@@ -136,6 +136,10 @@ export interface Config extends BaseConfig {
   demoRequireClient: boolean;
   /** `KNOWLEDGE_AUTO_IMPORT` (default on): a lead with the client's site in the brief queues the import of that site into his agent's knowledge. `off` stops it. */
   knowledgeAutoImport: boolean;
+  /** `KNOWLEDGE_AUTO_DAILY` (default 20): automatic site imports per 24 hours for all clients together. */
+  knowledgeAutoDaily: number;
+  /** `PUBLIC_IP` and `SELF_IPS` (comma list): addresses of this server; the site crawler never fetches them. */
+  selfIps: string[];
   /** age public key (`age1...`) for the nightly backup sent to the owner; unset: sent unencrypted (the message says so). */
   backupAgeRecipient: string | undefined;
 }
@@ -250,6 +254,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     demoDailyPerClient: Math.round(num(env, 'DEMO_DAILY_PER_CLIENT', 30, 1, 10_000)),
     demoRequireClient: /^(on|1|true|yes)$/i.test(optional(env, 'DEMO_REQUIRE_CLIENT') ?? ''),
     knowledgeAutoImport: !/^(off|0|false|no)$/i.test(optional(env, 'KNOWLEDGE_AUTO_IMPORT') ?? ''),
+    knowledgeAutoDaily: Math.max(0, Math.floor(Number(optional(env, 'KNOWLEDGE_AUTO_DAILY')) || 20)),
+    selfIps: [optional(env, 'PUBLIC_IP'), optional(env, 'SELF_IPS')].flatMap((v) => (v ?? '').split(',')).map((x) => x.trim()).filter(Boolean),
     backupAgeRecipient: backupRecipient(optional(env, 'BACKUP_AGE_RECIPIENT')),
     pricesUrl: optional(env, 'PRICES_URL') ?? DEFAULT_PRICES_URL,
     siteUrl: (optional(env, 'SITE_URL') ?? 'https://firtech.pro').replace(/\/$/, ''),

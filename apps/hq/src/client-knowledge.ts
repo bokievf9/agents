@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { errMsg, log, migrate, type Db } from '@fir/core';
-import { chunkText, redactSecrets, type Knowledge, type KnowledgeChunk } from '@fir/fira';
+import { chunkText, redactSecrets, type Embedder, type Knowledge, type KnowledgeChunk } from '@fir/fira';
 import { crawlSite, MAX_PAGES, parseSiteUrl, publicFetcher, type Fetcher } from './site-crawl.js';
 
 /**
@@ -40,11 +40,82 @@ CREATE TABLE IF NOT EXISTS ck_jobs (
   created_at INTEGER NOT NULL,
   finished_at INTEGER
 );
-CREATE INDEX IF NOT EXISTS ck_jobs_client ON ck_jobs (client_id, id);`;
+CREATE INDEX IF NOT EXISTS ck_jobs_client ON ck_jobs (client_id, id);
+CREATE TABLE IF NOT EXISTS ck_embed (
+  k TEXT PRIMARY KEY,
+  v BLOB NOT NULL,
+  at INTEGER NOT NULL
+);`;
 
 export const scopeOf = (clientId: number): string => `client-${clientId}`;
 const HOUR = 3_600_000;
 const CHUNKS_CAP = 1200;
+/** Jobs kept per client; older rows are deleted. */
+const JOBS_KEPT = 20;
+/** Whole HQ: crawls running at once, the rest wait in line. */
+export const MAX_CONCURRENT = 2;
+/** Whole HQ: automatic imports (from a lead's brief) per rolling 24 hours. */
+export const AUTO_DAILY = 20;
+/** Chunks of all clients in the store; over it the client used longest ago is dropped from memory (his pages stay in SQLite and come back on demand). */
+export const STORE_CHUNKS_CAP = 20_000;
+
+const sha = (t: string): string => createHash('sha256').update(t).digest('hex');
+
+/**
+ * Embeddings of client sites, cached by the hash of the text in SQLite: after a restart or a re-import nothing that did not change is embedded again.
+ * A request to the model gets a deadline: when Voyage is slow or down the call fails at once, the store keeps the chunk without a vector and finds it by words
+ * (vectors of two models are never mixed in one store, so there is no switch to the hash embedder in the middle). `tag` names the model: another model, another cache.
+ */
+export class ClientEmbedder implements Embedder {
+  readonly dims: number;
+  constructor(private readonly db: Db, private readonly inner: Embedder, private readonly tag: string, private readonly o: { docMs?: number; queryMs?: number; maxRows?: number } = {}) {
+    migrate(db, SCHEMA);
+    this.dims = inner.dims;
+  }
+
+  private within<T>(p: Promise<T>, ms: number): Promise<T> {
+    let t: NodeJS.Timeout;
+    return Promise.race([p, new Promise<T>((_, rej) => { t = setTimeout(() => rej(new Error('embedding deadline')), ms); t.unref(); })]).finally(() => clearTimeout(t));
+  }
+
+  async embed(texts: string[]): Promise<number[][]> {
+    const keys = texts.map((x) => `${this.tag}:${sha(x)}`);
+    const get = this.db.prepare('SELECT v FROM ck_embed WHERE k = ?');
+    const out: (number[] | null)[] = keys.map((k) => {
+      const r = get.get(k) as { v: Buffer } | undefined;
+      return r ? Array.from(new Float32Array(r.v.buffer.slice(r.v.byteOffset, r.v.byteOffset + r.v.byteLength))) : null;
+    });
+    const miss = out.map((v, i) => (v ? -1 : i)).filter((i) => i >= 0);
+    if (miss.length) {
+      const vs = await this.within(this.inner.embed(miss.map((i) => texts[i]!)), this.o.docMs ?? 30_000);
+      const put = this.db.prepare('INSERT OR REPLACE INTO ck_embed (k, v, at) VALUES (?, ?, ?)');
+      miss.forEach((i, j) => {
+        out[i] = vs[j]!;
+        put.run(keys[i], Buffer.from(new Float32Array(vs[j]!).buffer), Date.now());
+      });
+      const max = this.o.maxRows ?? 60_000;
+      const n = (this.db.prepare('SELECT COUNT(*) AS n FROM ck_embed').get() as { n: number }).n;
+      if (n > max) this.db.prepare('DELETE FROM ck_embed WHERE k IN (SELECT k FROM ck_embed ORDER BY at LIMIT ?)').run(Math.ceil(max / 10));
+    }
+    return out as number[][];
+  }
+
+  embedQuery(texts: string[]): Promise<number[][]> {
+    return this.within((this.inner.embedQuery ?? this.inner.embed).call(this.inner, texts), this.o.queryMs ?? 3000);
+  }
+}
+
+/** The openers of the agent's own JSON protocol (`"reply":`, `"tool": {`, `"name": "faq_search"`): chunks are single lines, so they are neutralised inside the text, not by dropping lines. */
+const PROTOCOL = /["']?\b(?:tool|reply)["']?\s*:\s*[{"']|["']?name["']?\s*:\s*["']?(?:faq_search|booking_slots|book_slot|capture_lead|handoff_human)["']?/gi;
+/**
+ * A passage of a stranger's website on its way to the model: the delimiter tag is cut out (and every angle bracket softened, so a rebuilt tag cannot appear),
+ * and the openers of the agent's reply or tool protocol are neutralised. What is left is plain text for `<site_data>`.
+ */
+export function cleanSite(t: string): string {
+  let x = t;
+  for (let i = 0; i < 5 && /<\/?\s*site_data/i.test(x); i++) x = x.replace(/<\/?\s*site_data[^>]*>?/gi, '');
+  return x.replace(PROTOCOL, '…').replace(/</g, '‹').replace(/>/g, '›');
+}
 
 export interface Reply {
   status: number;
@@ -54,7 +125,7 @@ const ok = (body: Record<string, unknown> = {}): Reply => ({ status: 200, body: 
 const fail = (status: number, error: string, more: Record<string, unknown> = {}): Reply => ({ status, body: { ok: false, error, ...more } });
 
 interface JobRow {
-  id: number; client_id: number; url: string; origin: string; state: 'running' | 'done' | 'failed'; pages: number; chunks: number; chars: number;
+  id: number; client_id: number; url: string; origin: string; state: 'queued' | 'running' | 'done' | 'failed'; pages: number; chunks: number; chars: number;
   errors: number; skipped: number; truncated: number; error: string; created_at: number; finished_at: number | null;
 }
 const iso = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toISOString());
@@ -74,11 +145,23 @@ export interface ClientKnowledgeDeps {
   autoImport?: boolean;
   /** Politeness pause between pages (tests 0). */
   delayMs?: number;
+  /** Crawls at once for the whole HQ (default 2). */
+  maxConcurrent?: number;
+  /** Automatic imports per rolling 24 hours for the whole HQ (default 20; `KNOWLEDGE_AUTO_DAILY`). */
+  autoDaily?: number;
+  /** Chunks of all clients kept in the store (default 20 000). */
+  chunkCap?: number;
 }
+
+interface Usage { chunks: number; last: number }
 
 export class ClientKnowledge {
   private readonly running = new Map<number, Promise<void>>();
   private readonly loaded = new Map<number, Promise<void>>();
+  /** Chunks each client holds in the store, and when he was last used: the order of eviction. */
+  private readonly usage = new Map<number, Usage>();
+  private active = 0;
+  private readonly waiting: (() => void)[] = [];
   private readonly fetcher: Fetcher;
   private readonly autoOn: boolean;
 
@@ -87,7 +170,7 @@ export class ClientKnowledge {
     this.fetcher = d.fetcher ?? publicFetcher();
     this.autoOn = d.autoImport ?? true;
     // a restart killed a running job: it is not running any more
-    d.db.prepare("UPDATE ck_jobs SET state = 'failed', error = 'restart', finished_at = ? WHERE state = 'running'").run(d.now());
+    d.db.prepare("UPDATE ck_jobs SET state = 'failed', error = 'restart', finished_at = ? WHERE state IN ('running', 'queued')").run(d.now());
   }
 
   private clientExists(id: number): boolean {
@@ -123,22 +206,54 @@ export class ClientKnowledge {
     const url = raw ? parseSiteUrl(raw) : null;
     if (!url) return fail(400, 'invalid_url');
     const r = this.start(clientId, url.href, 'manual', b.maxPages as number | undefined);
-    return r.status === 'running' ? { status: 202, body: { ok: true, jobId: r.id, state: 'running', already: r.already } } : fail(429, 'too_soon');
+    return r.status === 'running' ? { status: 202, body: { ok: true, jobId: r.id, state: r.already ? 'running' : 'queued', already: r.already } } : fail(429, 'too_soon');
   }
 
-  /** Starts a job unless one runs for the client (then that job is returned) or, for auto, one ran within the hour. */
+  /** Starts a job unless one runs or waits for the client (then that job is returned) or, for auto, one ran within the hour or the day's allowance is spent. */
   private start(clientId: number, url: string, origin: 'auto' | 'manual', maxPages: number | undefined): { status: 'running' | 'skipped'; id: number; already: boolean } {
-    const live = this.d.db.prepare("SELECT id FROM ck_jobs WHERE client_id = ? AND state = 'running' ORDER BY id DESC LIMIT 1").get(clientId) as { id: number } | undefined;
+    const live = this.d.db.prepare("SELECT id FROM ck_jobs WHERE client_id = ? AND state IN ('queued', 'running') ORDER BY id DESC LIMIT 1").get(clientId) as { id: number } | undefined;
     if (live && this.running.has(clientId)) return { status: 'running', id: live.id, already: true };
     const t = this.d.now();
     if (origin === 'auto') {
       const recent = this.d.db.prepare('SELECT id FROM ck_jobs WHERE client_id = ? AND created_at > ? LIMIT 1').get(clientId, t - HOUR) as { id: number } | undefined;
       if (recent) return { status: 'skipped', id: recent.id, already: true };
+      const today = (this.d.db.prepare("SELECT COUNT(*) AS n FROM ck_jobs WHERE origin = 'auto' AND created_at > ?").get(t - 24 * HOUR) as { n: number }).n;
+      if (today >= (this.d.autoDaily ?? AUTO_DAILY)) {
+        log('warn', 'client knowledge auto import over the daily allowance', { client: clientId, today });
+        return { status: 'skipped', id: 0, already: false };
+      }
     }
-    const id = Number(this.d.db.prepare("INSERT INTO ck_jobs (client_id, url, origin, state, created_at) VALUES (?, ?, ?, 'running', ?)").run(clientId, url, origin, t).lastInsertRowid);
-    const p = this.run(clientId, id, url, maxPages).finally(() => void this.running.delete(clientId));
+    const id = Number(this.d.db.prepare("INSERT INTO ck_jobs (client_id, url, origin, state, created_at) VALUES (?, ?, ?, 'queued', ?)").run(clientId, url, origin, t).lastInsertRowid);
+    this.d.db.prepare('DELETE FROM ck_jobs WHERE client_id = ? AND id NOT IN (SELECT id FROM ck_jobs WHERE client_id = ? ORDER BY id DESC LIMIT ?)').run(clientId, clientId, JOBS_KEPT);
+    const p = this.slot().then(async (release) => {
+      try {
+        this.d.db.prepare("UPDATE ck_jobs SET state = 'running' WHERE id = ?").run(id);
+        await this.run(clientId, id, url, maxPages);
+      } finally {
+        release();
+      }
+    }).catch((e) => void log('warn', 'client knowledge job crashed', { client: clientId, job: id, err: errMsg(e) })).finally(() => void this.running.delete(clientId));
     this.running.set(clientId, p);
     return { status: 'running', id, already: false };
+  }
+
+  /** The line for a crawl: at most `maxConcurrent` run at once in the whole HQ, the rest wait in order. */
+  private slot(): Promise<() => void> {
+    const max = this.d.maxConcurrent ?? MAX_CONCURRENT;
+    const release = (): void => {
+      this.active--;
+      this.waiting.shift()?.();
+    };
+    if (this.active < max) {
+      this.active++;
+      return Promise.resolve(release);
+    }
+    return new Promise((res) => {
+      this.waiting.push(() => {
+        this.active++;
+        res(release);
+      });
+    });
   }
 
   /** Resolves when the client's running job (if any) is over (tests, shutdown). */
@@ -149,7 +264,9 @@ export class ClientKnowledge {
   private async run(clientId: number, id: number, url: string, maxPages: number | undefined): Promise<void> {
     const scope = scopeOf(clientId);
     try {
-      const res = await crawlSite(new URL(url), { fetcher: this.fetcher, ...(maxPages ? { maxPages } : {}), ...(this.d.delayMs !== undefined ? { delayMs: this.d.delayMs } : {}) });
+      const crawled = await crawlSite(new URL(url), { fetcher: this.fetcher, ...(maxPages ? { maxPages } : {}), ...(this.d.delayMs !== undefined ? { delayMs: this.d.delayMs } : {}) });
+      // what is stored is already free of keys and tokens: the database never holds them, the chunks are cut from this text
+      const res = { ...crawled, pages: crawled.pages.map((p) => ({ ...p, text: redactSecrets(p.text).text })) };
       const t = this.d.now();
       if (!res.pages.length) {
         // nothing readable (robots, errors): the old knowledge stays as it was
@@ -167,6 +284,7 @@ export class ClientKnowledge {
       await this.d.knowledge.remove?.(scope, 'site-');
       await this.d.knowledge.add(chunks);
       this.loaded.set(clientId, Promise.resolve());
+      await this.account(clientId, chunks.length);
       this.d.db.prepare("UPDATE ck_jobs SET state = 'done', pages = ?, chunks = ?, chars = ?, errors = ?, skipped = ?, truncated = ?, finished_at = ? WHERE id = ?")
         .run(res.pages.length, chunks.length, res.chars, res.errors, res.skipped, res.truncated ? 1 : 0, this.d.now(), id);
       log('info', 'client knowledge imported', { client: clientId, job: id, pages: res.pages.length, chunks: chunks.length, chars: res.chars, errors: res.errors });
@@ -180,7 +298,7 @@ export class ClientKnowledge {
     const out: KnowledgeChunk[] = [];
     for (const p of pages) {
       const key = createHash('sha256').update(p.url).digest('hex').slice(0, 10);
-      chunkText(redactSecrets(p.text).text).forEach((text, i) => {
+      chunkText(p.text).forEach((text, i) => {
         if (out.length < CHUNKS_CAP) out.push({ id: `site-${key}#${i}`, companyId: scopeOf(clientId), source: 'site', title: p.title || p.url, text, ref: p.url, tier: 'internal', updatedAt: p.fetchedAt });
       });
     }
@@ -206,22 +324,45 @@ export class ClientKnowledge {
     });
   }
 
-  /** Brings the client's pages back into the store after a restart (once per process, never blocks longer than `wait` ms). */
+  /** Remembers how many chunks the client holds and drops the longest unused clients while the store is over its cap. */
+  private async account(clientId: number, chunks: number): Promise<void> {
+    this.usage.set(clientId, { chunks, last: this.d.now() });
+    const cap = this.d.chunkCap ?? STORE_CHUNKS_CAP;
+    for (;;) {
+      let total = 0;
+      for (const u of this.usage.values()) total += u.chunks;
+      if (total <= cap) return;
+      let victim: number | null = null;
+      for (const [id, u] of this.usage) if (id !== clientId && (victim === null || u.last < this.usage.get(victim)!.last)) victim = id;
+      if (victim === null) return;
+      await this.d.knowledge.remove?.(scopeOf(victim), 'site-');
+      this.usage.delete(victim);
+      this.loaded.delete(victim);
+      log('info', 'client knowledge evicted from memory', { client: victim, chunks: total });
+    }
+  }
+
+  /** Brings the client's pages back into the store (after a restart or an eviction), once; never blocks a question longer than `wait` ms. */
   private async ensureLoaded(clientId: number, wait: number): Promise<void> {
     let p = this.loaded.get(clientId);
     if (!p) {
       const rows = this.d.db.prepare('SELECT url, title, text, fetched_at AS fetchedAt FROM ck_pages WHERE client_id = ?').all(clientId) as { url: string; title: string; text: string; fetchedAt: number }[];
-      p = rows.length ? this.d.knowledge.add(this.chunksOf(clientId, rows)).then(() => undefined).catch((e) => log('warn', 'client knowledge reload failed', { client: clientId, err: errMsg(e) })) : Promise.resolve();
+      if (rows.length) {
+        const chunks = this.chunksOf(clientId, rows);
+        p = this.d.knowledge.add(chunks).then(() => this.account(clientId, chunks.length)).catch((e) => log('warn', 'client knowledge reload failed', { client: clientId, err: errMsg(e) }));
+      } else p = Promise.resolve();
       this.loaded.set(clientId, p);
     }
     await Promise.race([p, new Promise<void>((r) => setTimeout(r, wait).unref())]);
   }
 
-  /** Chunks of this client's site that answer the question. Another client's or Fir Tech's knowledge is never searched: the scope is fixed here. */
+  /** Chunks of this client's site that answer the question, cleaned for the model (`cleanSite`). Another client's or Fir Tech's knowledge is never searched: the scope is fixed here. */
   async search(clientId: number, query: string, k = 4): Promise<{ title: string; text: string; ref: string }[]> {
     await this.ensureLoaded(clientId, 3000);
+    const u = this.usage.get(clientId);
+    if (u) u.last = this.d.now();
     const hits = await this.d.knowledge.search(scopeOf(clientId), query, k, { audience: 'owner' });
-    return hits.filter((h) => h.companyId === scopeOf(clientId)).map((h) => ({ title: h.title, text: h.text.slice(0, 700), ref: h.ref ?? '' }));
+    return hits.filter((h) => h.companyId === scopeOf(clientId)).map((h) => ({ title: cleanSite(h.title).slice(0, 200), text: cleanSite(h.text).slice(0, 700), ref: h.ref ?? '' })).filter((h) => h.text.trim() !== '');
   }
 }
 

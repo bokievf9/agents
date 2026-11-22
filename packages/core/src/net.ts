@@ -22,6 +22,7 @@ const privateV4 = (ip: string): boolean => {
     (a === 172 && b >= 16 && b <= 31) || // private
     (a === 192 && b === 0 && c === 0) || // IETF protocol assignments
     (a === 192 && b === 0 && c === 2) || // documentation
+    (a === 192 && b === 88 && c === 99) || // 6to4 relay anycast 192.88.99.0/24 (deprecated)
     (a === 192 && b === 168) || // private
     (a === 198 && (b === 18 || b === 19)) || // benchmarking 198.18.0.0/15
     (a === 198 && b === 51 && c === 100) || // documentation
@@ -62,7 +63,8 @@ export function isPrivateAddress(ip: string): boolean {
   if (!g) return true;
   const [g0, g1, g2, g3, g4, g5, g6, g7] = g as [number, number, number, number, number, number, number, number];
   if (g.every((x) => x === 0)) return true; // ::
-  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && (g5 === 0xffff || g5 === 0)) return g5 === 0 && g6 === 0 && g7 <= 1 ? true : privateV4(v4Of(g6, g7)); // mapped, compatible, ::1
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) return true; // ::ffff:0:0/96 IPv4-mapped: a resolver never answers with it for a real site
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) return g6 === 0 && g7 <= 1 ? true : privateV4(v4Of(g6, g7)); // compatible, ::1
   if ((g0 & 0xfe00) === 0xfc00) return true; // fc00::/7 unique local
   if ((g0 & 0xffc0) === 0xfe80 || (g0 & 0xffc0) === 0xfec0) return true; // link-local, site-local
   if ((g0 & 0xff00) === 0xff00) return true; // multicast

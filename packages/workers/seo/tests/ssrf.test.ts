@@ -27,11 +27,12 @@ describe('which addresses are private', () => {
     for (const ip of ['2606:4700:4700::1111', '2001:4860:4860::8888', '2a00:1450:4001:81b::200e', '2002:5db8:d822::1']) expect(isPrivateAddress(ip), ip).toBe(false);
   });
 
-  it('IPv4 hidden in IPv6: mapped (dotted and hex) and compatible forms follow the IPv4 rules', () => {
+  it('IPv4 hidden in IPv6: the whole mapped range ::ffff:0:0/96 is refused (a resolver never answers with it), compatible forms follow the IPv4 rules', () => {
     for (const ip of ['::ffff:10.0.0.1', '::ffff:127.0.0.1', '::ffff:7f00:1', '::ffff:a9fe:a9fe', '::ffff:c0a8:1', '::7f00:1', '::10.0.0.1', '::ffff:100.64.0.1', '::ffff:198.18.0.1']) {
       expect(isPrivateAddress(ip), ip).toBe(true);
     }
-    for (const ip of ['::ffff:93.184.216.34', '::ffff:5db8:d822']) expect(isPrivateAddress(ip), ip).toBe(false);
+    for (const ip of ['::ffff:93.184.216.34', '::ffff:5db8:d822', '::ffff:0:0']) expect(isPrivateAddress(ip), ip).toBe(true);
+    expect(isPrivateAddress('192.88.99.1')).toBe(true);
   });
 
   it('what is not an address is never fetched', () => {
