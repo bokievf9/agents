@@ -16,7 +16,9 @@ export interface VoyageOptions {
   apiKey: string;
   model?: string;
   fetch?: typeof fetch;
-  /** Retries after the first try (default 3); the wait doubles from `backoffMs`. */
+  /** Retries after the first try for document batches (default 5); the wait doubles from `backoffMs` (default 2 s) and a
+   * `Retry-After` header wins (capped at 60 s), so a 3-requests-per-minute account still gets through. A query gets one short
+   * retry only: the visitor is waiting, words-only search is the fallback. */
   retries?: number;
   backoffMs?: number;
   timeoutMs?: number;
@@ -39,8 +41,8 @@ export class VoyageEmbedder implements Embedder {
     this.key = o.apiKey;
     this.model = o.model || VOYAGE_DEFAULT_MODEL;
     this.f = o.fetch ?? fetch;
-    this.retries = o.retries ?? 3;
-    this.backoff = o.backoffMs ?? 500;
+    this.retries = o.retries ?? 5;
+    this.backoff = o.backoffMs ?? 2000;
     this.timeout = o.timeoutMs ?? 15_000;
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
@@ -66,8 +68,11 @@ export class VoyageEmbedder implements Embedder {
 
   private async batch(texts: string[], type: 'document' | 'query'): Promise<number[][]> {
     let lastErr = 'unknown';
-    for (let attempt = 0; attempt <= this.retries; attempt++) {
-      if (attempt) await this.sleep(this.backoff * 2 ** (attempt - 1));
+    let retryAfterMs = 0;
+    const retries = type === 'query' ? Math.min(1, this.retries) : this.retries;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      if (attempt) await this.sleep(retryAfterMs || (type === 'query' ? Math.min(this.backoff, 500) : this.backoff * 2 ** (attempt - 1)));
+      retryAfterMs = 0;
       try {
         const res = await this.f(VOYAGE_URL, {
           method: 'POST',
@@ -77,6 +82,8 @@ export class VoyageEmbedder implements Embedder {
         });
         if (res.status === 429 || res.status >= 500) {
           lastErr = `http ${res.status}`;
+          const ra = Number(res.headers?.get?.('retry-after'));
+          if (Number.isFinite(ra) && ra > 0) retryAfterMs = Math.min(ra, 60) * 1000;
           continue;
         }
         if (!res.ok) throw new Error(`voyage: http ${res.status}`);
@@ -95,7 +102,7 @@ export class VoyageEmbedder implements Embedder {
         lastErr = m;
       }
     }
-    throw new Error(`voyage: failed after ${this.retries + 1} tries (${lastErr})`);
+    throw new Error(`voyage: failed after ${retries + 1} tries (${lastErr})`);
   }
 }
 

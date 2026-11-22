@@ -24,13 +24,31 @@ describe('voyage adapter', () => {
     expect(e.usage.texts).toBe(301);
   });
 
-  it('retries on 429 and 5xx with backoff, then succeeds', async () => {
+  it('documents: retries on 429 and 5xx with doubling backoff, then succeeds', async () => {
     const f = vi.fn().mockResolvedValueOnce(ok({}, 429)).mockResolvedValueOnce(ok({}, 503)).mockResolvedValueOnce(ok(vecs(1)));
     const waits: number[] = [];
-    const e = mk(f as unknown as typeof fetch, { sleep: (ms) => { waits.push(ms); return Promise.resolve(); } });
-    expect(await e.embedQuery(['q'])).toEqual([[1, 0]]);
+    const e = mk(f as unknown as typeof fetch, { backoffMs: 500, sleep: (ms) => { waits.push(ms); return Promise.resolve(); } });
+    expect(await e.embed(['d'])).toEqual([[1, 0]]);
     expect(f).toHaveBeenCalledTimes(3);
     expect(waits).toEqual([500, 1000]);
+  });
+
+  it('documents: a Retry-After header wins over the backoff (capped at 60 s)', async () => {
+    const slow = new Response('{}', { status: 429, headers: { 'retry-after': '20' } });
+    const f = vi.fn().mockResolvedValueOnce(slow).mockResolvedValueOnce(ok(vecs(1)));
+    const waits: number[] = [];
+    const e = mk(f as unknown as typeof fetch, { backoffMs: 500, sleep: (ms) => { waits.push(ms); return Promise.resolve(); } });
+    expect(await e.embed(['d'])).toEqual([[1, 0]]);
+    expect(waits).toEqual([20_000]);
+  });
+
+  it('query: one short retry only, then the caller falls back to words', async () => {
+    const f = vi.fn().mockResolvedValue(ok({}, 429));
+    const waits: number[] = [];
+    const e = mk(f as unknown as typeof fetch, { sleep: (ms) => { waits.push(ms); return Promise.resolve(); } });
+    await expect(e.embedQuery(['q'])).rejects.toThrow(/failed after 2 tries/);
+    expect(f).toHaveBeenCalledTimes(2);
+    expect(waits).toEqual([500]);
   });
 
   it('gives up after the retries; a 400 is not retried', async () => {
