@@ -195,6 +195,8 @@ describe('/status and /tasks in words', () => {
     const w = world();
     await w.director.onCommand('help');
     const text = stripHtml(w.messenger.last()!.text); // the Director writes Telegram HTML
-    for (const c of ['/status', '/tasks', '/approve', '/retry <id>', 'группе HQ']) expect(text).toContain(c);
+    for (const c of ['/status', '/tasks', '/approve', '/retry <id>', 'группе Shell']) expect(text).toContain(c);
+    expect(text).not.toMatch(/\bHQ\b/); // the workplace is called Shell since 2026-11-22
+    expect(text).not.toContain('Пульт');
   });
 });

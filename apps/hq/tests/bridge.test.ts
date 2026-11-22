@@ -41,7 +41,7 @@ describe('builder bridge', () => {
     expect(i.labels).toEqual(['builder']);
     const t = w.hq.tasks({ status: 'blocked' })[0]!;
     expect(i.body).toContain('Отдел: marketing');
-    expect(i.body).toContain(`Задача HQ: #${t.id}`);
+    expect(i.body).toContain(`Задача Shell: #${t.id}`);
     expect(i.body).toContain('Нужна оплата через Kaspi');
     expect(i.body).toContain('## Сценарий (одобрен владельцем)\nСцена 1');
     expect(i.body).toContain('срочно');

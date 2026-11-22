@@ -62,7 +62,7 @@ export const EXEC_TOOL_DEFS: Record<string, LlmToolDef> = {
   },
   director_history: {
     name: 'director_history',
-    description: 'Последние поручения владельца и ответы HQ (Пульт «Поручения» и этот чат).',
+    description: 'Последние поручения владельца и ответы Shell (Пульт «Поручения» и этот чат).',
     input_schema: obj({ limit: { type: 'integer' } }),
   },
   services_status: {

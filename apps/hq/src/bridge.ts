@@ -100,7 +100,7 @@ export function extractResult(comment: string): string | null {
 
 /** The text of the issue for a task: department, id, context, acceptance checklist, the HQ-TASK marker. */
 export function issueBody(hq: Hq, t: Task): string {
-  const out: string[] = [`Отдел: ${t.dept}`, `Задача HQ: #${t.id}`, ''];
+  const out: string[] = [`Отдел: ${t.dept}`, `Задача Shell: #${t.id}`, ''];
   out.push('## Контекст', t.body.trim() || '(без описания)');
   const m = t.meta;
   const str = (k: string) => (typeof m[k] === 'string' && (m[k] as string).trim() ? (m[k] as string).trim() : null);

@@ -28,7 +28,7 @@ export function installRejectionGuard(
     const n = unreported;
     unreported = 0;
     try {
-      void Promise.resolve(alert(`HQ: необработанная ошибка в фоне (${n} за последние ${Math.round(every / 60_000)} мин). Процесс работает дальше, подробности в логе hq («unhandled rejection»).`)).catch(() => undefined);
+      void Promise.resolve(alert(`Shell: необработанная ошибка в фоне (${n} за последние ${Math.round(every / 60_000)} мин). Процесс работает дальше, подробности в логе hq («unhandled rejection»).`)).catch(() => undefined);
     } catch {
       /* the alert itself must never throw into the handler */
     }

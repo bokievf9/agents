@@ -21,7 +21,7 @@ export interface TopicsApi {
 }
 
 export const STEPS_TEXT =
-  'Чтобы отчёты шли по темам, сделайте два шага в группе HQ:\n' +
+  'Чтобы отчёты шли по темам, сделайте два шага в группе Shell:\n' +
   '1. Настройки группы -> включить «Темы» (Topics).\n' +
   '2. Администраторы -> бот @firtech_hq_bot -> дать право «Управление темами» (Manage topics).\n' +
   'Потом отправьте мне /topics: я создам темы сам.';
@@ -104,7 +104,7 @@ export class TopicManager {
   /** Create the missing topics when the group is a forum and the bot may manage them. */
   async ensure(): Promise<EnsureResult> {
     const g = this.groupId();
-    if (g === undefined) return this.done('no_group', [], 'Группа HQ не задана: добавьте бота в группу и укажите HQ_GROUP_ID.');
+    if (g === undefined) return this.done('no_group', [], 'Группа Shell не задана: добавьте бота в группу и укажите HQ_GROUP_ID.');
     try {
       const chat = await this.api.getChat(g);
       if (chat.type === 'group' || !chat.is_forum) return this.done('not_forum', [], STEPS_TEXT);
@@ -149,6 +149,6 @@ export class TopicManager {
     if (this.forum !== 'not_forum' && this.forum !== 'no_right') return null;
     if (this.hq.setting('hq_topics_hint') === '1') return null;
     this.hq.setSetting('hq_topics_hint', '1');
-    return `Группа HQ ещё без тем. ${this.forum === 'not_forum' ? 'Включите «Темы» в настройках группы и дайте боту право «Управление темами»' : 'Дайте боту право «Управление темами»'}, затем /topics.`;
+    return `Группа Shell ещё без тем. ${this.forum === 'not_forum' ? 'Включите «Темы» в настройках группы и дайте боту право «Управление темами»' : 'Дайте боту право «Управление темами»'}, затем /topics.`;
   }
 }

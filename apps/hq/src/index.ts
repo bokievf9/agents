@@ -67,7 +67,7 @@ const cfg = loadConfig();
 const db = openDb(cfg.dbFile);
 const hq = new Hq(db);
 // P-28: a forgotten promise is an error line and one alert in 10 minutes, never the end of the process (the alert sink is the Director, added below).
-installRejectionGuard(process, (text) => hq.alert(text, { kind: 'service', short: 'HQ: ошибка в фоне (обещание без обработки), процесс работает. Подробности в логе hq.' }), { now: Date.now });
+installRejectionGuard(process, (text) => hq.alert(text, { kind: 'service', short: 'Shell: ошибка в фоне (обещание без обработки), процесс работает. Подробности в логе hq.' }), { now: Date.now });
 // Requests accepted from visitors that fail before the owner sees them: `lost_lead` rows and one summary alert an hour.
 const lost = new LostLeads(hq);
 // Emails to clients that failed (P-07): a row each, one alert an hour, the mark on the cabinet document.
@@ -517,7 +517,7 @@ if (clientBot) {
     onGiveUp: async (e) => {
       log('error', 'client bot stopped', { err: errMsg(e) });
       // The main sales channel is down: the owner hears about it at once (the monitoring check turns `down` too).
-      await hq.alert('Клиентский бот @firtech_bot: поллинг упал 4 раза подряд, перезапускаю HQ (контейнер поднимется сам). Подробности в логе hq.', { kind: 'service', short: 'Клиентский Telegram @firtech_bot упал, HQ перезапускается.' }).catch(() => undefined);
+      await hq.alert('Клиентский бот @firtech_bot: поллинг упал 4 раза подряд, перезапускаю Shell (контейнер поднимется сам). Подробности в логе hq.', { kind: 'service', short: 'Клиентский Telegram @firtech_bot упал, Shell перезапускается.' }).catch(() => undefined);
       process.exit(1);
     },
   });

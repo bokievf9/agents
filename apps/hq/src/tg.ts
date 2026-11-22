@@ -42,8 +42,8 @@ export const DIRECTOR_COMMANDS: BotCommand[] = DIRECTOR_MENU;
 /** The profile of the one HQ bot (2026-11-22): a reminder that answers questions; control lives in the Пульт. */
 export const HQ_PROFILE = {
   description:
-    'HQ Fir Tech: напоминает владельцу о главном (новый клиент, заявка, документ на одобрение, оплата, этап) и отвечает на любой вопрос о компании обычным текстом. Управление в Пульте firtech.pro/admin. Отвечает только владельцу.',
-  short: 'HQ Fir Tech: напоминания и ответы владельцу. Управление в Пульте.',
+    'Shell Fir Tech: напоминает владельцу о главном (новый клиент, заявка, документ на одобрение, оплата, этап) и отвечает на любой вопрос о компании обычным текстом. Управление в Пульте firtech.pro/admin. Отвечает только владельцу.',
+  short: 'Shell Fir Tech: напоминания и ответы владельцу. Управление в Пульте.',
 };
 
 export const DIRECTOR_PROFILE = {

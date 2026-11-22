@@ -1091,7 +1091,7 @@ export class CabDocs {
     const hq = this.d.hq;
     hq.log('client', 'contract_signed', 'document', String(r.id), rendered ? 'pdf' : 'no_pdf');
     // P-12: the signature is stored, the signed copy is not: the owner hears it now, the next read of the documents tries again
-    if (!rendered) void hq.alert(`Договор ${r.number} подписан клиентом, но подписанный PDF не собрался (подпись сохранена). Повторю при следующем открытии документов; если не выйдет, проверьте шрифты и папку файлов HQ.`);
+    if (!rendered) void hq.alert(`Договор ${r.number} подписан клиентом, но подписанный PDF не собрался (подпись сохранена). Повторю при следующем открытии документов; если не выйдет, проверьте шрифты и папку файлов Shell.`);
     // the owner's next card: the invoice of stage 1 (what the old chain made together with the contract)
     const quote = this.db.prepare("SELECT meta FROM cab_documents WHERE kind = 'quote' AND pack_id IS ? AND client_id = ? ORDER BY id DESC LIMIT 1").get(r.pack_id, clientId) as { meta: string } | undefined;
     const invoice = (JSON.parse(quote?.meta || '{}') as { invoice?: Record<string, unknown>; client?: string });
