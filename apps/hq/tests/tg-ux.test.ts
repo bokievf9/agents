@@ -30,7 +30,7 @@ async function batch(textA = 'Пост A') {
 }
 
 describe('Telegram UX: command menu', () => {
-  it('the one HQ bot registers two commands (/start, /pult) with Russian descriptions, its profile texts and the menu button; errors are only logged', async () => {
+  it('the one HQ bot registers one command (/start) with Russian descriptions, its profile texts and the menu button; errors are only logged', async () => {
     const calls: { m: string; args: unknown[] }[] = [];
     const api = new Proxy({}, {
       get: (_t, m: string) => (...args: unknown[]) => {
@@ -43,15 +43,15 @@ describe('Telegram UX: command menu', () => {
     const owner = calls.find((c) => c.m === 'setMyCommands' && (c.args[1] as { scope?: unknown })?.scope)!;
     expect(owner.args[1]).toEqual({ scope: { type: 'chat', chat_id: OWNER } });
     const list = owner.args[0] as { command: string; description: string }[];
-    expect(list.map((x) => x.command)).toEqual(['start', 'pult']);
+    expect(list.map((x) => x.command)).toEqual(['start']);
     expect(list.every((c) => /[а-яё]/i.test(c.description))).toBe(true);
     expect(calls.find((c) => c.m === 'setChatMenuButton')!.args[0]).toEqual({ chat_id: OWNER, menu_button: { type: 'commands' } });
     expect(HQ_PROFILE.description.length).toBeLessThanOrEqual(512);
     expect(HQ_PROFILE.short.length).toBeLessThanOrEqual(120);
-    expect(HQ_PROFILE.description).toContain('Пульт');
+    expect(HQ_PROFILE.description).toContain('Shell');
   });
 
-  it('legacy (Пульт commands, TG_APPROVAL_CARDS): /start of the Director shows the reply keyboard; its buttons map to the commands', async () => {
+  it('legacy (Shell commands, TG_APPROVAL_CARDS): /start of the Director shows the reply keyboard; its buttons map to the commands', async () => {
     const w = world();
     await w.director.onCommand('start');
     expect(w.messenger.options.at(-1)).toMatchObject({ html: true, keyboard: KEYBOARD });

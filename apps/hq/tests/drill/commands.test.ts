@@ -9,7 +9,7 @@ afterEach(async () => { await w?.close(); });
 
 const ARGS = ['', 'abc', '99999', '-1', '<b>x</b> & y', 'x'.repeat(3000), '12 3 4'];
 
-describe('every command of the Пульт (POST /admin/command) answers something, with and without arguments', () => {
+describe('every command of the Shell (POST /admin/command) answers something, with and without arguments', () => {
   for (const c of COMMANDS) {
     it(`/${c.name}`, async () => {
       w = await drillWorld({ withServer: false });

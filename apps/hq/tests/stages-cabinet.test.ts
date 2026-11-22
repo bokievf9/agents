@@ -5,7 +5,7 @@ import { PmStore } from '@fir/worker-project-manager';
 import { describe, expect, it } from 'vitest';
 import { pultWorld } from './pult-helpers.js';
 
-/** Cabinet and Пульт views of a project paid by stages, and the client's «Принять этап». */
+/** Cabinet and Shell views of a project paid by stages, and the client's «Принять этап». */
 function setup() {
   let accept: (p: number, n: number) => Promise<any> = () => Promise.resolve({ status: 'unknown', text: '' });
   const p = pultWorld({ admin: { acceptStage: (a, b) => accept(a, b) } });
@@ -116,7 +116,7 @@ describe('cabinet: POST /admin/clients/:id/projects/:pid/milestones/:no/accept',
   });
 });
 
-describe('Пульт: invoices and projects expose the stage', () => {
+describe('Shell: invoices and projects expose the stage', () => {
   it('invoice items carry stageNo and stage {no, of, title}; the project detail milestones carry the stage fields', async () => {
     const s = setup();
     s.invoice(2, 'issued');

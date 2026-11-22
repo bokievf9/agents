@@ -178,7 +178,7 @@ describe('P-12: the signed PDF that did not build', () => {
 });
 
 describe('P-14: the owner marks a stage ready', () => {
-  it('/mready and the Пульт `ready_milestone` give the client «Принять этап» like a builder result; unpaid or repeated changes nothing', async () => {
+  it('/mready and the Shell `ready_milestone` give the client «Принять этап» like a builder result; unpaid or repeated changes nothing', async () => {
     const { cid } = await leadWithQuote();
     const pid = await toRunningProject(cid);
     const pm = new PmStore(w.db, w.hq.now);

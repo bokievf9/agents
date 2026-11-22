@@ -335,14 +335,14 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
     await marketing.onHeartbeat();
   };
   const decide = async (action: 'approve' | 'reject', id: number) => { const r = await queue.handle(action, id, OWNER); director.afterDecision(); return r; };
-  /** A command as the Пульт runs it (`POST /admin/command`): inside the website scope, the replies come back (`pult`), nothing goes to Telegram. */
+  /** A command as the Shell runs it (`POST /admin/command`): inside the website scope, the replies come back (`pult`), nothing goes to Telegram. */
   const pult: string[] = [];
   const cmd = async (name: string, arg = '') => {
     const { replies } = await channel.capture(() => director.onCommand(name, arg));
     pult.push(...replies);
     return replies;
   };
-  /** Everything the owner can see: Telegram, the inbox of the Пульт and the replies of the Пульт's commands. */
+  /** Everything the owner can see: Telegram, the inbox of the Shell and the replies of the Shell's commands. */
   const ownerSaw = () => [...tg.to(OWNER), ...channel.list({ limit: 200 }).map((m) => m.text), ...pult].join('\n');
   const close = () => new Promise<void>((res) => (url ? webhook.close(() => res()) : res()));
   return {

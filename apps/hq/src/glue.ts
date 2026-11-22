@@ -24,16 +24,15 @@ export interface GlueDeps {
   cards?: boolean;
 }
 
-/** The two commands left in the bot (owner 2026-11-22: «никаких функций»): what the bot is, and the link to the Пульт. */
+/** The one command left in the bot (owner 2026-11-22: «никаких функций»): what the bot is, and the link to Shell. */
 export const TG_COMMANDS: { command: string; description: string }[] = [
-  { command: 'start', description: 'Что умеет Shell и ссылка на Пульт' },
-  { command: 'pult', description: 'Открыть Пульт: управление компанией' },
+  { command: 'start', description: 'Что умеет бот и ссылка на Shell' },
 ];
 
 /**
  * The Telegram glue of the one HQ bot, in the order the handlers must run: group events, the owner-only gate, the buttons (old cards answer
- * «решения в Пульте»; with `cards` the legacy approval buttons), `/start` and `/pult`, then every other text is a question to the assistant.
- * The Director's commands, the reply keyboard and the task cards are gone from Telegram: the same actions live in the Пульт (admin API).
+ * «решения в Пульте»; with `cards` the legacy approval buttons), `/start`, then every other text is a question to the assistant.
+ * The Director's commands, the reply keyboard and the task cards are gone from Telegram: the same actions live in Shell (admin API).
  */
 export function installOwnerGlue(bot: Bot, d: GlueDeps): void {
   const { ownerId, channel, director, topicManager, assistant, links } = d;
@@ -68,7 +67,7 @@ export function installOwnerGlue(bot: Bot, d: GlueDeps): void {
   else {
     // A card or a button from before the switch: answered with where decisions live now, never left spinning.
     bot.on('callback_query:data', async (ctx) => {
-      await ctx.answerCallbackQuery({ text: 'Решения теперь в Пульте, в ревью-центре' }).catch(() => undefined);
+      await ctx.answerCallbackQuery({ text: 'Решения теперь в Shell, в ревью-центре' }).catch(() => undefined);
     });
   }
 
@@ -84,13 +83,12 @@ export function installOwnerGlue(bot: Bot, d: GlueDeps): void {
       await answer(text);
     }
   }));
-  bot.command('pult', () => background('pult', async () => { note('command', '/pult'); await answerNoted(`Пульт: ${links.to('home')}\nОдобрения: ${links.to('review')}`); }));
   // Any other text is a question, answered in the background (the next update is not held). An old /command gets a short hint instead.
   bot.on('message:text', (ctx) => {
     const text = ctx.message.text;
     if (text.startsWith('/')) {
       note('command', text.slice(0, 200));
-      background('unknown', () => answerNoted(`Команд в Telegram больше нет, управление в Пульте: ${links.to('home')}. Спросите обычным текстом, например «что висит?».`));
+      background('unknown', () => answerNoted(`Команд в Telegram больше нет, управление в Shell: ${links.to('home')}. Спросите обычным текстом, например «что висит?».`));
       return;
     }
     background('question', async () => {

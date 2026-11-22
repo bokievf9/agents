@@ -33,7 +33,7 @@ beforeAll(async () => {
   await w.cmd('referral', `${P.name} -> Madina Rahimova`);
   await w.say(`/reply 1`); // an old command in the bot: the hint
   await w.say(P.text); // a question to the assistant: kept in its own memory, never in a log line
-  await w.cmd('reply', '1'); // the same through the Пульт
+  await w.cmd('reply', '1'); // the same through the Shell
   await w.director.onText(P.text);
   for (let i = 0; i < 4; i++) await w.beat();
   await w.director.sendApprovalBatch(true);

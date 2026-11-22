@@ -125,7 +125,7 @@ if (cutOff.length) log('warn', 'approvals interrupted by a restart marked failed
 const directLlm = cfg.llm.mode === 'direct';
 const modelsName = directLlm ? 'Claude (Anthropic)' : 'Шлюз моделей';
 const llm = new GatewayWatch(createLlm(cfg.llm), {
-  onDown: () => hq.alert(`${modelsName} не отвечает больше минуты, задачи подождут (задачи с ошибкой модели можно повторить в Пульте). Скажу, когда вернётся.`, { kind: 'llm', short: `${modelsName} не отвечает больше минуты, задачи подождут.` }),
+  onDown: () => hq.alert(`${modelsName} не отвечает больше минуты, задачи подождут (задачи с ошибкой модели можно повторить в Shell). Скажу, когда вернётся.`, { kind: 'llm', short: `${modelsName} не отвечает больше минуты, задачи подождут.` }),
   onUp: () => hq.alert(`${modelsName} снова отвечает, работа идёт.`, { kind: 'llm' }),
 });
 if (directLlm) {
@@ -172,7 +172,7 @@ const clientBot = cfg.clientBotToken
       quietHours: cfg.clientQuietHours, perHour: cfg.clientRatePerHour, dailyCap: cfg.clientLlmDailyCap,
       // one bot: «позвать человека» and the client's words after it go to the thread in the Пульт and a reminder of the HQ bot, never from the client bot
       toOwner: clientToOwner({ inbox: new ClientInbox(db, hq.now), notices, links, now: hq.now, onError: (e) => log('warn', 'client bot hand-off failed', { err: errMsg(e) }) }),
-      ownerHint: `Этот бот для клиентов. Ответы клиентам и возврат бота сценарию: в Пульте, ${links.to('chats')}`,
+      ownerHint: `Этот бот для клиентов. Ответы клиентам и возврат бота сценарию: в Shell, ${links.to('chats')}`,
       onLost: (source, reason, info) => lost.record(source, reason, info), gatewayDown,
     })
   : null;
@@ -374,8 +374,8 @@ for (const dept of hq.departments()) {
 const chatGate = clientBot?.engine.limiter ?? new RateLimiter(1, cfg.clientLlmDailyCap, hq.now, () => hq.tz, counter);
 // P-25: the owner hears when the day's model calls of the clients' chats reach 80% and 100% of the cap (one shared counter: any limiter tells it).
 const capNotice = (level: 80 | 100, used: number, cap: number) => void hq.alert(level === 100
-  ? `Дневной лимит вызовов модели для клиентских чатов исчерпан (${used} из ${cap}): до завтра чаты отвечают сценариями. Лимит меняется в Пульте, настройки.`
-  : `Клиентские чаты израсходовали ${used} из ${cap} вызовов модели за сегодня (80%). Лимит меняется в Пульте, настройки.`, { kind: 'budget' });
+  ? `Дневной лимит вызовов модели для клиентских чатов исчерпан (${used} из ${cap}): до завтра чаты отвечают сценариями. Лимит меняется в Shell, настройки.`
+  : `Клиентские чаты израсходовали ${used} из ${cap} вызовов модели за сегодня (80%). Лимит меняется в Shell, настройки.`, { kind: 'budget' });
 for (const l of new Set([clientBot?.engine.limiter, chatGateForAgents, chatGate])) if (l) l.onCap ??= capNotice;
 // ИИ-менеджер заявок on Fira (FIRA_LEAD_MANAGER=on): registered before the web chat and the client bot take their first turn
 const firaLead = cfg.firaLeadManager ? startFiraLeadManager({ hq, db }) : null;

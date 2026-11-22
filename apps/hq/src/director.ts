@@ -346,7 +346,7 @@ export class Director {
       `Заявок ${leads}${lost ? ` (не доставлено ${lost})` : ''}, новых клиентов ${clients}, оплат ${money(revenue)}.`,
       `Задач выполнено ${done}, застряло ${blocked}. Одобрено ${approved}, отклонено ${rejected}, ждёт вас ${waiting}.`,
       `Расходы на модели ${money(spend)}.`,
-      `Пульт: ${this.links.to('home')}`,
+      `Shell: ${this.links.to('home')}`,
     ].join('\n');
   }
 
@@ -393,7 +393,7 @@ export class Director {
       const held = this.held();
       if (held.length) out.push(`Инциденты за ночь: ${held.slice(0, 5).map((h) => oneLine(h, 120)).join('; ')}`);
     }
-    out.push(`Пульт: ${this.links.to('home')}`);
+    out.push(`Shell: ${this.links.to('home')}`);
     return out.join('\n');
   }
 

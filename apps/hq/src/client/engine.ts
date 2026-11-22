@@ -102,7 +102,7 @@ export interface ClientEngineDeps {
  * the way the website form does, never into logs.
  */
 /** What the owner reads when he writes to the client bot: the chats are in the Пульт. */
-const OWNER_HINT = 'Этот бот для клиентов. Ответы клиентам и возврат бота сценарию: в Пульте, раздел «Чаты».';
+const OWNER_HINT = 'Этот бот для клиентов. Ответы клиентам и возврат бота сценарию: в Shell, раздел «Чаты».';
 
 export class ClientEngine implements ClientChannel {
   readonly store: ChatStore;

@@ -74,15 +74,15 @@ describe('Telegram trouble: the outbox retries, nothing is lost or doubled', () 
 });
 
 describe('quiet hours (owner clock 23:00-08:00 Kuala Lumpur)', () => {
-  it('an alert in the night waits for the morning summary instead of waking the owner (the Пульт has it at once)', async () => {
+  it('an alert in the night waits for the morning summary instead of waking the owner (the Shell has it at once)', async () => {
     w = await drillWorld({ withServer: false });
     w.clock.t = Date.UTC(2026, 10, 18, 17, 30); // 01:30 Kuala Lumpur
     expect(w.hq.isQuiet()).toBe(true);
     const n = w.tg.sent.length;
-    await w.hq.alert('Тестовый ночной алерт: подробности для Пульта', { kind: 'llm', short: 'Тестовый ночной алерт' });
+    await w.hq.alert('Тестовый ночной алерт: подробности для Shell', { kind: 'llm', short: 'Тестовый ночной алерт' });
     await w.notices.flush();
     expect(w.tg.sent.length).toBe(n);
-    expect(w.channel.list({ limit: 50 }).map((m) => m.text).join('\n')).toContain('подробности для Пульта');
+    expect(w.channel.list({ limit: 50 }).map((m) => m.text).join('\n')).toContain('подробности для Shell');
     w.clock.t = Date.UTC(2026, 10, 19, 0, 5); // 08:05
     expect(w.hq.isQuiet()).toBe(false);
     await w.notices.flush();

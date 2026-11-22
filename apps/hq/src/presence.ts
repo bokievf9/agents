@@ -160,7 +160,7 @@ export class OwnerChannel implements Messenger {
     if (!rows.length) return;
     const n = (k: InboxKind) => rows.filter((r) => r.kind === k).length;
     const text = this.notices
-      ? `Пока вы были за столом: ждут одобрения ${n('approval')}, алертов ${n('alert')}. Пульт: ${this.d.pultUrl ?? 'https://firtech.pro/admin'}`
+      ? `Пока вы были за столом: ждут одобрения ${n('approval')}, алертов ${n('alert')}. Shell: ${this.d.pultUrl ?? 'https://firtech.pro/admin'}`
       : `Пока вы были на месте: ${n('approval')} одобрений, ${n('progress')} задач готово, ${n('alert')} алертов. /approve, /status`;
     if (this.notices && n('approval') + n('alert') === 0) return;
     const ids = rows.map((r) => r.id);

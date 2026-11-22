@@ -233,7 +233,7 @@ export class Calls {
       ru: day ? `Напоминаем: завтра созвон с Fir Tech, ${this.when(r.at, 'ru')}.` : `Через час созвон с Fir Tech, ${this.when(r.at, 'ru')}.`,
       en: day ? `A reminder: your call with Fir Tech is tomorrow, ${this.when(r.at, 'en')}.` : `Your call with Fir Tech is in an hour, ${this.when(r.at, 'en')}.`,
     }, { ru: day ? 'Завтра созвон с Fir Tech' : 'Через час созвон с Fir Tech', en: day ? 'Your call with Fir Tech is tomorrow' : 'Your call with Fir Tech is in an hour' });
-    this.d.notifyOwner?.(`${day ? 'Завтра' : 'Через час'} созвон: лид #${lead.id} ${lead.name || ''}, ${this.when(r.at, 'ru')} (время рынка, ${this.d.hq.tz})${r.state === 'pending' ? ', время ещё не подтверждено: Пульт, лид, «Подтвердить созвон»' : ''}.`.replace(/\s+,/g, ','));
+    this.d.notifyOwner?.(`${day ? 'Завтра' : 'Через час'} созвон: лид #${lead.id} ${lead.name || ''}, ${this.when(r.at, 'ru')} (время рынка, ${this.d.hq.tz})${r.state === 'pending' ? ', время ещё не подтверждено: Shell, лид, «Подтвердить созвон»' : ''}.`.replace(/\s+,/g, ','));
     this.d.hq.log('sales-head', 'call_reminded', 'lead', String(lead.id), when);
   }
 

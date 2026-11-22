@@ -55,7 +55,7 @@ describe('TG_APPROVAL_CARDS=on (legacy): the Director buttons through the real b
 });
 
 describe('the one HQ bot: free text is a question, old buttons and commands, strangers and groups', () => {
-  it.each(['📥 Одобрения', '📊 Статус', 'задачи', 'что висит?', 'Сколько заявок сегодня?'])('%s is a question: the assistant answers with a link to the Пульт', async (text) => {
+  it.each(['📥 Одобрения', '📊 Статус', 'задачи', 'что висит?', 'Сколько заявок сегодня?'])('%s is a question: the assistant answers with a link to the Shell', async (text) => {
     const w2 = await drillWorld({ withServer: false });
     const n = w2.tg.sent.length;
     await w2.say(text);
@@ -69,9 +69,9 @@ describe('the one HQ bot: free text is a question, old buttons and commands, str
     expect(g.errors()).toEqual([]);
     await w2.close();
   });
-  it('a request to act gets the screen of the Пульт, without a model call and without doing anything', async () => {
+  it('a request to act gets the screen of the Shell, without a model call and without doing anything', async () => {
     const w2 = await drillWorld({ withServer: false });
-    for (const [text, url] of [['Одобри КП для Шифо', 'https://firtech.pro/admin/review'], ['ответь клиенту, что всё готово', 'https://firtech.pro/admin/chats'], ['отметь счёт FT-2026-001 оплаченным', 'panel=backoffice'], ['создай задачу маркетингу', 'panel=director']] as const) {
+    for (const [text, url] of [['Одобри КП для Шифо', 'https://firtech.pro/admin/approvals'], ['ответь клиенту, что всё готово', 'https://firtech.pro/admin/chats'], ['отметь счёт FT-2026-001 оплаченным', 'admin/finance'], ['создай задачу маркетингу', 'admin/tasks']] as const) {
       const n = w2.tg.sent.length;
       await w2.say(text);
       await w2.settle();
@@ -81,17 +81,17 @@ describe('the one HQ bot: free text is a question, old buttons and commands, str
     expect(w2.hq.tasks({ limit: 100 }).filter((t) => t.creator === 'owner')).toEqual([]);
     await w2.close();
   });
-  it('/start and /pult answer; every old command gets the hint; old buttons answer «в Пульте»; strangers and groups are ignored', async () => {
+  it('/start answers; every old command gets the hint; old buttons answer «в Shell»; strangers and groups are ignored', async () => {
     const w2 = await drillWorld({ withServer: false });
     const start = await w2.say('/start');
     await w2.settle();
     const reply = start.find((c) => c.method === 'sendMessage')!;
     expect(reply.payload.reply_markup).toEqual({ remove_keyboard: true }); // the old reply keyboard goes away
-    expect(String(reply.payload.text)).toContain('Пульт');
+    expect(String(reply.payload.text)).toContain('Shell');
     const n = w2.tg.sent.length;
     await w2.say('/pult');
     await w2.settle();
-    expect(w2.tg.sent.slice(n).at(-1)!.text).toContain('https://firtech.pro/admin/review');
+    expect(w2.tg.sent.slice(n).at(-1)!.text).toContain('https://firtech.pro/admin/inbox');
     for (const old of ['/status', '/approve', '/paid FT-2026-001', '/level lead_reply 1', '/mdone 1 1', '/nope']) {
       const m = w2.tg.sent.length;
       await w2.say(old);
@@ -100,7 +100,7 @@ describe('the one HQ bot: free text is a question, old buttons and commands, str
     }
     for (const data of ['ap:1:a', 'pg:all:0', 'tk:1:o', 'dp:list', 'garbage']) {
       const calls = await w2.press(data);
-      expect(JSON.stringify(calls.find((c) => c.method === 'answerCallbackQuery')?.payload ?? {}), data).toContain('Пульте');
+      expect(JSON.stringify(calls.find((c) => c.method === 'answerCallbackQuery')?.payload ?? {}), data).toContain('Shell');
     }
     const b2 = w2.tg.sent.length;
     await w2.say('/status', { from: 555 });

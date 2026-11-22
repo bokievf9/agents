@@ -46,7 +46,7 @@ describe('the reminders of the one HQ bot (owner 2026-11-22)', () => {
     expect(await s.notices.scan()).toBe(1);
     const [msg] = s.sent();
     expect(msg).toMatch(/^Новая заявка #2 «Салон Лола»: сайт, салон, /);
-    expect(msg).toContain('https://firtech.pro/admin/office?panel=sales&amp;tab=leads&amp;focus=2');
+    expect(msg).toContain('https://firtech.pro/admin/clients?tab=pipeline&amp;focus=2');
     expect(msg).not.toMatch(/\+992|Секретный/);
     expect(msg!.split('\n').length).toBeLessThanOrEqual(2);
     // a second scan repeats nothing (the ref is kept)
@@ -116,14 +116,14 @@ describe('the reminders of the one HQ bot (owner 2026-11-22)', () => {
     expect(await s.channel.capture(() => s.channel.notice('x'))).toMatchObject({ result: 'capture' });
   });
 
-  it('alerts: only the reminder kinds reach Telegram, as their short line; the other kinds stay in the Пульт', async () => {
+  it('alerts: only the reminder kinds reach Telegram, as their short line; the other kinds stay in the Shell', async () => {
     const s = setup();
     expect(await s.notices.alert('Продажи: задача #4 заблокирована (сбой)')).toBe(false);
-    expect(await s.notices.alert('Длинный текст про потерянные заявки, связаться: +992 90 765 43 21, a@b.co', { kind: 'lost_lead', short: 'Потеряно заявок: 2 (шлюз недоступен). Контакты в Пульте.' })).toBe(true);
+    expect(await s.notices.alert('Длинный текст про потерянные заявки, связаться: +992 90 765 43 21, a@b.co', { kind: 'lost_lead', short: 'Потеряно заявок: 2 (шлюз недоступен). Контакты в Shell.' })).toBe(true);
     expect(await s.notices.alert('Отдел marketing: потрачено 81% лимита', { kind: 'budget' })).toBe(true);
     expect(s.sent()).toEqual([
-      'Потеряно заявок: 2 (шлюз недоступен). Контакты в Пульте.\nhttps://firtech.pro/admin/office?panel=sales&amp;tab=leads',
-      'Отдел marketing: потрачено 81% лимита\nhttps://firtech.pro/admin/office?panel=company',
+      'Потеряно заявок: 2 (шлюз недоступен). Контакты в Shell.\nhttps://firtech.pro/admin/clients?tab=pipeline',
+      'Отдел marketing: потрачено 81% лимита\nhttps://firtech.pro/admin/agents',
     ]);
   });
 

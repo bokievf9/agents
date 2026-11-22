@@ -439,7 +439,7 @@ describe('«Позвать человека»', () => {
     expect(w.engine.handOver(999, true)).toBe(false);
   });
 
-  it('/human works as a command; whatever the owner writes to the client bot gets one line about the Пульт, never the client flow or the old commands', async () => {
+  it('/human works as a command; whatever the owner writes to the client bot gets one line about the Shell, never the client flow or the old commands', async () => {
     const w = world();
     await w.engine.onCommand(ME, 'human', '');
     expect(w.engine.store.get(CLIENT)!.muted).toBe(true);
@@ -449,7 +449,7 @@ describe('«Позвать человека»', () => {
     expect(w.lines).toHaveLength(1); // asked twice, told once
     for (const text of ['привет', `/reply ${CLIENT} текст`, '/resume', '/chats']) {
       await w.engine.onText({ chatId: OWNER }, text);
-      expect(w.transport.last(OWNER)!.html).toContain('в Пульте');
+      expect(w.transport.last(OWNER)!.html).toContain('в Shell');
       expect(w.transport.last(OWNER)!.html).not.toContain('/reply');
     }
     expect(w.transport.last(CLIENT)!.html).toContain('уже в курсе'); // nothing went to the client

@@ -63,7 +63,7 @@ export function addReview(db: Db, now: number, clientId: number, raw: unknown, o
   if (!projectOf(db, clientId, p.data.projectId)) return { status: 404, body: { ok: false, error: 'not_found' } };
   if (db.prepare('SELECT 1 FROM crm_reviews WHERE project_id = ?').get(p.data.projectId)) return { status: 409, body: { ok: false, error: 'exists' } };
   const id = Number(db.prepare('INSERT INTO crm_reviews (client_id, project_id, rating, text, at) VALUES (?, ?, ?, ?, ?)').run(clientId, p.data.projectId, p.data.rating, p.data.text, now).lastInsertRowid);
-  onAdded?.(`Новый отзыв по проекту #${p.data.projectId}: ${p.data.rating} из 5 (Пульт, отзывы).`);
+  onAdded?.(`Новый отзыв по проекту #${p.data.projectId}: ${p.data.rating} из 5 (Shell, отзывы).`);
   return { status: 200, body: { ok: true, item: { id, clientId, projectId: p.data.projectId, rating: p.data.rating, text: p.data.text, at: iso(now) } } };
 }
 

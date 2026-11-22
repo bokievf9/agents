@@ -7,7 +7,7 @@ import { useGuard } from './guard.js';
 
 /**
  * The process gaps of the audit 2026-11-22, package «the client will notice» (P-02 … P-21 and «демо на ваших данных»): each `describe` is one gap, driven
- * through the same world as the other drills (the site's routes, the review API, the Пульт, the due ticker).
+ * through the same world as the other drills (the site's routes, the review API, the Shell, the due ticker).
  */
 const g = useGuard();
 let w: DrillWorld;
@@ -255,7 +255,7 @@ describe('P-06: the first reply offers the two nearest free windows of the site'
   }, 60_000);
 });
 
-describe('P-18: a call set from the Пульт books the window on the site and tells the client', () => {
+describe('P-18: a call set from the Shell books the window on the site and tells the client', () => {
   it('cabinet lead: the site gets the window, the lead thread has the time, an email goes; the same time again changes nothing', async () => {
     const { cid, leadId } = await cabinetLead();
     w.emails.length = 0;

@@ -77,7 +77,7 @@ describe('the public client bot: every command, button and text, in any state', 
     expect(g.errors().map((l) => `${l.msg}: ${String(l.err)}`)).toEqual([]);
   }, 60_000);
 
-  it('the owner in the client bot: any command or text gets the one line about the Пульт, nothing reaches a client, no old command works', async () => {
+  it('the owner in the client bot: any command or text gets the one line about the Shell, nothing reaches a client, no old command works', async () => {
     const { engine, transport } = await engineWorld();
     await engine.onCommand(CHATS[0]!, 'start', '');
     const before = transport.sent.filter((m) => m.chatId === CHATS[0]!.chatId).length;
@@ -91,13 +91,13 @@ describe('the public client bot: every command, button and text, in any state', 
     await engine.onMedia(owner, 'photo');
     const toOwner = transport.sent.filter((m) => m.chatId === OWNER);
     expect(toOwner).toHaveLength(8); // one line each, only as an answer to what he wrote
-    for (const m of toOwner) expect(m.html).toContain('в Пульте');
+    for (const m of toOwner) expect(m.html).toContain('в Shell');
     expect(transport.sent.filter((m) => m.chatId === CHATS[0]!.chatId)).toHaveLength(before);
     expect(engine.store.get(7001)!.muted).toBe(false);
     expect(g.errors()).toEqual([]);
   });
 
-  it('one bot end to end: «позвать человека» is a reminder of the HQ bot with a link and no text; the client\'s words are in his thread in the Пульт; the answer from there reaches the client; resume gives the bot back', async () => {
+  it('one bot end to end: «позвать человека» is a reminder of the HQ bot with a link and no text; the client\'s words are in his thread in the Shell; the answer from there reaches the client; resume gives the bot back', async () => {
     const { engine, transport } = await engineWorld();
     const chats = createChats({ hq: w.hq, now: w.hq.now, client: engine });
     await w.notices.scan(); // the first scan only marks what exists

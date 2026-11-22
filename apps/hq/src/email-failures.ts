@@ -54,8 +54,8 @@ export class EmailFailures {
     const reasons = [...new Set(rows.map((r) => r.reason))].slice(0, 3);
     await this.hq.alert(
       `Письма клиентам не ушли: ${rows.length} (${what.join(', ')}${rows.length > what.length ? ', …' : ''}), причина: ${reasons.join(', ')}. `
-      + 'Документы и строки в треде у клиента есть, почты нет. Отправить снова: Пульт, документ клиента, «Отправить снова» (POST /admin/crm/cabinet-docs/:id {"action":"resend"}).',
-      { kind: 'email_failed', short: `Письма клиентам не ушли: ${rows.length} (${what.slice(0, 3).join(', ')}). Отправить снова в Пульте.` },
+      + 'Документы и строки в треде у клиента есть, почты нет. Отправить снова: Shell, документ клиента, «Отправить снова» (POST /admin/crm/cabinet-docs/:id {"action":"resend"}).',
+      { kind: 'email_failed', short: `Письма клиентам не ушли: ${rows.length} (${what.slice(0, 3).join(', ')}). Отправить снова в Shell.` },
     );
     return rows.length;
   }
@@ -63,6 +63,6 @@ export class EmailFailures {
   /** Failures of the last day not sent again yet (the morning summary line). Null when none. */
   summaryLine(): string | null {
     const n = (this.hq.db.prepare('SELECT COUNT(*) c FROM email_failures WHERE at >= ?').get(this.hq.now() - 24 * HOUR) as { c: number }).c;
-    return n > 0 ? `Писем клиентам не ушло за сутки: ${n} (подробности в алерте, «Отправить снова» в Пульте).` : null;
+    return n > 0 ? `Писем клиентам не ушло за сутки: ${n} (подробности в алерте, «Отправить снова» в Shell).` : null;
   }
 }

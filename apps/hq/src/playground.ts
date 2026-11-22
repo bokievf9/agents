@@ -780,7 +780,7 @@ export class Playground {
     const limit = json<{ msgsPerDay?: number }>(a.limits, {}).msgsPerDay ?? defaultLimit(this.db, a.state === 'live' ? 'live' : 'draft');
     if (this.usedToday(a.id) >= limit) {
       // P-25: the owner hears about it once per agent per day (counts and the agent's name only)
-      if (this.hitsToday(a.id) === 0) this.d.notifyOwner?.(`Агент #${a.id} клиента исчерпал лимит ${limit} сообщений в сутки: следующие ответы получают отказ до завтра. Лимит меняется в Пульте.`);
+      if (this.hitsToday(a.id) === 0) this.d.notifyOwner?.(`Агент #${a.id} клиента исчерпал лимит ${limit} сообщений в сутки: следующие ответы получают отказ до завтра. Лимит меняется в Shell.`);
       this.count(a.id, 'limit_hit');
       return { error: 'limit_reached' };
     }

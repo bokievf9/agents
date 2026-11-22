@@ -488,7 +488,7 @@ export class SalesHead implements ApprovalEditor {
       const discuss = task.meta.mode === 'discuss';
       const leadId = Number(task.meta.leadId) || null;
       const text = `${String(task.meta.client ?? 'Клиент')} ${discuss ? 'хочет обсудить' : 'отклонил'} КП ${String(task.meta.number ?? '')}${leadId ? ` (лид #${leadId})` : ''}. Причина: ${oneLine(task.body, 600)}\n`
-        + `Ответить: тред заявки в Пульте (чаты)${leadId ? `; новое КП: /kp ${leadId}` : ''}. Договор по этому КП не готовится.`;
+        + `Ответить: тред заявки в Shell (чаты)${leadId ? `; новое КП: /kp ${leadId}` : ''}. Договор по этому КП не готовится.`;
       this.hq.complete(task.id, HEAD_ID, text);
       await this.d.messenger.send(this.d.ownerId, text);
       return void (await this.d.reporter.post(SALES, `КП ${String(task.meta.number ?? '')}: клиент ${discuss ? 'хочет обсудить' : 'отклонил'} (задача #${task.id}).`));
@@ -496,7 +496,7 @@ export class SalesHead implements ApprovalEditor {
     if (action === 'call_confirm') {
       // P-04: a call window the site has not got (it does not take a booking from HQ, or it was taken): the owner confirms the time with the client himself
       const leadId = Number(task.meta.leadId) || null;
-      const text = `Созвон с лидом #${leadId ?? '?'}: ${oneLine(task.body, 300)} Подтвердите время клиенту: Пульт, лид, «Подтвердить созвон» (или перенесите на другое окно).`;
+      const text = `Созвон с лидом #${leadId ?? '?'}: ${oneLine(task.body, 300)} Подтвердите время клиенту: Shell, лид, «Подтвердить созвон» (или перенесите на другое окно).`;
       this.hq.complete(task.id, HEAD_ID, text);
       await this.d.messenger.send(this.d.ownerId, text);
       return void (await this.d.reporter.post(SALES, `Созвон лида #${leadId ?? '?'} ждёт подтверждения владельца (задача #${task.id}).`));

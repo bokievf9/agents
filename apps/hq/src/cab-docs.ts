@@ -805,7 +805,7 @@ export class CabDocs {
         || this.db.prepare("SELECT 1 FROM cab_tmsgs WHERE thread = ? AND \"from\" = 'client' AND at > ?").get(`project-${projectId}`, a.at) !== undefined;
       mail.markOnce(`review:nudge:${projectId}`);
       if (answered) continue;
-      this.d.notifyOwner(`Отзыва по проекту #${projectId} нет неделю после закрытия. Можно напомнить клиенту в треде проекта (Пульт, чаты).`);
+      this.d.notifyOwner(`Отзыва по проекту #${projectId} нет неделю после закрытия. Можно напомнить клиенту в треде проекта (Shell, чаты).`);
       n++;
     }
     return n;
@@ -1064,7 +1064,7 @@ export class CabDocs {
         await this.d.hq.alert(`КП ${r.number} (${who}) истекло: клиент не ответил за ${days} дн. Продлить: правка КП в ревью-центре (уйдёт клиенту заново) или новое КП.`);
       } else if (now >= until - DAY && meta.expiryWarned !== true) {
         this.db.prepare('UPDATE cab_documents SET meta = ? WHERE id = ?').run(JSON.stringify({ ...meta, expiryWarned: true }), r.id);
-        await this.d.hq.alert(`КП ${r.number} (${who}) истекает завтра, клиент его не принял. Напомнить можно в треде заявки (Пульт, чаты).`);
+        await this.d.hq.alert(`КП ${r.number} (${who}) истекает завтра, клиент его не принял. Напомнить можно в треде заявки (Shell, чаты).`);
       }
     }
     return expired;

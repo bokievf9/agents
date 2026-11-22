@@ -100,7 +100,7 @@ describe('the one HQ bot over the whole office', () => {
     expect(overview.today.leads).toBeGreaterThanOrEqual(2);
     expect(overview.approvalsWaiting).toBeGreaterThan(0);
     const lead = (await tools.leads!.run({ id: 1 }, ctx)).value.lead;
-    expect(lead).toMatchObject({ id: 1, name: 'Dilnoza Karimova', link: 'https://firtech.pro/admin/office?panel=sales&tab=leads&focus=1' });
+    expect(lead).toMatchObject({ id: 1, name: 'Dilnoza Karimova', link: 'https://firtech.pro/admin/clients?tab=pipeline&focus=1' });
     expect((await tools.pult_link!.run({ screen: 'review', id: 3 }, ctx)).value.url).toBe('https://firtech.pro/admin/review?id=ap_3');
   });
 
@@ -109,7 +109,7 @@ describe('the one HQ bot over the whole office', () => {
       if (n === 0) return { tools: [{ name: 'approvals_queue' }] };
       const result = JSON.stringify(req.messages.at(-1)!.content);
       const waiting = /\\"waiting\\":(\d+)/.exec(result)?.[1];
-      return { text: `Ждут одобрения ${waiting}. https://firtech.pro/admin/review` };
+      return { text: `Ждут одобрения ${waiting}. https://firtech.pro/admin/approvals` };
     };
     const costs = () => (w.db.prepare("SELECT COUNT(*) c FROM costs WHERE agent_id = 'director'").get() as { c: number }).c;
     const before = costs();
@@ -118,7 +118,7 @@ describe('the one HQ bot over the whole office', () => {
     await w.settle();
     const answer = w.tg.sent.slice(n);
     expect(answer).toHaveLength(1);
-    expect(answer[0]!.text).toMatch(/^Ждут одобрения \d+\. https:\/\/firtech\.pro\/admin\/review$/);
+    expect(answer[0]!.text).toMatch(/^Ждут одобрения \d+\. https:\/\/firtech\.pro\/admin\/approvals$/);
     expect(costs()).toBe(before + 2); // two model calls: the tool round and the answer
     const hist = (await w.adm('GET', '/admin/director/history?limit=5')).json.items as { role: string; text: string }[];
     expect(hist.slice(-2).map((h) => h.role)).toEqual(['owner', 'hq']);
@@ -168,7 +168,7 @@ describe('the one HQ bot without a model', () => {
     const w = await drillWorld({ withServer: false, gatewayDown: true });
     await w.http('POST', '/lead', LEAD, { 'x-lead-token': TOKENS.lead }).catch(() => undefined);
     const reply = await w.assistant.answer('что нового?');
-    expect(reply).toMatch(/^Модель сейчас недоступна, коротко по данным: заявок сегодня \d+, новых клиентов \d+, ждёт одобрения \d+, застряло задач \d+\. Пульт: https:\/\/firtech\.pro\/admin\/office$/);
+    expect(reply).toMatch(/^Модель сейчас недоступна, коротко по данным: заявок сегодня \d+, новых клиентов \d+, ждёт одобрения \d+, застряло задач \d+\. Shell: https:\/\/firtech\.pro\/admin\/inbox$/);
     expect(w.assistant.memory.all().at(-1)!.text).toBe(reply);
     expect(w.tg.to(OWNER)).toEqual([]); // answer() itself sends nothing; the glue does
     await w.close();
