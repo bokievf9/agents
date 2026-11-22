@@ -221,7 +221,7 @@ describe('GET /admin/settings/log', () => {
 describe('autopilot.leadManager and the human alert (Fira hooks)', () => {
   it('defaults to policy, accepts the three modes, rejects others, journals the change; the human alert reaches Telegram', async () => {
     const { settings, patch, notices, w } = setup();
-    expect((settings.get().body as any).settings.autopilot).toEqual({ leadManager: 'policy' });
+    expect((settings.get().body as any).settings.autopilot).toEqual({ leadManager: 'policy', support: 'policy' });
     const r = patch({ autopilot: { leadManager: 'autopilot' } });
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ changed: ['autopilot.leadManager'] });
@@ -245,5 +245,28 @@ describe('GET /admin/settings/log hides secret-like keys', () => {
     expect(body).toContain('service.botToken');
     expect(body).not.toContain('old-secret-1');
     expect(body).not.toContain('new-secret-2');
+  });
+});
+
+describe('autopilot.support', () => {
+  it('defaults to policy, takes either key or both (strict), rejects bad values, journals each key', () => {
+    const { settings, patch, w } = setup();
+    expect((settings.get().body as any).settings.autopilot.support).toBe('policy');
+    const r = patch({ autopilot: { support: 'autopilot' } });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ changed: ['autopilot.support'], settings: { autopilot: { leadManager: 'policy', support: 'autopilot' } } });
+    expect(w.hq.setting('autopilot.support')).toBe('autopilot');
+    expect(w.hq.setting('autopilot.leadManager')).not.toBe('autopilot');
+    const both = patch({ autopilot: { leadManager: 'ask_me', support: 'ask_me' } });
+    expect((both.body as any).changed.sort()).toEqual(['autopilot.leadManager', 'autopilot.support']);
+    expect(patch({ autopilot: { support: 'yolo' } }).status).toBe(400);
+    expect(patch({ autopilot: { support: 'policy', other: 1 } }).status).toBe(400);
+    expect(w.hq.setting('autopilot.support')).toBe('ask_me');
+    expect(patch({ autopilot: { support: 'ask_me' } }).body).toMatchObject({ changed: [] });
+    const keys = settings.history().map((h: any) => `${h.key}:${h.old}>${h.new}`);
+    expect(keys).toContain('autopilot.support:policy>autopilot');
+    expect(keys).toContain('autopilot.support:autopilot>ask_me');
+    const log = (settings.logView(new URLSearchParams()).body as any).items;
+    expect(log.some((i: any) => i.key === 'autopilot.support' && i.new === 'autopilot' && i.source === 'owner')).toBe(true);
   });
 });

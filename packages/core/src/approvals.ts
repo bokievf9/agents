@@ -84,7 +84,7 @@ export interface Decision {
   id: number;
   approvalId: number | null;
   kind: string;
-  decision: 'approve' | 'edit' | 'reject' | 'auto' | 'auto_failed';
+  decision: 'approve' | 'edit' | 'reject' | 'auto' | 'auto_failed' | 'autopilot';
   at: number;
 }
 
@@ -384,6 +384,30 @@ export class ApprovalQueue {
     if (row.edited) this.bump(row.kind, 'reset');
     else await this.bumpClean(row.kind);
     return 'Одобрено';
+  }
+
+  /**
+   * Autopilot (owner setting `autopilot.*`): approves a pending proposal on the owner's behalf and journals it as `autopilot`. Never for a locked kind,
+   * a kind with its own buttons or a draft with a template left in it (`ready`); the trust counter is not touched. On a failed execution the proposal
+   * goes back to `pending` for the owner (journal `auto_failed`). Returns whether the text was delivered.
+   */
+  async approveAsAutopilot(id: number): Promise<boolean> {
+    const row = this.get(id);
+    if (!row || row.status !== 'pending') return false;
+    const spec = this.spec(row.kind);
+    if (spec.locked || spec.ready?.(row.payload)) return false;
+    if (!this.claim(id)) return false;
+    try {
+      await spec.execute(row.payload, id);
+    } catch (e) {
+      log('error', 'autopilot execute failed', { approvalId: id, err: errMsg(e) });
+      this.setStatus(id, 'pending');
+      this.journal(id, row.kind, 'auto_failed');
+      return false;
+    }
+    this.setStatus(id, 'executed');
+    this.journal(id, row.kind, 'autopilot');
+    return true;
   }
 
   /** Why an open proposal cannot be approved as it stands (its `ready` hook), else null. */

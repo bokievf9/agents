@@ -47,7 +47,7 @@ export function createCompany(d: ShellCompanyDeps) {
     };
   }
 
-  const approvalsOf = (kind: string) => (db.prepare("SELECT COUNT(*) n FROM decisions WHERE kind = ? AND decision IN ('approve', 'auto')").get(kind) as { n: number }).n;
+  const approvalsOf = (kind: string) => (db.prepare("SELECT COUNT(*) n FROM decisions WHERE kind = ? AND decision IN ('approve', 'auto', 'autopilot')").get(kind) as { n: number }).n;
   const trustView = (kind: string) => {
     const row = queue.trustTable().find((k) => k.kind === kind)!;
     return { kind: row.kind, level: row.level, locked: row.locked, approvals: approvalsOf(kind) };

@@ -568,6 +568,24 @@ export class Hq {
     return id;
   }
 
+  /**
+   * Autopilot decides a queued proposal on the owner's behalf (setting `autopilot.*`): same execution and delivery as the owner's approval, journal `autopilot`.
+   * False (nothing sent, the proposal stays queued for the owner): a locked kind, a draft with a template, a failed delivery or any error.
+   */
+  async approveQueuedAsAutopilot(linkId: number): Promise<boolean> {
+    const approvalId = this.openQueued(linkId);
+    if (approvalId === null) return false;
+    let done = false;
+    try {
+      done = await this.q().approveAsAutopilot(approvalId);
+    } catch (e) {
+      coreLog('error', 'autopilot approval failed', { link: linkId, err: errMsg(e) });
+    }
+    if (done) this.reconcileApprovals();
+    else this.db.prepare("UPDATE task_approvals SET state = 'queued' WHERE id = ? AND state = 'asked'").run(linkId);
+    return done;
+  }
+
   /** The owner rejects a held proposal through its pack: the link is closed as rejected and the task follows. */
   rejectHeld(linkId: number): boolean {
     const l = this.approvalLink(linkId);

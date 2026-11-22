@@ -9,6 +9,7 @@ import { MonitoringWorker, WORKER_ID as MONITORING_WORKER_ID, type MonEvent } fr
 import { OnboardingWorker, obStoreFor, parseOnboardArgs } from '@fir/worker-onboarding';
 import type { Cron } from 'croner';
 import type { CabDocs } from '../cab-docs.js';
+import { remindOnce, supportEscalation, supportModeOf, SupportAutopilotLimit } from '../support-autopilot.js';
 import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
 import type { Reporter } from '../reporter.js';
 import { toolsFor, type AppTools } from '../tools.js';
@@ -106,6 +107,7 @@ export function guessAction(task: Task): Action {
  */
 export class SupportHead {
   private jobs: Cron[] = [];
+  private limit: SupportAutopilotLimit;
   private checking = false;
   private watching = false;
   /**
@@ -120,6 +122,7 @@ export class SupportHead {
   private readonly onboarding: OnboardingWorker;
 
   constructor(private readonly d: SupportDeps) {
+    this.limit = new SupportAutopilotLimit(d.hq.db, d.hq.now);
     this.cs = d.cs ?? new CustomerSupportWorker();
     this.billing = d.billing ?? new BillingWorker();
     this.onboarding = d.onboarding ?? new OnboardingWorker();
@@ -427,6 +430,36 @@ export class SupportHead {
     return t.id;
   }
 
+  /**
+   * `autopilot.support`: decides what happens to the draft answer just queued for `task`. Escalation: it stays in the owner's queue and one reminder goes
+   * out. No escalation: the autopilot approves it through the same approval and delivery path as the owner (journal `autopilot`), at most 20 per client
+   * per day. Fail closed: any error leaves the draft where it is, with a warning in the log.
+   */
+  private async autopilotReply(task: Task, ticket: { id: number; clientId: number | null; clientName: string; contact: string; money: boolean }, clientText: string, draft: string): Promise<void> {
+    try {
+      const link = this.hq.db.prepare("SELECT id, kind FROM task_approvals WHERE task_id = ? AND state = 'queued' ORDER BY id DESC LIMIT 1").get(task.id) as { id: number; kind: string } | undefined;
+      if (!link) return; // already decided (level 1) or nothing queued
+      const mode = supportModeOf(this.hq);
+      const channel = typeof task.meta.ticketId === 'number' ? 'кабинет' : 'клиентский бот';
+      const e = supportEscalation(this.hq.db, mode, { text: clientText, draft, contact: ticket.contact, money: ticket.money || link.kind === 'support_money' }, channel);
+      if (e) await remindOnce(this.hq, task.id, e);
+      if (e || mode === 'ask_me') return; // ask_me: every answer waits for the owner, as before the autopilot
+      const key = String(ticket.clientId ?? (ticket.contact || ticket.clientName).trim().toLowerCase());
+      if (this.limit.full(key)) {
+        log('warn', 'support autopilot: daily limit reached, the answer waits for the owner', { ticket: ticket.id });
+        return;
+      }
+      if (!(await this.hq.approveQueuedAsAutopilot(link.id))) {
+        log('warn', 'support autopilot: not sent, the answer waits for the owner', { ticket: ticket.id, link: link.id });
+        return;
+      }
+      this.limit.note(key, ticket.id);
+      this.hq.log('autopilot', 'support_autopilot_sent', 'ticket', String(ticket.id), `${link.kind} link ${link.id}`);
+    } catch (err) {
+      log('warn', 'support autopilot failed, the answer waits for the owner', { task: task.id, err: errMsg(err) });
+    }
+  }
+
   /** Owner commands and the billing routine. Returns the text for the owner (or the routine's report). */
   private async ownerAction(task: Task, action: Action): Promise<string> {
     const ctx = this.ctx(task);
@@ -441,6 +474,8 @@ export class SupportHead {
         const chatId = typeof task.meta.chatId === 'number' ? task.meta.chatId : undefined;
         const ticketId = typeof task.meta.ticketId === 'number' ? task.meta.ticketId : undefined;
         const r = await this.cs.handleTicket(ctx, { ...p, ...(chatId !== undefined ? { chatId } : {}), ...(ticketId !== undefined ? { ticketId } : {}) });
+        // a client's own message (cabinet or bot, never the owner's /ticket) goes through the support autopilot: send it alone or remind the owner
+        if (ticketId !== undefined || chatId !== undefined) await this.autopilotReply(task, r.ticket, p.text, r.text);
         if (ticketId !== undefined) return `${r.line}\n\nОбращение из кабинета на сайте: одобренный ответ появится у клиента в кабинете${chatId !== undefined ? ' и уйдёт ему в Telegram' : ''}.`;
         if (chatId !== undefined) return `${r.line}\n\nКлиент написал в клиентский бот: одобренный ответ бот отправит ему сам.`;
         return `${r.line}\n\nЧерновик:\n${r.text}\n\nОдобрите его (/approve или в пачке): после этого я пришлю текст для отправки клиенту.`;

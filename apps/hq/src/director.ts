@@ -266,7 +266,7 @@ export class Director {
     const out: string[] = [`Недельный дайджест, ${day(since)}-${day(now)}`];
     const done = hq.db.prepare("SELECT dept, COUNT(*) c FROM tasks WHERE status = 'done' AND updated_at >= ? AND (',' || tags || ',') NOT LIKE '%,drill,%' GROUP BY dept ORDER BY dept").all(since) as { dept: string; c: number }[];
     out.push(done.length ? `Задач выполнено: ${done.map((r) => `${deptRu(r.dept)} ${r.c}`).join(', ')}.` : 'Выполненных задач за неделю нет.');
-    const approved = count("SELECT COUNT(*) c FROM decisions WHERE decision IN ('approve','auto') AND at >= ?", since);
+    const approved = count("SELECT COUNT(*) c FROM decisions WHERE decision IN ('approve','auto','autopilot') AND at >= ?", since);
     const rejected = count("SELECT COUNT(*) c FROM decisions WHERE decision = 'reject' AND at >= ?", since);
     const waiting = hq.queuedApprovals().length + hq.heldApprovals().length + this.d.queue.pending().length;
     out.push(`Одобрения: одобрено ${approved}, отклонено ${rejected}, ждёт вас ${waiting}.`);
@@ -337,7 +337,7 @@ export class Director {
     const revenue = count("SELECT COALESCE(SUM(amount_usd), 0) c FROM bl_invoices WHERE status = 'paid' AND paid_at >= ?", since);
     const done = count("SELECT COUNT(*) c FROM tasks WHERE status = 'done' AND updated_at >= ? AND (',' || tags || ',') NOT LIKE '%,drill,%'", since);
     const blocked = hq.tasks({ status: 'blocked', limit: 100 }).filter((t) => !t.tags.includes('drill')).length;
-    const approved = count("SELECT COUNT(*) c FROM decisions WHERE decision IN ('approve','auto') AND at >= ?", since);
+    const approved = count("SELECT COUNT(*) c FROM decisions WHERE decision IN ('approve','auto','autopilot') AND at >= ?", since);
     const rejected = count("SELECT COUNT(*) c FROM decisions WHERE decision = 'reject' AND at >= ?", since);
     const waiting = hq.queuedApprovals().length + hq.heldApprovals().length + this.d.queue.pending().length;
     const spend = hq.costSummary(since).reduce((a, r) => a + r.usd, 0);

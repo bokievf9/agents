@@ -48,7 +48,7 @@ const OWNER_OTHER = "agent_id = 'owner' AND action NOT IN ('approval_decided', '
 const SOURCES: Source[] = [
   {
     key: 'dec', kind: 'decision', rank: 0, from: 'decisions', where: '1', at: 'at',
-    actor: "CASE WHEN decision IN ('auto', 'auto_failed') THEN 'system' ELSE 'owner' END", action: "'decision'", objectType: "'approval'", objectId: "COALESCE(CAST(approval_id AS TEXT), '')", detail: "kind || ' ' || decision",
+    actor: "CASE WHEN decision = 'autopilot' THEN 'autopilot' WHEN decision IN ('auto', 'auto_failed') THEN 'system' ELSE 'owner' END", action: "'decision'", objectType: "'approval'", objectId: "COALESCE(CAST(approval_id AS TEXT), '')", detail: "kind || ' ' || decision",
   },
   {
     key: 'tap', kind: 'decision', rank: 1, from: 'activity', where: "action = 'approval_decided'", at: 'at',

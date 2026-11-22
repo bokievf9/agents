@@ -777,7 +777,7 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
     "kp": { "validDays": 14, "defaultLang": "ru" },
     "playground": { "draftMsgsPerDay": 50, "liveMsgsPerDay": 500 },
     "service": { "tgApprovalCards": false, "tgGroupReports": false },
-    "autopilot": { "leadManager": "policy" } },
+    "autopilot": { "leadManager": "policy", "support": "policy" } },
   "usage": { "deptMonthUsd": { "marketing": 4.2, "sales": 1.1, "support": 0, "production": 0, "backoffice": 0, "director": 0.6 }, "clientLlmToday": 41, "monthStartedAt": "2026-10-31T19:00:00.000Z" },
   "restartRequired": false, "restartKeys": [] }
 ```
@@ -787,6 +787,7 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 - `limits.deptBudgetUsd`: **ключ лимитов отделов, USD в месяц** (0 = без лимита), пишется в `agents.budget_usd_month` головы отдела (для `director`: самого Директора и его ассистента), его читает `overBudget`; применяется сразу, алерты 80% и 100% остаются. `usage.deptMonthUsd` расход месяца рядом (`director` это отдел `hq`). `clientLlmDailyCap` дневной потолок ответов модели клиентского бота и чата сайта (0: только шаблоны), `usage.clientLlmToday` сколько израсходовано сегодня.
 - `calls`: `slotHours` два окна по умолчанию (когда сайт не отдал свои), `durationMin` 5..240 и `bufferMin` 0..240: занятый созвон закрывает окна ближе, чем длительность плюс буфер. `kp.validDays` 1..90, `kp.defaultLang` `ru|en` (язык документов по умолчанию, сохраняется; документы клиентов с языком кабинета идут на его языке). `playground`: лимит сообщений в сутки у агента площадки без своего лимита, 1..2000.
 - `autopilot.leadManager` (`ask_me|policy|autopilot`, по умолчанию `policy`): как часто менеджер заявок (Фира) спрашивает владельца. `ask_me` каждое сомнение, `policy` по политике эскалации, `autopilot` только просьба живого человека, гнев, юридическое. Применяется сразу.
+- `autopilot.support` (те же значения, по умолчанию `policy`, 2026-11-23): ответы клиентам поддержки (тикеты из кабинета и клиентского бота). Черновик ответа Support-головы проходит ту же политику эскалации (`escalationOf`, VIP = клиент с проектом). Эскалация: ответ остаётся у владельца в очереди одобрений и приходит одно напоминание (`hq.alert` вида `human`, строка без слов клиента, повторно по тому же тикету не шлётся). Нет эскалации: автопилот сам одобряет и отправляет ответ тем же путём, что и владелец (нить кабинета, почта, чат Telegram), в журнале решений `autopilot` (`decisions.decision = 'autopilot'`, в аудите актор `autopilot`). Деньги, скидки и возврат только у владельца в любом режиме (строже, чем у менеджера заявок); просьба человека, гнев и юридическое тоже. Режим `ask_me`: всё ждёт владельца. Черновик с `[меткой]` или пустой автопилот не отправляет; не больше 20 автоответов на клиента в сутки, дальше ждут владельца; любая ошибка оставляет ответ в очереди (предупреждение в логе). Закрытые (`locked`) виды остаются закрытыми.
 - `service`: флаги `TG_APPROVAL_CARDS` и `TG_GROUP_REPORTS`; смена читается при старте HQ, поэтому после неё `restartRequired: true` и `restartKeys: ["service.tgApprovalCards"]`.
 
 `PATCH /admin/settings`: тело — любое подмножество тех же групп, лишние поля 400 `invalid` (`fields` перечисляет пути), всё или ничего:
@@ -799,7 +800,7 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
   "kp": { "validDays": 30, "defaultLang": "en" },
   "playground": { "draftMsgsPerDay": 20, "liveMsgsPerDay": 800 },
   "service": { "tgApprovalCards": true },
-  "autopilot": { "leadManager": "ask_me" } }
+  "autopilot": { "leadManager": "ask_me", "support": "autopilot" } }
 ```
 Ответ `200 { ok: true, changed: ["schedule.summaryTime", ...], settings, usage, restartRequired, restartKeys }` (то же, что `GET`, плюс `changed`: только ключи, значение которых действительно поменялось). Ошибки: 400 `invalid` (формат, диапазон, неизвестный ключ, часовой пояс не IANA), 422 `unknown_kind` + `kinds` (вид действия не существует; `thresholds: { вид: null }` сбрасывает порог вида), 422 `unknown_department` + `department` (у отдела нет головы), 503 `unavailable` (нет объекта настроек). `levels` это тот же код, что `POST /admin/company/trust/:kind` и `/level`.
 

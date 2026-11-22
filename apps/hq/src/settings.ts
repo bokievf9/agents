@@ -80,7 +80,7 @@ const patchBody = z.object({
   kp: z.object({ validDays: z.number().int().min(1).max(90), defaultLang: z.enum(['ru', 'en']) }).partial().strict(),
   playground: z.object({ draftMsgsPerDay: z.number().int().min(1).max(2000), liveMsgsPerDay: z.number().int().min(1).max(2000) }).partial().strict(),
   service: z.object({ tgApprovalCards: bool, tgGroupReports: bool }).partial().strict(),
-  autopilot: z.object({ leadManager: z.enum(AUTOPILOT_MODES) }).partial().strict(),
+  autopilot: z.object({ leadManager: z.enum(AUTOPILOT_MODES), support: z.enum(AUTOPILOT_MODES) }).partial().strict(),
 }).partial().strict();
 
 export type SettingsPatch = z.infer<typeof patchBody>;
@@ -134,9 +134,9 @@ export function createSettings(d: SettingsDeps) {
     const m = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/.exec(hq.setting('quiet_hours'));
     return m ? { from: `${m[1]!.padStart(2, '0')}:${m[2]}`, to: `${m[3]!.padStart(2, '0')}:${m[4]}` } : null;
   };
-  const approvalsOf = (kind: string) => (db.prepare("SELECT COUNT(*) n FROM decisions WHERE kind = ? AND decision IN ('approve', 'auto')").get(kind) as { n: number }).n;
-  const autopilotMode = (): (typeof AUTOPILOT_MODES)[number] => {
-    const v = hq.setting('autopilot.leadManager');
+  const approvalsOf = (kind: string) => (db.prepare("SELECT COUNT(*) n FROM decisions WHERE kind = ? AND decision IN ('approve', 'auto', 'autopilot')").get(kind) as { n: number }).n;
+  const autopilotMode = (key: 'autopilot.leadManager' | 'autopilot.support' = 'autopilot.leadManager'): (typeof AUTOPILOT_MODES)[number] => {
+    const v = hq.setting(key);
     return (AUTOPILOT_MODES as readonly string[]).includes(v) ? (v as (typeof AUTOPILOT_MODES)[number]) : 'policy';
   };
   const round = (n: number) => Math.round(n * 100) / 100;
@@ -171,7 +171,7 @@ export function createSettings(d: SettingsDeps) {
         kp: { validDays: sv.kpValidDays(), defaultLang: hq.setting('kp_lang') === 'en' ? 'en' : 'ru' },
         playground: { draftMsgsPerDay: intOr(hq.setting('pg_limit_draft'), 50), liveMsgsPerDay: intOr(hq.setting('pg_limit_live'), 500) },
         service: { tgApprovalCards: sv.tgApprovalCards, tgGroupReports: sv.tgGroupReports },
-        autopilot: { leadManager: autopilotMode() },
+        autopilot: { leadManager: autopilotMode(), support: autopilotMode('autopilot.support') },
       },
       usage: { deptMonthUsd: monthUsd, clientLlmToday: d.limiters()[0]?.llmToday ?? 0, monthStartedAt: new Date(zonedToMs(p.y, p.mo, 1, 0, 0, hq.tz)).toISOString() },
       restartRequired: restartKeys.length > 0, restartKeys,
@@ -267,6 +267,7 @@ export function createSettings(d: SettingsDeps) {
     }
     const ap = p.autopilot;
     if (ap?.leadManager !== undefined) kv('autopilot.leadManager', ap.leadManager, 'autopilot.leadManager', autopilotMode());
+    if (ap?.support !== undefined) kv('autopilot.support', ap.support, 'autopilot.support', autopilotMode('autopilot.support'));
     return out;
   }
 
