@@ -229,7 +229,7 @@ export function assistantTools(d: AssistantToolDeps): ToolRegistry {
 
     tool('services_status', () => {
       const s = buildStatus(db, now());
-      const TITLE_RU: Record<string, string> = { site: 'сайт', hq: 'HQ', bot: 'клиентский Telegram', omniroute: 'модели (Claude или шлюз)', renderer: 'рендер видео' };
+      const TITLE_RU: Record<string, string> = { site: 'сайт', hq: 'Shell', bot: 'клиентский Telegram', omniroute: 'модели (Claude или шлюз)', renderer: 'рендер видео' };
       const down = s.services.filter((x) => x.state === 'down' || x.state === 'degraded').map((x) => ({ name: TITLE_RU[x.id] ?? x.title, state: x.state, since: x.since ? hm(Date.parse(x.since)) : null }));
       const up = s.services.filter((x) => x.state === 'up').map((x) => TITLE_RU[x.id] ?? x.title);
       const unknown = s.services.filter((x) => x.state === 'unknown').map((x) => TITLE_RU[x.id] ?? x.title);

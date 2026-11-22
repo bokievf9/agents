@@ -10,7 +10,7 @@ export const PROGRESS_MAX_MS = 2 * 3_600_000;
 const MAX_EDIT_ERRORS = 3;
 
 export const DEPT_RU: Record<string, string> = {
-  marketing: 'Маркетинг', sales: 'Продажи', support: 'Сопровождение', production: 'Производство', backoffice: 'Бэк-офис', hq: 'HQ',
+  marketing: 'Маркетинг', sales: 'Продажи', support: 'Сопровождение', production: 'Производство', backoffice: 'Бэк-офис', hq: 'Shell',
 };
 export const deptRu = (dept: string) => DEPT_RU[dept] ?? dept;
 

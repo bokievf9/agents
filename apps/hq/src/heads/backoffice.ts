@@ -260,7 +260,7 @@ export class BackofficeHead {
       await this.hq.alert('Резервная копия сделана, но этот канал не умеет отправлять файлы: лежит на сервере в data/backups.');
     } else {
       try {
-        await this.d.messenger.sendDocument(this.d.ownerId, r.file, `Резервная копия HQ: ${r.databases.join(', ')}, ${mb} МБ, ${note}.`);
+        await this.d.messenger.sendDocument(this.d.ownerId, r.file, `Резервная копия Shell: ${r.databases.join(', ')}, ${mb} МБ, ${note}.`);
         sent = true;
       } catch (e) {
         await this.hq.alert(`Резервная копия сделана (${mb} МБ), но не отправилась в Telegram: ${errMsg(e).slice(0, 150)}. Лежит на сервере в data/backups.`);

@@ -67,7 +67,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: 'render', route: 'marketing', group: 'marketing', args: '<id>', help: 'собрать видео рилса заново' },
   { name: 'builders', route: 'director', group: 'system', help: 'задачи строителям (Claude Code)', menu: 'Задачи строителям (Claude Code)' },
   { name: 'builder', route: 'director', group: 'system', args: '<id>', help: 'передать задачу строителю' },
-  { name: 'topics', route: 'director', group: 'system', help: 'создать темы в группе HQ' },
+  { name: 'topics', route: 'director', group: 'system', help: 'создать темы в группе Shell' },
   { name: 'drill', route: 'director', group: 'system', args: '[отдел|report|clear]', help: 'учения: проверить все отделы', menu: 'Учения: проверить все отделы' },
   { name: 'skip', route: 'director', group: 'system', help: 'отменить ожидание правки' },
 ];
@@ -93,7 +93,7 @@ export function helpHtml(): string {
   return [
     '🆘 <b>Fir Tech Director</b>',
     'Пишите задачу обычным текстом: передам отделу и буду править одно сообщение по ходу работы (взял, делает, ждёт вас, готово). Кнопки внизу: одобрения, задачи, статус, отделы, помощь.',
-    'Куда что приходит: ответы, карточки на одобрение и «живые» сообщения о задачах здесь, в личке. Отчёты отделов и сводки в группе HQ по темам.',
+    'Куда что приходит: ответы, карточки на одобрение и «живые» сообщения о задачах здесь, в личке. Отчёты отделов и сводки в группе Shell по темам.',
     'Ваше время (Куала-Лумпур): сводка, пачка на одобрение, недельный дайджест и тихие часы. Рынок и клиенты (Душанбе): часы клиентского бота, слоты звонков, время публикаций.',
     ...section('daily', by('daily')),
     ...section('more', by('more')),

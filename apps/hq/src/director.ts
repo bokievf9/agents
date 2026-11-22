@@ -559,7 +559,7 @@ export class Director {
       case 'drill':
         return this.say(this.onDrillCommand ? await this.onDrillCommand(arg) : 'Учения не подключены.');
       case 'topics':
-        return this.say(this.onTopicsCommand ? await this.onTopicsCommand() : 'Группа HQ не подключена.');
+        return this.say(this.onTopicsCommand ? await this.onTopicsCommand() : 'Группа Shell не подключена.');
       case 'skip':
         for (const e of this.editors.values()) e.cancel();
         return this.say('Ок, ничего не жду.');

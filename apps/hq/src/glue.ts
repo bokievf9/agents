@@ -26,7 +26,7 @@ export interface GlueDeps {
 
 /** The two commands left in the bot (owner 2026-11-22: «никаких функций»): what the bot is, and the link to the Пульт. */
 export const TG_COMMANDS: { command: string; description: string }[] = [
-  { command: 'start', description: 'Что умеет HQ и ссылка на Пульт' },
+  { command: 'start', description: 'Что умеет Shell и ссылка на Пульт' },
   { command: 'pult', description: 'Открыть Пульт: управление компанией' },
 ];
 
