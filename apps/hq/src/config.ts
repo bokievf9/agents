@@ -112,7 +112,7 @@ export interface Config extends BaseConfig {
   igApiHost: 'graph.facebook.com' | 'graph.instagram.com';
   igPublicBase: string | undefined;
   igTokenIssuedAt: string | undefined;
-  /** Signs the public `/media/<sig>/<path>` URLs: `MEDIA_SECRET`, else `WEB_CHAT_TOKEN`. Without both the route answers 404. */
+  /** Signs the public `/media/<sig>/<path>` URLs: `MEDIA_SECRET`, its own secret (P2-3: required in production, never equal to `WEB_CHAT_TOKEN`: that one travels in a header to the site). */
   mediaSecret: string | undefined;
   /** Key for the Telegram tokens of the clients' agents at rest (`PG_SECRET`); absent: the media secret is used. */
   pgSecret: string | undefined;
@@ -245,7 +245,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     igApiHost: optional(env, 'IG_API_HOST') === 'graph.instagram.com' ? 'graph.instagram.com' : 'graph.facebook.com',
     igPublicBase: optional(env, 'IG_PUBLIC_BASE')?.replace(/\/+$/, ''),
     igTokenIssuedAt: optional(env, 'IG_TOKEN_ISSUED_AT'),
-    mediaSecret: optional(env, 'MEDIA_SECRET') ?? optional(env, 'WEB_CHAT_TOKEN'),
+    mediaSecret: mediaSecretOf(env),
     pgSecret: optional(env, 'PG_SECRET'),
     trendsRegions: (optional(env, 'TRENDS_REGIONS') ?? 'KZ,UZ,RU').split(',').map((r) => r.trim().toUpperCase()).filter((r) => /^[A-Z]{2}$/.test(r)),
     gscServiceAccountJson: optional(env, 'GSC_SERVICE_ACCOUNT_JSON'),
@@ -272,6 +272,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 }
 
 /** An age public key (`age1` + bech32 characters), or undefined. A wrong value fails at start, not at three in the morning. */
+/** P2-3: the media-signing key is its own secret. Equal to `WEB_CHAT_TOKEN` is refused everywhere; missing is refused in production (dev and tests may run without it: the route answers 404). */
+export function mediaSecretOf(env: NodeJS.ProcessEnv): string | undefined {
+  const m = optional(env, 'MEDIA_SECRET');
+  if (m === undefined) {
+    if (env.NODE_ENV === 'production') throw new Error('MEDIA_SECRET is required (its own random secret, not WEB_CHAT_TOKEN): it signs the public /media/ links of clients\' documents');
+    return undefined;
+  }
+  if (m === optional(env, 'WEB_CHAT_TOKEN')) throw new Error('MEDIA_SECRET must differ from WEB_CHAT_TOKEN');
+  return m;
+}
+
 function backupRecipient(v: string | undefined): string | undefined {
   if (v === undefined) return undefined;
   if (!/^age1[0-9a-z]{50,}$/.test(v)) throw new Error('BACKUP_AGE_RECIPIENT must be an age public key (age1...), made with `age-keygen`');
