@@ -66,6 +66,8 @@ export interface CrmHooks {
   payUrl?: (inv: { number: string; payKey: string | null; locale: 'ru' | 'en' }) => string | null;
   /** The client accepts a stage (Production: `acceptStage`, which proposes the next invoice). */
   acceptStage?: (projectId: number, stageNo: number) => Promise<{ status: 'accepted' | 'already' | 'not_paid' | 'not_ready' | 'unknown'; text: string }>;
+  /** P2-14: `POST /admin/clients/:id/anonymize` (`client-anonymize.ts`). Without it the route answers 404. */
+  anonymize?: (clientId: number) => Promise<CrmReply>;
   /** Cabinet v3 (2026-11-22): documents, threads, uploads and the playground under `/admin/clients/:id/`. Without it those routes answer 404. */
   cabinet?: CabinetApi;
 }
@@ -771,6 +773,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     if (method === 'POST' && seg.length === 4 && seg[1] === 'tickets' && seg[3] === 'close' && /^\d+$/.test(seg[0]!) && /^\d+$/.test(seg[2]!)) return clientTicketClose(Number(seg[0]), Number(seg[2]));
     if (method === 'POST' && seg.length === 2 && seg[1] === 'tickets' && /^\d+$/.test(seg[0]!)) return clientTicketCreate(Number(seg[0]), body);
     if ((method === 'POST' || method === 'PATCH') && seg.length === 1 && /^\d+$/.test(seg[0]!)) return profilePatchRoute(Number(seg[0]), body);
+    if (method === 'POST' && seg.length === 2 && seg[1] === 'anonymize' && /^\d+$/.test(seg[0]!)) return hooks.anonymize ? hooks.anonymize(Number(seg[0])) : fail(404, 'not_found');
     const v3 = hooks.cabinet?.route(method, seg, query, body);
     if (v3) return v3;
     return fail(404, 'not_found');

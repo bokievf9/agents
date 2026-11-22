@@ -331,6 +331,14 @@ export class ClientKnowledge {
     return out;
   }
 
+  /** P2-14: the client is deleted: his site rows go from the database and his chunks from the store. */
+  async forget(clientId: number): Promise<void> {
+    for (const t of ['ck_sources', 'ck_pages', 'ck_pending', 'ck_jobs']) this.d.db.prepare(`DELETE FROM ${t} WHERE client_id = ?`).run(clientId);
+    await this.d.knowledge.remove?.(scopeOf(clientId), 'site-');
+    this.usage.delete(clientId);
+    this.loaded.delete(clientId);
+  }
+
   /** `GET /admin/clients/:id/knowledge`: the state of the import (counts, the pages list, never texts). */
   statusRoute(clientId: number): Reply {
     if (!this.clientExists(clientId)) return fail(404, 'not_found');

@@ -4,6 +4,7 @@ import type { Hq, Task } from '@fir/hq';
 import { openBuilderTasks } from './bridge.js';
 import type { Director } from './director.js';
 import type { DrillStatus } from './drill.js';
+import { anonymizeClient } from './client-anonymize.js';
 import { createCrm } from './admin-crm.js';
 import type { CabinetApi } from './cabinet-api.js';
 import type { Campaigns } from './campaigns.js';
@@ -45,6 +46,8 @@ export interface AdminDeps {
   /** «Shell v3» content calendar: the Marketing head (approve/reject/revise/rerender run its code) and the folder of rendered files (`DATA_DIR/renders`). */
   marketing?: MarketingHead;
   rendersDir?: string;
+  /** `DATA_DIR`: uploads of a client live under `uploads/<id>` (`POST /admin/clients/:id/anonymize` deletes them). */
+  dataDir?: string;
   /** A routine was switched on or off from the workplace: the app restarts its cron jobs. */
   onRoutinesChange?: () => void;
   /** `GET` and `PATCH /admin/settings`. */
@@ -89,6 +92,10 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   const hits: number[] = [];
   let served = 0;
   const crm = createCrm(hq.db, now, {
+    anonymize: (clientId) => anonymizeClient({
+      db: hq.db, now, rendersDir: d.rendersDir, dataDir: d.dataDir, forgetKnowledge: d.cabinet?.siteKnowledge ? (id) => d.cabinet!.siteKnowledge!.forget(id) : undefined,
+      audit: (action, id, detail) => hq.log('owner', action, 'client', String(id), detail),
+    }, clientId),
     ...(d.cabinet ? { cabinet: d.cabinet } : {}),
     // a plain inbox line, not an approval: Telegram only through the away digest rules of the channel
     notifyOwner: (text) => void channel.notify('message', text).catch((e) => log('warn', 'cabinet notify failed', { err: errMsg(e) })),
