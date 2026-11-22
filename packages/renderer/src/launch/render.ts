@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { copyFileSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -71,7 +72,7 @@ export async function renderLaunch(bundle: BundleCache, o: LaunchRender): Promis
     const tmp = `${o.outFile}.part.mp4`;
     let last = -1;
     await renderMedia({
-      composition, serveUrl, inputProps, codec: 'h264', videoBitrate: '4M', audioBitrate: '192k', outputLocation: tmp, concurrency: o.concurrency ?? 2,
+      composition, serveUrl, inputProps, codec: 'h264', videoBitrate: '4M', audioBitrate: '192k', outputLocation: tmp, concurrency: Math.min(o.concurrency ?? 1, Math.max(1, typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length)),
       onProgress: ({ progress }) => {
         const pct = Math.floor(progress * 4) * 25;
         if (pct !== last) {
@@ -111,7 +112,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   for (const variant of (only ? [only] : ['film', 'teaser']) as Variant[]) {
     const outFile = join(outDir, variant === 'film' ? `launch-${lang}.mp4` : `launch-teaser-${lang}.mp4`);
     const t0 = Date.now();
-    const r = await renderLaunch(bundle, { variant, lang, outFile, tts, musicFile: musicFile ? resolve(musicFile) : undefined, concurrency: Number(process.env.RENDER_CONCURRENCY) || 2, log });
+    const r = await renderLaunch(bundle, { variant, lang, outFile, tts, musicFile: musicFile ? resolve(musicFile) : undefined, concurrency: Number(process.env.RENDER_CONCURRENCY) || 1, log });
     log(`done ${r.path}: ${(r.bytes / 1e6).toFixed(2)} MB, ${r.seconds.toFixed(1)} s, voiced ${r.voiced}, rendered in ${Math.round((Date.now() - t0) / 1000)} s`);
   }
 }

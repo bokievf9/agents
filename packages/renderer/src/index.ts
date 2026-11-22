@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { openDb } from '@fir/core';
 import { RenderQueue } from '@fir/worker-content-maker';
 import { utimesSync, writeFileSync } from 'node:fs';
@@ -14,7 +15,10 @@ const dataDir = process.env.DATA_DIR || './data';
 const pollMs = Math.max(2, Number(process.env.RENDERER_POLL_SECONDS) || 20) * 1000;
 const timeoutMs = (Number(process.env.RENDER_TIMEOUT_SECONDS) || 600) * 1000;
 const noTts = process.env.RENDER_NO_TTS === '1';
-const concurrency = Math.max(1, Number(process.env.RENDER_CONCURRENCY) || 2);
+// Remotion refuses a concurrency above the visible core count (the container is capped by `cpus:` in compose), so the
+// wish from the env is clamped to what this machine actually has.
+const cores = Math.max(1, typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length);
+const concurrency = Math.min(Math.max(1, Number(process.env.RENDER_CONCURRENCY) || 1), cores);
 /** `RENDER_SFX=off`: reels without the sound-effect layer. */
 const sfx = (process.env.RENDER_SFX ?? 'on').toLowerCase() !== 'off';
 
