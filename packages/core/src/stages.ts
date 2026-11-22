@@ -10,14 +10,15 @@ import { DEFAULT_SMALL_PROJECT_MAX_USD, DEFAULT_STAGE_TEMPLATES, type PaymentSta
 export const SUBSCRIPTION_PRODUCTS = ['content', 'agent', 'personal'];
 
 /** HQ key of a site product id (the same mapping as the price list's). */
-const HQ_KEY: Record<string, string> = { receptionist: 'intake', implementation: 'aiteam' };
+const HQ_KEY: Record<string, string> = { receptionist: 'intake' };
 
 export const stageTemplates = (p: Prices = getPrices()): StageTemplate[] => (p.stages && p.stages.length ? p.stages : DEFAULT_STAGE_TEMPLATES);
 export const smallProjectMaxUsd = (p: Prices = getPrices()): number => p.smallProjectMaxUsd ?? DEFAULT_SMALL_PROJECT_MAX_USD;
 
 /** What a product costs in the list (its standard package, else a catalogue variant); 0 when unknown. */
 function priceOfProduct(id: string, p: Prices): number {
-  if (id === 'company' && p.companyPlan) return p.companyPlan.setup;
+  // the retired turnkey department (`implementation`, `aiteam`) is priced as the AI company
+  if ((id === 'company' || id === 'implementation' || id === 'aiteam') && p.companyPlan) return p.companyPlan.setup;
   const direct = p.products[HQ_KEY[id] ?? id];
   if (direct !== undefined) return direct;
   for (const c of Object.values(p.catalog)) if (c.variants[id] !== undefined) return c.variants[id]!;

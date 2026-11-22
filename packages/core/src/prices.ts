@@ -12,7 +12,7 @@ import { normalizeStages } from './stage-templates.js';
 const amount = z.number().nonnegative().finite();
 const amounts = z.record(z.string(), amount);
 
-export const PRODUCT_KEYS = ['admin', 'intake', 'automation', 'miniapp', 'aiteam', 'site', 'bot', 'app'] as const;
+export const PRODUCT_KEYS = ['admin', 'intake', 'automation', 'miniapp', 'site', 'bot', 'app'] as const;
 export type ProductKey = (typeof PRODUCT_KEYS)[number];
 
 // `byokMonthly` (v4, 2026-11-22): the monthly price when the client brings their own model key.
@@ -55,11 +55,14 @@ export const pricesSchema = z
   })
   .transform((p, ctx) => {
     // site id -> HQ key
-    const ID: Record<string, string> = { receptionist: 'intake', implementation: 'aiteam' };
+    const ID: Record<string, string> = { receptionist: 'intake' };
+    // retired product (the site stopped sending it): ignored silently; a team costs `teamMonthly()` of its agents, the whole company is `companyPlan`
+    const RETIRED = new Set(['aiteam', 'implementation']);
     const products: Record<string, number> = {};
     // live product names: `products.<id>.title` as a string (Russian) or `{ ru, en }` (the site may publish them; `product-names.ts` reads them first)
     const titles: Record<string, { ru?: string; en?: string }> = { ...(p.titles ?? {}) };
     for (const [id, v] of Object.entries(p.products)) {
+      if (RETIRED.has(id)) continue;
       const t = v && typeof v === 'object' ? (v as { title?: unknown }).title : undefined;
       const named = typeof t === 'string' ? { ru: t } : t && typeof t === 'object' ? (t as { ru?: unknown; en?: unknown }) : undefined;
       if (named) {

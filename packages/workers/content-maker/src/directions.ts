@@ -1,4 +1,4 @@
-import { allowedAmounts, getPrices, personalPlans, planOf, productName, supportMonthly, type ProductKey } from '@fir/core';
+import { allowedAmounts, companyPlan, getPrices, personalPlans, planOf, productName, supportMonthly, type ProductKey } from '@fir/core';
 
 /**
  * Service directions of the content plan (pillars). Names and summaries live here; every dollar amount comes from the
@@ -59,7 +59,7 @@ export const DIRECTIONS: Direction[] = [
       return { from: first?.setup ?? 0, monthly: first?.monthly };
     },
   ),
-  make({ id: 'implementation', name: '', pillar: 'X', summary: 'разбор процессов компании и подключение агентов к её инструментам' }, product('aiteam')),
+  make({ id: 'implementation', name: '', pillar: 'X', summary: 'разбор процессов компании и подключение агентов к её инструментам' }, () => ({ from: companyPlan()?.setup ?? 0, monthly: companyPlan()?.monthly })),
   make({ id: 'site', name: '', pillar: 'X', summary: 'лендинг или сайт компании с формой заявки в Telegram, русская и английская версии; магазины, студии, клиники' }, product('site')),
 ];
 

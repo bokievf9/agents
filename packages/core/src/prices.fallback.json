@@ -294,10 +294,6 @@
       "kind": "from",
       "from": 660
     },
-    "implementation": {
-      "kind": "from",
-      "from": 550
-    },
     "personal": {
       "kind": "plans",
       "plans": [

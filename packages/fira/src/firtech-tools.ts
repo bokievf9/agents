@@ -7,7 +7,7 @@ import type { FiraTool, ToolRegistry } from './tools.js';
  * At migration HQ passes its own: `builder_link` from `client/builder-link.ts`, `call_slots` from `client/site-slots.ts`.
  */
 
-const PRICE_IDS = ['admin', 'intake', 'automation', 'miniapp', 'aiteam', 'site', 'app'] as const;
+const PRICE_IDS = ['admin', 'intake', 'automation', 'miniapp', 'site', 'app'] as const;
 
 export const priceList: FiraTool = {
   def: {

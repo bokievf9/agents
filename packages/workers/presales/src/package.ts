@@ -71,7 +71,8 @@ export function quotePackage(id: DirectionId, title: string, text: string, p: Pr
     case 'receptionist': return one(title, p.products.intake!);
     case 'automation': return one(title, p.products.automation!);
     case 'miniapp': return one(title, p.products.miniapp!);
-    case 'implementation': return one(title, p.products.aiteam!);
+    // the retired turnkey department is the AI company now
+    case 'implementation': return quotePackage('company', title, text, p);
     case 'content': {
       const c = planOf('content', p);
       return { totalUsd: c.setup, monthlyUsd: c.monthly, lines: [{ label: `${title}: настройка каналов и контент-план`, usd: c.setup }] };

@@ -18,7 +18,7 @@ describe('the bundled fallback snapshot', () => {
     expect(parsePrices(fallbackJson)).not.toBeNull();
     const p = FALLBACK_PRICES;
     expect(p.currency).toBe('USD');
-    expect(p.products).toEqual({ admin: 290, intake: 220, automation: 230, miniapp: 660, aiteam: 550, site: 150, bot: 100, app: 800 });
+    expect(p.products).toEqual({ admin: 290, intake: 220, automation: 230, miniapp: 660, site: 150, bot: 100, app: 800 });
     expect(PRODUCT_KEYS.every((k) => k in p.products)).toBe(true);
     expect(p.startingPrice).toEqual({ websites: 150, bots: 100, apps: 800, automation: 200 });
     expect(p.catalog.websites).toEqual({ variants: { landing: 150, company: 350, shop: 700 }, addons: { language: 40, telegram: 20, payments: 60, cms: 100 } });
@@ -52,7 +52,7 @@ describe('the bundled fallback snapshot', () => {
     };
     const p = parsePrices(live)!;
     expect(p).not.toBeNull();
-    expect(p.products).toMatchObject({ admin: 290, intake: 220, automation: 230, miniapp: 660, aiteam: 550, site: 150, bot: 100, app: 800 });
+    expect(p.products).toMatchObject({ admin: 290, intake: 220, automation: 230, miniapp: 660, site: 150, bot: 100, app: 800 });
     expect(planOf('dono', p)).toEqual({ setup: 150, monthly: 15 });
     expect(planOf('content', p)).toEqual({ setup: 90, monthly: 60 });
     expect(parsePrices(p)?.products.intake).toBe(220); // the normalised copy kept in the database parses again
@@ -75,8 +75,8 @@ describe('the bundled fallback snapshot', () => {
 
   it('allowedAmounts is every amount of the list and nothing else', () => {
     const a = allowedAmounts(FALLBACK_PRICES);
-    for (const n of [290, 220, 230, 660, 550, 150, 100, 800, 90, 60, 29, 49, 79, 490, 790, 1490, 149, 20, 2000, 1200, 700, 40]) expect(a.has(n), String(n)).toBe(true);
-    for (const stale of [250 + 50, 300, 400, 500 + 1, 25, 800 + 1]) expect(a.has(stale), String(stale)).toBe(false);
+    for (const n of [290, 220, 230, 660, 150, 100, 800, 90, 60, 29, 49, 79, 490, 790, 1490, 149, 20, 2000, 1200, 700, 40]) expect(a.has(n), String(n)).toBe(true);
+    for (const stale of [250 + 50, 550, 300, 400, 500 + 1, 25, 800 + 1]) expect(a.has(stale), String(stale)).toBe(false);
   });
 
   it('is validated: a broken shape is rejected', () => {
@@ -104,11 +104,19 @@ describe('the live v4 payload of firtech.pro/api/prices', () => {
       content: { kind: 'plans', plans: [{ id: 'content', setup: 90, monthly: 60 }] }, miniapp: { kind: 'from', from: 660 },
     },
   };
-  it('parses without products.implementation / aiteam, keeps the bundled value and warns once', () => {
+  it('parses without products.implementation / aiteam, no aiteam key and no warning', () => {
     setPrices(FALLBACK_PRICES);
     const p = parsePrices(v4)!;
     expect(p).not.toBeNull();
-    expect(p.products).toMatchObject({ admin: 290, intake: 220, automation: 230, miniapp: 660, aiteam: 550, site: 150, bot: 100, app: 800 });
+    expect(p.products).toMatchObject({ admin: 290, intake: 220, automation: 230, miniapp: 660, site: 150, bot: 100, app: 800 });
+    expect(p.products).not.toHaveProperty('aiteam');
+  });
+  it('an extra products.aiteam / products.implementation from the site is ignored silently', () => {
+    const p = parsePrices({ ...v4, products: { ...v4.products, aiteam: { kind: 'from', from: 999 }, implementation: { kind: 'from', from: 550 } } })!;
+    expect(p).not.toBeNull();
+    expect(p.products).not.toHaveProperty('aiteam');
+    expect(p.products).not.toHaveProperty('implementation');
+    expect(Object.values(p.products)).not.toContain(999);
   });
   it('carries setup + monthly + BYOK, the agent subscription and the team discount', () => {
     const p = parsePrices(v4)!;
@@ -122,14 +130,15 @@ describe('the live v4 payload of firtech.pro/api/prices', () => {
     expect(parsePrices(p)?.companyPlan?.byokMonthly).toBe(104);
   });
   it('unknown product keys are ignored, missing ones keep the previous snapshot', async () => {
-    setPrices({ ...FALLBACK_PRICES, products: { ...FALLBACK_PRICES.products, aiteam: 600 } });
-    const r = await loadPrices({ store: memStore(), fetchImpl: reply({ ...v4, products: { ...v4.products, brandNew: { kind: 'quote' } } }) });
+    setPrices({ ...FALLBACK_PRICES, products: { ...FALLBACK_PRICES.products, miniapp: 600 } });
+    const r = await loadPrices({ store: memStore(), fetchImpl: reply({ ...v4, products: { ...v4.products, miniapp: undefined, brandNew: { kind: 'quote' } } }) });
     expect(r.source).toBe('fetched');
-    expect(getPrices().products.aiteam).toBe(600);
+    expect(getPrices().products.miniapp).toBe(600);
     setPrices(FALLBACK_PRICES);
   });
-  it('still parses the old shape (with implementation)', () => {
-    expect(parsePrices(fallbackJson)?.products.aiteam).toBe(550);
+  it('still parses the old shape (with implementation), which is dropped', () => {
+    const old = { ...fallbackJson, products: { ...fallbackJson.products, implementation: { kind: 'from', from: 550 } } };
+    expect(parsePrices(old)?.products).not.toHaveProperty('aiteam');
   });
 });
 

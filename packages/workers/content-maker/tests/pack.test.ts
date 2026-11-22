@@ -135,7 +135,7 @@ describe('pack generation', () => {
     expect(lintText('Бот за $99. firtech.pro').some((i) => i.startsWith('цена не из справки'))).toBe(true);
     expect(lintText('Бот от $250. firtech.pro')).toEqual([]);
     // current site prices pass, the stale ones of the old table fail
-    for (const ok of ['Бот-администратор от $290', 'Приёмщик от $220', 'Mini App от $660', 'Внедрение ИИ от $550', 'Контент от $90 и $60 в месяц', 'Персональный ИИ $290 + $29 в месяц', 'ИИ-компания $1490 + $149 в месяц']) {
+    for (const ok of ['Бот-администратор от $290', 'Приёмщик от $220', 'Mini App от $660', 'ИИ-компания от $1490', 'Контент от $90 и $60 в месяц', 'Персональный ИИ $290 + $29 в месяц', 'ИИ-компания $1490 + $149 в месяц']) {
       expect(lintText(`${ok}. firtech.pro`), ok).toEqual([]);
     }
     for (const stale of ['$300', '$400', '$25', '$501']) expect(lintText(`Цена ${stale}. firtech.pro`).some((i) => i.startsWith('цена не из справки')), stale).toBe(true);

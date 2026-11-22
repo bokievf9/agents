@@ -256,7 +256,7 @@ export const currentId = <T extends string>(id: T): T | 'personal' => (id === 'a
 export const isProductId = (s: string): s is ProductId => (PRODUCT_IDS as readonly string[]).includes(s);
 
 const PRICE_KEY: Partial<Record<CatalogueId, ProductKey>> = {
-  admin: 'admin', receptionist: 'intake', automation: 'automation', miniapp: 'miniapp', ai: 'aiteam', site: 'site', bot: 'bot', app: 'app',
+  admin: 'admin', receptionist: 'intake', automation: 'automation', miniapp: 'miniapp', site: 'site', bot: 'bot', app: 'app',
 };
 
 /** «$N 490»: thousands with a space, as the owner writes the flagship prices. */
@@ -271,7 +271,8 @@ export function priceOf(id: CatalogueId, lang: PLang): string {
     return `${from} ${usd(c.setup)} + ${usd(c.monthly)}${month}`;
   }
   if (id === 'personal' || (id as string) === 'agent') return personalPrice(lang);
-  if (id === 'company') return companyPrice(lang);
+  // the retired turnkey department (`ai`) is priced as the AI company; a team's monthly is `teamMonthly()` of its agents
+  if (id === 'company' || id === 'ai') return companyPrice(lang);
   const key = PRICE_KEY[id];
   return `${from} ${usd(key ? getPrices().products[key]! : 0)}`;
 }

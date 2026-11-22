@@ -173,7 +173,7 @@ const PRICE: Record<DirectionId, () => { from: number; monthly?: number }> = {
   content,
   miniapp: product('miniapp'),
   agent: personal,
-  implementation: product('aiteam'),
+  implementation: company,
   site: product('site'),
 };
 
