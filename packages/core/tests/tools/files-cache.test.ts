@@ -104,6 +104,8 @@ describe('files', () => {
     expect(await t.files.get('../hq.db')).toMatchObject({ error: 'invalid' });
     expect(await t.files.list('..')).toMatchObject({ error: 'invalid' });
     expect(safeRel('a/b.png', true)).toBe('a/b.png');
+    // P2-2: a lone `.` or `..` (or only dots) is never a segment
+    for (const bad of ['.', '..', '...', 'a/./b.png', 'a/../b.png', './b.png', '../b.png', 'a/..']) expect(safeRel(bad, false), bad).toBeNull();
     const outside = mkdtempSync(join(tmpdir(), 'fir-out-'));
     writeFileSync(join(outside, 'secret.txt'), 'nope');
     mkdirSync(join(dataDir, 'renders'), { recursive: true });
