@@ -158,7 +158,7 @@ function setup(o: { auto?: boolean; llm?: MockLlm; fetcher?: Fetcher; deps?: Par
   const w = world;
   const db = w.w.hq.db;
   ensureCabinetTables(db);
-  db.prepare("INSERT INTO cab_clients (id, email, name, created_at, updated_at) VALUES (1, 'a@example.com', 'Клиент А', 1, 1), (2, 'b@example.com', 'Клиент Б', 1, 1), (3, 'c@example.com', 'В', 1, 1), (4, 'd@example.com', 'Г', 1, 1), (5, 'e@example.com', 'Д', 1, 1), (6, 'f@example.com', 'Е', 1, 1)").run();
+  db.prepare("INSERT INTO cab_clients (id, email, name, supabase_id, created_at, updated_at) VALUES (1, 'a@example.com', 'Клиент А', 'sb-1', 1, 1), (2, 'b@example.com', 'Клиент Б', 'sb-2', 1, 1), (3, 'c@example.com', 'В', 'sb-3', 1, 1), (4, 'd@example.com', 'Г', 'sb-4', 1, 1), (5, 'e@example.com', 'Д', 'sb-5', 1, 1), (6, 'f@example.com', 'Е', 'sb-6', 1, 1)").run();
   const knowledge = new InMemoryKnowledge(o.embedder ?? new HashEmbedder());
   const ck = new ClientKnowledge({ db, now: () => w.t(), knowledge, fetcher: o.fetcher ?? plainFetcher(), delayMs: 0, ...(o.auto !== undefined ? { autoImport: o.auto } : {}), ...o.deps });
   const llm = o.llm ?? new MockLlm(() => JSON.stringify({ reply: 'Готово.' }));
@@ -268,6 +268,28 @@ describe('auto import from the lead brief', () => {
     expect(s.db.prepare('SELECT COUNT(*) n FROM ck_jobs').get()).toEqual({ n: 2 });
     expect(f.hits.every((h) => !h.includes('instagram'))).toBe(true);
     expect((await s.world.call('GET', '/admin/clients/1/knowledge')).json).toMatchObject({ site: `${f.url}/`, instagram: 'salon_liza', instagramImported: false });
+  });
+
+  it('P2-11: an unconfirmed client (no account id) is not crawled: the site waits for approval, the owner starts it with the ordinary import route', async () => {
+    const f = await fx();
+    const s = setup();
+    s.db.prepare("INSERT INTO cab_clients (id, email, name, supabase_id, created_at, updated_at) VALUES (7, 'anon@example.com', 'Аноним', '', 1, 1)").run();
+    s.ck.onBrief(7, { si: f.url, ig: 'anon_shop' });
+    await settle(s.ck, 7);
+    expect(f.hits).toEqual([]); // nothing fetched
+    expect(s.db.prepare('SELECT COUNT(*) n FROM ck_jobs WHERE client_id = 7').get()).toEqual({ n: 0 });
+    const status = (await s.world.call('GET', '/admin/clients/7/knowledge')).json;
+    expect(status).toMatchObject({ state: 'pending', pending: { url: `${f.url}/` }, pages: 0 });
+    // the Shell Knowledge list carries the waiting item
+    const list = (await s.world.call('GET', '/admin/knowledge')).json as { pendingImports: { clientId: number; clientName: string; url: string }[] };
+    expect(list.pendingImports).toMatchObject([{ clientId: 7, clientName: 'Аноним', url: `${f.url}/` }]);
+    // Import: the existing endpoint
+    expect((await s.world.call('POST', '/admin/clients/7/knowledge/import', { url: f.url })).status).toBe(202);
+    await settle(s.ck, 7);
+    expect(f.hits.length).toBeGreaterThan(0);
+    expect(s.db.prepare("SELECT state FROM ck_jobs WHERE client_id = 7").get()).toEqual({ state: 'done' });
+    expect(((await s.world.call('GET', '/admin/knowledge')).json as { pendingImports: unknown[] }).pendingImports).toEqual([]);
+    expect((await s.world.call('GET', '/admin/clients/7/knowledge')).json).toMatchObject({ state: 'done', pending: null });
   });
 
   it('KNOWLEDGE_AUTO_IMPORT=off stores the handles and queues nothing', async () => {

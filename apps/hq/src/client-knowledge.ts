@@ -41,6 +41,11 @@ CREATE TABLE IF NOT EXISTS ck_jobs (
   finished_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS ck_jobs_client ON ck_jobs (client_id, id);
+CREATE TABLE IF NOT EXISTS ck_pending (
+  client_id INTEGER PRIMARY KEY,
+  url TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ck_embed (
   k TEXT PRIMARY KEY,
   v BLOB NOT NULL,
@@ -181,7 +186,19 @@ export class ClientKnowledge {
     }
   }
 
-  /** The site and Instagram handle of the client's brief (`brief.discovery.si` and `ig`): stored, the site is queued when auto-import is on. */
+  /** An account with a confirmed email: the site's Supabase session id is on the row (`cab_clients.supabase_id`). Anyone else's site is crawled only after the owner approves it (P2-11). */
+  private confirmed(id: number): boolean {
+    try {
+      return (this.d.db.prepare("SELECT 1 FROM cab_clients WHERE id = ? AND supabase_id != ''").get(id) as unknown) !== undefined;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The site and Instagram handle of the client's brief (`brief.discovery.si` and `ig`): stored. The site is queued when auto-import is on AND the client has a confirmed
+   * account; otherwise it waits as «ждёт одобрения» (`ck_pending`, shown in the Shell Knowledge tab) until the owner starts the import by hand (P2-11: no crawl of a stranger's site for an anonymous lead).
+   */
   onBrief(clientId: number, b: { si?: string | undefined; ig?: string | undefined }): void {
     const si = (b.si ?? '').trim().slice(0, 300);
     const ig = (b.ig ?? '').trim().replace(/^@/, '').replace(/^https?:\/\/(?:www\.)?instagram\.com\//i, '').replace(/[/?#].*$/, '').slice(0, 60);
@@ -193,7 +210,15 @@ export class ClientKnowledge {
          ig_handle = CASE WHEN excluded.ig_handle != '' THEN excluded.ig_handle ELSE ig_handle END, updated_at = excluded.updated_at`,
     ).run(clientId, si ? (url?.href ?? '') : '', /^[A-Za-z0-9._]{1,30}$/.test(ig) ? ig : '', this.d.now());
     // a non-http address ("javascript:", "ftp:") is never queued
-    if (url && this.autoOn) void this.start(clientId, url.href, 'auto', undefined);
+    if (url && this.autoOn) {
+      if (this.confirmed(clientId)) void this.start(clientId, url.href, 'auto', undefined);
+      else this.d.db.prepare('INSERT INTO ck_pending (client_id, url, created_at) VALUES (?, ?, ?) ON CONFLICT(client_id) DO UPDATE SET url = excluded.url, created_at = excluded.created_at').run(clientId, url.href, this.d.now());
+    }
+  }
+
+  /** Imports waiting for the owner's approval, newest first (`GET /admin/knowledge` → `pendingImports`). */
+  pendingImports(): { clientId: number; url: string; since: string | null }[] {
+    return (this.d.db.prepare('SELECT client_id, url, created_at FROM ck_pending ORDER BY created_at DESC LIMIT 100').all() as { client_id: number; url: string; created_at: number }[]).map((r) => ({ clientId: r.client_id, url: r.url, since: iso(r.created_at) }));
   }
 
   /** `POST /admin/clients/:id/knowledge/import { url?, maxPages? }`: without `url`, the site of the client's brief. */
@@ -206,6 +231,7 @@ export class ClientKnowledge {
     const url = raw ? parseSiteUrl(raw) : null;
     if (!url) return fail(400, 'invalid_url');
     const r = this.start(clientId, url.href, 'manual', b.maxPages as number | undefined);
+    if (r.status === 'running') this.d.db.prepare('DELETE FROM ck_pending WHERE client_id = ?').run(clientId);
     return r.status === 'running' ? { status: 202, body: { ok: true, jobId: r.id, state: r.already ? 'running' : 'queued', already: r.already } } : fail(429, 'too_soon');
   }
 
@@ -310,6 +336,7 @@ export class ClientKnowledge {
     if (!this.clientExists(clientId)) return fail(404, 'not_found');
     const src = this.d.db.prepare('SELECT * FROM ck_sources WHERE client_id = ?').get(clientId) as { site_url: string; ig_handle: string } | undefined;
     const last = this.d.db.prepare('SELECT * FROM ck_jobs WHERE client_id = ? ORDER BY id DESC LIMIT 1').get(clientId) as JobRow | undefined;
+    const pending = this.d.db.prepare('SELECT url, created_at FROM ck_pending WHERE client_id = ?').get(clientId) as { url: string; created_at: number } | undefined;
     const pages = this.d.db.prepare('SELECT url, title, length(text) AS chars, fetched_at FROM ck_pages WHERE client_id = ? ORDER BY url').all(clientId) as { url: string; title: string; chars: number; fetched_at: number }[];
     const lastAt = pages.reduce((m, p) => Math.max(m, p.fetched_at), 0);
     const chunks = this.d.db.prepare("SELECT chunks FROM ck_jobs WHERE client_id = ? AND state = 'done' ORDER BY id DESC LIMIT 1").get(clientId) as { chunks: number } | undefined;
@@ -318,7 +345,9 @@ export class ClientKnowledge {
       site: src?.site_url || null, instagram: src?.ig_handle || null,
       // Instagram is not crawled yet (TODO: Agent Reach); only the handle is kept
       instagramImported: false,
-      state: last?.state ?? 'none', job: last ? job(last) : null,
+      // `pending`: the site waits for the owner's approval (the client has no confirmed account), nothing was fetched
+      pending: pending ? { url: pending.url, since: iso(pending.created_at) } : null,
+      state: last?.state ?? (pending ? 'pending' : 'none'), job: last ? job(last) : null,
       pages: pages.length, chunks: chunks?.chunks ?? 0, lastAt: lastAt ? iso(lastAt) : null, errors: errors.n,
       items: pages.map((p) => ({ url: p.url, title: p.title, chars: p.chars, fetchedAt: iso(p.fetched_at) })),
     });

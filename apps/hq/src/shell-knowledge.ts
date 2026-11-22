@@ -105,7 +105,15 @@ export function createKnowledgeApi(d: ShellKnowledgeDeps) {
     if (tier) items = items.filter((x) => x.tier === tier);
     if (source) items = items.filter((x) => x.source === source);
     if (needle) items = items.filter((x) => x.title.toLowerCase().includes(needle) || x.hay().toLowerCase().includes(needle));
-    return ok({ items: items.slice(0, limit).map(({ hay, ...x }) => (void hay, x)), total: items.length, builtAt: p.builtAt });
+    // P2-11: sites of clients without a confirmed account wait here for the owner; «Импортировать» = `POST /admin/clients/:id/knowledge/import { url }`
+    let pendingImports: { clientId: number; clientName: string; url: string; since: string | null }[] = [];
+    try {
+      pendingImports = (d.db.prepare("SELECT p.client_id, COALESCE(c.name, '') AS name, p.url, p.created_at FROM ck_pending p LEFT JOIN cab_clients c ON c.id = p.client_id ORDER BY p.created_at DESC LIMIT 100").all() as { client_id: number; name: string; url: string; created_at: number }[])
+        .map((r) => ({ clientId: r.client_id, clientName: r.name, url: r.url, since: iso(r.created_at) }));
+    } catch {
+      /* no pending table or no clients table yet: nothing waits */
+    }
+    return ok({ items: items.slice(0, limit).map(({ hay, ...x }) => (void hay, x)), total: items.length, builtAt: p.builtAt, pendingImports });
   }
 
   function get(id: string): AdminReply {
