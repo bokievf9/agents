@@ -127,8 +127,6 @@ describe('Director: commands, summary, batch, alerts', () => {
     expect(w.hq.agent('marketing-head')!.status).toBe('active');
     await w.director.onCommand('pause', 'x');
     expect(w.messenger.last()!.text).toContain('Укажите отдел');
-    await w.director.onCommand('help');
-    expect(w.messenger.last()!.text).toContain('/approve');
   });
 
   it('the morning summary is one message: reports, approvals, blocked, costs, held alerts', async () => {

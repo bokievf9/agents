@@ -133,7 +133,7 @@ describe('the night routines on real files', () => {
     const t = w.hq.runRoutine('backoffice-backup-daily')!;
     await w.beat();
     expect(w.hq.task(t.id)!.status, JSON.stringify(w.hq.events(t.id).at(-1))).toBe('done');
-    expect(w.tg.documents.length, 'the archive went to the owner').toBe(1);
+    expect(w.tg.documents.length, 'no age key: the plain archive never goes to the owner').toBe(0);
     // renders of an item that no longer exists, older than 14 days
     mkdirSync(join(w.rendersDir, '777'), { recursive: true });
     writeFileSync(join(w.rendersDir, '777', 'reel.mp4'), 'x');
