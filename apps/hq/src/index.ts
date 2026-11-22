@@ -22,7 +22,7 @@ import { MonitoringWorker } from '@fir/worker-monitoring';
 import { Reporter, type TopicSender } from './reporter.js';
 import { TopicManager } from './topics.js';
 import { resolveMedia } from '@fir/worker-publisher';
-import { createWebhook } from './webhook.js';
+import { createWebhook, dockerGateways, setTrustedProxies } from './webhook.js';
 import { TelegramRunner, fetchTransport } from './tg-runner.js';
 import { leadDedupe } from './lead-dedupe.js';
 import { registerCabinetLead } from './cabinet.js';
@@ -427,6 +427,7 @@ const admin = cfg.adminToken
 const presenceTimer = setInterval(() => void channel.sync().catch((e) => log('error', 'presence sync failed', { err: errMsg(e) })), 60_000);
 presenceTimer.unref();
 
+setTrustedProxies(cfg.trustedProxyIps.length ? cfg.trustedProxyIps : dockerGateways());
 const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cfg.siteEventsToken || cfg.mediaSecret
   ? createWebhook(
       // the form gets its error when the task cannot be made, but the person's contact is kept for the owner (guardedLead)

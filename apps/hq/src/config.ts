@@ -77,6 +77,8 @@ export interface Config extends BaseConfig {
    * (never `anonymize`), see `cabinetRouteAllowed` in `webhook.ts`; nothing else under `/admin`. Unset: the cabinet-token path is off. Must differ from `ADMIN_TOKEN`.
    */
   cabinetToken: string | undefined;
+  /** `TRUSTED_PROXY_IP` (comma list): the peers whose `x-real-ip` / `x-visitor-ip` HQ believes besides loopback; empty: the docker network gateway of this container is derived at start. */
+  trustedProxyIps: string[];
   /** The site counts as gone after this many minutes without a ping: notifications go back to Telegram. */
   presenceAwayAfterMin: number;
   /** New Scout cards per day. */
@@ -216,6 +218,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     leadWebhookToken: optional(env, 'LEAD_WEBHOOK_TOKEN'),
     officeToken: optional(env, 'OFFICE_TOKEN'),
     adminToken: optional(env, 'ADMIN_TOKEN'),
+    trustedProxyIps: (optional(env, 'TRUSTED_PROXY_IP') ?? '').split(',').map((x) => x.trim()).filter(Boolean),
     cabinetToken: ((c, a) => { if (c && a && c === a) throw new Error('CABINET_TOKEN must differ from ADMIN_TOKEN'); return c; })(optional(env, 'CABINET_TOKEN'), optional(env, 'ADMIN_TOKEN')),
     presenceAwayAfterMin: num(env, 'PRESENCE_AWAY_AFTER_MIN', 20, 1, 1440),
     webChatToken: optional(env, 'WEB_CHAT_TOKEN'),

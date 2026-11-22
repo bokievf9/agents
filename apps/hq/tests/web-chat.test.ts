@@ -18,7 +18,7 @@ import { SalesHead, seedSales } from '../src/heads/sales.js';
 import { SupportHead, seedSupport } from '../src/heads/support.js';
 import { seedOrg } from '../src/org.js';
 import { Reporter } from '../src/reporter.js';
-import { createWebhook, isTrustedPeer, visitorIp } from '../src/webhook.js';
+import { createWebhook, dockerGateways, isTrustedPeer, setTrustedProxies, trustedProxies, visitorIp } from '../src/webhook.js';
 import { instructionsDir, NOW, OWNER, routedLlm } from './sales-helpers.js';
 
 const RULES = 'Правила этого ответа';
@@ -414,25 +414,52 @@ describe('contact parsing', () => {
 describe('visitor IP', () => {
   const fake = (peer: string | undefined, headers: Record<string, string> = {}) => ({ socket: { remoteAddress: peer }, headers }) as unknown as IncomingMessage;
 
-  it('x-visitor-ip counts only from loopback or the docker gateway AND with a valid site token', () => {
-    for (const peer of ['127.0.0.1', '::1', '::ffff:127.0.0.1', '172.18.0.1', '172.17.0.1', '::ffff:172.20.0.1', '192.168.16.1']) {
+  it('x-visitor-ip counts only from loopback or the configured proxy address AND with a valid site token', () => {
+    setTrustedProxies(['172.18.0.1']);
+    for (const peer of ['127.0.0.1', '::1', '::ffff:127.0.0.1', '172.18.0.1', '::ffff:172.18.0.1']) {
       expect(isTrustedPeer(peer), peer).toBe(true);
       expect(visitorIp(fake(peer, { 'x-visitor-ip': '203.0.113.7' }), true), peer).toBe('203.0.113.7');
-      // no valid token: the header is not believed
+      // no valid token: x-visitor-ip is not believed
       expect(visitorIp(fake(peer, { 'x-visitor-ip': '203.0.113.7' }), false), peer).toBe(peer.replace('::ffff:', ''));
     }
-    // any other peer: the header is ignored even with a valid token
-    for (const peer of ['203.0.113.50', '8.8.8.8', '172.32.0.1', '172.15.0.1', '10.0.0.5', '2001:db8::1', undefined]) {
+    // any other peer (a neighbour container in the same /12 included): the headers are ignored even with a valid token
+    for (const peer of ['203.0.113.50', '8.8.8.8', '172.18.0.2', '172.17.0.1', '172.20.0.1', '192.168.16.1', '172.32.0.1', '10.0.0.5', '2001:db8::1', undefined]) {
       expect(isTrustedPeer(peer), String(peer)).toBe(false);
-      expect(visitorIp(fake(peer, { 'x-visitor-ip': '1.2.3.4' }), true)).toBe(peer ?? 'unknown');
+      expect(visitorIp(fake(peer, { 'x-visitor-ip': '1.2.3.4', 'x-real-ip': '1.2.3.5' }), true)).toBe(peer ?? 'unknown');
     }
+    setTrustedProxies([]);
+  });
+
+  it('P1-2: x-real-ip of a trusted peer is the visitor; x-forwarded-for is never read; a stranger cannot name an IP', () => {
+    setTrustedProxies(['172.18.0.1']);
+    expect(visitorIp(fake('172.18.0.1', { 'x-real-ip': '198.51.100.9', 'x-forwarded-for': '6.6.6.6, 198.51.100.9' }), false)).toBe('198.51.100.9');
+    expect(visitorIp(fake('172.18.0.1', { 'x-forwarded-for': '6.6.6.6' }), false)).toBe('172.18.0.1');
+    expect(visitorIp(fake('172.18.0.1', { 'x-real-ip': 'garbage' }), false)).toBe('172.18.0.1');
+    expect(visitorIp(fake('203.0.113.50', { 'x-real-ip': '198.51.100.9' }), false)).toBe('203.0.113.50');
+    setTrustedProxies([]);
+  });
+
+  it('P2-8: the default trusts loopback only; the gateway comes from the env list or from the interface (network + 1)', () => {
+    setTrustedProxies([]);
+    expect(trustedProxies()).toEqual([]);
+    expect(isTrustedPeer('172.18.0.1')).toBe(false);
+    const ifaces = { lo: [{ address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', internal: true }], eth0: [{ address: '172.19.0.5', netmask: '255.255.0.0', family: 'IPv4', internal: false }] } as never;
+    expect(dockerGateways(ifaces)).toEqual(['172.19.0.1']);
+    setTrustedProxies(dockerGateways(ifaces));
+    expect(isTrustedPeer('172.19.0.1')).toBe(true);
+    expect(isTrustedPeer('172.19.0.7')).toBe(false);
+    setTrustedProxies(['not-an-ip', '10.1.2.3 ']);
+    expect(trustedProxies()).toEqual(['10.1.2.3']);
+    setTrustedProxies([]);
   });
 
   it('a missing or malformed x-visitor-ip falls back to the socket address; x-forwarded-for is never used', () => {
     expect(visitorIp(fake('127.0.0.1'), true)).toBe('127.0.0.1');
     for (const bad of ['', 'not-an-ip', '1.2.3.4, 5.6.7.8', '999.1.1.1', '<script>']) expect(visitorIp(fake('127.0.0.1', { 'x-visitor-ip': bad }), true)).toBe('127.0.0.1');
     expect(visitorIp(fake('127.0.0.1', { 'x-forwarded-for': '5.5.5.5' }), true)).toBe('127.0.0.1');
+    setTrustedProxies(['172.18.0.1']);
     expect(visitorIp(fake('172.18.0.1', { 'x-visitor-ip': '2001:db8::7' }), true)).toBe('2001:db8::7');
+    setTrustedProxies([]);
   });
 });
 

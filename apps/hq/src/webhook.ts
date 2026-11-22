@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { isIP } from 'node:net';
+import { networkInterfaces } from 'node:os';
 import { z } from 'zod';
 import { errMsg, log } from '@fir/core';
 import type { AdminReply, AdminRequest } from './admin.js';
@@ -112,28 +113,63 @@ export type WebLeadInput = z.output<typeof webLeadSchema>;
 
 const stripMapped = (a: string): string => (a.toLowerCase().startsWith('::ffff:') && isIP(a.slice(7)) === 4 ? a.slice(7) : a);
 
-/** The peer is the site on this host: loopback, or the docker gateway of the compose network (172.16.0.0/12, 192.168.0.0/16). */
+/**
+ * Peers whose `x-real-ip` / `x-visitor-ip` we believe: loopback, plus the exact addresses set by `setTrustedProxies` (env `TRUSTED_PROXY_IP`, else the
+ * gateway of the docker network this container sits in, see `dockerGateways`). NOT the whole 172.16/12 or 192.168/16 (P2-8): another container
+ * on the same host must not be able to name any visitor.
+ */
+let trustedPeers: ReadonlySet<string> = new Set();
+export function setTrustedProxies(addresses: readonly string[]): void {
+  trustedPeers = new Set(addresses.map((x) => stripMapped(x.trim())).filter((x) => isIP(x) !== 0));
+}
+export function trustedProxies(): string[] {
+  return [...trustedPeers];
+}
+
+/** The gateway address (network address + 1) of every IPv4 interface that is not loopback: the docker bridge gateway the published port arrives from. */
+export function dockerGateways(interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces()): string[] {
+  const out: string[] = [];
+  for (const list of Object.values(interfaces)) {
+    for (const i of list ?? []) {
+      if (i.family !== 'IPv4' || i.internal) continue;
+      const ip = i.address.split('.').map(Number);
+      const mask = i.netmask.split('.').map(Number);
+      if (ip.length !== 4 || mask.length !== 4 || ip.some(Number.isNaN) || mask.some(Number.isNaN)) continue;
+      const net = ip.map((o, k) => o & mask[k]!);
+      net[3] = net[3]! + 1;
+      out.push(net.join('.'));
+    }
+  }
+  return out;
+}
+
+/** The peer is the site or the reverse proxy on this host: loopback, or one of the configured proxy addresses. */
 export function isTrustedPeer(address: string | undefined): boolean {
   if (!address) return false;
   const a = stripMapped(address);
-  if (a === '::1') return true;
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(a);
-  if (!m) return false;
-  const [o1, o2] = [Number(m[1]), Number(m[2])];
-  return o1 === 127 || (o1 === 172 && o2 >= 16 && o2 <= 31) || (o1 === 192 && o2 === 168);
+  if (a === '::1' || /^127(?:\.\d{1,3}){3}$/.test(a)) return true;
+  return trustedPeers.has(a);
 }
 
+const validIp = (raw: string | string[] | undefined): string => {
+  const v = stripMapped((Array.isArray(raw) ? raw[0] : raw)?.trim() ?? '');
+  return v && isIP(v) !== 0 ? v : '';
+};
+
 /**
- * The visitor's IP for rate limits. The site (firtech.pro on the same host) passes it in `x-visitor-ip`; it is believed
- * only when the request came from a trusted peer (loopback or the docker gateway) AND already passed the site-token
- * check (call this after the token is verified). Anything else: the socket address.
+ * The visitor's IP for rate limits. Believed only when the request came from a trusted peer: `x-visitor-ip` (the site's server, and only after the
+ * site-token check: `tokenValid`), else `x-real-ip` (nginx, which overwrites it with `$remote_addr`). `x-forwarded-for` is never read: a visitor can
+ * put anything in it. Anything else: the socket address.
  */
 export function visitorIp(req: IncomingMessage, tokenValid: boolean): string {
   const peer = req.socket.remoteAddress;
-  if (tokenValid && isTrustedPeer(peer)) {
-    const raw = req.headers['x-visitor-ip'];
-    const v = stripMapped((Array.isArray(raw) ? raw[0] : raw)?.trim() ?? '');
-    if (v && isIP(v) !== 0) return v;
+  if (isTrustedPeer(peer)) {
+    if (tokenValid) {
+      const v = validIp(req.headers['x-visitor-ip']);
+      if (v) return v;
+    }
+    const real = validIp(req.headers['x-real-ip']);
+    if (real) return real;
   }
   return peer ? stripMapped(peer) : 'unknown';
 }
@@ -205,6 +241,12 @@ export function createWebhook(
     agent?: { handle: (publicId: string, req: { token: string; origin: string; body: unknown; trusted: boolean }) => Promise<{ status: number; body: Record<string, unknown>; allowOrigin?: string }> };
   } = {},
 ): Server {
+  /** A request from the site's server carries one of its tokens: then its `x-visitor-ip` is believed (public routes: /pay, /status, /blog, /agent). */
+  const siteTokens = [token, chat?.token, extra.events?.token, extra.audit?.token].filter((x): x is string => Boolean(x));
+  const siteTokenValid = (req: IncomingMessage): boolean => {
+    const given = ['x-site-token', 'x-chat-token', 'x-lead-token'].map((h) => req.headers[h]).find((v): v is string => typeof v === 'string' && v !== '');
+    return given !== undefined && siteTokens.some((t) => tokenOk(given, t));
+  };
   const hits: number[] = [];
   const fileHits: number[] = [];
   const auditHits: number[] = [];
@@ -264,8 +306,7 @@ export function createWebhook(
         }
         if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ok: true });
         if (req.method === 'GET' && req.url?.split('?')[0] === '/status' && extra.status) {
-          const fwd = req.headers['x-forwarded-for'];
-          const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+          const ip = visitorIp(req, siteTokenValid(req));
           const t = now();
           const mine = (statusHits.get(ip) ?? []).filter((x) => x > t - 60_000);
           if (mine.length >= 30) return json(res, 429, { ok: false, error: 'rate_limited' });
@@ -277,8 +318,7 @@ export function createWebhook(
         }
         if (req.method === 'GET' && extra.blog && /^\/blog(?:\/|$)/.test(req.url?.split('?')[0] ?? '')) {
           const url = new URL(req.url!, 'http://hq.local');
-          const fwd = req.headers['x-forwarded-for'];
-          const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+          const ip = visitorIp(req, siteTokenValid(req));
           const t = now();
           const mine = (blogHits.get(ip) ?? []).filter((x) => x > t - 60_000);
           if (mine.length >= 60) return json(res, 429, { ok: false, error: 'rate_limited' });
@@ -298,8 +338,7 @@ export function createWebhook(
           return json(res, 200, found);
         }
         if ((req.method === 'GET' || req.method === 'HEAD') && extra.media && /^\/media\//.test(req.url ?? '')) {
-          const fwd = req.headers['x-forwarded-for'];
-          const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+          const ip = visitorIp(req, siteTokenValid(req));
           if (!mediaByIp.take(ip, now())) return json(res, 429, { ok: false, error: 'rate_limited' });
           const m = /^\/media\/([0-9a-f]{32})\/([^?#]+)(?:\?([^#]*))?/.exec(req.url!);
           const expRaw = m?.[3] ? new URLSearchParams(m[3]).get('e') : null;
@@ -330,8 +369,7 @@ export function createWebhook(
             res.writeHead(204, cors(publicId.startsWith('demo-') ? '*' : origin || '*'));
             return void res.end();
           }
-          const fwd = req.headers['x-forwarded-for'];
-          const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+          const ip = visitorIp(req, siteTokenValid(req));
           if (!agentByIp.take(ip, now()) || !agentByIpDay.take(ip, now())) {
             res.writeHead(429, { 'content-type': 'application/json', ...cors(publicId.startsWith('demo-') ? '*' : origin || '*') });
             return void res.end(JSON.stringify({ ok: false, error: 'rate_limited' }));
@@ -353,8 +391,7 @@ export function createWebhook(
         }
         if (req.method === 'GET' && extra.pay && /^\/pay\//.test(req.url ?? '')) {
           const url = new URL(req.url!, 'http://hq.local');
-          const fwd = req.headers['x-forwarded-for'];
-          const ip = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+          const ip = visitorIp(req, siteTokenValid(req));
           if (!payByIp.take(ip, now())) return json(res, 429, { ok: false, error: 'rate_limited' });
           res.setHeader('cache-control', 'no-store');
           const m = /^\/pay\/([^/]{1,40})$/.exec(url.pathname);
