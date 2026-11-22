@@ -104,7 +104,8 @@ export function createQualityApi(d: ShellQualityDeps) {
         const r = one<{ text: string; answer: string | null }>('SELECT text, answer FROM cs_tickets WHERE id = ?', Number(m[1]));
         return r ? { question: r.text, bad: r.answer ?? '' } : none;
       }
-      const approval = (m = /^rp_(\d+)$/.exec(messageId)) ? Number(m[1]) : thread === 'review' && /^\d{1,9}$/.test(messageId) ? Number(messageId) : null;
+      m = /^rp_(\d+)$/.exec(messageId);
+      const approval = m ? Number(m[1]) : thread === 'review' && /^\d{1,9}$/.test(messageId) ? Number(messageId) : null;
       if (approval !== null && has(db, 'approvals')) {
         const r = one<{ payload: string }>('SELECT payload FROM approvals WHERE id = ?', approval);
         if (!r) return none;
