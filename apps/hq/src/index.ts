@@ -453,7 +453,7 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cf
       Date.now,
       cfg.officeToken ? { token: cfg.officeToken, get: cachedOffice(hq) } : undefined,
       webChat && cfg.webChatToken ? { token: cfg.webChatToken, handle: (r, ip) => webChat.handle(r, ip) } : undefined,
-      admin && cfg.adminToken ? { token: cfg.adminToken, handle: (r) => admin.handle(r), file: (path, range, access) => serveFile(cfg.rendersDir, path, range, access) } : undefined,
+      admin && cfg.adminToken ? { token: cfg.adminToken, cabinetToken: cfg.cabinetToken, handle: (r) => admin.handle(r), file: (path, range, access) => serveFile(cfg.rendersDir, path, range, access) } : undefined,
       {
         ...(cfg.leadWebhookToken
           ? {
@@ -486,6 +486,7 @@ const missingTokens = [
   ...(cfg.leadWebhookToken ? [] : ['LEAD_WEBHOOK_TOKEN: POST /lead and POST /audit answer 404']),
   ...(cfg.webChatToken ? [] : ['WEB_CHAT_TOKEN: POST /chat answers 404']),
   ...(cfg.adminToken ? [] : ['ADMIN_TOKEN: /admin/* answers 404']),
+  ...(cfg.cabinetToken ? [] : ['CABINET_TOKEN: the cabinet key is off (the cabinet must use ADMIN_TOKEN)']),
   ...(cfg.siteEventsToken ? [] : ['SITE_EVENTS_TOKEN (or WEB_CHAT_TOKEN): POST /events answers 404']),
 ];
 if (missingTokens.length) log('warn', `routes switched off, tokens are required (no fallback to another token): ${missingTokens.join('; ')}`);

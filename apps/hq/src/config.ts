@@ -72,6 +72,11 @@ export interface Config extends BaseConfig {
   officeToken: string | undefined;
   /** Secret of `/admin/*` (header `x-admin-token`). Required for the routes: without it `/admin/*` answers 404 (no fallback to `OFFICE_TOKEN`, which the public hero uses). */
   adminToken: string | undefined;
+  /**
+   * `CABINET_TOKEN` (header `x-cabinet-token`): the client cabinet's own key to HQ. It opens only `/admin/clients/by-email` and `/admin/clients/:id` and `:id/*`
+   * (never `anonymize`), see `cabinetRouteAllowed` in `webhook.ts`; nothing else under `/admin`. Unset: the cabinet-token path is off. Must differ from `ADMIN_TOKEN`.
+   */
+  cabinetToken: string | undefined;
   /** The site counts as gone after this many minutes without a ping: notifications go back to Telegram. */
   presenceAwayAfterMin: number;
   /** New Scout cards per day. */
@@ -211,6 +216,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     leadWebhookToken: optional(env, 'LEAD_WEBHOOK_TOKEN'),
     officeToken: optional(env, 'OFFICE_TOKEN'),
     adminToken: optional(env, 'ADMIN_TOKEN'),
+    cabinetToken: ((c, a) => { if (c && a && c === a) throw new Error('CABINET_TOKEN must differ from ADMIN_TOKEN'); return c; })(optional(env, 'CABINET_TOKEN'), optional(env, 'ADMIN_TOKEN')),
     presenceAwayAfterMin: num(env, 'PRESENCE_AWAY_AFTER_MIN', 20, 1, 1440),
     webChatToken: optional(env, 'WEB_CHAT_TOKEN'),
     siteEventsToken: optional(env, 'SITE_EVENTS_TOKEN') ?? optional(env, 'WEB_CHAT_TOKEN'),

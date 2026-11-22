@@ -96,6 +96,18 @@ function readBody(req: IncomingMessage, res: ServerResponse, max = MAX_BODY): Pr
   });
 }
 
+/**
+ * What the cabinet token may call (P1-4): the registered-client routes only. `POST /admin/clients` (registration), `anonymize`, `/admin/files`,
+ * settings, prices, CRM, tasks and everything else need the full admin token.
+ */
+export function cabinetRouteAllowed(method: string, pathname: string): boolean {
+  if (pathname === '/admin/clients/by-email') return method === 'GET';
+  const m = /^\/admin\/clients\/\d+(?:\/([^/]+)(?:\/.*)?)?$/.exec(pathname);
+  if (!m) return false;
+  if (m[1] === 'anonymize') return false;
+  return method === 'GET' || method === 'POST' || method === 'PATCH';
+}
+
 export type WebLeadInput = z.output<typeof webLeadSchema>;
 
 const stripMapped = (a: string): string => (a.toLowerCase().startsWith('::ffff:') && isIP(a.slice(7)) === 4 ? a.slice(7) : a);
@@ -160,6 +172,8 @@ export function createWebhook(
   /** `/admin/*` (header `x-admin-token`), the owner's website workplace (`admin.ts`); without it the routes answer 404. */
   admin?: {
     token: string;
+    /** `CABINET_TOKEN` (header `x-cabinet-token`): a second key that opens only `cabinetRouteAllowed` routes. Unset: off. */
+    cabinetToken?: string | undefined;
     handle: (req: AdminRequest) => Promise<AdminReply>;
     /** `GET /admin/files/<path>` (rendered files of the content calendar, `shell-files.ts`); without it the path is an ordinary 404. */
     file?: (path: string, range: string | undefined, access: FileAccess) => FileReply;
@@ -208,8 +222,13 @@ export function createWebhook(
     void (async () => {
       try {
         if (admin && req.url?.startsWith('/admin/')) {
-          if (!tokenOk(req.headers['x-admin-token'] as string | undefined, admin.token)) return json(res, 401, { ok: false, error: 'unauthorized' });
+          const adminGiven = req.headers['x-admin-token'] as string | undefined;
+          const cabGiven = req.headers['x-cabinet-token'] as string | undefined;
+          const isAdmin = adminGiven !== undefined && tokenOk(adminGiven, admin.token);
+          const isCabinet = !isAdmin && admin.cabinetToken !== undefined && cabGiven !== undefined && tokenOk(cabGiven, admin.cabinetToken);
+          if (!isAdmin && !isCabinet) return json(res, 401, { ok: false, error: 'unauthorized' });
           const url = new URL(req.url, 'http://hq.local');
+          if (isCabinet && !cabinetRouteAllowed(req.method ?? 'GET', url.pathname)) return json(res, 403, { ok: false, error: 'forbidden' });
           if (req.method === 'GET' && admin.file && url.pathname.startsWith('/admin/files/')) {
             // pictures and video of one page load are many requests: their own, wider window (the 600 of `/admin/*` is for the API calls)
             const t = now();
@@ -217,7 +236,7 @@ export function createWebhook(
             if (fileHits.length >= 3000) return json(res, 429, { ok: false, error: 'rate_limited' });
             fileHits.push(t);
             const rangeHeader = req.headers.range;
-            const out = admin.file(url.pathname.slice('/admin/files/'.length), typeof rangeHeader === 'string' ? rangeHeader : undefined, { allowCabinet: true });
+            const out = admin.file(url.pathname.slice('/admin/files/'.length), typeof rangeHeader === 'string' ? rangeHeader : undefined, { allowCabinet: isAdmin });
             if ('json' in out) {
               res.writeHead(out.status, { 'content-type': 'application/json', ...out.headers });
               return void res.end(JSON.stringify(out.json));

@@ -131,6 +131,12 @@ Read-mostly представления над таблицами исполни�
 Клиенты регистрируются на сайте через Supabase (email и пароль, Google, Apple), сайт зовёт HQ по loopback с тем же `x-admin-token`.
 Те же 401/404 и общий лимит 6000 запросов за 10 минут. Код: `apps/hq/src/admin-crm.ts`, тесты: `apps/hq/tests/admin-cabinet.test.ts`.
 
+### Токены доступа: `ADMIN_TOKEN` и `CABINET_TOKEN` (2026-11-23, безопасность P1-4)
+`x-admin-token` (`ADMIN_TOKEN`) открывает весь `/admin/*`, как раньше. Второй ключ `x-cabinet-token` (`CABINET_TOKEN`, env HQ, должен отличаться от `ADMIN_TOKEN`, иначе HQ не стартует; не задан: путь выключен) принадлежит только кабинету клиентов на сайте и открывает ровно:
+- `GET /admin/clients/by-email`;
+- `/admin/clients/:id` и `/admin/clients/:id/*` (профиль, threads, documents, uploads, tickets, agents, knowledge, projects, reviews...) методами `GET`, `POST`, `PATCH`, кроме `/admin/clients/:id/anonymize` (только `ADMIN_TOKEN`).
+Всё остальное с этим ключом отвечает `403 {ok:false,error:"forbidden"}`: `POST /admin/clients` (регистрация и синк), `/admin/files/*` (в том числе префикс `cabinet/`), `/admin/crm/*`, `settings`, `prices`, `knowledge/*` Shell, `tasks`, `approvals`. Неверный или отсутствующий ключ: `401`. PDF кабинета клиент получает через клиентские маршруты (`documents`, проверка `client_id`) и подписанный `/media/`, не через `/admin/files`. Даже с `ADMIN_TOKEN` пути `/admin/files/*` с `%2e`, закодированным слэшем или `..` отклоняются 400. Тест матрицы: `apps/hq/tests/access-matrix.test.ts`.
+
 ### POST /admin/clients
 Тело `{ email, name, telegram, locale, supabaseId, marketingConsent }`: `email` обязателен (обрезается, нижний регистр, до 254), `name` и `telegram` до 120 (можно пустые),
 `locale` `ru|en` (по умолчанию `ru`), `supabaseId` до 64 символов `[A-Za-z0-9_-]`. Необязательные (2026-11-23): `marketingConsent`, `recommendationsConsent` boolean (у нового клиента `false`), `notifyChannel` `email|telegram|both` (`email`), `phone` до 40, `company` до 120. Поле, которое сайт НЕ прислал, при повторной регистрации не меняется (отписка клиента переживает следующий вход); прислал, значит записывается. Неверное тело 400 `invalid`.
