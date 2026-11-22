@@ -418,6 +418,27 @@ export class Playground {
     }
   }
 
+  /** Live agents with a connected Telegram bot, for the runner: id and token (decrypted, never logged). */
+  telegramBots(): { agentId: number; token: string }[] {
+    const rows = this.db.prepare("SELECT id FROM pg_agents WHERE state = 'live' AND channels LIKE '%\"telegram\"%' ORDER BY id").all() as { id: number }[];
+    const out: { agentId: number; token: string }[] = [];
+    for (const r of rows) {
+      const token = this.telegramToken(r.id);
+      if (token) out.push({ agentId: r.id, token });
+    }
+    return out;
+  }
+
+  /** A message from a visitor of the client's Telegram bot: the same chat as the widget, channel `telegram`. Only live agents answer. */
+  async chatTelegram(agentId: number, chatId: number | string, text: string): Promise<{ reply: string } | { error: string }> {
+    const a = this.agent(agentId);
+    if (!a || a.state !== 'live') return { error: 'not_live' };
+    const t = text.trim().slice(0, 1000);
+    if (!t) return { error: 'empty' };
+    const r = await this.chat(a, { conversationId: `tg-${String(chatId).replace(/[^0-9-]/g, '')}`, text: t, channel: 'telegram' });
+    return 'error' in r ? r : { reply: r.reply };
+  }
+
   private view(a: AgentRow, extra: Record<string, unknown> = {}): Record<string, unknown> {
     const ch = json<{ telegram?: unknown; siteWidget?: string }>(a.channels, {});
     const limits = json<{ msgsPerDay?: number }>(a.limits, {});
@@ -755,7 +776,7 @@ export class Playground {
     return id ?? (this.d.demoRequireClient ? 'login_required' : null);
   }
 
-  private async chat(a: AgentRow, o: { conversationId: string; text: string; channel: 'cabinet' | 'widget' | 'demo' }): Promise<ChatOut | { error: string }> {
+  private async chat(a: AgentRow, o: { conversationId: string; text: string; channel: 'cabinet' | 'widget' | 'demo' | 'telegram' }): Promise<ChatOut | { error: string }> {
     const limit = json<{ msgsPerDay?: number }>(a.limits, {}).msgsPerDay ?? defaultLimit(this.db, a.state === 'live' ? 'live' : 'draft');
     if (this.usedToday(a.id) >= limit) {
       // P-25: the owner hears about it once per agent per day (counts and the agent's name only)
@@ -867,7 +888,7 @@ export class Playground {
    * this conversation (`capture_lead`), and an email «новое сообщение» (P-13) when it came from his site (`widget`); the journal counts it. No Fir Tech ticket and
    * no auto-answer: the visitor is the client's customer. A test chat of the client himself (`cabinet`) gets the line without the email.
    */
-  private handoff(a: AgentRow, conv: string, reason: string, text: string, channel: 'cabinet' | 'widget' | 'demo'): void {
+  private handoff(a: AgentRow, conv: string, reason: string, text: string, channel: 'cabinet' | 'widget' | 'demo' | 'telegram'): void {
     this.count(a.id, 'handoff');
     // the lead trying his own demo (no account yet) has no thread to write to
     if (a.client_id === 0) return void this.d.journal?.('playground', 'agent_handoff', String(a.id));
@@ -879,7 +900,7 @@ export class Playground {
       lead ? `Контакт: ${lead.name ? `${lead.name}, ` : ''}${lead.contact}.` : 'Контакт посетитель не оставил: ответить можно, когда он напишет в этот разговор снова.',
       `Разговор ${conv}, вкладка «Ваш агент».`,
     ].filter(Boolean).join(' ');
-    addThreadMessage(this.db, this.d.now(), { clientId: a.client_id, thread: `agent-${a.id}`, from: 'agent', text: line, notify: channel === 'widget' });
+    addThreadMessage(this.db, this.d.now(), { clientId: a.client_id, thread: `agent-${a.id}`, from: 'agent', text: line, notify: channel === 'widget' || channel === 'telegram' });
     this.d.journal?.('playground', 'agent_handoff', String(a.id));
     this.d.handoff?.(a.client_id, a.id);
   }

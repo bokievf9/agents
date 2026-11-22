@@ -23,6 +23,7 @@ import { Reporter, type TopicSender } from './reporter.js';
 import { TopicManager } from './topics.js';
 import { resolveMedia } from '@fir/worker-publisher';
 import { createWebhook } from './webhook.js';
+import { TelegramRunner, fetchTransport } from './tg-runner.js';
 import { leadDedupe } from './lead-dedupe.js';
 import { registerCabinetLead } from './cabinet.js';
 import { AuditGate, AuditStore, submitAudit } from './audit-shared.js';
@@ -475,7 +476,17 @@ const missingTokens = [
 ];
 if (missingTokens.length) log('warn', `routes switched off, tokens are required (no fallback to another token): ${missingTokens.join('; ')}`);
 
+// Clients' Telegram bots (playground agents): long polling per live agent with a token, see docs/telegram-runner.md.
+const tgRunner = cfg.tgRunner
+  ? new TelegramRunner({
+      agents: cabinet.playground, transport: fetchTransport(), db: hq.db, maxBots: cfg.tgRunnerMax,
+      notifyOwner: (t) => void hq.alert(t, { kind: 'service', short: t.slice(0, 120) }).catch(() => undefined),
+    })
+  : undefined;
+tgRunner?.start();
+
 const stop = () => {
+  void tgRunner?.stop();
   webhook?.close();
   pricesRefresh.stop();
   clearInterval(presenceTimer);
