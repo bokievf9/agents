@@ -307,7 +307,7 @@ const identity = {
   clientName: z.string().trim().max(120).optional().catch(undefined),
 };
 const chatBody = z.object({
-  conversationId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).optional(), text: z.string().trim().min(1).max(1000),
+  conversationId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional(), text: z.string().trim().min(1).max(1000),
   /** «Демо на ваших данных»: the key of the lead's demo link opens his draft agent without the agent token. */
   demoKey: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/).optional(),
   ...identity,
@@ -351,6 +351,17 @@ export interface PlaygroundDeps {
 interface DemoSession { turns: { role: 'user' | 'assistant'; content: string }[]; last: number }
 
 /** What a chat returns: the reply, the conversation and the tools the agent used. */
+/**
+ * P1-1: the server owns conversation ids. A browser (widget, demo) may only continue an id the server made for that channel
+ * (`w-...` / `d-...`); anything else, notably `cab-<clientId>-<agentId>` and `tg-<chatId>`, gets a fresh id. The cabinet may not name a `tg-`/`w-`/`d-` id.
+ */
+export function pickConversationId(channel: 'widget' | 'demo' | 'cabinet', given: string | undefined, own: string): string {
+  const prefix = channel === 'widget' ? 'w-' : channel === 'demo' ? 'd-' : null;
+  if (prefix) return given !== undefined && given.startsWith(prefix) && given.length >= 8 ? given : `${prefix}${randomBytes(9).toString('base64url')}`;
+  // the cabinet is signed in as the agent's owner: it may keep several threads of its own; the channel check in `chat()` keeps them apart from `tg-` and widget ones
+  return given !== undefined && !/^(?:tg|w|d)-/.test(given) ? given : own;
+}
+
 export interface ChatOut { reply: string; conversationId: string; usedTools: AgentTool[] }
 
 export class Playground {
@@ -717,7 +728,7 @@ export class Playground {
     if (!a) return failR(404, 'not_found');
     const parsed = chatBody.safeParse(body ?? {});
     if (!parsed.success) return failR(400, 'invalid');
-    const r = await this.chat(a, { conversationId: parsed.data.conversationId ?? `cab-${clientId}-${a.id}`, text: parsed.data.text, channel: 'cabinet' });
+    const r = await this.chat(a, { conversationId: pickConversationId('cabinet', parsed.data.conversationId, `cab-${clientId}-${a.id}`), text: parsed.data.text, channel: 'cabinet' });
     return 'error' in r ? failR(r.error === 'limit_reached' ? 429 : 503, r.error) : okR({ reply: r.reply, conversationId: r.conversationId, usedTools: r.usedTools });
   }
 
@@ -748,7 +759,7 @@ export class Playground {
       if (!parsed.success) return failR(400, 'invalid');
       const who = this.demoClient(parsed.data, o.trusted === true);
       if (who === 'login_required') return { ...failR(401, 'login_required'), allowOrigin: '*' };
-      const run = () => this.chat(a, { conversationId: parsed.data.conversationId ?? `d-${randomBytes(9).toString('base64url')}`, text: parsed.data.text, channel: 'demo' });
+      const run = () => this.chat(a, { conversationId: pickConversationId('demo', parsed.data.conversationId, ''), text: parsed.data.text, channel: 'demo' });
       const m = who === null ? { ok: true as const, value: await run() } : await this.d.demoUsage!.metered(who, `agent:${a.public_id}`, run);
       // the client's day cap is spent: the same 429 as the agent's own cap, with the usage fields
       if (!m.ok) return { ...failR(429, 'limit_reached', this.d.demoUsage!.fields(who as number)), allowOrigin: '*' };
@@ -763,7 +774,7 @@ export class Playground {
     if (a.state !== 'live') return failR(403, 'not_live');
     const parsed = chatBody.safeParse(o.body ?? {});
     if (!parsed.success) return failR(400, 'invalid');
-    const conv = parsed.data.conversationId ?? `w-${randomBytes(9).toString('base64url')}`;
+    const conv = pickConversationId('widget', parsed.data.conversationId, '');
     const r = await this.chat(a, { conversationId: conv, text: parsed.data.text, channel: 'widget' });
     const out = 'error' in r ? failR(r.error === 'limit_reached' ? 429 : 503, r.error) : okR({ reply: r.reply, conversationId: r.conversationId, usedTools: r.usedTools });
     return { ...out, ...(site ? { allowOrigin: site } : {}) };
@@ -788,6 +799,9 @@ export class Playground {
     }
     this.count(a.id, 'message');
     const t = this.d.now();
+    // the conversation key is (agent, channel, id): an id that already lives in another channel is never continued from this one
+    const known = this.db.prepare('SELECT channel FROM pg_conversations WHERE agent_id = ? AND id = ?').get(a.id, o.conversationId) as { channel: string } | undefined;
+    if (known && known.channel !== o.channel) o = { ...o, conversationId: `${o.channel.slice(0, 1)}-${randomBytes(9).toString('base64url')}` };
     this.db.prepare('INSERT INTO pg_conversations (agent_id, id, channel, started_at, last_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(agent_id, id) DO UPDATE SET last_at = excluded.last_at').run(a.id, o.conversationId, o.channel, t, t);
     // memory: this conversation only, the last turns; old conversations are dropped after the retention period
     this.db.prepare('DELETE FROM pg_messages WHERE at < ?').run(t - RETENTION_DAYS * 86_400_000);

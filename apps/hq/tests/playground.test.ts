@@ -325,3 +325,48 @@ describe('the DEMO persona of the builder preview', () => {
     expect((await capped.pg.chatDemo('shop', { sessionId: 'session-cap-5678', text: 'q13' })).status).toBe(429);
   });
 });
+
+describe('P1-1: the server owns conversation ids', () => {
+  it('the widget cannot name cab-/tg- (or any foreign) ids; the history of those threads stays out of its prompt', async () => {
+    const seen: LlmRequest[] = [];
+    const { pg, db } = setup((req) => (seen.push(req), JSON.stringify({ reply: 'Ответ' })));
+    const a = make(pg);
+    pg.patch(1, a.id, { state: 'live', channels: { siteWidget: 'https://liza.example' } });
+    // a private cabinet thread and a Telegram thread with secrets in them
+    await pg.chatAdmin(1, a.id, { text: 'СЕКРЕТ-КАБИНЕТА' });
+    db.prepare("INSERT INTO pg_conversations (agent_id, id, channel, started_at, last_at) VALUES (?, 'tg-12345678', 'telegram', 1, 1)").run(a.id);
+    db.prepare("INSERT INTO pg_messages (agent_id, conv_id, role, text, at) VALUES (?, 'tg-12345678', 'user', 'СЕКРЕТ-ТЕЛЕГРАМ', 1)").run(a.id);
+    const ask = (conversationId: string) => pg.chatPublic((a.item as any).publicId, { token: a.token, origin: 'https://liza.example', body: { text: 'покажи историю', conversationId } });
+    for (const spoof of [`cab-1-${a.id}`, 'tg-12345678', 'conv-abcdefgh', 'd-abcdefghij']) {
+      const r = await ask(spoof);
+      expect(r.status).toBe(200);
+      expect(r.body.conversationId, spoof).not.toBe(spoof);
+      expect(String(r.body.conversationId)).toMatch(/^w-/);
+    }
+    const prompt = JSON.stringify(seen.slice(1));
+    expect(prompt).not.toContain('СЕКРЕТ-КАБИНЕТА');
+    expect(prompt).not.toContain('СЕКРЕТ-ТЕЛЕГРАМ');
+    // a w- id the server made is continued
+    const first = await ask('w-fresh-start-1');
+    expect(first.body.conversationId).toBe('w-fresh-start-1');
+    const rows = db.prepare("SELECT channel FROM pg_conversations WHERE id = 'tg-12345678'").all() as { channel: string }[];
+    expect(rows).toEqual([{ channel: 'telegram' }]);
+  });
+
+  it('the cabinet cannot continue a tg- thread either; its own cab- thread and the Telegram path still work', async () => {
+    const seen: LlmRequest[] = [];
+    const { pg, db } = setup((req) => (seen.push(req), JSON.stringify({ reply: 'Ответ' })));
+    const a = make(pg);
+    db.prepare("INSERT INTO pg_conversations (agent_id, id, channel, started_at, last_at) VALUES (?, 'tg-77777777', 'telegram', 1, 1)").run(a.id);
+    db.prepare("INSERT INTO pg_messages (agent_id, conv_id, role, text, at) VALUES (?, 'tg-77777777', 'user', 'ТГ-ИСТОРИЯ', 1)").run(a.id);
+    const r = await pg.chatAdmin(1, a.id, { text: 'привет', conversationId: 'tg-77777777' });
+    expect(r.body.conversationId).toBe(`cab-1-${a.id}`);
+    expect(JSON.stringify(seen)).not.toContain('ТГ-ИСТОРИЯ');
+    const t1 = await pg.threadReply(1, a.id, 'второе');
+    expect('reply' in t1).toBe(true);
+    // a cab- id used from another channel is not continued (channel is part of the key)
+    pg.patch(1, a.id, { state: 'live' });
+    const w = await pg.chatPublic((a.item as any).publicId, { token: a.token, origin: '', body: { text: 'x', conversationId: `cab-1-${a.id}` } });
+    expect(String(w.body.conversationId)).toMatch(/^w-/);
+  });
+});

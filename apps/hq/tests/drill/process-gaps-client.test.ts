@@ -365,7 +365,7 @@ describe('P-21: the handoff of a client\'s agent reaches the agent\'s owner, not
     expect(created.status, created.text).toBe(200);
     const agent = created.json.item;
     await w.adm('PATCH', `/admin/clients/${cid}/agents/${agent.id}`, { state: 'live', channels: { siteWidget: 'https://gaps.example' } });
-    const conv = 'visitor-conv-0001';
+    const conv = 'w-visitor-conv-0001';
     // the visitor left his contact earlier in this conversation (capture_lead)
     w.db.prepare('INSERT INTO pg_leads (agent_id, conv_id, name, contact, note, at) VALUES (?, ?, ?, ?, ?, ?)').run(agent.id, conv, 'Мадина', '+992 93 000 11 22', '', w.hq.now());
     const tickets = () => (w.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'cs_tickets'").get() ? (w.db.prepare('SELECT COUNT(*) n FROM cs_tickets').get() as { n: number }).n : 0);
