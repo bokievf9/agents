@@ -15,6 +15,9 @@ export interface Config extends BaseConfig {
   retiredBots: string[];
   /** `TG_APPROVAL_CARDS=on`: approval cards with buttons in Telegram again (off by default: decisions only in the review center). */
   tgApprovalCards: boolean;
+  /** `TG_RUNNER=off` stops the clients' Telegram bots (default on); `TG_RUNNER_MAX` bots poll at once (default 20). */
+  tgRunner: boolean;
+  tgRunnerMax: number;
   /** ИИ-менеджер заявок on Fira (`client/fira-lead.ts`, `FIRA_LEAD_MANAGER=on`); off: the old JSON runtime. */
   firaLeadManager: boolean;
   /** `TG_GROUP_REPORTS=on`: department reports into the topics of the HQ group again, posted by the HQ bot (off by default: reports stay in the Пульт). */
@@ -173,6 +176,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dbFile: `${base.dataDir}/hq.db`,
     instructionsDir: optional(env, 'INSTRUCTIONS_DIR') ?? new URL('../instructions', import.meta.url).pathname,
     retiredBots: RETIRED_BOT_TOKENS.filter((k) => optional(env, k) !== undefined),
+    tgRunner: (env.TG_RUNNER ?? 'on').toLowerCase() !== 'off',
+    tgRunnerMax: Math.min(200, Math.max(1, Number(env.TG_RUNNER_MAX) || 20)),
     tgApprovalCards: (env.TG_APPROVAL_CARDS ?? 'off').toLowerCase() === 'on',
     firaLeadManager: (env.FIRA_LEAD_MANAGER ?? 'off').toLowerCase() === 'on',
     tgGroupReports: (env.TG_GROUP_REPORTS ?? 'off').toLowerCase() === 'on',
