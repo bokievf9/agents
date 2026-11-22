@@ -6,6 +6,7 @@ import type { Director } from './director.js';
 import type { DrillStatus } from './drill.js';
 import { createCrm } from './admin-crm.js';
 import type { CabinetApi } from './cabinet-api.js';
+import type { Campaigns } from './campaigns.js';
 import type { Calls } from './calls.js';
 import { createPult } from './pult.js';
 import type { BillingWorker } from '@fir/worker-billing';
@@ -54,6 +55,8 @@ export interface AdminDeps {
   cabinet?: CabinetApi;
   /** P-18/P-19 (2026-11-22): the call bookings (`calls.ts`): the Пульт's «Созвон» books the site's window and tells the client. */
   calls?: Calls;
+  /** News and recommendation mailings through the approval queue (`campaigns.ts`): `GET` and `POST /admin/campaigns`. */
+  campaigns?: Campaigns;
 }
 
 export interface AdminRequest {
@@ -217,6 +220,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
     if (v3) return v3;
     if (a === 'crm') return crm.handle(method, seg.slice(1), query, req.body);
     if (a === 'clients') return crm.clients(method, seg.slice(1), query, req.body);
+    if (a === 'campaigns') return (d.campaigns ? await d.campaigns.handle(method, seg.slice(1), req.body) : null) ?? fail(d.campaigns ? 404 : 503, d.campaigns ? 'not_found' : 'unavailable');
 
     if (key === 'POST prices/reload') {
       if (!d.reloadPrices) return fail(503, 'unavailable');

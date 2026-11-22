@@ -31,6 +31,7 @@ import { payApi } from './pay.js';
 import { cachedStatus } from './status.js';
 import { createAdmin } from './admin.js';
 import { buildCabinet, type CabinetApi } from './cabinet-api.js';
+import { Campaigns } from './campaigns.js';
 import { UPLOAD_TYPES } from '@fir/core';
 import { serveFile } from './pult-files.js';
 import { eventsApi } from './pult-events.js';
@@ -234,6 +235,8 @@ const cabinet = buildCabinet({
 });
 sales.cabinet = cabinet.docs;
 cabinetRef.current = cabinet;
+// News and recommendation mailings: only through the locked approval kind `client_campaign` (registered here, so a pending card survives a restart)
+const campaigns = cabinet.mail ? new Campaigns({ hq, mail: cabinet.mail }) : undefined;
 // P-02/P-04/P-18/P-19/P-20 (2026-11-22): the call bookings live in HQ; the window goes to the site, the client hears it by his channel, reminders a day and an hour before
 const calls = new Calls({
   hq, siteBook: siteBooker(cfg.siteUrl, cfg.siteBookingToken), mail: cabinet.mail,
@@ -405,7 +408,7 @@ const admin = cfg.adminToken
   ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: COMMAND_NAMES, drill: (arg) => drill.command(arg), drillStatus: () => drill.status(), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),
       reloadPrices: async () => { const r = await loadPrices(pricesOpts); return { source: r.source, updatedAt: r.prices.updatedAt }; },
       acceptStage: (projectId, stageNo) => Promise.resolve(production.acceptStage(projectId, stageNo, 'client')),
-      billing, marketing, tools, cabinet, calls, rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), settings, ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
+      billing, marketing, tools, cabinet, calls, ...(campaigns ? { campaigns } : {}), rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), settings, ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
     })
   : null;
 // Presence: the site pings while it is open; without pings the owner counts as away and a digest goes to Telegram.
