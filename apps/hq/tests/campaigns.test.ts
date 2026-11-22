@@ -28,6 +28,21 @@ function setup(max?: number) {
   return { w, call, client, sent, draft, approvalOf, campaigns };
 }
 
+describe('a mailing stuck in sending after a restart', () => {
+  it('is marked failed on start with the journal counts and the owner is told', async () => {
+    const { client, draft, w, approvalOf, campaigns, call } = setup();
+    const c1 = await client(1, { marketingConsent: true });
+    const id = (await draft()).json.campaign.id as number;
+    w.hq.db.prepare("UPDATE cab_campaigns SET status = 'sending' WHERE id = ?").run(id);
+    w.hq.db.prepare("INSERT INTO cab_campaign_log (campaign_id, client_id, outcome, at) VALUES (?, ?, 'email', 1)").run(id, c1);
+    void approvalOf;
+    const again = new Campaigns({ hq: w.hq, mail: (campaigns as any).d.mail });
+    expect(again.recoverStuck()).toBe(0); // the constructor already closed it
+    const r = await call('GET', `/admin/campaigns/${id}`);
+    expect(r.json.campaign).toMatchObject({ status: 'failed', counts: { email: 1 } });
+  });
+});
+
 describe('mailings go only through the owner\'s approval', () => {
   it('a draft sends nothing; the card waits as a locked approval', async () => {
     const { client, draft, sent, w } = setup();

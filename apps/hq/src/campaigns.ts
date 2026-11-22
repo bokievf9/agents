@@ -85,6 +85,24 @@ export class Campaigns {
       if (link.kind !== CAMPAIGN_KIND) return;
       if (state === 'rejected') this.setStatus(Number(link.payload.campaignId), 'rejected', 'pending');
     });
+    this.recoverStuck();
+  }
+
+  /**
+   * A mailing left in `sending` by a restart is closed as `failed` (the journal says whom it already reached) and the owner is told. It is not resumed on its own:
+   * the owner may have edited the text in the approval card and that text lived only in the interrupted run; a fresh draft is sent to those not yet written to.
+   */
+  recoverStuck(): number {
+    const rows = this.db.prepare("SELECT id FROM cab_campaigns WHERE status = 'sending'").all() as { id: number }[];
+    for (const { id } of rows) {
+      const counts: Record<string, number> = {};
+      for (const l of this.db.prepare('SELECT outcome, COUNT(*) n FROM cab_campaign_log WHERE campaign_id = ? GROUP BY outcome').all(id) as { outcome: string; n: number }[]) counts[l.outcome] = l.n;
+      this.db.prepare("UPDATE cab_campaigns SET status = 'failed', counts = ? WHERE id = ? AND status = 'sending'").run(JSON.stringify(counts), id);
+      const done = Object.values(counts).reduce((a, b) => a + b, 0);
+      this.d.hq.log(ACTOR, 'campaign_interrupted', 'campaign', String(id), `restart during sending, already written to: ${done}`);
+      void this.d.hq.alert(`Рассылка #${id} прервалась на перезапуске и закрыта как неудавшаяся: письма получили ${done}. Остальным можно отправить новую рассылку, прежним она не уйдёт повторно.`).catch(() => undefined);
+    }
+    return rows.length;
   }
 
   private get db() {
