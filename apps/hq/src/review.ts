@@ -211,6 +211,10 @@ export function createReview(d: ReviewDeps) {
     for (const f of rows.flatMap((r) => r.files)) {
       const path = rel(f);
       if (!path || !existsSync(join(root, path))) continue;
+      if (path.toLowerCase().endsWith('.pdf')) {
+        out.push({ type: 'pdf', url: `/admin/files/${path}`, poster: null, w: null, h: null, durationS: null });
+        continue;
+      }
       const dims = pngDims(join(root, path)) ?? { w: IMAGE_SIZE[item.type].width, h: IMAGE_SIZE[item.type].height };
       out.push({ type: 'image', url: `/admin/files/${path}`, poster: null, w: dims.w, h: dims.h, durationS: null });
     }

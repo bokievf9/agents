@@ -15,6 +15,9 @@ function fixture() {
   writeFileSync(join(renders, '7', 'reel.mp4'), VIDEO);
   writeFileSync(join(renders, '7', 'meta.json'), '{"a":1}');
   writeFileSync(join(renders, '7', 'notes.txt'), 'x');
+  writeFileSync(join(renders, '7', 'doc.pdf'), '%PDF-1.4 test');
+  writeFileSync(join(base, 'secret.pdf'), 'SECRETPDF');
+  symlinkSync(join(base, 'secret.pdf'), join(renders, '7', 'evil.pdf'));
   writeFileSync(join(base, 'secret.png'), 'SECRET');
   mkdirSync(join(base, 'outside'));
   writeFileSync(join(base, 'outside', 'leak.png'), 'LEAK');
@@ -24,6 +27,25 @@ function fixture() {
 }
 
 describe('GET /admin/files/<path>', () => {
+  it('serves .pdf from renders with application/pdf and Range; traversal and symlink escape are refused', async () => {
+    const { renders } = fixture();
+    const s = await serve(shellWorld(), {}, renders);
+    const pdf = await s.http('GET', '/admin/files/7/doc.pdf');
+    expect(pdf.status).toBe(200);
+    expect(pdf.headers.get('content-type')).toBe('application/pdf');
+    expect(pdf.headers.get('accept-ranges')).toBe('bytes');
+    expect(await pdf.text()).toBe('%PDF-1.4 test');
+    const part = await s.http('GET', '/admin/files/7/doc.pdf', undefined, { 'x-admin-token': 'admin-secret', range: 'bytes=0-3' });
+    expect(part.status).toBe(206);
+    expect(await part.text()).toBe('%PDF');
+    expect((await s.http('GET', '/admin/files/7/evil.pdf')).status).toBe(404);
+    expect((await s.http('GET', '/admin/files/..%2Fsecret.pdf')).status).toBe(400);
+    expect((await s.http('GET', '/admin/files/7/notes.txt')).status).toBe(400);
+    expect(serveFile(renders, '7/doc.pdf').status).toBe(200);
+    expect(serveFile(renders, '../secret.pdf').status).toBe(400);
+    await s.close();
+  });
+
   it('serves the files under renders with the right type and a private cache header; 401 without the token', async () => {
     const { renders } = fixture();
     const s = await serve(shellWorld(), {}, renders);

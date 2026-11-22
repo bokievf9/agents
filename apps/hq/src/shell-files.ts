@@ -2,11 +2,11 @@ import { createReadStream, realpathSync, statSync, type ReadStream } from 'node:
 import { extname, resolve, sep } from 'node:path';
 
 /**
- * `GET /admin/files/<path>`: the rendered files of the content calendar (PNG of posts and slides, `reel.mp4`) for the workplace.
+ * `GET /admin/files/<path>`: the rendered files of the content calendar (PNG of posts and slides, `reel.mp4`, PDF documents) for the workplace.
  * Only inside `DATA_DIR/renders`: the path is cleaned, resolved with `realpath` (a symlink out of the folder is refused) and
  * must stay under the real folder. Content type by extension, `Range` for video (206), `cache-control: private, max-age=300`.
  */
-const TYPES: Record<string, string> = { '.png': 'image/png', '.mp4': 'video/mp4', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.json': 'application/json' };
+const TYPES: Record<string, string> = { '.png': 'image/png', '.mp4': 'video/mp4', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.json': 'application/json', '.pdf': 'application/pdf' };
 export const FILE_EXTENSIONS = Object.keys(TYPES).map((e) => e.slice(1));
 
 export type FileReply =
