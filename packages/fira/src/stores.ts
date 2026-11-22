@@ -61,6 +61,8 @@ export interface Knowledge {
   add(chunks: KnowledgeChunk[]): Promise<number>;
   /** Hybrid search (words + meaning) inside one company, only the tiers the audience may read (default: a visitor, `public`). */
   search(companyId: string, query: string, k: number, o?: { audience?: Audience }): Promise<KnowledgeHit[]>;
+  /** Drops the chunks of one company whose id starts with `idPrefix` (an edited or deleted owner note); returns how many. Optional: a store without it keeps stale chunks. */
+  remove?(companyId: string, idPrefix: string): Promise<number>;
   /** Notes a question nothing answered. */
   missed(companyId: string, query: string, at: number): Promise<void>;
   misses(companyId: string, limit: number): Promise<KnowledgeMiss[]>;
@@ -99,7 +101,7 @@ export interface Memory {
   sweep(now: number): Promise<number>;
 }
 
-export const LESSON_SOURCES = ['owner_review', 'client_cabinet', 'eval'] as const;
+export const LESSON_SOURCES = ['owner_review', 'client_cabinet', 'eval', 'rating'] as const;
 export type LessonSource = (typeof LESSON_SOURCES)[number];
 
 /** A correction as text: on this kind of question, this is how to answer. Few-shot by closeness to the current question. */

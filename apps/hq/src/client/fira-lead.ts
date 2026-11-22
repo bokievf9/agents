@@ -2,7 +2,7 @@ import { errMsg, formatSlot, log, okv, tryChat, tryComplete, turnToolUses } from
 import {
   applyGuards, builderLink as builderLinkStub, DEFAULT_ESCALATION_MODE, DEMO_PAGE_KINDS, demoLinkDef, escalationOf, firtechGuardContext, InMemoryJournal, InMemoryKnowledge,
   InMemoryLessons, InMemoryMemory, isProbe, leakGuard, loadCompanyKnowledge, nicheBrief, nicheOfKind, priceList, recordBriefDef, run, specOf,
-  type AgentSpec, type Escalation, type EscalationMode, type FiraTool, type Journal, type Knowledge, type Lessons, type Memory, type MemTurn, type Mode, type RunOut, type ToolRegistry,
+  type AgentSpec, type Escalation, type EscalationMode, type FiraTool, type Journal, type Knowledge, type KnowledgeChunk, type Lessons, type Memory, type MemTurn, type Mode, type RunOut, type ToolRegistry,
 } from '@fir/fira';
 import { BUILD_CHANNELS, BUILD_GOALS, BUILDER_KINDS, builderPath, DETAIL_DEADLINES } from './builder-link.js';
 import { asksCatalogue } from './needs.js';
@@ -37,6 +37,8 @@ export interface FiraLeadOptions {
   /** The lead's draft agent of the playground for `demo_link` (when the conversation already is a lead); null: the niche page of the site. */
   demoLink?: (q: QState, lang: Lang) => string | null;
   knowledge?: Knowledge;
+  /** More chunks loaded with the company pack on every reload (the owner's notes of the Пульт). */
+  extraChunks?: () => KnowledgeChunk[];
   memory?: Memory;
   lessons?: Lessons;
   journal?: Journal;
@@ -135,7 +137,7 @@ export function createFiraLead(o: FiraLeadOptions): FiraLead {
   const lessons = o.lessons ?? new InMemoryLessons();
   const journal = o.journal ?? new InMemoryJournal(2000);
   let swept = 0;
-  const reload = async (): Promise<number> => knowledge.add(loadCompanyKnowledge(COMPANY, { now: o.now() }));
+  const reload = async (): Promise<number> => knowledge.add([...loadCompanyKnowledge(COMPANY, { now: o.now() }), ...(o.extraChunks?.() ?? [])]);
   const loaded = o.knowledge ? Promise.resolve(0) : reload().catch((e) => {
     log('warn', 'fira lead: company pack not loaded', { err: errMsg(e) });
     return 0;

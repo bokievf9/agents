@@ -378,7 +378,7 @@ const capNotice = (level: 80 | 100, used: number, cap: number) => void hq.alert(
   : `Клиентские чаты израсходовали ${used} из ${cap} вызовов модели за сегодня (80%). Лимит меняется в Пульте, настройки.`, { kind: 'budget' });
 for (const l of new Set([clientBot?.engine.limiter, chatGateForAgents, chatGate])) if (l) l.onCap ??= capNotice;
 // ИИ-менеджер заявок on Fira (FIRA_LEAD_MANAGER=on): registered before the web chat and the client bot take their first turn
-if (cfg.firaLeadManager) startFiraLeadManager({ hq, db });
+const firaLead = cfg.firaLeadManager ? startFiraLeadManager({ hq, db }) : null;
 const webChat = cfg.webChatToken
   ? new WebChatEngine({
       db, now: hq.now, tz: () => hq.tz, llm: clientLlm, instructions: readClientInstructions(), quietHours: cfg.clientQuietHours, gate: chatGate, demoUsage, demoRequireClient: cfg.demoRequireClient,
@@ -410,7 +410,7 @@ const admin = cfg.adminToken
   ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: COMMAND_NAMES, drill: (arg) => drill.command(arg), drillStatus: () => drill.status(), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),
       reloadPrices: async () => { const r = await loadPrices(pricesOpts); return { source: r.source, updatedAt: r.prices.updatedAt }; },
       acceptStage: (projectId, stageNo) => Promise.resolve(production.acceptStage(projectId, stageNo, 'client')),
-      billing, marketing, tools, cabinet, calls, ...(campaigns ? { campaigns } : {}), rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), settings, ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
+      fira: () => firaLead, billing, marketing, tools, cabinet, calls, ...(campaigns ? { campaigns } : {}), rendersDir: cfg.rendersDir, onRoutinesChange: () => director.onTimingChange?.(), settings, ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
     })
   : null;
 // Presence: the site pings while it is open; without pings the owner counts as away and a digest goes to Telegram.

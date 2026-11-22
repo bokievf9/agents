@@ -30,6 +30,12 @@ export class InMemoryKnowledge implements Knowledge {
     return hits.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, k);
   }
 
+  remove(companyId: string, idPrefix: string): Promise<number> {
+    let n = 0;
+    for (const [k, v] of this.rows) if (v.c.companyId === companyId && v.c.id.startsWith(idPrefix)) { this.rows.delete(k); n++; }
+    return Promise.resolve(n);
+  }
+
   missed(companyId: string, query: string, at: number): Promise<void> {
     const key = `${companyId}\u0000${query.trim().toLowerCase().slice(0, 200)}`;
     const m = this.miss.get(key);

@@ -3,6 +3,7 @@ import { escalationModeOf } from '@fir/fira';
 import type { Hq } from '@fir/hq';
 import { ensureCabinetTables } from './cabinet.js';
 import { createFiraLead, registerFiraLead, type FiraLead } from './client/fira-lead.js';
+import { ownerChunks } from './pult-knowledge.js';
 import { harvestLessons, SqliteLessons } from './fira-lessons.js';
 
 /**
@@ -43,6 +44,7 @@ export function startFiraLeadManager(o: { hq: Hq; db: Db }): FiraLead {
     escalate: (e) => hq.alert(e.line, { kind: 'human', short: e.short }),
     clientNames,
     lessons,
+    extraChunks: () => ownerChunks(db, hq.now()),
   });
   registerFiraLead(fira);
   schedule('fira-knowledge', '30 3 * * *', hq.tz, async () => {

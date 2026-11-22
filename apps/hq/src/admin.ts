@@ -8,7 +8,7 @@ import { createCrm } from './admin-crm.js';
 import type { CabinetApi } from './cabinet-api.js';
 import type { Campaigns } from './campaigns.js';
 import type { Calls } from './calls.js';
-import { createPult } from './pult.js';
+import { createPult, type PultDeps } from './pult.js';
 import type { BillingWorker } from '@fir/worker-billing';
 import type { ChatsClient } from './chats.js';
 import type { MarketingHead } from './heads/marketing.js';
@@ -57,6 +57,8 @@ export interface AdminDeps {
   calls?: Calls;
   /** News and recommendation mailings through the approval queue (`campaigns.ts`): `GET` and `POST /admin/campaigns`. */
   campaigns?: Campaigns;
+  /** The lead manager on Fira, when on (`fira-wiring.ts`): the owner's knowledge notes reach its search. */
+  fira?: PultDeps['fira'];
 }
 
 export interface AdminRequest {
@@ -116,7 +118,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));
   const history = createDirectorHistory(hq.db, now);
   const pult = createPult({
-    hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply,
+    fira: d.fira, hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply,
     marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange, settings: d.settings, tools: d.tools, ...(d.drill && d.drillStatus ? { drill: { command: d.drill, status: d.drillStatus } } : {}), ...(d.cabinet ? { cabinet: d.cabinet.docs } : {}), ...(d.calls ? { calls: d.calls } : {}),
   });
 
