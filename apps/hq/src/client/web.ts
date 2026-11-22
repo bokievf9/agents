@@ -252,7 +252,8 @@ export class WebChatEngine {
     else if (s.state !== 'contact' && linksOnly(text)) step = { reply: W[lang].ask };
     else step = await this.text(s, lang, text.slice(0, 1000));
     // A new visitor who starts with a real question: the greeting first, then the answer to it.
-    if (fresh) step = { ...step, reply: `${asksCatalogue(text) ? W[lang].welcome : W[lang].welcomeShort}\n\n${step.reply}`, buttons: menuButtons(lang) };
+    // The model may greet and introduce itself too: one greeting is enough, so a leading greeting sentence of the answer is dropped.
+    if (fresh) step = { ...step, reply: `${asksCatalogue(text) ? W[lang].welcome : W[lang].welcomeShort}\n\n${stripGreeting(step.reply)}`, buttons: menuButtons(lang) };
     const after = this.store.get(s.id)!;
     return {
       ok: true, reply: step.reply, ...(step.buttons?.length ? { buttons: step.buttons } : {}),
@@ -555,4 +556,11 @@ export class WebChatEngine {
     if (!handoff && lead.slot && state.slot !== undefined) return { reply: slotPickedText(lang, state.slot, this.d.tz(), { signedIn: true, loginUrl: '' }), created: true };
     return { reply: handoff ? `${HANDOFF[lang].done}${night ? (lang === 'ru' ? ' Сейчас у нас ночь, поэтому ответ придёт утром.' : ' It is night here now, so the answer will come in the morning.') : ''}` : LEAD_DONE[lang](night), created: true, ...(handoff ? { handoff: true } : {}) };
   }
+}
+
+/** Drops a leading greeting sentence («Здравствуйте! Я Фира, ...» / «Hi, I'm Fira ...») when the system already greeted in the same message. */
+export function stripGreeting(reply: string): string {
+  const m = /^\s*(Здравствуйте|Привет|Добрый день|Добрый вечер|Доброе утро|Hello|Hi|Good (?:morning|afternoon|evening))[^\n.!?]{0,120}[.!?]?(?:\s+(?:Я|I'm|I am)\s[^\n.!?]{0,120}[.!?])?\s*/u.exec(reply);
+  if (!m || m[0].length >= reply.trim().length) return reply;
+  return reply.slice(m[0].length);
 }

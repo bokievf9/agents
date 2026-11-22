@@ -517,3 +517,13 @@ describe('POST /chat over HTTP', () => {
     }
   });
 });
+
+describe('stripGreeting', () => {
+  it('drops a second greeting and self-introduction when the system already greeted', async () => {
+    const { stripGreeting } = await import('../src/client/web.js');
+    expect(stripGreeting('Здравствуйте! Я Фира, ИИ-ассистент Fir Tech. Сайт для салона от $150.')).toBe('Сайт для салона от $150.');
+    expect(stripGreeting("Hi, I'm Fira, Fir Tech's AI assistant. A salon site starts at $150.")).toBe('A salon site starts at $150.');
+    expect(stripGreeting('Сайт для салона от $150.')).toBe('Сайт для салона от $150.');
+    expect(stripGreeting('Здравствуйте!')).toBe('Здравствуйте!');
+  });
+});
