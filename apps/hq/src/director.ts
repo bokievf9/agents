@@ -3,7 +3,6 @@ import { errMsg, escapeHtml, log, schedule, stripHtml, tryJson, zonedParts, zone
 import { meterLlm, type AlertOpts, type Hq, type Task } from '@fir/hq';
 import { z } from 'zod';
 import { dailyCron, weeklyCron } from './config.js';
-import { helpHtml } from './commands.js';
 import { workersText } from './workers.js';
 import type { ApprovalEditor } from './editor.js';
 import type { Reporter } from './reporter.js';
@@ -98,8 +97,6 @@ const ruRole: Record<string, string> = { director: 'директор', head: 'г
 const STATUS_RU: Record<string, string> = {
   inbox: 'ждёт отдел', assigned: 'ждёт отдел', running: 'в работе', review: 'на проверке', approval: 'ждёт вас в /approve', blocked: 'застряла', done: 'выполнена', rejected: 'отклонена',
 };
-/** The cheat sheet of /help, Telegram HTML, made from the one command list (`commands.ts`; the full page: apps/hq/docs/owner-cheatsheet.md). */
-export const HELP = helpHtml();
 export const WELCOME = [
   '👋 <b>Fir Tech Director</b>',
   'Пишите задачу обычным текстом: я передам её отделу и покажу ход работы в одном сообщении.',
@@ -503,7 +500,7 @@ export class Director {
         await this.sayHtml(WELCOME, { keyboard: true });
         return;
       case 'help':
-        await this.sayHtml(HELP, { keyboard: true });
+        await this.say('Команд в Telegram больше нет, управление в Shell. Спросите обычным текстом, например «что висит?».', undefined, 'message', true);
         return;
       case 'status':
         return this.sendStatus();

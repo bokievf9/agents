@@ -185,21 +185,35 @@ describe('Back Office housekeeping routines', () => {
     return { ...w, head, dir };
   };
 
-  it('backup: the archive goes to the owner as a document and says it is not encrypted without a key', async () => {
+  it('backup without an age key: no file goes to Telegram, only a metadata summary with the warning', async () => {
     const w = withOps();
     const t = await run(w, 'backup');
     expect(t.status).toBe('done');
+    expect(w.messenger.documents).toHaveLength(0);
+    const msg = w.messenger.sent.map((m) => m.text).join('\n');
+    expect(msg).toContain('Файл НЕ отправлен');
+    expect(msg).toContain('BACKUP_AGE_RECIPIENT');
+    expect(t.result).toContain('только сводка');
+  });
+
+  it('backup with an age key: the encrypted archive goes to the owner as a document', async () => {
+    const w = withOps('age1testrecipient', async (cmd, args) => {
+      if (cmd === 'tar') writeFileSync(args[1]!, 'x');
+      if (cmd === 'age') writeFileSync(args[3]!, 'enc');
+    });
+    const t = await run(w, 'backup');
+    expect(t.status).toBe('done');
     expect(w.messenger.documents).toHaveLength(1);
-    expect(w.messenger.documents[0]).toMatchObject({ chatId: OWNER });
-    expect(w.messenger.documents[0]!.file).toMatch(/hq-backup-.*\.tar\.gz$/);
-    expect(w.messenger.documents[0]!.caption).toContain('НЕ зашифрована');
+    expect(w.messenger.documents[0]!.file).toMatch(/\.tar\.gz\.age$/);
+    expect(w.messenger.documents[0]!.caption).toContain('зашифрована age');
   });
 
   it('backup too large for Telegram: not sent, the owner is alerted, the copy stays on the server', async () => {
-    const w = withOps(undefined, async (cmd, args) => {
-      if (cmd === 'tar') {
-        writeFileSync(args[1]!, '');
-        truncateSync(args[1]!, 60 * 1024 * 1024); // sparse 60 MB
+    const w = withOps('age1testrecipient', async (cmd, args) => {
+      if (cmd === 'tar') writeFileSync(args[1]!, 'x');
+      if (cmd === 'age') {
+        writeFileSync(args[3]!, '');
+        truncateSync(args[3]!, 60 * 1024 * 1024); // sparse 60 MB
       }
     });
     const alerts: string[] = [];

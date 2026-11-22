@@ -1,8 +1,7 @@
 import { openDb } from '@fir/core';
 import { Hq } from '@fir/hq';
 import { describe, expect, it } from 'vitest';
-import { COMMANDS, COMMAND_NAMES, DIRECTOR_MENU, MENU_LIMIT, helpHtml, routedTo, type CommandRoute } from '../src/commands.js';
-import { HELP } from '../src/director.js';
+import { COMMANDS, COMMAND_NAMES, DIRECTOR_MENU, MENU_LIMIT, routedTo, type CommandRoute } from '../src/commands.js';
 import { seedBackoffice } from '../src/heads/backoffice.js';
 import { seedProduction } from '../src/heads/production.js';
 import { seedSales } from '../src/heads/sales.js';
@@ -27,23 +26,6 @@ describe('the command list, the menu and /help agree', () => {
       expect(c.description).toMatch(/[а-яё]/i);
     }
     for (const c of COMMANDS) expect(c.help).toMatch(/[а-яё]/i);
-  });
-
-  it('every command of the list is in /help, and every /command written in /help is in the list', () => {
-    expect(HELP).toBe(helpHtml());
-    for (const name of COMMAND_NAMES.filter((n) => n !== 'start' && n !== 'help')) expect(HELP).toContain(`/${name}`);
-    const mentioned = [...HELP.matchAll(/(?<![\w/<])\/([a-z][a-z0-9_]*)/g)].map((m) => m[1]!);
-    expect(mentioned.length).toBeGreaterThan(30);
-    for (const name of mentioned) expect(COMMAND_NAMES, `/${name} in /help is not a command`).toContain(name);
-  });
-
-  it('/help is valid Telegram HTML (arguments like <id> and <0|1> are escaped) and Russian', () => {
-    const noTags = HELP.replace(/<\/?(?:b|i)>/g, '');
-    expect(noTags).not.toMatch(/[<>]/);
-    expect(HELP).toContain('/level [&lt;тип|агент&gt; &lt;0|1&gt;]');
-    expect(HELP.length).toBeLessThan(4096);
-    // no English sentences: every help line has Cyrillic
-    for (const line of HELP.split('\n').filter((l) => l.startsWith('/'))) expect(line).toMatch(/[а-яё]/i);
   });
 
   it('the routes match the code: the support commands are the head list, and every route has a handler', () => {
@@ -106,8 +88,6 @@ describe('/workers: the table of the executors and what wakes them', () => {
     const hq = fullHq();
     const text = workersText(hq);
     expect(text).toContain('Исполнители (20)');
-    // the help does not carry its own hand-counted number (it said 19 while /workers printed 20: drill 2026-11-21)
-    expect(helpHtml()).not.toMatch(/\d+ исполнител/);
     expect(text).toContain('Content Maker (content-maker)');
     expect(text).toContain('рутина marketing-weekly-pack (пн 06:00 Куала-Лумпур)');
     expect(text).toContain('рутина marketing-daily-today (каждый день 09:00 Душанбе)');

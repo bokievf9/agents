@@ -79,29 +79,3 @@ export const routedTo = (route: CommandRoute): string[] => COMMANDS.filter((c) =
 
 /** The bot menu: the commands with a description, in this order, at most 20. */
 export const DIRECTOR_MENU: BotCommand[] = COMMANDS.filter((c) => c.menu).map((c) => ({ command: c.name, description: c.menu! }));
-
-const GROUP_TITLE: Record<'daily' | 'more' | 'sales' | 'support' | 'work' | 'system', string> = {
-  daily: 'Каждый день', more: 'Ещё', sales: 'Продажи', support: 'Сопровождение', work: 'Производство, документы, маркетинг', system: 'Служебные',
-};
-const htmlEsc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const line = (c: CommandSpec) => `/${c.name}${c.args ? ` ${htmlEsc(c.args)}` : ''}: ${htmlEsc(c.help)}`;
-
-/** The text of `/help` (Telegram HTML), made from the command list: nothing to forget, nothing dead. */
-export function helpHtml(): string {
-  const by = (...g: CommandGroup[]) => COMMANDS.filter((c) => g.includes(c.group) && c.name !== 'start' && c.name !== 'help');
-  const section = (key: keyof typeof GROUP_TITLE, list: CommandSpec[]) => (list.length ? ['', `<b>${GROUP_TITLE[key]}</b>`, ...list.map(line)] : []);
-  return [
-    '🆘 <b>Fir Tech Director</b>',
-    'Пишите задачу обычным текстом: передам отделу и буду править одно сообщение по ходу работы (взял, делает, ждёт вас, готово). Кнопки внизу: одобрения, задачи, статус, отделы, помощь.',
-    'Куда что приходит: ответы, карточки на одобрение и «живые» сообщения о задачах здесь, в личке. Отчёты отделов и сводки в группе Shell по темам.',
-    'Ваше время (Куала-Лумпур): сводка, пачка на одобрение, недельный дайджест и тихие часы. Рынок и клиенты (Душанбе): часы клиентского бота, слоты звонков, время публикаций.',
-    ...section('daily', by('daily')),
-    ...section('more', by('more')),
-    ...section('sales', by('sales')),
-    ...section('support', by('support')),
-    ...section('work', by('production', 'backoffice', 'marketing')),
-    ...section('system', by('system')),
-    '',
-    '<i>Статусы на сайте офиса: работает, ждёт (ответ за вами), застрял (/retry), спит (ночь или тихие часы), офлайн.</i>',
-  ].join('\n');
-}

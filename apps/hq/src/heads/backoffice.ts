@@ -238,7 +238,7 @@ export class BackofficeHead {
 
   /**
    * Night routine: a consistent copy of hq.db (and any other SQLite file in the data dir), tar.gz without renders, age-encrypted
-   * when BACKUP_AGE_RECIPIENT is set, sent to the owner as a document through the Director bot; seven copies stay in
+   * when BACKUP_AGE_RECIPIENT is set, sent to the owner as a document through the Director bot (without an age key only a metadata summary goes, never the plain file); seven copies stay in
    * DATA_DIR/backups. Over 49 MB (Telegram's bot limit) it is not sent: the owner is alerted and the copy stays on the server.
    */
   private async backup(task: Task): Promise<void> {
@@ -252,9 +252,16 @@ export class BackofficeHead {
       return void (await this.hq.alert(`Резервная копия не сделана: ${errMsg(e).slice(0, 200)}. Задача #${task.id}.`));
     }
     const mb = (r.bytes / 1_048_576).toFixed(1);
-    const note = r.encrypted ? 'зашифрована age' : 'НЕ зашифрована (BACKUP_AGE_RECIPIENT не задан, в архиве базы с клиентами: храните в закрытом чате)';
+    const note = 'зашифрована age';
     let sent = false;
-    if (r.bytes > MAX_SEND_BYTES) {
+    if (!r.encrypted) {
+      // never send the plain archive (it holds client data): a metadata summary and the warning only; the copy stays on the server
+      try {
+        await this.d.messenger.send(this.d.ownerId, `Резервная копия Shell: ${r.databases.length} баз, ${mb} МБ. Файл НЕ отправлен: BACKUP_AGE_RECIPIENT не задан, а в архиве базы с клиентами. Копия лежит на сервере в data/backups (хранится 7). Задайте ключ age, и ночная копия будет приходить зашифрованной.`);
+      } catch (e) {
+        await this.hq.alert(`Резервная копия сделана (${mb} МБ), сводка не отправилась в Telegram: ${errMsg(e).slice(0, 150)}.`);
+      }
+    } else if (r.bytes > MAX_SEND_BYTES) {
       await this.hq.alert(`Резервная копия ${mb} МБ больше лимита Telegram (50 МБ), в чат не отправлена: лежит на сервере в data/backups (хранится 7 копий). Нужно внешнее хранилище.`);
     } else if (!this.d.messenger.sendDocument) {
       await this.hq.alert('Резервная копия сделана, но этот канал не умеет отправлять файлы: лежит на сервере в data/backups.');
@@ -266,7 +273,7 @@ export class BackofficeHead {
         await this.hq.alert(`Резервная копия сделана (${mb} МБ), но не отправилась в Telegram: ${errMsg(e).slice(0, 150)}. Лежит на сервере в data/backups.`);
       }
     }
-    const text = `Резервная копия: ${r.databases.length} баз, ${mb} МБ, ${r.encrypted ? 'age' : 'без шифрования'}, ${sent ? 'отправлена владельцу' : 'не отправлена'}; старых удалено: ${r.removed.length}.`;
+    const text = `Резервная копия: ${r.databases.length} баз, ${mb} МБ, ${r.encrypted ? 'age' : 'без шифрования'}, ${sent ? 'отправлена владельцу' : r.encrypted ? 'не отправлена' : 'файл не отправлен (нет ключа age), только сводка'}; старых удалено: ${r.removed.length}.`;
     this.hq.complete(task.id, BACKOFFICE_HEAD_ID, text);
   }
 

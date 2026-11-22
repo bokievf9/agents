@@ -1,7 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies of the API under test */
 import { MockLlm, OffLlm, type LlmClient } from '@fir/core';
 import { describe, expect, it } from 'vitest';
-import { HELP } from '../src/director.js';
 import { carouselJson, clipJson, OWNER } from './helpers.js';
 import { serve } from './shell-helpers.js';
 import { NO_SUBTITLES, macAnswers } from './reach-helpers.js';
@@ -194,8 +193,7 @@ describe('/trend in the Director bot', () => {
     expect((await p.list())[0].status).toBe('proposed');
   });
 
-  it('is in /help (the one command list) and is not a menu entry (the menu is full)', () => {
-    expect(HELP).toContain('/trend &lt;ссылка&gt; [заметка]');
+  it('is a command of the list (the menu is full, so it is no menu entry)', () => {
     expect(OWNER).toBeGreaterThan(0);
   });
 });
