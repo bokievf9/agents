@@ -459,6 +459,9 @@ export function createReview(d: ReviewDeps) {
         const p = views.project(Number(payload.projectId));
         return generic(l, payload, `${l.kind === 'pm_spec' ? 'ТЗ проекта' : 'Статус клиенту'} #${num(payload.projectId) ?? '?'}${p ? `: ${p.client}` : ''}`, { meta: { project: p ? { id: p.id, client: p.client, status: p.status } : { id: num(payload.projectId) } } });
       }
+      case 'client_campaign':
+        // a mailing to clients: the owner reads (and may edit) the text that will go out; the audience is a count in the summary, never addresses
+        return generic(l, payload, `Рассылка #${num(payload.campaignId) ?? '?'}: ${oneLine(stripPrefix(l.summary).split('\n')[0] ?? 'клиентам', 100)}`, { text: { body: str(payload.text) }, meta: { campaign: { id: num(payload.campaignId) } } });
       case 'onboarding_guide':
         return generic(l, payload, `Инструкция клиенту ${str(payload.name)}`, { meta: { client: { id: null, email: null, cabinet: false, name: str(payload.name) }, onboarding: { id: num(payload.onboardingId) } } });
       case 'prospect_first':

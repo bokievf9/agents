@@ -614,3 +614,16 @@ describe('auto-executed kinds (level 1) are history, not work', () => {
     expect((await p.call('GET', '/admin/review')).json.counts.support).toBe(0);
   });
 });
+
+describe('client_campaign shows the text that will go out', () => {
+  it('is a pending item with the mailing text and its id, no addresses', async () => {
+    const p = reviewWorld();
+    const t = p.w.hq.createTask({ title: 'Рассылка #7', dept: 'marketing', creator: 'owner' });
+    await p.w.hq.requestApproval(t.id, 'marketing-head', 'client_campaign', { text: 'Мы запустили новый продукт.', campaignId: 7 }, 'Рассылка новостей, получателей: 3');
+    const item = (await p.items()).find((i) => i.kind === 'client_campaign');
+    expect(item).toBeTruthy();
+    expect(item.status).toBe('pending');
+    expect(item.title).toContain('#7');
+    expect(JSON.stringify(item)).toContain('Мы запустили новый продукт.');
+  });
+});
