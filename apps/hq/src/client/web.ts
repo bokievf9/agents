@@ -1,6 +1,6 @@
 import { errMsg, log, type Db, type LlmClient } from '@fir/core';
 import { z } from 'zod';
-import type { DemoUsage } from '../demo-usage.js';
+import { markDemoUnavailable, type DemoUsage } from '../demo-usage.js';
 import type { ClientSinks } from './engine.js';
 import { inWindow, linksOnly, RateLimiter } from './sanitize.js';
 import { asksCatalogue } from './needs.js';
@@ -207,6 +207,7 @@ export class WebChatEngine {
     if (du && clientId === null && this.d.demoRequireClient) return { kind: 'login_required' };
     const run = () => this.demo.reply(persona, req.sessionId, req.locale, req.message.trim()).catch((e) => {
       log('error', 'web chat demo failed', { err: errMsg(e) });
+      markDemoUnavailable();
       return null;
     });
     let r: Awaited<ReturnType<typeof run>>;

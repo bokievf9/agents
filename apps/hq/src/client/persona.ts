@@ -1,5 +1,6 @@
 import { productName, tryComplete, type LlmClient } from '@fir/core';
 import { buildPersona, DEMOS, NICHE_RU, NICHES, PERSONAL_DEMO, slotsFor, type Niche } from '../playground.js';
+import { markDemoUnavailable } from '../demo-usage.js';
 import { TurnHistory } from './shared.js';
 import type { Lang } from './texts.js';
 
@@ -131,7 +132,7 @@ export class DemoChat {
     const key = `${persona}:${sessionId}`;
     const n = this.counts.get(key) ?? 0;
     if (n >= DEMO_TURNS) return { kind: 'capped', reply: CAPPED[lang] };
-    if (!this.d.llm.enabled || !this.d.gate.llmAllowed() || this.d.gatewayDown?.()) return { kind: 'reply', reply: SCRIPTED[lang], turns: n };
+    if (!this.d.llm.enabled || !this.d.gate.llmAllowed() || this.d.gatewayDown?.()) { markDemoUnavailable(); return { kind: 'reply', reply: SCRIPTED[lang], turns: n }; }
     this.d.gate.llmUsed();
     let timer: NodeJS.Timeout | undefined;
     const raw = await Promise.race([
@@ -141,7 +142,7 @@ export class DemoChat {
       }),
     ]).finally(() => clearTimeout(timer));
     const reply = raw?.trim() ? clean(unwrap(raw)) : '';
-    if (reply.length < 2) return { kind: 'reply', reply: SCRIPTED[lang], turns: n };
+    if (reply.length < 2) { markDemoUnavailable(); return { kind: 'reply', reply: SCRIPTED[lang], turns: n }; }
     this.history.remember(key, 'user', text);
     this.history.remember(key, 'assistant', reply);
     this.counts.set(key, n + 1);

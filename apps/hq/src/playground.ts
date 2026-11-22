@@ -3,7 +3,7 @@ import { tryJson, zonedParts, type Db, type LlmClient } from '@fir/core';
 import { z } from 'zod';
 import { addThreadMessage, ensureCabinetTables } from './cabinet.js';
 import { countCalls } from './client/shared.js';
-import type { DemoUsage } from './demo-usage.js';
+import { markDemoUnavailable, type DemoUsage } from './demo-usage.js';
 
 /**
  * The playground (2026-11-22): an agent instance per cabinet client, for those who do not need a website. Its persona is built from the answers of the
@@ -836,6 +836,7 @@ export class Playground {
       }
       if (ctx.store) this.count(ctx.agent.id, 'llm_fail');
     }
+    markDemoUnavailable(); // no-op outside a metered demo: the model gave no answer, the demo is not charged
     return await this.fallback(ctx, text);
   }
 

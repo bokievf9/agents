@@ -74,6 +74,24 @@ describe('the site demo tab (/chat with persona) is booked to the signed-in clie
   });
 });
 
+describe('an unavailable model is not charged', () => {
+  it('the scripted «недоступно» answer books no message for the client', async () => {
+    const db = openDb(':memory:');
+    const clock = { t: NOW };
+    new Hq(db, { now: () => clock.t });
+    ensureCabinetTables(db);
+    const demoUsage = new DemoUsage({ db, now: () => clock.t, tz: () => 'Asia/Dushanbe', limit: () => 3 });
+    const off = new MockLlm(() => '', USAGE);
+    Object.defineProperty(off, 'enabled', { value: false });
+    const web = new WebChatEngine({ db, now: () => clock.t, tz: () => 'Asia/Dushanbe', llm: tapLlm(off), instructions: 'x', gate: { llmAllowed: () => true, llmUsed: () => undefined }, demoUsage, demoRequireClient: true });
+    const r = (await web.handle({ sessionId: 'visitor-0001-abcd', locale: 'ru', message: 'Привет', persona: 'salon', ...ME } as any, '1.2.3.4')) as any;
+    expect(r.kind).toBe('ok');
+    expect(r.body.reply).toMatch(/недоступно/);
+    expect(r.body.usage).toMatchObject({ used: 0, remaining: 3 });
+    expect((db.prepare('SELECT COALESCE(SUM(calls), 0) n FROM demo_usage').get() as any).n).toBe(0);
+  });
+});
+
 describe('DEMO_REQUIRE_CLIENT default', () => {
   it('is on unless the env explicitly says off', async () => {
     const { loadConfig } = await import('../src/config.js');

@@ -42,8 +42,14 @@ export interface DemoUsageBlock {
   bySource: { source: string; messages: number; usd: number }[];
 }
 
-interface Tally { in: number; out: number; usd: number }
+interface Tally { in: number; out: number; usd: number; unavailable?: boolean }
 const als = new AsyncLocalStorage<Tally>();
+
+/** Called inside `metered` when the model could not answer (disabled, gateway down, empty reply): the message is then not charged to the client's day. */
+export function markDemoUnavailable(): void {
+  const t = als.getStore();
+  if (t) t.unavailable = true;
+}
 
 /** Wraps a client so the usage of every model call made INSIDE `DemoUsage.metered` lands in that call's tally (outside it nothing changes). */
 export function tapLlm(llm: LlmClient): LlmClient {
@@ -130,8 +136,7 @@ export class DemoUsage {
   }
 
   /**
-   * Runs one demo message for a client: false (and nothing counted) when today's cap is spent; otherwise `fn` runs, and the message is booked in any case (a failed model call
-   * costs the client's attempt too, like the agents' own counters) together with the tokens and money of the model calls `fn` made.
+   * Runs one demo message for a client: false (and nothing counted) when today's cap is spent; otherwise `fn` runs, and the message is booked in any case (an exception costs the client's attempt too, like the agents' own counters; an unavailable model (`markDemoUnavailable`) does not) together with the tokens and money of the model calls `fn` made.
    */
   async metered<T>(clientId: number, source: string, fn: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false }> {
     if (this.usedToday(clientId) >= this.limit) return { ok: false };
@@ -139,10 +144,14 @@ export class DemoUsage {
     try {
       return { ok: true, value: await als.run(tally, fn) };
     } finally {
-      this.d.db.prepare(
-        `INSERT INTO demo_usage (client_id, source, day, calls, tokens_in, tokens_out, usd) VALUES (?, ?, ?, 1, ?, ?, ?)
-         ON CONFLICT(client_id, source, day) DO UPDATE SET calls = calls + 1, tokens_in = tokens_in + excluded.tokens_in, tokens_out = tokens_out + excluded.tokens_out, usd = usd + excluded.usd`,
-      ).run(clientId, source.slice(0, 80), this.day(), tally.in, tally.out, tally.usd);
+      // the model was unavailable: no message is charged (money of a half-made call is still booked, with no message counted)
+      const calls = tally.unavailable ? 0 : 1;
+      if (calls > 0 || tally.usd > 0) {
+        this.d.db.prepare(
+          `INSERT INTO demo_usage (client_id, source, day, calls, tokens_in, tokens_out, usd) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(client_id, source, day) DO UPDATE SET calls = calls + excluded.calls, tokens_in = tokens_in + excluded.tokens_in, tokens_out = tokens_out + excluded.tokens_out, usd = usd + excluded.usd`,
+        ).run(clientId, source.slice(0, 80), this.day(), calls, tally.in, tally.out, tally.usd);
+      }
     }
   }
 
