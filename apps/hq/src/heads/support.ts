@@ -177,7 +177,8 @@ export class SupportHead {
     const llm = meterLlm(this.d.llm, this.hq, { agentId: SUPPORT_HEAD_ID, taskId: task.id });
     return {
       llm, db: this.hq.db, tz: this.hq.tz, now: this.hq.now,
-      requestApproval: (kind, payload, summary) => this.hq.requestApproval(task.id, SUPPORT_HEAD_ID, kind, payload, summary),
+      // a client's own message (cabinet or bot): the support autopilot (`autopilotReply`) decides it, the trust level 1 does not send it behind its back
+      requestApproval: (kind, payload, summary) => this.hq.requestApproval(task.id, SUPPORT_HEAD_ID, kind, payload, summary, { hold: task.meta.action === 'ticket' && (typeof task.meta.ticketId === 'number' || typeof task.meta.chatId === 'number') }),
       log: (action, detail) => this.hq.log(SUPPORT_HEAD_ID, action, 'task', String(task.id), detail),
       tools: toolsFor(this.hq, this.d.tools, { agentId: SUPPORT_HEAD_ID, dept: SUPPORT, taskId: task.id, llm, messenger: this.d.messenger, ownerId: this.d.ownerId }),
     };

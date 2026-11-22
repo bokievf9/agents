@@ -484,9 +484,10 @@ export class Hq {
 
   /**
    * The head asks for the owner's decision. At level 0 the proposal waits in the queue and reaches the owner in the
-   * Director's batch (`releaseApprovals`), unless its kind is urgent (`registerKind` option); at level 1 the core runs it at once and reports. The task goes to `approval`.
+   * Director's batch (`releaseApprovals`), unless its kind is urgent (`registerKind` option); at level 1 the core runs it at once and reports, unless `hold` (the caller
+   * decides the proposal itself right after, e.g. the support autopilot). The task goes to `approval`.
    */
-  async requestApproval(taskId: number, actor: string, kind: string, payload: Payload, summary: string): Promise<number> {
+  async requestApproval(taskId: number, actor: string, kind: string, payload: Payload, summary: string, o: { hold?: boolean } = {}): Promise<number> {
     const t = this.task(taskId);
     if (!t) throw new Error(`Unknown task ${taskId}`);
     const r = this.db
@@ -497,7 +498,7 @@ export class Hq {
     this.addEvent(taskId, 'approval', actor, `${kind}: queued`);
     this.log(actor, 'approval_requested', 'task', String(taskId));
     const urgent = this.urgentKinds.has(kind);
-    if (urgent || this.q().level(kind) === 1) {
+    if (urgent || (this.q().level(kind) === 1 && !o.hold)) {
       if (!(await this.askOne(linkId, urgent ? `Срочно, ${t.dept}, задача #${taskId}\n` : ''))) void this.alert(`Одобрение «${kind}» (задача #${taskId}) не отправилось в Telegram, оно уйдёт со следующей пачкой.`);
       this.reconcileApprovals();
     }

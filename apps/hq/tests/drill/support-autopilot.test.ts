@@ -138,6 +138,21 @@ describe('support autopilot: mode x reason', () => {
   });
 });
 
+describe('support autopilot over the default trust level', () => {
+  it('support_answer is at level 1 by default: the policy still decides (legal waits, plain goes as autopilot, not as the trust level `auto`)', async () => {
+    w = await drillWorld({ flow: true });
+    expect(w.queue.level('support_answer')).toBe(1);
+    const a = await client(false);
+    await say(a, 'Нужен юрист, будет претензия и суд');
+    expect(waiting()).toHaveLength(1);
+    expect(decisions()).toEqual([]);
+    const b = await client(false);
+    await say(b, PLAIN);
+    expect(decisions()).toEqual(['autopilot']);
+    expect((await answers(b)).length).toBe(1);
+  });
+});
+
 describe('support autopilot: fail closed', () => {
   it('a failing evaluation (broken tables) leaves the answer in the queue with a warning', async () => {
     const cid = await start('autopilot');
