@@ -22,6 +22,8 @@ import { createReach } from './reach.js';
 import type { DrillStatus } from './drill.js';
 import { createProcesses } from './pult-processes.js';
 import { createCalendar } from './pult-calendar.js';
+import { createAudit } from './pult-audit.js';
+import { createAnalytics } from './pult-analytics.js';
 import type { SettingsApi } from './settings.js';
 
 /**
@@ -74,6 +76,8 @@ export function createPult(d: PultDeps) {
   const reach = createReach({ hq: d.hq, now: d.now });
   const processes = createProcesses({ db: d.hq.db, now: d.now, drill: d.drill });
   const calendar = createCalendar({ hq: d.hq, db: d.hq.db, now: d.now });
+  const audit = createAudit({ hq: d.hq, db: d.hq.db });
+  const analytics = createAnalytics({ db: d.hq.db, now: d.now, tz: () => d.hq.tz, numbers: metrics.numbers });
 
   /** `seg`: the path after `/admin/`. null: not a «Пульт v3» route. */
   async function handle(method: string, seg: string[], query: URLSearchParams, body: unknown): Promise<AdminReply | null> {
@@ -126,6 +130,8 @@ export function createPult(d: PultDeps) {
       return fail(404, 'not_found');
     }
     if (a === 'calendar') return method === 'GET' && seg.length === 1 ? calendar.get(query) : fail(404, 'not_found');
+    if (a === 'audit') return method === 'GET' && seg.length === 1 ? audit.get(query) : fail(404, 'not_found');
+    if (a === 'analytics') return method === 'GET' && seg.length === 1 ? analytics.get(query) : fail(404, 'not_found');
     if (a === 'reach') return reach.handle(method, seg, query, body);
     if (a === 'metrics') return method === 'GET' && seg.length === 2 && seg[1] === 'week' ? metrics.week(query) : fail(404, 'not_found');
     if (a === 'agents') return agents.handle(method, seg.slice(1), body);

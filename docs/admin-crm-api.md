@@ -873,3 +873,15 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 
 ## Идемпотентность заявок: `siteLeadId` (2026-11-23)
 `POST /lead` принимает необязательное `siteLeadId` (строка 8..64 знаков `A-Za-z0-9_.:-`; кривое значение игнорируется, заявка не отвергается). Первый ответ запоминается на 72 часа (таблица `site_lead_ids`: id, время, ответ из id и флагов, текста заявки там нет). Повтор с тем же id (сайт не дождался ответа и шлёт снова) не создаёт лид, задачу и уведомление, а отвечает как на первую заявку плюс `duplicate: true`: `{ ok: true, id, leadId?, notified: true, duplicate: true }`. Два одновременных запроса с одним id дают один лид. Ошибки (400, 429, 500) не запоминаются, повтор после них обработается заново. Без `siteLeadId` поведение прежнее. Код `apps/hq/src/lead-dedupe.ts`, `webhook.ts`.
+
+## Audit log и Analytics (2026-11-23, ветка `hq-audit`)
+Два раздела HQ, только чтение, под `x-admin-token`. Код `apps/hq/src/pult-audit.ts` и `pult-analytics.ts`. Только id, виды и счётчики: ни текстов инструкций, ни значений настроек (old/new), ни текстов и контактов клиентов.
+
+`GET /admin/audit?kind&actor&from&to&cursor&limit` → `{ ok, tz, kinds, counts, total, actors, nextCursor, entries }`. Фильтры необязательные: `kind` один из `decision|setting|instruction|trust|owner` (400 `invalid` иначе), `actor` точный id (`owner`, `system`, id агента), `from`/`to` включительно `YYYY-MM-DD` по часовому поясу компании, `limit` 1..200 (50 по умолчанию), `cursor` это `nextCursor` прошлой страницы (новые сверху). `counts` по видам с учётом дат и актора, без вида и курсора; `actors` для списка фильтра.
+```json
+{ "id": "dec:12", "kind": "decision", "at": "2026-11-23T04:00:00.000Z", "actor": "owner", "action": "decision",
+  "objectType": "approval", "objectId": "7", "detail": "lead_reply approve" }
+```
+Источники: `decision` = таблица `decisions` (актор `owner`, для `auto` и `auto_failed` `system`) и `approval_decided` из `activity` (одобрения задач); `setting` = `settings_log` кроме ключей `trust.*` (`objectId` ключ, значения не отдаются); `trust` = ключи `trust.*` из `settings_log` и `level_set` из `activity`; `instruction` = `instruction_versions` (`objectId` агент, `detail` `v<версия>`, без текста); `owner` = остальные действия актора `owner` в `activity`. Таблицы, которой ещё нет, нет в ответе.
+
+`GET /admin/analytics?week=YYYY-Www` (неделя по умолчанию текущая; 400 `invalid`) → `{ ok, week, from, to, prevWeek, tz, funnel, prevFunnel, site, prevSite, firstResponse, prevFirstResponse, sources }`. `funnel` (`leads, qualified, proposals, contracts, paid, projects`) и `site` (события сайта по именам) это те же числа, что `GET /admin/metrics/week` (вкладка «Цифры»), за неделю и за предыдущую. `firstResponse`: `{ leads, answered, avgMinutes, medianMinutes, within1hShare }` (null без ответов): время от заявки до первого ответа = самый ранний `report` задачи заявки (Менеджер заявок отработал) или `lead_reply` владельца. `sources`: заявки недели по метке источника (`site`, `bot`, `ref` для любого реферала, `direct` без метки) со счётчиками `leads, qualified, paid`, до 12 строк.
