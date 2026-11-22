@@ -3,14 +3,14 @@ import { storeFor } from '@fir/worker-content-maker';
 import { BillingStore } from '@fir/worker-billing';
 import { PmStore } from '@fir/worker-project-manager';
 import { describe, expect, it } from 'vitest';
-import { EVENT_NAMES, cleanPath, eventsApi } from '../src/pult-events.js';
-import { pultWorld, serve, type PultWorld } from './pult-helpers.js';
+import { EVENT_NAMES, cleanPath, eventsApi } from '../src/shell-events.js';
+import { shellWorld, serve, type ShellWorld } from './shell-helpers.js';
 
 const SITE = 'site-secret';
 const DAY = 86_400_000;
-const days = (p: PultWorld) => p.w.db.prepare('SELECT * FROM site_events ORDER BY day, name, path').all() as any[];
+const days = (p: ShellWorld) => p.w.db.prepare('SELECT * FROM site_events ORDER BY day, name, path').all() as any[];
 
-async function events(p: PultWorld, clock: () => number = () => p.t()) {
+async function events(p: ShellWorld, clock: () => number = () => p.t()) {
   const api = eventsApi(p.w.db, p.t, () => p.w.hq.tz);
   const s = await serve(p, { events: { token: SITE, handle: api.handle } }, undefined, clock);
   const send = (body: unknown, headers: Record<string, string> = { 'x-site-token': SITE }) =>
@@ -20,20 +20,20 @@ async function events(p: PultWorld, clock: () => number = () => p.t()) {
 
 describe('POST /events', () => {
   it('needs the site token (401), and does not exist without one (404)', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { s, send } = await events(p);
     expect((await send({ name: 'chat_open' }, {})).status).toBe(401);
     expect((await send({ name: 'chat_open' }, { 'x-site-token': 'nope' })).status).toBe(401);
     expect((await send({ name: 'chat_open' }, { 'x-admin-token': 'admin-secret' })).status).toBe(401); // another token does not open it
     expect(days(p)).toEqual([]);
     await s.close();
-    const bare = await serve(pultWorld());
+    const bare = await serve(shellWorld());
     expect((await bare.http('POST', '/events', { name: 'chat_open' }, { 'x-site-token': SITE })).status).toBe(404);
     await bare.close();
   });
 
   it('accepts exactly the whitelist, anything else is 400 with the allowed names', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { s, send } = await events(p);
     for (const name of EVENT_NAMES) {
       const r = await send({ name, path: '/ru/blog', locale: 'ru' });
@@ -53,7 +53,7 @@ describe('POST /events', () => {
   });
 
   it('aggregates per day, name and page into one counter; days follow the company clock', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { s, send } = await events(p);
     for (let i = 0; i < 3; i++) await send({ name: 'blog_view', path: '/ru/blog/bot-dlya-barber', locale: 'ru' });
     await send({ name: 'blog_view', path: '/ru/blog/other', locale: 'ru' });
@@ -72,7 +72,7 @@ describe('POST /events', () => {
   });
 
   it('keeps no personal data: no IP, no query or key, no invoice numbers, no free text', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { s, send } = await events(p);
     await send({ name: 'pay_view', path: '/ru/pay/FT-2026-001?k=SECRETKEY#frag', ref: 'c1a1b2c3', locale: 'ru' }, { 'x-site-token': SITE, 'x-visitor-ip': '203.0.113.9' });
     await send({ name: 'ref_click', path: 'https://firtech.pro/en/?utm=alice@example.com', ref: 'Алиса <script>', locale: 'de' });
@@ -88,7 +88,7 @@ describe('POST /events', () => {
   });
 
   it('120 a minute per visitor IP (x-visitor-ip), other visitors are not affected, the window moves', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const clock = { t: Date.now() };
     const { s, send } = await events(p, () => clock.t);
     const as = (ip: string) => ({ 'x-site-token': SITE, 'x-visitor-ip': ip });
@@ -122,7 +122,7 @@ describe('GET /admin/metrics/week', () => {
   const W46 = W47 - 7 * DAY;
 
   it('401 without the token, 400 on a bad week, zeros and the full shape on an empty database', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const s = await serve(p);
     expect((await s.http('GET', '/admin/metrics/week', undefined, {})).status).toBe(401);
     await s.close();
@@ -143,7 +143,7 @@ describe('GET /admin/metrics/week', () => {
   });
 
   it('adds up the seeded week and the week before from events, blog, YouTube, funnel and invoices', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { w } = p;
     const db = w.db;
     // site events of both weeks

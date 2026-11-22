@@ -6,14 +6,14 @@ import { PmStore } from '@fir/worker-project-manager';
 import { ProspectStore } from '@fir/worker-prospector';
 import { ReferralStore } from '@fir/worker-referral';
 import { storeFor } from '@fir/worker-content-maker';
-import { pultWorld } from './pult-helpers.js';
+import { shellWorld } from './shell-helpers.js';
 
 /** The kinds the Sales and Back-office heads own (the Pult world seeds Marketing, Support and Production only): stubs that remember what was executed. */
 const STUBS = ['lead_reply', 'lead_price', 'presales_pack', 'referral_reward', 'referral_payout', 'prospect_first', 'prospect_followup', 'prospect_reply', 'bo_document'];
 const LOCKED = ['lead_price', 'presales_pack', 'referral_reward', 'referral_payout', 'bo_document'];
 
-export function reviewWorld(opts: Parameters<typeof pultWorld>[0] = {}, o: { keepLevels?: boolean } = {}) {
-  const p = pultWorld(opts);
+export function reviewWorld(opts: Parameters<typeof shellWorld>[0] = {}, o: { keepLevels?: boolean } = {}) {
+  const p = shellWorld(opts);
   const executed: { kind: string; payload: Payload }[] = [];
   for (const kind of STUBS) p.w.hq.registerKind(kind, { initialLevel: 0, ...(LOCKED.includes(kind) ? { locked: true } : {}), execute: (payload) => { executed.push({ kind, payload }); return Promise.resolve(); } });
   // some kinds start at level 1 (the agent acts and reports): the fixtures want every card to wait for the owner, except where a test asks for it

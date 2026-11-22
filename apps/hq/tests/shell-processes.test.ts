@@ -1,16 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies of the API under test */
 import { describe, expect, it } from 'vitest';
 import { Drill } from '../src/drill.js';
-import { CHAINS } from '../src/pult-processes.js';
+import { CHAINS } from '../src/shell-processes.js';
 import { OWNER } from './helpers.js';
-import { pultWorld, serve } from './pult-helpers.js';
+import { shellWorld, serve } from './shell-helpers.js';
 
 const HOUR = 3_600_000;
 const stepOf = (json: any, chain: string, step: string) => json.chains.find((c: any) => c.id === chain).steps.find((s: any) => s.id === step);
 
 describe('GET /admin/processes', () => {
   it('401 without the token, 404 for other paths and methods', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const s = await serve(p);
     expect((await s.http('GET', '/admin/processes', undefined, {})).status).toBe(401);
     expect((await s.http('GET', '/admin/processes')).status).toBe(200);
@@ -20,7 +20,7 @@ describe('GET /admin/processes', () => {
   });
 
   it('the chain map in the contract shape: every chain of the table, every step with health, last success, failures, stuck', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const r = await p.call('GET', '/admin/processes');
     expect(r.status).toBe(200);
     expect(r.json.ok).toBe(true);
@@ -36,7 +36,7 @@ describe('GET /admin/processes', () => {
   });
 
   it('health from the data: last success, a failure after it, a stuck item; drill tasks are ignored', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const hq = p.w.hq;
     // lead step: a blocked intake task is a failure with its reason; a drill task of the same worker is not counted
     const t = hq.createTask({ title: 'Лид Анна', dept: 'sales', creator: 'routine', assigneeId: 'lead-intake' });
@@ -64,7 +64,7 @@ describe('GET /admin/processes', () => {
   });
 
   it('a failure older than the last success is only a warning', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const hq = p.w.hq;
     const t = hq.createTask({ title: 'Тренды', dept: 'marketing', creator: 'routine', assigneeId: 'trend-scout' });
     hq.block(t.id, 'trend-scout', 'сеть');
@@ -80,13 +80,13 @@ describe('GET /admin/processes', () => {
 describe('POST /admin/processes/drill', () => {
   const withDrill = () => {
     const ref: { drill?: Drill } = {};
-    const p = pultWorld({ admin: { drill: (a) => ref.drill!.command(a), drillStatus: () => ref.drill!.status() } });
+    const p = shellWorld({ admin: { drill: (a) => ref.drill!.command(a), drillStatus: () => ref.drill!.status() } });
     ref.drill = new Drill({ hq: p.w.hq, queue: p.w.queue, messenger: p.w.channel!, ownerId: OWNER });
     return p;
   };
 
   it('503 without a drill, 400 for a bad body', async () => {
-    expect((await pultWorld().call('POST', '/admin/processes/drill', { action: 'start' })).status).toBe(503);
+    expect((await shellWorld().call('POST', '/admin/processes/drill', { action: 'start' })).status).toBe(503);
     const p = withDrill();
     expect((await p.call('POST', '/admin/processes/drill', { action: 'boom' })).status).toBe(400);
     expect((await p.call('POST', '/admin/processes/drill', {})).status).toBe(400);

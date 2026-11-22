@@ -10,13 +10,13 @@ import { describe, expect, it } from 'vitest';
 import { nextStepOf, registerCabinetLead } from '../src/cabinet.js';
 import { STAGES } from '../src/lead-stage.js';
 import { createWebhook } from '../src/webhook.js';
-import { pultWorld } from './pult-helpers.js';
+import { shellWorld } from './shell-helpers.js';
 
 const HOUR = 3_600_000;
 
 function setup() {
   const tickets: any[] = [];
-  const p = pultWorld({ admin: { cabinetTicket: (x) => { tickets.push(x); return Promise.resolve(); } } });
+  const p = shellWorld({ admin: { cabinetTicket: (x) => { tickets.push(x); return Promise.resolve(); } } });
   const db = p.w.hq.db;
   const reg = (over: Record<string, unknown> = {}) => p.call('POST', '/admin/clients', { email: 'alice@example.com', name: 'Алиса', supabaseId: 'abc', ...over });
   /** A lead of a cabinet client the way the webhook makes it (task + row + link). */

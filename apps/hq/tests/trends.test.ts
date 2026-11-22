@@ -3,7 +3,7 @@ import { MockLlm, OffLlm, type LlmClient } from '@fir/core';
 import { describe, expect, it } from 'vitest';
 import { HELP } from '../src/director.js';
 import { carouselJson, clipJson, OWNER } from './helpers.js';
-import { serve } from './pult-helpers.js';
+import { serve } from './shell-helpers.js';
 import { NO_SUBTITLES, macAnswers } from './reach-helpers.js';
 import { reviewWorld } from './review-helpers.js';
 

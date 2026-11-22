@@ -6,14 +6,14 @@ import { parseLink } from '@fir/worker-trend-scout';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import type { MarketingHead } from './heads/marketing.js';
-import { fail, ok } from './pult-crm.js';
+import { fail, ok } from './shell-crm.js';
 
 /**
  * `POST /admin/trends { url, note? }` and `GET /admin/trends`: the owner's own links for the Trendwatcher (the same flow as `/trend <url> [note]` in the Director bot).
  * Status per link: `analysing` (queued, being read or analysed, the analogue is being written), `proposed` (the analogue waits in the review center), `done` (the owner
  * decided it), `failed` (`error` says why). Contract: `docs/admin-crm-api.md`, section «Ревью-центр (2026-11-21)».
  */
-export interface PultTrendsDeps {
+export interface ShellTrendsDeps {
   hq: Hq;
   now: () => number;
   marketing?: MarketingHead | undefined;
@@ -24,7 +24,7 @@ const iso = (ms: number) => new Date(ms).toISOString();
 
 export const LINK_STATUSES = ['analysing', 'proposed', 'done', 'failed'] as const;
 
-export function createPultTrends(d: PultTrendsDeps) {
+export function createShellTrends(d: ShellTrendsDeps) {
   const { hq } = d;
   const db = hq.db;
 

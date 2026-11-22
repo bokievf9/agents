@@ -6,34 +6,34 @@ import type { createCrm } from './admin-crm.js';
 import type { Director } from './director.js';
 import type { OwnerChannel } from './presence.js';
 import type { MarketingHead } from './heads/marketing.js';
-import { createAgents } from './pult-agents.js';
-import { createCompany } from './pult-company.js';
+import { createAgents } from './shell-agents.js';
+import { createCompany } from './shell-company.js';
 import type { AppTools } from './tools.js';
 import type { CabDocs } from './cab-docs.js';
-import { createPultContent } from './pult-content.js';
-import { createMetrics, SiteEvents } from './pult-events.js';
-import { createHub } from './pult-hub.js';
-import { createPultCrm, fail, ok } from './pult-crm.js';
+import { createShellContent } from './shell-content.js';
+import { createMetrics, SiteEvents } from './shell-events.js';
+import { createHub } from './shell-hub.js';
+import { createShellCrm, fail, ok } from './shell-crm.js';
 import type { Calls } from './calls.js';
 import { createChats, type ChatsClient } from './chats.js';
 import { createReview } from './review.js';
-import { createPultTrends } from './pult-trends.js';
+import { createShellTrends } from './shell-trends.js';
 import { createReach } from './reach.js';
 import type { DrillStatus } from './drill.js';
-import { createProcesses } from './pult-processes.js';
-import { createCalendar } from './pult-calendar.js';
-import { createAudit } from './pult-audit.js';
-import { createAnalytics } from './pult-analytics.js';
+import { createProcesses } from './shell-processes.js';
+import { createCalendar } from './shell-calendar.js';
+import { createAudit } from './shell-audit.js';
+import { createAnalytics } from './shell-analytics.js';
 import type { SettingsApi } from './settings.js';
-import { createKnowledgeApi, type PultKnowledgeDeps } from './pult-knowledge.js';
-import { createQualityApi } from './pult-quality.js';
+import { createKnowledgeApi, type ShellKnowledgeDeps } from './shell-knowledge.js';
+import { createQualityApi } from './shell-quality.js';
 
 /**
- * «Пульт v3»: the owner workplace routes added on top of `/admin/*` (hub, CRM writes, content, metrics, company).
+ * «Shell v3»: the owner workplace routes added on top of `/admin/*` (hub, CRM writes, content, metrics, company).
  * Each handler reuses the code the Telegram side already runs (approval queue, `/paid`, `/mdone`, `/level`, routines), never a copy.
- * Contract: `docs/admin-crm-api.md`, section «Пульт v3».
+ * Contract: `docs/admin-crm-api.md`, section «Shell v3».
  */
-export interface PultDeps {
+export interface ShellDeps {
   hq: Hq;
   queue: ApprovalQueue;
   director: Director;
@@ -61,13 +61,13 @@ export interface PultDeps {
   /** The Drill behind `/admin/processes/drill` (`drill.ts`). */
   drill?: { command(arg: string): Promise<string>; status(): DrillStatus } | undefined;
   /** The lead manager on Fira (when `FIRA_LEAD_MANAGER=on`): owner notes of `/admin/knowledge` go into its search. */
-  fira?: PultKnowledgeDeps['fira'];
+  fira?: ShellKnowledgeDeps['fira'];
 }
 
-export function createPult(d: PultDeps) {
+export function createShell(d: ShellDeps) {
   const hub = createHub(d.hq.db, d.now);
-  const crm = createPultCrm(d);
-  const content = createPultContent(d);
+  const crm = createShellCrm(d);
+  const content = createShellContent(d);
   const metrics = createMetrics(d.hq.db, d.now, () => d.hq.tz, new SiteEvents(d.hq.db, d.now, () => d.hq.tz));
   const company = createCompany(d);
   const agents = createAgents(d);
@@ -76,7 +76,7 @@ export function createPult(d: PultDeps) {
     callLead: (leadId, at) => crm.handle('POST', ['leads', String(leadId), 'call'], new URLSearchParams(), { at }),
   });
   const chats = createChats({ hq: d.hq, now: d.now, client: d.client, webReply: d.webReply });
-  const trends = createPultTrends({ hq: d.hq, now: d.now, marketing: d.marketing });
+  const trends = createShellTrends({ hq: d.hq, now: d.now, marketing: d.marketing });
   const reach = createReach({ hq: d.hq, now: d.now });
   const processes = createProcesses({ db: d.hq.db, now: d.now, drill: d.drill });
   const calendar = createCalendar({ hq: d.hq, db: d.hq.db, now: d.now });
@@ -85,7 +85,7 @@ export function createPult(d: PultDeps) {
   const quality = createQualityApi({ db: d.hq.db, now: d.now, setting: (k) => d.hq.setting(k) });
   const analytics = createAnalytics({ db: d.hq.db, now: d.now, tz: () => d.hq.tz, numbers: metrics.numbers });
 
-  /** `seg`: the path after `/admin/`. null: not a «Пульт v3» route. */
+  /** `seg`: the path after `/admin/`. null: not a «Shell v3» route. */
   async function handle(method: string, seg: string[], query: URLSearchParams, body: unknown): Promise<AdminReply | null> {
     const [a] = seg;
     if (a === 'hub') return method === 'GET' && seg.length === 1 ? ok(hub.get()) : fail(404, 'not_found');

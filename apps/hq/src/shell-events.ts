@@ -3,12 +3,12 @@ import { aggregate, weekVideoIds } from '@fir/worker-analyst';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import { StageContext, rankOf } from './lead-stage.js';
-import { fail, ok } from './pult-crm.js';
-import { isoWeekOf, shiftWeek, todayIn, weekRange, weekWindow } from './pult-week.js';
+import { fail, ok } from './shell-crm.js';
+import { isoWeekOf, shiftWeek, todayIn, weekRange, weekWindow } from './shell-week.js';
 
 /**
  * Site events (`POST /events`, public with the site token) and the weekly numbers (`GET /admin/metrics/week`).
- * The table keeps counters per day, name, page, referral slug and language: no visitor id, no IP, no text. Contract: `docs/admin-crm-api.md` («Пульт v3»).
+ * The table keeps counters per day, name, page, referral slug and language: no visitor id, no IP, no text. Contract: `docs/admin-crm-api.md` («Shell v3»).
  */
 export const EVENT_NAMES = ['chat_open', 'builder_done', 'estimate_pdf', 'lead_sent', 'audit_sent', 'ref_click', 'cabinet_signup', 'cabinet_offer_click', 'pay_view', 'blog_view'] as const;
 export type EventName = (typeof EVENT_NAMES)[number];

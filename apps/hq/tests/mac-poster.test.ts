@@ -5,15 +5,15 @@ import { join } from 'node:path';
 import { createTools } from '@fir/core';
 import { storeFor } from '@fir/worker-content-maker';
 import { describe, expect, it } from 'vitest';
-import { pultWorld, type PultWorld } from './pult-helpers.js';
+import { shellWorld, type ShellWorld } from './shell-helpers.js';
 
 const NEW_PACK = { postsPerWeek: 3, storiesPerWeek: 5, carouselsPerWeek: 2 };
 const WEEK = '2026-W48';
-const store = (p: PultWorld) => storeFor({ db: p.w.db, now: p.w.hq.now });
+const store = (p: ShellWorld) => storeFor({ db: p.w.db, now: p.w.hq.now });
 
 /** The pack of the week, with every item of Monday 23.11 approved through the API. */
 async function monday() {
-  const p = pultWorld({ cadence: NEW_PACK, rendersDir: mkdtempSync(join(tmpdir(), 'mac-poster-')) });
+  const p = shellWorld({ cadence: NEW_PACK, rendersDir: mkdtempSync(join(tmpdir(), 'mac-poster-')) });
   p.w.hq.runRoutine('marketing-weekly-pack');
   await p.w.marketing.onHeartbeat();
   await p.w.director.sendApprovalBatch(false);
@@ -22,7 +22,7 @@ async function monday() {
   for (const i of day) expect((await p.call('POST', `/admin/content/${i.id}`, { action: 'approve' })).status).toBe(200);
   return { p, day };
 }
-const journal = (p: PultWorld, action: string) => p.w.db.prepare("SELECT COUNT(*) n FROM activity WHERE agent_id = 'mac-poster' AND action = ?").get(action) as { n: number };
+const journal = (p: ShellWorld, action: string) => p.w.db.prepare("SELECT COUNT(*) n FROM activity WHERE agent_id = 'mac-poster' AND action = ?").get(action) as { n: number };
 
 describe('the Mac helper reports through POST /admin/content/:id', () => {
   it('the item view carries publishedOn and the Instagram caption ready to paste', async () => {

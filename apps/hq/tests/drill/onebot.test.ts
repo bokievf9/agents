@@ -84,7 +84,7 @@ describe('the one HQ bot over the whole office', () => {
     expect(Object.keys(tools).sort()).toEqual([...Object.keys(EXEC_TOOL_DEFS), 'price_list'].sort());
     const inputs: Record<string, Record<string, unknown>[]> = {
       leads: [{}, { period: 'today' }, { period: 'month', query: 'Dilnoza' }, { id: 1 }, { id: 99999 }], projects: [{}, { query: 'Dilnoza' }, { id: 1 }], clients: [{}, { query: 'anvar' }],
-      money: [{}, { period: 'month' }], llm_costs: [{}, { period: 'today' }], tasks: [{}, { dept: 'sales' }, { dept: 'nope' }], director_history: [{ limit: 5 }], pult_link: [{ screen: 'review', id: 3 }, { screen: 'bogus' }],
+      money: [{}, { period: 'month' }], llm_costs: [{}, { period: 'today' }], tasks: [{}, { dept: 'sales' }, { dept: 'nope' }], director_history: [{ limit: 5 }], shell_link: [{ screen: 'review', id: 3 }, { screen: 'bogus' }],
     };
     for (const [name, t] of Object.entries(tools)) {
       for (const input of inputs[name] ?? [{}]) {
@@ -92,7 +92,7 @@ describe('the one HQ bot over the whole office', () => {
         const json = JSON.stringify(r);
         if (name === 'tasks' && input.dept === 'nope') { expect(r.ok).toBe(false); continue; }
         expect(r.ok, `${name} ${json.slice(0, 200)}`).toBe(true);
-        if (name !== 'price_list' && name !== 'pult_link') expect(json, name).toContain('https://firtech.pro/admin');
+        if (name !== 'price_list' && name !== 'shell_link') expect(json, name).toContain('https://firtech.pro/admin');
         for (const c of CONTACTS) expect(json, `${name} leaks ${c}`).not.toContain(c);
       }
     }
@@ -101,7 +101,7 @@ describe('the one HQ bot over the whole office', () => {
     expect(overview.approvalsWaiting).toBeGreaterThan(0);
     const lead = (await tools.leads!.run({ id: 1 }, ctx)).value.lead;
     expect(lead).toMatchObject({ id: 1, name: 'Dilnoza Karimova', link: 'https://firtech.pro/admin/clients?tab=pipeline&focus=1' });
-    expect((await tools.pult_link!.run({ screen: 'review', id: 3 }, ctx)).value.url).toBe('https://firtech.pro/admin/approvals?id=ap_3');
+    expect((await tools.shell_link!.run({ screen: 'review', id: 3 }, ctx)).value.url).toBe('https://firtech.pro/admin/approvals?id=ap_3');
   });
 
   it('a question in the bot: the model calls a tool, the answer goes to Telegram, the spend is in costs, the exchange in the history and the memory', async () => {

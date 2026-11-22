@@ -39,7 +39,7 @@ export function menuCommand(text: string): string | null {
 /** The owner's menu (scoped to his private chat), made from the one command list (`commands.ts`): at most 20 shown. */
 export const DIRECTOR_COMMANDS: BotCommand[] = DIRECTOR_MENU;
 
-/** The profile of the one HQ bot (2026-11-22): a reminder that answers questions; control lives in the Пульт. */
+/** The profile of the one HQ bot (2026-11-22): a reminder that answers questions; control lives in the Shell. */
 export const HQ_PROFILE = {
   description:
     'Shell Fir Tech: напоминает владельцу о главном (новый клиент, заявка, документ на одобрение, оплата, этап) и отвечает на любой вопрос о компании обычным текстом. Управление в Shell firtech.pro/admin. Отвечает только владельцу.',

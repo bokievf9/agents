@@ -3,12 +3,12 @@ import { stagesFor } from '@fir/core';
 import { BillingStore } from '@fir/worker-billing';
 import { PmStore } from '@fir/worker-project-manager';
 import { describe, expect, it } from 'vitest';
-import { pultWorld } from './pult-helpers.js';
+import { shellWorld } from './shell-helpers.js';
 
 /** Cabinet and Shell views of a project paid by stages, and the client's «Принять этап». */
 function setup() {
   let accept: (p: number, n: number) => Promise<any> = () => Promise.resolve({ status: 'unknown', text: '' });
-  const p = pultWorld({ admin: { acceptStage: (a, b) => accept(a, b) } });
+  const p = shellWorld({ admin: { acceptStage: (a, b) => accept(a, b) } });
   accept = (a, b) => Promise.resolve(p.production.acceptStage(a, b, 'client'));
   const db = p.w.hq.db;
   const pm = new PmStore(db, p.t);

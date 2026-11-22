@@ -1,10 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies of the API under test */
 import { describe, expect, it } from 'vitest';
-import { pultWorld, serve } from './pult-helpers.js';
+import { shellWorld, serve } from './shell-helpers.js';
 
 describe('GET /admin/analytics', () => {
   it('401 without the token, 404 for other paths and methods, 400 for a bad week', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const s = await serve(p);
     expect((await s.http('GET', '/admin/analytics', undefined, {})).status).toBe(401);
     expect((await s.http('GET', '/admin/analytics')).status).toBe(200);
@@ -15,7 +15,7 @@ describe('GET /admin/analytics', () => {
   });
 
   it('empty company: zeros and nulls in the contract shape', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const r = await p.call('GET', '/admin/analytics');
     expect(r.status).toBe(200);
     expect(Object.keys(r.json).sort()).toEqual(['firstResponse', 'from', 'funnel', 'ok', 'prevFirstResponse', 'prevFunnel', 'prevSite', 'prevWeek', 'site', 'sources', 'to', 'tz', 'week']);
@@ -25,7 +25,7 @@ describe('GET /admin/analytics', () => {
   });
 
   it('first answer time, sources and the funnel of the week agree with the weekly numbers', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const a = p.lead('Анна', { contact: '@anna' });
     const b = p.lead('Борис', { contact: '@boris' });
     p.lead('Вера');

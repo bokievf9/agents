@@ -14,8 +14,8 @@ import type { Director } from './director.js';
 import { ensureStageColumn, isStage, rankOf, STAGES } from './lead-stage.js';
 import type { OwnerChannel } from './presence.js';
 
-/** «Пульт v3»: lead writes, client 360, project detail and actions, invoices. Contract: `docs/admin-crm-api.md` («Пульт v3»). */
-export interface PultCrmDeps {
+/** «Shell v3»: lead writes, client 360, project detail and actions, invoices. Contract: `docs/admin-crm-api.md` («Shell v3»). */
+export interface ShellCrmDeps {
   hq: Hq;
   director: Director;
   channel: OwnerChannel;
@@ -57,7 +57,7 @@ const INVOICE_STATUSES = ['draft', 'issued', 'paid', 'void'] as const;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const dayDiff = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 
-export function createPultCrm(d: PultCrmDeps) {
+export function createShellCrm(d: ShellCrmDeps) {
   const { hq, crm, now } = d;
   const db = hq.db;
   const { views } = crm;
@@ -397,7 +397,7 @@ export function createPultCrm(d: PultCrmDeps) {
 
   const num = (v: string | undefined) => (v !== undefined && /^\d+$/.test(v) ? Number(v) : null);
 
-  /** `seg` is the path after `/admin/crm/`. null: not a «Пульт v3» route (the older CRM handler answers). */
+  /** `seg` is the path after `/admin/crm/`. null: not a «Shell v3» route (the older CRM handler answers). */
   async function handle(method: string, seg: string[], query: URLSearchParams, body: unknown): Promise<AdminReply | null> {
     const [panel, idRaw, sub] = seg;
     if (panel === 'leads' && idRaw !== undefined && method === 'POST') {

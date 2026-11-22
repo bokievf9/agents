@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { Bot } from 'grammy';
 import { installOwnerGlue } from '../../src/glue.js';
 import { OwnerAssistant } from '../../src/assistant.js';
-import { pultLinks } from '../../src/links.js';
+import { shellLinks } from '../../src/links.js';
 import { OwnerNotices } from '../../src/notices.js';
 import { TopicManager } from '../../src/topics.js';
 import { readFileSync } from 'node:fs';
@@ -36,8 +36,8 @@ import { cachedOffice } from '../../src/office.js';
 import { seedOrg } from '../../src/org.js';
 import { OwnerChannel } from '../../src/presence.js';
 import { payApi } from '../../src/pay.js';
-import { eventsApi } from '../../src/pult-events.js';
-import { serveFile } from '../../src/pult-files.js';
+import { eventsApi } from '../../src/shell-events.js';
+import { serveFile } from '../../src/shell-files.js';
 import { Reporter, type TopicSender } from '../../src/reporter.js';
 import { cachedStatus } from '../../src/status.js';
 import { seedTiming } from '../../src/timing.js';
@@ -80,10 +80,10 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
   const outbox = new OutboxMessenger(tg, { minGapMs: 0, backoffMs: 1, sleep: (ms) => { sleeps.push(ms); return Promise.resolve(); }, now: t });
   const hq = new Hq(db, { now: t });
   const lost = new LostLeads(hq);
-  const links = pultLinks('https://firtech.pro');
+  const links = shellLinks('https://firtech.pro');
   const channel: OwnerChannel = new OwnerChannel({
     hq, inner: outbox, ownerId: OWNER, approvalPending: (id) => queue.get(id)?.status === 'pending', onCardSent: (id, m) => queue.noteCard(id, OWNER, m),
-    telegram: 'notices', cards: o.tgCards ?? false, pultUrl: links.base,
+    telegram: 'notices', cards: o.tgCards ?? false, shellUrl: links.base,
   });
   const notices = new OwnerNotices({ hq, links, deliver: (html) => channel.notice(html) });
   const queue: ApprovalQueue = new ApprovalQueue(db, channel, OWNER, 20, t);
@@ -335,19 +335,19 @@ export async function drillWorld(o: { gatewayDown?: boolean; withServer?: boolea
     await marketing.onHeartbeat();
   };
   const decide = async (action: 'approve' | 'reject', id: number) => { const r = await queue.handle(action, id, OWNER); director.afterDecision(); return r; };
-  /** A command as the Shell runs it (`POST /admin/command`): inside the website scope, the replies come back (`pult`), nothing goes to Telegram. */
-  const pult: string[] = [];
+  /** A command as the Shell runs it (`POST /admin/command`): inside the website scope, the replies come back (`shellOut`), nothing goes to Telegram. */
+  const shellOut: string[] = [];
   const cmd = async (name: string, arg = '') => {
     const { replies } = await channel.capture(() => director.onCommand(name, arg));
-    pult.push(...replies);
+    shellOut.push(...replies);
     return replies;
   };
   /** Everything the owner can see: Telegram, the inbox of the Shell and the replies of the Shell's commands. */
-  const ownerSaw = () => [...tg.to(OWNER), ...channel.list({ limit: 200 }).map((m) => m.text), ...pult].join('\n');
+  const ownerSaw = () => [...tg.to(OWNER), ...channel.list({ limit: 200 }).map((m) => m.text), ...shellOut].join('\n');
   const close = () => new Promise<void>((res) => (url ? webhook.close(() => res()) : res()));
   return {
     bot, api, press, say, settle, clock, db, tg, hq, queue, channel, llm, calls, state, director, marketing, support, sales, production, backoffice, drill, billing, payWatch, chain, chainGets, admin, webhook, url, http, adm,
-    cabinet, callBook, emails, emailFail, site, heartbeat, beat, decide, cmd, pult, alerts, posted, lost, webChat, reloads, toWeb, toClient, tools, fetched, rendersDir, dataDir, sleeps, outbox, ownerSaw, close, startRoutines: () => startRoutines(hq),
+    cabinet, callBook, emails, emailFail, site, heartbeat, beat, decide, cmd, shellOut, alerts, posted, lost, webChat, reloads, toWeb, toClient, tools, fetched, rendersDir, dataDir, sleeps, outbox, ownerSaw, close, startRoutines: () => startRoutines(hq),
     links, notices, assistant, assistantScript, chatCalls,
   };
 }

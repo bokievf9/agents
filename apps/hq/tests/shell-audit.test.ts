@@ -1,13 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies of the API under test */
 import { describe, expect, it } from 'vitest';
-import { pultWorld, serve } from './pult-helpers.js';
+import { shellWorld, serve } from './shell-helpers.js';
 
 const SCHEMA = `CREATE TABLE IF NOT EXISTS settings_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, key TEXT NOT NULL, old TEXT NOT NULL, new TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'owner')`;
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 describe('GET /admin/audit', () => {
   it('401 without the token, 404 for other paths and methods, 400 for bad filters', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const s = await serve(p);
     expect((await s.http('GET', '/admin/audit', undefined, {})).status).toBe(401);
     expect((await s.http('GET', '/admin/audit')).status).toBe(200);
@@ -22,7 +22,7 @@ describe('GET /admin/audit', () => {
   });
 
   it('merges decisions, settings, instructions, trust and owner actions without any text or value', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const db = p.w.hq.db;
     db.exec(SCHEMA);
     const t = p.t();
@@ -53,7 +53,7 @@ describe('GET /admin/audit', () => {
   });
 
   it('filters by kind, actor and date; the cursor pages without gaps or repeats', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const db = p.w.hq.db;
     const t = p.t();
     for (let i = 0; i < 7; i++) db.prepare("INSERT INTO decisions (approval_id, kind, decision, at) VALUES (?, 'k', ?, ?)").run(i, i % 2 ? 'reject' : 'approve', t - i * 1000);

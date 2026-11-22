@@ -2,7 +2,7 @@ import { Cron } from 'croner';
 import { errMsg, log, zonedParts, zonedToMs, type Db } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import type { AdminReply } from './admin.js';
-import { fail, ok } from './pult-crm.js';
+import { fail, ok } from './shell-crm.js';
 
 /**
  * `GET /admin/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD`: one read-only list of what is on the calendar, for the HQ «Calendar» grid: call bookings,

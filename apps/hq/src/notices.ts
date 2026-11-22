@@ -1,15 +1,15 @@
 import { errMsg, escapeHtml, log, migrate, productName, zonedParts, type Db } from '@fir/core';
 import type { AlertKind, AlertOpts, Hq } from '@fir/hq';
-import type { PultLinks, PultScreen } from './links.js';
+import type { ShellLinks, ShellScreen } from './links.js';
 import { kindRu } from './tg.js';
 
 /**
  * The reminders of the one HQ bot (owner 2026-11-22: «в Telegram только напоминания: новый клиент, новая заявка, документ на одобрение; мало
- * инфы, только основное, никаких функций»). Each event is one or two lines and one link into the Пульт; names of clients may be there, contacts and
+ * инфы, только основное, никаких функций»). Each event is one or two lines and one link into the Shell; names of clients may be there, contacts and
  * texts of clients never (the log rule carried over to Telegram).
  *
  * Where the events come from: `scan()` reads the tables every 30 seconds (`dueTick`) and notes what is new by a key (`ref`), so every path that
- * writes them (the site, the cabinet, the bots, the Пульт, the payment watch) is covered and a restart repeats nothing; alerts are pushed by the
+ * writes them (the site, the cabinet, the bots, the Shell, the payment watch) is covered and a restart repeats nothing; alerts are pushed by the
  * Director (`alert`). Grouping: one message in 5 minutes per type (payments, alerts and summaries go at once); in the owner's quiet hours nothing goes,
  * the night's notices become one line of the morning summary (`takeNight`). At the desk (the site open) a notice is skipped: the inbox shows it.
  */
@@ -19,7 +19,7 @@ export const NOTICE_TYPES: readonly NoticeType[] = ['client', 'lead', 'approval'
 /** The switch of a type in the settings (`notice.<name>`): the two stage types share one. Summaries are not switchable. */
 const SWITCH: Partial<Record<NoticeType, string>> = { client: 'client', lead: 'lead', approval: 'approval', payment: 'payment', stage_ready: 'stage', stage_accepted: 'stage', signed: 'signed', call: 'call', human: 'human', chat: 'chat' };
 
-/** Alerts that are reminders (Telegram); the rest stay in the Пульт and count in the morning line. */
+/** Alerts that are reminders (Telegram); the rest stay in the Shell and count in the morning line. */
 export const TG_ALERT_KINDS: ReadonlySet<AlertKind> = new Set<AlertKind>(['lost_lead', 'email_failed', 'llm', 'budget', 'service', 'human']);
 
 const UNGROUPED: ReadonlySet<NoticeType> = new Set<NoticeType>(['payment', 'human', 'alert', 'summary']);
@@ -47,7 +47,7 @@ CREATE INDEX IF NOT EXISTS owner_notices_open ON owner_notices (state, type, id)
 `;
 
 /** The words of a group of notices of one type («Новые заявки: 3»). */
-const GROUP_RU: Record<NoticeType, [string, PultScreen]> = {
+const GROUP_RU: Record<NoticeType, [string, ShellScreen]> = {
   client: ['Новые клиенты в кабинете', 'clients'],
   lead: ['Новые заявки', 'leads'],
   approval: ['На одобрение', 'review'],
@@ -98,7 +98,7 @@ interface Row { id: number; at: number; type: NoticeType; ref: string | null; te
 
 export interface NoticeDeps {
   hq: Hq;
-  links: PultLinks;
+  links: ShellLinks;
   /** The Telegram side: the owner channel's `notice` (skips at the desk). */
   deliver: (html: string) => Promise<'sent' | 'desk' | 'capture'>;
 }
@@ -142,7 +142,7 @@ export class OwnerNotices {
     return true;
   }
 
-  /** An alert from `hq.alert` (through the Director): the reminder kinds only; the rest stays in the Пульт. */
+  /** An alert from `hq.alert` (through the Director): the reminder kinds only; the rest stays in the Shell. */
   async alert(text: string, o: AlertOpts = {}): Promise<boolean> {
     if (!TG_ALERT_KINDS.has(o.kind ?? 'other')) return false;
     if (this.d.hq.setting(`notice.alert.${o.kind ?? 'other'}`) === '0') return false;

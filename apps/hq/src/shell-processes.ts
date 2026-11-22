@@ -2,7 +2,7 @@ import { errMsg, log, type Db } from '@fir/core';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import type { DrillStatus } from './drill.js';
-import { fail, ok } from './pult-crm.js';
+import { fail, ok } from './shell-crm.js';
 
 /**
  * `GET /admin/processes` and `POST /admin/processes/drill`: the map of the process chains of `docs/process-audit` (client money chain, support,
@@ -170,14 +170,14 @@ const clip = (s: string, n = 160): string => {
 };
 const iso = (ms: number | null): string | null => (ms === null ? null : new Date(ms).toISOString());
 
-export interface PultProcessesDeps {
+export interface ShellProcessesDeps {
   db: Db;
   now: () => number;
   /** The Drill: `command('')` starts it, `command('clear')` removes the test data, `status()` is the table as data. Absent: the button answers 503. */
   drill?: { command(arg: string): Promise<string>; status(): DrillStatus } | undefined;
 }
 
-export function createProcesses(d: PultProcessesDeps) {
+export function createProcesses(d: ShellProcessesDeps) {
   const { db, now } = d;
 
   /** A table that does not exist yet (a worker never started) is an empty result, not an error. */

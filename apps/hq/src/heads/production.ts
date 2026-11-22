@@ -205,7 +205,7 @@ export class ProductionHead {
     if (m.acceptedAt !== null) return { status: 'already', text: `Этап ${stageNo} уже принят.` };
     if (m.paidAt === null) return { status: 'not_paid', text: `Этап ${stageNo} ещё не оплачен: принять его нельзя.` };
     // P-15: nobody accepts a stage that is still running, the owner included: the client would read «Этап принят» for work he never saw.
-    // The owner first marks it ready (`/mready`, Пульт `ready_milestone`): the client gets «Принять этап»; then either of them accepts.
+    // The owner first marks it ready (`/mready`, Shell `ready_milestone`): the client gets «Принять этап»; then either of them accepts.
     if (m.status !== 'done') {
       return {
         status: 'not_ready',
@@ -236,7 +236,7 @@ export class ProductionHead {
   }
 
   /**
-   * P-14: the owner says a paid stage is finished (`/mready <project> <stage>`, Пульт `ready_milestone`) when the work was not done through the builder chain: the
+   * P-14: the owner says a paid stage is finished (`/mready <project> <stage>`, Shell `ready_milestone`) when the work was not done through the builder chain: the
    * same steps as a builder's accepted result (`markDone` + `afterMilestone`), so the client gets «Принять этап» in the cabinet and by email. Once only;
    * an unpaid stage cannot be ready. An older milestone (no stage number) is simply closed, as `/mdone` does.
    */

@@ -6,7 +6,7 @@ import type { SiteBooking, SiteBookingRequest } from './client/site-slots.js';
 
 /**
  * Calls with leads (audit 2026-11-22, P-02, P-04, P-18, P-19, P-20): HQ keeps the booking of every call, wherever it was picked (the website chat, the site's
- * form, the client bot, the Пульт). A window HQ books itself goes to the site (`POST <site>/api/slots`) so it is not offered twice; when the site does not take
+ * form, the client bot, the Shell). A window HQ books itself goes to the site (`POST <site>/api/slots`) so it is not offered twice; when the site does not take
  * it, the Sales head gets «подтвердить созвон». The client hears the time, a confirmation and a move by his own channel (the cabinet thread and an email, the
  * client bot, the website chat); reminders go a day and an hour before (client and owner), in the market's time zone (`TZ`), once each (`remind_24`, `remind_1`).
  * Logs carry ids only; the client's name and contact stay in the database and in the owner's own lines.
@@ -117,7 +117,7 @@ export class Calls {
   /**
    * A call for a lead at `at`: a new booking, the same one again (nothing happens) or a move of the live one (`reschedule`). The window goes to the site unless the
    * site booked it itself (`siteBooked`: the site's form); a window the site did not take becomes a Sales task «подтвердить созвон». `tell`: the client hears the
-   * time by his channel (the Пульт, P-18); the chat and the form already told him themselves.
+   * time by his channel (the Shell, P-18); the chat and the form already told him themselves.
    */
   async book(leadId: number, at: number, source: CallSource, o: { siteBooked?: boolean; tell?: boolean } = {}): Promise<{ booking: CallBooking; told: Told[]; moved: boolean } | null> {
     const lead = this.lead(leadId);
@@ -142,7 +142,7 @@ export class Calls {
     return { booking: this.of(leadId)!, told, moved: false };
   }
 
-  /** P-19: the owner confirms the time (Пульт). The client hears it by his channel. Null without a live booking. */
+  /** P-19: the owner confirms the time (Shell). The client hears it by his channel. Null without a live booking. */
   async confirm(leadId: number): Promise<{ booking: CallBooking; told: Told[] } | null> {
     const lead = this.lead(leadId);
     const live = this.of(leadId);

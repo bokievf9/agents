@@ -271,7 +271,7 @@ export class Drill {
     return rows;
   }
 
-  /** The same rows as the table of `/drill report`, as data for the Пульт (`GET /admin/processes`): no side effects except `advance()`. */
+  /** The same rows as the table of `/drill report`, as data for the Shell (`GET /admin/processes`): no side effects except `advance()`. */
   status(): DrillStatus {
     const started = Number(this.hq.setting(STARTED) || 0);
     if (!this.drillTasks().length && !started) return { state: 'none', startedAt: null, elapsedMs: 0, counts: { ok: 0, wait: 0, fail: 0, run: 0 }, rows: [], openApprovals: 0 };

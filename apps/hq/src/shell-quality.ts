@@ -1,7 +1,7 @@
 import { migrate, type Db } from '@fir/core';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
-import { fail, ok } from './pult-crm.js';
+import { fail, ok } from './shell-crm.js';
 import { SqliteLessons } from './fira-lessons.js';
 
 /**
@@ -50,13 +50,13 @@ const iso = (ms: number): string => new Date(ms).toISOString();
 const has = (db: Db, t: string): boolean => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(t));
 const limitOf = (q: URLSearchParams): number => Math.min(500, Math.max(1, Number(q.get('limit')) || 100));
 
-export interface PultQualityDeps {
+export interface ShellQualityDeps {
   db: Db;
   now: () => number;
   setting: (key: string) => string;
 }
 
-export function createQualityApi(d: PultQualityDeps) {
+export function createQualityApi(d: ShellQualityDeps) {
   const { db } = d;
   migrate(db, SCHEMA);
   const lessons = new SqliteLessons(db); // creates fira_lessons when the lead manager is off

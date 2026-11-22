@@ -1,7 +1,7 @@
 import { errMsg, log, zonedToMs, type Db } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import type { AdminReply } from './admin.js';
-import { fail, ok } from './pult-crm.js';
+import { fail, ok } from './shell-crm.js';
 
 /**
  * `GET /admin/audit?kind&actor&from&to&cursor&limit`: one read-only journal of changes and decisions for the HQ «Audit log» section.

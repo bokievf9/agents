@@ -3,12 +3,12 @@ import { escalationModeOf } from '@fir/fira';
 import type { Hq } from '@fir/hq';
 import { ensureCabinetTables } from './cabinet.js';
 import { createFiraLead, registerFiraLead, type FiraLead } from './client/fira-lead.js';
-import { ownerChunks } from './pult-knowledge.js';
+import { ownerChunks } from './shell-knowledge.js';
 import { harvestLessons, SqliteLessons } from './fira-lessons.js';
 
 /**
  * `FIRA_LEAD_MANAGER=on`: the lead manager of the web chat and the client bot answers through Fira (`client/fira-lead.ts`). Escalations go to the owner as
- * `hq.alert(kind: 'human')` (the Пульт; Telegram once `notices.ts` lets the kind through), the mode is the setting `autopilot.leadManager`
+ * `hq.alert(kind: 'human')` (the Shell; Telegram once `notices.ts` lets the kind through), the mode is the setting `autopilot.leadManager`
  * (`ask_me | policy | autopilot`, default `policy`), the leak guard knows the names of the cabinet's clients, the company pack is loaded again every night, the owner's corrections become lessons every hour (`fira-lessons.ts`).
  */
 export function startFiraLeadManager(o: { hq: Hq; db: Db }): FiraLead {

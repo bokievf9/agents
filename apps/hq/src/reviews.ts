@@ -5,7 +5,7 @@ import { ensureCabinetTables } from './cabinet.js';
 
 /**
  * P-16 (audit 2026-11-22): the client's review of a closed project. One per project, from the cabinet form (`POST /admin/clients/:id/reviews`); the owner lists
- * them in the Пульт (`GET /admin/crm/reviews`). The request to leave one goes with the last stage's acceptance (`CabDocs.onStageAccepted`).
+ * them in the Shell (`GET /admin/crm/reviews`). The request to leave one goes with the last stage's acceptance (`CabDocs.onStageAccepted`).
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS crm_reviews (

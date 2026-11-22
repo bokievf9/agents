@@ -4,7 +4,7 @@ import type { Hq } from '@fir/hq';
 import { createCrm } from './admin-crm.js';
 import { createChats } from './chats.js';
 import { createDirectorHistory } from './director-history.js';
-import { PULT_SCREENS, type PultLinks, type PultScreen } from './links.js';
+import { SHELL_SCREENS, type ShellLinks, type ShellScreen } from './links.js';
 import { deptRu, lastReason, reasonRu } from './progress.js';
 import { buildStatus } from './status.js';
 import { kindRu } from './tg.js';
@@ -12,12 +12,12 @@ import { kindRu } from './tg.js';
 /**
  * The read-only tools of the owner's assistant (`packages/fira/role-packs/executive-assistant.md`), over the stores HQ already has. The definitions
  * are Fira's (`EXEC_TOOL_DEFS`, the same ones the eval set mocks); here is only `run`. Rules: nothing writes, no contacts and no texts of clients or
- * anonymous visitors in a result (names may be there), every result carries the `link` of its Пульт screen.
+ * anonymous visitors in a result (names may be there), every result carries the `link` of its Shell screen.
  */
 
 export interface AssistantToolDeps {
   hq: Hq;
-  links: PultLinks;
+  links: ShellLinks;
   /** What is waiting in the approval queue of the core (pending cards), next to the proposals of HQ. */
   pendingApprovals?: () => number;
   /** The company settings as `GET /admin/settings` answers them (`settings.ts` `view`); absent: the tool says so. Read only. */
@@ -245,8 +245,8 @@ export function assistantTools(d: AssistantToolDeps): ToolRegistry {
 
     ['price_list', priceList],
 
-    tool('pult_link', (input) => {
-      const screen = (PULT_SCREENS as readonly string[]).includes(String(input.screen)) ? (input.screen as PultScreen) : 'home';
+    tool('shell_link', (input) => {
+      const screen = (SHELL_SCREENS as readonly string[]).includes(String(input.screen)) ? (input.screen as ShellScreen) : 'home';
       return Promise.resolve(okv({ url: links.to(screen, int(input.id)) }));
     }),
   ];

@@ -1,18 +1,18 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies of the API under test */
 import { describe, expect, it } from 'vitest';
 import { ROLE_TITLES } from '@fir/core';
-import { pultWorld, serve } from './pult-helpers.js';
+import { shellWorld, serve } from './shell-helpers.js';
 
 describe('Agents section: GET /admin/agents and /admin/agents/:id', () => {
   it('401 without the token', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const s = await serve(p);
     expect((await s.http('GET', '/admin/agents', undefined, {})).status).toBe(401);
     await s.close();
   });
 
   it('list: every agent with an English title, departments with their limit and spend', async () => {
-    const p = pultWorld({ budget: 25 });
+    const p = shellWorld({ budget: 25 });
     p.w.hq.recordCost({ agentId: 'content-maker', model: 'claude-sonnet-5-5', inputTokens: 1000, outputTokens: 500, usd: 0.5 });
     const r = await p.call('GET', '/admin/agents');
     expect(r.status).toBe(200);
@@ -30,7 +30,7 @@ describe('Agents section: GET /admin/agents and /admin/agents/:id', () => {
   });
 
   it('card: role, instructions, trust, tools, budget, Fira pack, history counters; unknown id is 404', async () => {
-    const p = pultWorld({ budget: 25 });
+    const p = shellWorld({ budget: 25 });
     const r = await p.call('GET', '/admin/agents/content-maker');
     expect(r.status).toBe(200);
     expect(r.json.agent).toMatchObject({ id: 'content-maker', title: 'Content Maker', dept: 'marketing', role: 'worker' });
@@ -45,7 +45,7 @@ describe('Agents section: GET /admin/agents and /admin/agents/:id', () => {
   });
 
   it('Fira pack for the director (executive assistant) is described without a file error', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const r = await p.call('GET', '/admin/agents/director');
     expect(r.json.fira).toMatchObject({ pack: 'executive-assistant' });
     expect(r.json.fira.error).toBeUndefined();
@@ -53,7 +53,7 @@ describe('Agents section: GET /admin/agents and /admin/agents/:id', () => {
   });
 
   it('history carries ids and counters only, never task titles or client text', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     p.w.hq.createTask({ title: 'Секретный клиент Иванов', dept: 'marketing', creator: 'owner', assigneeId: 'content-maker' });
     const r = await p.call('GET', '/admin/agents/content-maker');
     expect(r.json.history.tasksByStatus).toEqual({ assigned: 1 });
@@ -64,7 +64,7 @@ describe('Agents section: GET /admin/agents and /admin/agents/:id', () => {
 
 describe('Agents section: instruction versions', () => {
   it('the first edit stores the old text as v1, then v2; list is newest first, version text is readable', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const before = (await p.call('GET', '/admin/agents/marketing-head')).json.instructions.text as string;
     expect(before.length).toBeGreaterThan(0);
     const w = await p.call('POST', '/admin/agents/marketing-head/instructions', { text: 'Новая инструкция', note: 'проба' });
@@ -79,7 +79,7 @@ describe('Agents section: instruction versions', () => {
   });
 
   it('rollback makes a new version with the old text and keeps the history', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const before = p.w.hq.agent('marketing-head')!.instructions;
     await p.call('POST', '/admin/agents/marketing-head/instructions', { text: 'Правка' });
     const r = await p.call('POST', '/admin/agents/marketing-head/instructions/rollback', { version: 1 });
@@ -92,13 +92,13 @@ describe('Agents section: instruction versions', () => {
   });
 
   it('a worker without instructions: the first edit is v1 by the owner, no seed row', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const w = await p.call('POST', '/admin/agents/content-maker/instructions', { text: 'Первая' });
     expect(w.json.instructions.versions.map((v: any) => [v.version, v.actor])).toEqual([[1, 'owner']]);
   });
 
   it('refuses empty, oversized, extra-field and unchanged text; unknown agent is 404', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     expect((await p.call('POST', '/admin/agents/marketing-head/instructions', { text: '   ' })).status).toBe(400);
     expect((await p.call('POST', '/admin/agents/marketing-head/instructions', { text: 'x'.repeat(20_001) })).status).toBe(400);
     expect((await p.call('POST', '/admin/agents/marketing-head/instructions', { text: 'ok', extra: 1 })).status).toBe(400);

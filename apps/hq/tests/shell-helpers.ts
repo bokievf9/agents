@@ -10,7 +10,7 @@ import { CsStore } from '@fir/worker-customer-support';
 import { createAdmin, type AdminDeps } from '../src/admin.js';
 import { PRODUCTION_HEAD_ID, ProductionHead, seedProduction } from '../src/heads/production.js';
 import { SupportHead, seedSupport } from '../src/heads/support.js';
-import { serveFile } from '../src/pult-files.js';
+import { serveFile } from '../src/shell-files.js';
 import { createWebhook } from '../src/webhook.js';
 import { OWNER, world } from './helpers.js';
 
@@ -24,7 +24,7 @@ const mdeps = (t: () => number): CheckDeps => ({
 });
 
 /** The company world of the marketing tests plus Support (for `/paid`), Production (for `/mdone`), a client-bot spy and the admin API. */
-export function pultWorld(opts: Partial<Parameters<typeof world>[0]> & { admin?: Partial<AdminDeps> } = {}) {
+export function shellWorld(opts: Partial<Parameters<typeof world>[0]> & { admin?: Partial<AdminDeps> } = {}) {
   const w = world({ presence: true, ...opts });
   const t = () => w.clock.t;
   seedSupport(w.hq, { supportBudgetUsd: 0 }, () => 'Инструкция');
@@ -61,10 +61,10 @@ export function pultWorld(opts: Partial<Parameters<typeof world>[0]> & { admin?:
   const cs = new CsStore(w.hq.db, t);
   return { w, call, admin, lead, leads, cs, toClient, toWeb, billing, support, production, PRODUCTION_HEAD_ID, t };
 }
-export type PultWorld = ReturnType<typeof pultWorld>;
+export type ShellWorld = ReturnType<typeof shellWorld>;
 
 /** The admin API behind the real webhook server (token, 401, rate-limit behaviour). */
-export async function serve(p: PultWorld, extra: Parameters<typeof createWebhook>[6] = {}, rendersDir?: string, clock: () => number = Date.now) {
+export async function serve(p: ShellWorld, extra: Parameters<typeof createWebhook>[6] = {}, rendersDir?: string, clock: () => number = Date.now) {
   const server = createWebhook(() => Promise.resolve(0), undefined, clock, undefined, undefined, { token: TOKEN, handle: (r) => p.admin.handle(r), ...(rendersDir ? { file: (path: string, range: string | undefined) => serveFile(rendersDir, path, range) } : {}) }, extra);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');

@@ -224,7 +224,7 @@ export class SalesHead implements ApprovalEditor {
     const dueProduct = longestProduct(directions.map(productOfDirection));
     // the client of a cabinet lead accepts the КП and signs the contract himself: the chain has the client's two steps in the middle
     const cabinetClient = this.cabinet && lead ? this.cabinet.clientOfLead(lead.id) : null;
-    // P-10: a cabinet lead's project is reserved when the CLIENT accepts the КП (`CabDocs.accept`), not now: the Пульт never shows «готовим» for an
+    // P-10: a cabinet lead's project is reserved when the CLIENT accepts the КП (`CabDocs.accept`), not now: the Shell never shows «готовим» for an
     // unanswered КП. The old chain (no cabinet) reserves at once, as before. `{project}` in the chain lines is filled in when the project exists.
     const reservation = { client, what, product, leadId: lead?.id ?? null, packId, stages, dueProduct };
     const project = cabinetClient === null ? new PmStore(hq.db, hq.now).reserve({ ...reservation, dueAts: planStageDates(dueProduct, stages.map((x) => x.share), hq.now(), hq.tz) }) : null;

@@ -6,8 +6,8 @@ import { openDb } from '@fir/core';
 import { InMemoryKnowledge } from '@fir/fira';
 import { Hq } from '@fir/hq';
 import { describe, expect, it } from 'vitest';
-import { createKnowledgeApi, ownerChunks } from '../src/pult-knowledge.js';
-import { createQualityApi, saveEvalRun } from '../src/pult-quality.js';
+import { createKnowledgeApi, ownerChunks } from '../src/shell-knowledge.js';
+import { createQualityApi, saveEvalRun } from '../src/shell-quality.js';
 
 const NOW = Date.UTC(2026, 10, 23, 9, 0);
 const q = (s = '') => new URLSearchParams(s);

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies of the API under test */
-import type { PultWorld } from './pult-helpers.js';
+import type { ShellWorld } from './shell-helpers.js';
 
 /** What `agent-reach youtube read` prints (real shape, shortened). */
 export const YT_READ = {
@@ -14,7 +14,7 @@ export const NO_SUBTITLES = { ok: false, items: [], meta: {}, error: { code: 'NO
 type Answer = (job: { id: number; channel: string; action: string; args: Record<string, unknown> }) => unknown | { error: string };
 
 /** The Mac in a test: lists the queued jobs, claims each, answers with `answer(job)` (a CLI JSON or `{ error }`). Returns the jobs answered. */
-export async function macAnswers(p: PultWorld, answer: Answer, channels: string[] = ['youtube', 'web']): Promise<{ id: number; channel: string; action: string }[]> {
+export async function macAnswers(p: ShellWorld, answer: Answer, channels: string[] = ['youtube', 'web']): Promise<{ id: number; channel: string; action: string }[]> {
   const list = (await p.call('GET', `/admin/reach/jobs?status=queued&channels=${channels.join(',')}`)).json.items as any[];
   const done: { id: number; channel: string; action: string }[] = [];
   for (const j of list) {

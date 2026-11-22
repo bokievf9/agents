@@ -5,7 +5,7 @@ import type { AdminReply } from './admin.js';
 import { addCabMessage, addThreadMessage, ensureCabinetTables } from './cabinet.js';
 import type { ClientChannel } from './client/channel.js';
 import { ClientInbox } from './client-inbox.js';
-import { fail, ok } from './pult-crm.js';
+import { fail, ok } from './shell-crm.js';
 
 /**
  * Chats with clients: one thread per client, merged from the cabinet (`cab_clients`, `cab_messages`), the leads and their replies, the support tickets,

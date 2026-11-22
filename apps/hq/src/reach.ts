@@ -2,7 +2,7 @@ import { REACH_CHANNELS, REACH_SETTING_CHANNELS, ReachStore, reachChannels, clea
 import type { Hq } from '@fir/hq';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
-import { fail, ok } from './pult-crm.js';
+import { fail, ok } from './shell-crm.js';
 
 /**
  * Agent Reach on the owner's Mac, the HQ side (`docs/admin-crm-api.md`, «Reach (2026-11-21)»). The queue is `rc_jobs` (core `ReachStore`), the agents fill it through

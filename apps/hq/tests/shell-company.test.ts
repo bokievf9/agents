@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { seedOrg } from '../src/org.js';
 import { AGENT_STATUSES } from '../src/office.js';
 import { instructionsDir } from './helpers.js';
-import { pultWorld, serve } from './pult-helpers.js';
+import { shellWorld, serve } from './shell-helpers.js';
 import { TOOL_POLICY, createTools } from '@fir/core';
 import { appTools } from '../src/tools.js';
 
@@ -12,7 +12,7 @@ const DAY = 86_400_000;
 
 describe('GET /admin/company/playbooks/:role', () => {
   it('the whole markdown of a role; unknown role or missing file is 404', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const r = await p.call('GET', '/admin/company/playbooks/seo');
     expect(r.status).toBe(200);
     expect(r.json).toMatchObject({ ok: true, role: 'seo' });
@@ -24,7 +24,7 @@ describe('GET /admin/company/playbooks/:role', () => {
 
 describe('GET /admin/company', () => {
   it('tools: every tool with departments, set-up state (never a key), today\'s calls and errors, limits', async () => {
-    const plain = pultWorld();
+    const plain = shellWorld();
     const none = (await plain.call('GET', '/admin/company')).json.tools as any[];
     expect(none).toHaveLength(TOOL_POLICY.length);
     for (const t of none) expect(Object.keys(t).sort()).toEqual(['callsToday', 'configured', 'departments', 'env', 'errorsToday', 'limits', 'name']);
@@ -34,7 +34,7 @@ describe('GET /admin/company', () => {
       dataDir: '/tmp/x', rendersDir: '/tmp/x/renders', knowledgeDir: undefined, mediaSecret: 'm', igPublicBase: 'https://hq.example/media', braveSearchKey: 'BRAVE-SECRET', resendApiKey: 'RESEND-SECRET',
       emailFrom: 'a@b.co', gscServiceAccountJson: undefined, gscSiteUrl: undefined, youtubeApiKey: undefined, youtubeChannelId: undefined, ytOauthClientJson: undefined, ytRefreshToken: undefined, trongridApiKey: undefined, toncenterApiKey: undefined,
     });
-    const p = pultWorld({ admin: { tools: app } });
+    const p = shellWorld({ admin: { tools: app } });
     const t = createTools({ agentId: 'content-maker', dept: 'marketing', journal: p.w.hq, db: p.w.db, now: p.w.hq.now, tz: p.w.hq.tz });
     await t.media.qr('x'); // not allowed for marketing: one call, one error
     await t.cache.set('k', 1, 1000);
@@ -53,7 +53,7 @@ describe('GET /admin/company', () => {
   });
 
   it('401 without the token; routines, costs, trust, playbooks and workers in the contract shape', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const s = await serve(p);
     expect((await s.http('GET', '/admin/company', undefined, {})).status).toBe(401);
     await s.close();
@@ -82,7 +82,7 @@ describe('GET /admin/company', () => {
   });
 
   it('nextRunAt comes from the cron in the routine\'s own clock (owner or company), disabled ones have none', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const r = await p.call('GET', '/admin/company');
     const pack = r.json.routines.find((x: any) => x.name === 'marketing-weekly-pack');
     expect(pack.tz).toBe(p.w.hq.ownerTz);
@@ -99,7 +99,7 @@ describe('GET /admin/company', () => {
   });
 
   it('costs: today and month by department with the limit, the last 30 days by day', async () => {
-    const p = pultWorld({ budget: 50 });
+    const p = shellWorld({ budget: 50 });
     const { hq } = p.w;
     const rec = (usd: number, at: number) => { p.w.clock.t = at; hq.recordCost({ agentId: 'marketing-head', model: 'claude-haiku-5-5', inputTokens: 1, outputTokens: 1, usd }); };
     const now = Date.UTC(2026, 10, 18, 7, 0);
@@ -121,7 +121,7 @@ describe('GET /admin/company', () => {
   });
 
   it('trust lists every kind with its level, lock and the number of approvals', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const r = await p.call('GET', '/admin/company');
     const kind = (k: string) => r.json.trust.find((t: any) => t.kind === k);
     expect(kind('content_item')).toEqual({ kind: 'content_item', level: 0, locked: false, approvals: 0 });
@@ -138,7 +138,7 @@ describe('GET /admin/company', () => {
 describe('POST /admin/company/routines/:name', () => {
   it('switches a routine off and on, tells the app to restart its cron jobs, and the owner\'s switch survives a restart', async () => {
     let restarts = 0;
-    const p = pultWorld({ admin: { onRoutinesChange: () => { restarts++; } } });
+    const p = shellWorld({ admin: { onRoutinesChange: () => { restarts++; } } });
     const name = 'marketing-daily-today';
     let r = await p.call('POST', `/admin/company/routines/${name}`, { enabled: false });
     expect(r.json).toMatchObject({ ok: true, item: { name, enabled: false, nextRunAt: null } });
@@ -156,7 +156,7 @@ describe('POST /admin/company/routines/:name', () => {
   });
 
   it('validates the body, unknown routine 404, and the route needs a POST', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const name = 'marketing-daily-today';
     for (const bad of [{}, { enabled: 'yes' }, { enabled: 1 }, { enabled: true, extra: 1 }, null]) {
       expect((await p.call('POST', `/admin/company/routines/${name}`, bad)).json.error, JSON.stringify(bad)).toBe('invalid');
@@ -169,7 +169,7 @@ describe('POST /admin/company/routines/:name', () => {
 
 describe('POST /admin/company/routines/:name/run', () => {
   it('fires the routine now through Hq.runRoutine: a task, last run recorded, the head woken', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const name = 'marketing-trends-daily';
     const r = await p.call('POST', `/admin/company/routines/${name}/run`);
     expect(r.status).toBe(200);
@@ -187,7 +187,7 @@ describe('POST /admin/company/routines/:name/run', () => {
   });
 
   it('a disabled routine does not run; unknown 404; GET is not a way to run', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     await p.call('POST', '/admin/company/routines/marketing-trends-daily', { enabled: false });
     const r = await p.call('POST', '/admin/company/routines/marketing-trends-daily/run');
     expect(r.status).toBe(409);
@@ -199,7 +199,7 @@ describe('POST /admin/company/routines/:name/run', () => {
 
 describe('POST /admin/company/trust/:kind', () => {
   it('changes the level with the code of /level, a locked kind included, and says what the item is now', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const q = p.w.queue;
     let r = await p.call('POST', '/admin/company/trust/content_item', { level: 1 });
     expect(r.json).toEqual({ ok: true, item: { kind: 'content_item', level: 1, locked: false, approvals: 0 } });
@@ -218,7 +218,7 @@ describe('POST /admin/company/trust/:kind', () => {
   });
 
   it('validates the level (0 or 1 only), unknown kind 404', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     for (const bad of [{}, { level: 2 }, { level: '1' }, { level: -1 }, { level: 1, extra: true }, null]) {
       const r = await p.call('POST', '/admin/company/trust/content_item', bad);
       expect(r.status, JSON.stringify(bad)).toBe(400);

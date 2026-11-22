@@ -15,7 +15,7 @@ import type { Director } from './director.js';
 import type { MarketingHead } from './heads/marketing.js';
 import type { OwnerChannel } from './presence.js';
 import { AuditStore } from './audit-shared.js';
-import { fail, ok } from './pult-crm.js';
+import { fail, ok } from './shell-crm.js';
 import { PILOT_DIRECTIONS, withPilot } from '@fir/worker-presales';
 import { ReviewVersions, type ReviewVersion } from './review-versions.js';
 

@@ -5,26 +5,26 @@ import { join } from 'node:path';
 import { storeFor } from '@fir/worker-content-maker';
 import { describe, expect, it } from 'vitest';
 import { openPack } from './helpers.js';
-import { pultWorld, serve, type PultWorld } from './pult-helpers.js';
+import { shellWorld, serve, type ShellWorld } from './shell-helpers.js';
 
 const NEW_PACK = { postsPerWeek: 3, storiesPerWeek: 5, carouselsPerWeek: 2 };
 const WEEK = '2026-W48'; // the pack of the world covers Mon 23.11 - Sun 29.11
-const store = (p: PultWorld) => storeFor({ db: p.w.db, now: p.w.hq.now });
-const decisions = (p: PultWorld) => (p.w.db.prepare("SELECT COUNT(*) n FROM decisions WHERE kind = 'content_item'").get() as { n: number }).n;
+const store = (p: ShellWorld) => storeFor({ db: p.w.db, now: p.w.hq.now });
+const decisions = (p: ShellWorld) => (p.w.db.prepare("SELECT COUNT(*) n FROM decisions WHERE kind = 'content_item'").get() as { n: number }).n;
 
-async function packed(opts: Parameters<typeof pultWorld>[0] = {}) {
-  const p = pultWorld(opts);
+async function packed(opts: Parameters<typeof shellWorld>[0] = {}) {
+  const p = shellWorld(opts);
   p.w.hq.runRoutine('marketing-weekly-pack');
   await p.w.marketing.onHeartbeat();
   await p.w.director.sendApprovalBatch(false);
   return p;
 }
-const items = async (p: PultWorld, week = WEEK) => (await p.call('GET', `/admin/content?week=${week}`)).json.days.flatMap((d: any) => d.items) as any[];
-const firstOf = async (p: PultWorld, kind: string) => (await items(p)).find((i) => i.kind === kind);
+const items = async (p: ShellWorld, week = WEEK) => (await p.call('GET', `/admin/content?week=${week}`)).json.days.flatMap((d: any) => d.items) as any[];
+const firstOf = async (p: ShellWorld, kind: string) => (await items(p)).find((i) => i.kind === kind);
 
 describe('GET /admin/content', () => {
   it('401 without the token; the current week by default; a bad week is 400', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const s = await serve(p);
     expect((await s.http('GET', '/admin/content', undefined, {})).status).toBe(401);
     const r = await p.call('GET', '/admin/content');
@@ -62,7 +62,7 @@ describe('GET /admin/content', () => {
 
 describe('POST /admin/content/:itemId', () => {
   it('approve: the same queue path as the Telegram button; a second approve changes nothing (one decision, one journal row)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pult-renders-'));
+    const dir = mkdtempSync(join(tmpdir(), 'shell-renders-'));
     const p = await packed({ cadence: NEW_PACK, rendersDir: dir });
     const post = await firstOf(p, 'post');
     const before = decisions(p);
@@ -139,7 +139,7 @@ describe('POST /admin/content/:itemId', () => {
   });
 
   it('published marks every ready platform row (or one platform), idempotent; refused before approval', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pult-renders-'));
+    const dir = mkdtempSync(join(tmpdir(), 'shell-renders-'));
     const p = await packed({ rendersDir: dir });
     const clip = await firstOf(p, 'clip');
     expect((await p.call('POST', `/admin/content/${clip.id}`, { action: 'published' })).status).toBe(409);
@@ -158,7 +158,7 @@ describe('POST /admin/content/:itemId', () => {
   });
 
   it('rerender: a reel goes back to the render queue (status rendering), an image item is drawn again; not for unapproved items', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pult-renders-'));
+    const dir = mkdtempSync(join(tmpdir(), 'shell-renders-'));
     const p = await packed({ cadence: NEW_PACK, rendersDir: dir, renderReels: true });
     const clip = await firstOf(p, 'clip');
     const post = await firstOf(p, 'post');
@@ -193,7 +193,7 @@ describe('POST /admin/content/:itemId', () => {
   });
 
   it('an item that is not waiting (a draft) cannot be approved', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const id = store(p).insertItem({ packId: null, seq: 1, total: 1, type: 'post', topicKey: 'k', topicText: 'тема', plannedDate: '2026-11-24' });
     const it = (await items(p)).find((i) => i.id === id);
     expect(it).toMatchObject({ status: 'draft', title: 'тема' });
@@ -205,14 +205,14 @@ describe('POST /admin/content/:itemId', () => {
 
 describe('articles in the calendar', () => {
   async function withArticle() {
-    const p = pultWorld();
+    const p = shellWorld();
     p.w.hq.createTask({ title: 'Статья дня', body: '', dept: 'marketing', creator: 'owner', meta: { action: 'article' } });
     p.w.hq.wake('marketing-head', 'task');
     await p.w.marketing.onHeartbeat();
     await p.w.director.sendApprovalBatch(false);
     return { p, art: store(p).articles()[0]! };
   }
-  const row = async (p: PultWorld, id: string) => (await p.call('GET', '/admin/content?week=2026-W47')).json.days.flatMap((d: any) => d.items).find((i: any) => i.id === id);
+  const row = async (p: ShellWorld, id: string) => (await p.call('GET', '/admin/content?week=2026-W47')).json.days.flatMap((d: any) => d.items).find((i: any) => i.id === id);
 
   it('an article waits as pending with its approval id; ids are a<number>', async () => {
     const { p, art } = await withArticle();
@@ -261,7 +261,7 @@ describe('Content Studio: feed and orders', () => {
   });
 
   it('a prompt order is a Content Maker task; the result comes back as an approval linked to the order', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     expect((await p.call('POST', '/admin/content/orders', { mode: 'prompt', prompt: 'a' })).status).toBe(400);
     expect((await p.call('POST', '/admin/content/orders', { mode: 'prompt', prompt: 'Про ночные заявки', extra: 1 })).status).toBe(400);
     const r = await p.call('POST', '/admin/content/orders', { mode: 'prompt', prompt: 'Про ночные заявки в барбершопе', type: 'post' });

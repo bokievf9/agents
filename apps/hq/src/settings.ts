@@ -4,10 +4,10 @@ import type { Hq } from '@fir/hq';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import type { RateLimiter } from './client/sanitize.js';
-import { fail, ok } from './pult-crm.js';
+import { fail, ok } from './shell-crm.js';
 
 /**
- * The company settings of the Пульт (`GET` and `PATCH /admin/settings`, owner 2026-11-22): one JSON over what already lives in the `settings` table, the
+ * The company settings of the Shell (`GET` and `PATCH /admin/settings`, owner 2026-11-22): one JSON over what already lives in the `settings` table, the
  * agents' limits and the env (the env value is only the default until the owner changes it). Every change is validated as a whole, written, applied
  * without a restart where the code reads the value live, and journaled in `settings_log` (key, old, new, time, who; never a text of a client).
  * Contract: `docs/admin-crm-api.md`, section «Настройки (2026-11-22)».

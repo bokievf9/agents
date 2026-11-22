@@ -20,7 +20,7 @@ export interface Config extends BaseConfig {
   tgRunnerMax: number;
   /** ИИ-менеджер заявок on Fira (`client/fira-lead.ts`, `FIRA_LEAD_MANAGER=on`); off: the old JSON runtime. */
   firaLeadManager: boolean;
-  /** `TG_GROUP_REPORTS=on`: department reports into the topics of the HQ group again, posted by the HQ bot (off by default: reports stay in the Пульт). */
+  /** `TG_GROUP_REPORTS=on`: department reports into the topics of the HQ group again, posted by the HQ bot (off by default: reports stay in the Shell). */
   tgGroupReports: boolean;
   /** Telegram group of the HQ (with topics) and the topic ids by key: general, approvals, or a department id. */
   groupId: number | undefined;

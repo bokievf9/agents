@@ -4,7 +4,7 @@ import { addCabMessage, addThreadMessage, ensureCabinetTables, registerCabinetLe
 import { contactKey } from '../src/chats.js';
 import { ChatStore } from '../src/client/store.js';
 import { WebSessionStore } from '../src/client/web-store.js';
-import { serve } from './pult-helpers.js';
+import { serve } from './shell-helpers.js';
 import { reviewWorld, type ReviewWorld } from './review-helpers.js';
 
 const DAY = 86_400_000;

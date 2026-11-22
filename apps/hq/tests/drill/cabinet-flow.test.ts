@@ -184,10 +184,10 @@ describe('Cabinet v3: lead -> КП to the client -> accept -> contract -> signat
     expect(cab.projects[0].state).toBe('preparing');
     expect(cab.leads[0].nextAction.kind).toBe('pay_stage');
     // the Пульт shows the same: the project with its state and next action, the invoice with its cabinet document
-    const pultProject = (await w.adm('GET', `/admin/crm/projects/${cab.projects[0].id}`)).json.item;
-    expect(pultProject).toMatchObject({ state: 'preparing', nextAction: { kind: 'pay_stage', stageNo: 1 }, documents: expect.arrayContaining([quote.id, contract.id, invoice.id]) });
-    const pultInv = ((await w.adm('GET', '/admin/crm/invoices')).json.items as any[])[0];
-    expect(pultInv.documentId).toBe(invoice.id);
+    const shellProject = (await w.adm('GET', `/admin/crm/projects/${cab.projects[0].id}`)).json.item;
+    expect(shellProject).toMatchObject({ state: 'preparing', nextAction: { kind: 'pay_stage', stageNo: 1 }, documents: expect.arrayContaining([quote.id, contract.id, invoice.id]) });
+    const shellInv = ((await w.adm('GET', '/admin/crm/invoices')).json.items as any[])[0];
+    expect(shellInv.documentId).toBe(invoice.id);
 
     // 7. paid: the document is paid, the project runs, the stage chain stays intact (the next invoice comes after the acceptance)
     const invRow = w.db.prepare('SELECT id FROM bl_invoices').get() as { id: number };

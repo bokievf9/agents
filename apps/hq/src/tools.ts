@@ -8,7 +8,7 @@ import type { Config } from './config.js';
 
 /**
  * The app side of the agents' toolbox (`docs/tools.md`): the keys from the HQ config, and the adapters core cannot have itself
- * (the content-maker PNG renderer, the Пульт CRM views, the Publisher's YouTube quota). One `AppTools` per process; every head
+ * (the content-maker PNG renderer, the Shell CRM views, the Publisher's YouTube quota). One `AppTools` per process; every head
  * builds a toolbox per worker run with `toolsFor`.
  */
 export interface AppTools {
@@ -41,7 +41,7 @@ export async function renderPngFrame(frame: unknown): Promise<Uint8Array> {
 
 /** The process-wide adapters and keys, from the HQ config. */
 export function appTools(hq: Hq, llm: LlmClient, cfg: Pick<Config, 'dataDir' | 'rendersDir' | 'knowledgeDir' | 'mediaSecret' | 'igPublicBase' | 'braveSearchKey' | 'resendApiKey' | 'emailFrom' | 'gscServiceAccountJson' | 'gscSiteUrl' | 'youtubeApiKey' | 'youtubeChannelId' | 'ytOauthClientJson' | 'ytRefreshToken' | 'trongridApiKey' | 'toncenterApiKey'> & Partial<Pick<Config, 'openverseClientId' | 'openverseClientSecret'>>): AppTools {
-  // read-only views of the Пульт CRM: no hooks, so nothing a tool does can write through it
+  // read-only views of the Shell CRM: no hooks, so nothing a tool does can write through it
   const crm = createCrm(hq.db, hq.now);
   const quota = new PublishStore(hq.db);
   return {

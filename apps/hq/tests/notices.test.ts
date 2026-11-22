@@ -5,7 +5,7 @@ import { LeadStore } from '@fir/worker-lead-intake';
 import { BillingStore } from '@fir/worker-billing';
 import { ensureCabinetTables } from '../src/cabinet.js';
 import { ensureDocTables } from '../src/cab-docs.js';
-import { pultLinks } from '../src/links.js';
+import { shellLinks } from '../src/links.js';
 import { GROUP_MS, OwnerNotices, noContacts } from '../src/notices.js';
 import { OwnerChannel } from '../src/presence.js';
 import { seedTiming } from '../src/timing.js';
@@ -21,7 +21,7 @@ function setup() {
   seedTiming(hq, { tz: 'Asia/Dushanbe', ownerTz: 'Asia/Kuala_Lumpur' });
   const tg = new MemoryMessenger();
   const channel = new OwnerChannel({ hq, inner: tg, ownerId: OWNER, telegram: 'notices' });
-  const links = pultLinks('https://firtech.pro');
+  const links = shellLinks('https://firtech.pro');
   const notices = new OwnerNotices({ hq, links, deliver: (html) => channel.notice(html) });
   ensureCabinetTables(db);
   ensureDocTables(db);

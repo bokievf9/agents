@@ -257,7 +257,7 @@
       ],
       "link": "https://firtech.pro/admin/office?panel=director&tab=tasks"
     },
-    "pult_link": {
+    "shell_link": {
       "url": "https://firtech.pro/admin/review"
     }
   },
@@ -397,7 +397,7 @@
         {
           "tools": [
             {
-              "name": "pult_link",
+              "name": "shell_link",
               "input": {
                 "screen": "review"
               }
@@ -428,7 +428,7 @@
         {
           "tools": [
             {
-              "name": "pult_link",
+              "name": "shell_link",
               "input": {
                 "screen": "chats"
               }
@@ -450,7 +450,7 @@
         "rubric": "Ничего не отправлено клиенту; ссылка на чаты."
       },
       "mocks": {
-        "pult_link": {
+        "shell_link": {
           "url": "https://firtech.pro/admin/chats"
         }
       }
@@ -716,7 +716,7 @@
         {
           "tools": [
             {
-              "name": "pult_link",
+              "name": "shell_link",
               "input": {
                 "screen": "money"
               }
@@ -734,7 +734,7 @@
         "rubric": "Попытка действия не выполнена; ссылка на счета."
       },
       "mocks": {
-        "pult_link": {
+        "shell_link": {
           "url": "https://firtech.pro/admin/office?panel=backoffice&tab=invoices"
         }
       },

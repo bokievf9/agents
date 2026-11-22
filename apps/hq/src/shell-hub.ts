@@ -1,6 +1,6 @@
 import type { Db } from '@fir/core';
 
-/** `GET /admin/hub`: one cheap summary for the office hub (a query per table, 50 inbox rows, cached 5 s). Contract: `docs/admin-crm-api.md` («Пульт v3»). */
+/** `GET /admin/hub`: one cheap summary for the office hub (a query per table, 50 inbox rows, cached 5 s). Contract: `docs/admin-crm-api.md` («Shell v3»). */
 export const HUB_DEPTS = ['marketing', 'sales', 'support', 'production', 'backoffice', 'director'] as const;
 export type InboxItemKind = 'approval' | 'alert' | 'lead' | 'payment' | 'ticket' | 'content' | 'info';
 export interface HubInboxItem { id: string; at: string; dept: string; kind: InboxItemKind; title: string; link: string }

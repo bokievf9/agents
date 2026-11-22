@@ -5,12 +5,12 @@ import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import type { Director } from './director.js';
 import { buildOffice } from './office.js';
-import { fail, ok } from './pult-crm.js';
-import { todayIn } from './pult-week.js';
+import { fail, ok } from './shell-crm.js';
+import { todayIn } from './shell-week.js';
 import type { AppTools } from './tools.js';
 
-/** `GET /admin/company` and its three writes (routines on/off, run now, trust level). Contract: `docs/admin-crm-api.md` («Пульт v3»). */
-export interface PultCompanyDeps {
+/** `GET /admin/company` and its three writes (routines on/off, run now, trust level). Contract: `docs/admin-crm-api.md` («Shell v3»). */
+export interface ShellCompanyDeps {
   hq: Hq;
   queue: ApprovalQueue;
   director: Director;
@@ -26,7 +26,7 @@ const enabledBody = z.object({ enabled: z.boolean() }).strict();
 const levelBody = z.object({ level: z.union([z.literal(0), z.literal(1)]) }).strict();
 const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
 
-export function createCompany(d: PultCompanyDeps) {
+export function createCompany(d: ShellCompanyDeps) {
   const { hq, queue, now } = d;
   const db = hq.db;
 
@@ -128,7 +128,7 @@ export function createCompany(d: PultCompanyDeps) {
 }
 
 /** The tool catalogue with today's counters and the set-up state (never a key); shared by `/admin/company` and the agent card. */
-export function toolList(d: Pick<PultCompanyDeps, 'hq' | 'now' | 'tools'>) {
+export function toolList(d: Pick<ShellCompanyDeps, 'hq' | 'now' | 'tools'>) {
   return toolCatalog({
     journal: d.hq, db: d.hq.db, now: d.now, tz: d.hq.tz, config: d.tools?.config ?? {}, ...(d.tools?.renderPng ? { renderPng: d.tools.renderPng } : {}), ...(d.tools?.crm ? { crm: d.tools.crm } : {}), ...(d.tools?.llm ? { llm: d.tools.llm } : {}),
     // the heads always pass their bot to `telegram.*`; the listing says so through a stand-in

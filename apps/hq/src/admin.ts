@@ -8,7 +8,7 @@ import { createCrm } from './admin-crm.js';
 import type { CabinetApi } from './cabinet-api.js';
 import type { Campaigns } from './campaigns.js';
 import type { Calls } from './calls.js';
-import { createPult, type PultDeps } from './pult.js';
+import { createShell, type ShellDeps } from './shell.js';
 import type { BillingWorker } from '@fir/worker-billing';
 import type { ChatsClient } from './chats.js';
 import type { MarketingHead } from './heads/marketing.js';
@@ -38,11 +38,11 @@ export interface AdminDeps {
   reloadPrices?: () => Promise<{ source: 'fetched' | 'cached' | 'fallback'; updatedAt: string }>;
   /** The client accepts a stage of their project in the cabinet (Production `acceptStage`). */
   acceptStage?: (projectId: number, stageNo: number) => Promise<{ status: 'accepted' | 'already' | 'not_paid' | 'not_ready' | 'unknown'; text: string }>;
-  /** «Пульт v3»: Billing (reminder text, pay links), the client bot (replies to Telegram leads), the website chat (replies to web leads). */
+  /** «Shell v3»: Billing (reminder text, pay links), the client bot (replies to Telegram leads), the website chat (replies to web leads). */
   billing?: BillingWorker;
   client?: ChatsClient;
   webReply?: (sessionId: string, text: string) => boolean;
-  /** «Пульт v3» content calendar: the Marketing head (approve/reject/revise/rerender run its code) and the folder of rendered files (`DATA_DIR/renders`). */
+  /** «Shell v3» content calendar: the Marketing head (approve/reject/revise/rerender run its code) and the folder of rendered files (`DATA_DIR/renders`). */
   marketing?: MarketingHead;
   rendersDir?: string;
   /** A routine was switched on or off from the workplace: the app restarts its cron jobs. */
@@ -53,12 +53,12 @@ export interface AdminDeps {
   tools?: AppTools;
   /** Cabinet v3 (2026-11-22): documents, threads, uploads, the playground (`cabinet-api.ts`); its owner-side hooks are bound here. */
   cabinet?: CabinetApi;
-  /** P-18/P-19 (2026-11-22): the call bookings (`calls.ts`): the Пульт's «Созвон» books the site's window and tells the client. */
+  /** P-18/P-19 (2026-11-22): the call bookings (`calls.ts`): the Shell's «Созвон» books the site's window and tells the client. */
   calls?: Calls;
   /** News and recommendation mailings through the approval queue (`campaigns.ts`): `GET` and `POST /admin/campaigns`. */
   campaigns?: Campaigns;
   /** The lead manager on Fira, when on (`fira-wiring.ts`): the owner's knowledge notes reach its search. */
-  fira?: PultDeps['fira'];
+  fira?: ShellDeps['fira'];
 }
 
 export interface AdminRequest {
@@ -73,7 +73,7 @@ export interface AdminReply {
 }
 
 const RATE_WINDOW_MS = 10 * 60_000;
-// The admin API is reached only from loopback by the site's server with a valid token, and the Пульт v3
+// The admin API is reached only from loopback by the site's server with a valid token, and the Shell v3
 // polls it from every open tab (office 10 s, hub 15 s, panels 30-60 s). 600 per 10 minutes was hit by one
 // or two tabs and made the office go dark for minutes (2026-11-20); the limit now protects against a
 // runaway client, not against normal polling: 6000 per 10 minutes, about 10 requests a second.
@@ -117,7 +117,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   });
   const commands = new Set(d.commandNames.map((n) => n.toLowerCase()));
   const history = createDirectorHistory(hq.db, now);
-  const pult = createPult({
+  const shell = createShell({
     fira: d.fira, hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply,
     marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange, settings: d.settings, tools: d.tools, ...(d.drill && d.drillStatus ? { drill: { command: d.drill, status: d.drillStatus } } : {}), ...(d.cabinet ? { cabinet: d.cabinet.docs } : {}), ...(d.calls ? { calls: d.calls } : {}),
   });
@@ -218,7 +218,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
     const [a, id, sub] = seg;
     const key = `${method} ${a}${id !== undefined && /^\d+$/.test(id) ? '/:id' : id ? `/${id}` : ''}${sub ? `/${sub}` : ''}`;
     const num = (v: string | undefined) => (v !== undefined && /^\d+$/.test(v) ? Number(v) : null);
-    const v3 = await pult.handle(method, seg, query, req.body);
+    const v3 = await shell.handle(method, seg, query, req.body);
     if (v3) return v3;
     if (a === 'crm') return crm.handle(method, seg.slice(1), query, req.body);
     if (a === 'clients') return crm.clients(method, seg.slice(1), query, req.body);

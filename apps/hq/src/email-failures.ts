@@ -5,7 +5,7 @@ import type { Hq } from '@fir/hq';
  * P-07 (audit 2026-11-22): an email to a client that did not go (Resend down, refused, over the daily cap) used to be a journal line only, so the owner
  * believed the КП, the contract, the invoice or the act had reached the client's mailbox. Each failure is a row here (the kind and a reference such as
  * «КП-12» or «лид #5», the reason code; never the address or the text) and the owner gets ONE summary alert an hour, the way lost leads do. The document
- * itself carries the mark (`cab_documents.mail_state = 'failed'`) and can be sent again from the Пульт.
+ * itself carries the mark (`cab_documents.mail_state = 'failed'`) and can be sent again from the Shell.
  */
 export type EmailKind = 'quote' | 'contract' | 'invoice' | 'act' | 'other' | 'stage' | 'clarify' | 'message' | 'payment' | 'call' | 'review' | 'news' | 'recommendation';
 const KIND_RU: Record<EmailKind, string> = {

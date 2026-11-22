@@ -48,7 +48,7 @@ export interface NotifyOpts {
 /**
  * What reaches Telegram. `all` (the old Director bot): everything addressed to the owner while he is away. `notices` (owner 2026-11-22, one HQ bot):
  * only the short reminders of `OwnerNotices` (`notice()`) and the answers to his own messages in the bot; everything else lives in the inbox of the
- * Пульт. Approval cards reach Telegram only with `cards` (`TG_APPROVAL_CARDS=on`).
+ * Shell. Approval cards reach Telegram only with `cards` (`TG_APPROVAL_CARDS=on`).
  */
 export type TelegramPolicy = 'all' | 'notices';
 
@@ -58,13 +58,13 @@ export interface OwnerChannelDeps {
   telegram?: TelegramPolicy;
   /** With `telegram: 'notices'`: approval cards with buttons still go to Telegram (the legacy flag). */
   cards?: boolean;
-  /** The Пульт, for the one link of the presence digest (default https://firtech.pro/admin). */
-  pultUrl?: string;
+  /** The Shell, for the one link of the presence digest (default https://firtech.pro/admin). */
+  shellUrl?: string;
   inner: Messenger;
   ownerId: number;
   /** The site is considered gone after this many minutes without a ping. */
   awayAfterMin?: number;
-  /** `notice.skip_desk` of the settings: a reminder is skipped while the Пульт is open (default yes). */
+  /** `notice.skip_desk` of the settings: a reminder is skipped while the Shell is open (default yes). */
   skipAtDesk?: () => boolean;
   /** Is the core approval still waiting for the owner? Used to keep digests and resends honest. */
   approvalPending?: (approvalId: number) => boolean;
@@ -160,7 +160,7 @@ export class OwnerChannel implements Messenger {
     if (!rows.length) return;
     const n = (k: InboxKind) => rows.filter((r) => r.kind === k).length;
     const text = this.notices
-      ? `Пока вы были за столом: ждут одобрения ${n('approval')}, алертов ${n('alert')}. Shell: ${this.d.pultUrl ?? 'https://firtech.pro/admin'}`
+      ? `Пока вы были за столом: ждут одобрения ${n('approval')}, алертов ${n('alert')}. Shell: ${this.d.shellUrl ?? 'https://firtech.pro/admin'}`
       : `Пока вы были на месте: ${n('approval')} одобрений, ${n('progress')} задач готово, ${n('alert')} алертов. /approve, /status`;
     if (this.notices && n('approval') + n('alert') === 0) return;
     const ids = rows.map((r) => r.id);
@@ -178,7 +178,7 @@ export class OwnerChannel implements Messenger {
   }
 
   /**
-   * A short reminder to Telegram (`OwnerNotices`): it is a ping about something the Пульт already shows, so it is not stored in the inbox.
+   * A short reminder to Telegram (`OwnerNotices`): it is a ping about something the Shell already shows, so it is not stored in the inbox.
    * At the desk it is skipped (he sees the site), inside a website command it is dropped. Returns what happened.
    */
   async notice(html: string): Promise<'sent' | 'desk' | 'capture'> {
@@ -310,7 +310,7 @@ export class OwnerChannel implements Messenger {
 
   /** `/approve` in Telegram: pending approval cards that never reached it (sent while at the desk) go out now. */
   async resendUndelivered(): Promise<number> {
-    // with the one HQ bot the cards stay in the Пульт (TG_APPROVAL_CARDS=on brings them back)
+    // with the one HQ bot the cards stay in the Shell (TG_APPROVAL_CARDS=on brings them back)
     if (this.capturing() || (this.notices && !this.d.cards)) return 0;
     const rows = this.db
       .prepare("SELECT id, text, html, approval_id, buttons FROM owner_inbox WHERE kind = 'approval' AND delivered_tg = 0 AND buttons IS NOT NULL ORDER BY id")

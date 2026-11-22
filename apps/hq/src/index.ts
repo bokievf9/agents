@@ -35,8 +35,8 @@ import { createAdmin } from './admin.js';
 import { buildCabinet, type CabinetApi } from './cabinet-api.js';
 import { Campaigns } from './campaigns.js';
 import { UPLOAD_TYPES } from '@fir/core';
-import { serveFile } from './pult-files.js';
-import { eventsApi } from './pult-events.js';
+import { serveFile } from './shell-files.js';
+import { eventsApi } from './shell-events.js';
 import { OwnerChannel } from './presence.js';
 import { cachedOffice } from './office.js';
 import { Drill } from './drill.js';
@@ -54,7 +54,7 @@ import { gatewayGate } from './client/shared.js';
 import { HQ_PROFILE } from './tg.js';
 import { COMMAND_NAMES, routedTo } from './commands.js';
 import { installOwnerGlue, TG_COMMANDS } from './glue.js';
-import { pultLinks } from './links.js';
+import { shellLinks } from './links.js';
 import { ClientInbox, clientToOwner } from './client-inbox.js';
 import { OwnerNotices } from './notices.js';
 import { OwnerAssistant } from './assistant.js';
@@ -103,14 +103,14 @@ syncRoleTitles(hq);
 // One bot in Telegram (owner 2026-11-22): HQ_BOT_TOKEN. The department bots are retired: their tokens are ignored, nothing polls or posts with them.
 if (cfg.retiredBots.length) log('info', 'department bots retired, HQ bot only', { ignored: cfg.retiredBots });
 const bot = createBot(cfg.botToken);
-const links = pultLinks(cfg.siteUrl);
-// Every message to the owner goes through the channel: the inbox of the Пульт always; Telegram gets only the short reminders (`notices`) and the
+const links = shellLinks(cfg.siteUrl);
+// Every message to the owner goes through the channel: the inbox of the Shell always; Telegram gets only the short reminders (`notices`) and the
 // answers to his own messages in the bot (presence.ts, `telegram: 'notices'`). TG_APPROVAL_CARDS=on brings the approval cards back.
 const telegram = new OutboxMessenger(grammyMessenger(bot));
 const channel: OwnerChannel = new OwnerChannel({
   hq, inner: telegram, ownerId: cfg.ownerId, awayAfterMin: cfg.presenceAwayAfterMin, approvalPending: (id: number): boolean => queue.get(id)?.status === 'pending',
   onCardSent: (id: number, messageId: number) => queue.noteCard(id, cfg.ownerId, messageId),
-  telegram: 'notices', cards: cfg.tgApprovalCards, pultUrl: links.base, skipAtDesk: () => hq.setting('notice.skip_desk') !== '0',
+  telegram: 'notices', cards: cfg.tgApprovalCards, shellUrl: links.base, skipAtDesk: () => hq.setting('notice.skip_desk') !== '0',
 });
 const notices = new OwnerNotices({ hq, links, deliver: (html) => channel.notice(html) });
 const messenger = channel;
@@ -142,7 +142,7 @@ const clientLlm = tapLlm(meterLlm(llm, hq, { agentId: 'client-bot', urgent: true
 const counter = { get: (k: string) => hq.setting(k) || undefined, set: (k: string, v: string) => hq.setSetting(k, v) };
 
 // Department reports: into the topics of the HQ group only with TG_GROUP_REPORTS=on, and then by the HQ bot itself. Off (the default), a report stays
-// in the task journal and the Пульт (Reporter.post returns false).
+// in the task journal and the Shell (Reporter.post returns false).
 const topicSender: TopicSender = async (chatId, threadId, text) => {
   await bot.api.sendMessage(chatId, text, { message_thread_id: threadId, link_preview_options: { is_disabled: true } });
 };
@@ -170,7 +170,7 @@ const clientBot = cfg.clientBotToken
   ? new ClientBot({
       token: cfg.clientBotToken, db, now: hq.now, tz: () => hq.tz, llm: clientLlm, counter, ownerId: cfg.ownerId, instructions: readClientInstructions(),
       quietHours: cfg.clientQuietHours, perHour: cfg.clientRatePerHour, dailyCap: cfg.clientLlmDailyCap,
-      // one bot: «позвать человека» and the client's words after it go to the thread in the Пульт and a reminder of the HQ bot, never from the client bot
+      // one bot: «позвать человека» and the client's words after it go to the thread in the Shell and a reminder of the HQ bot, never from the client bot
       toOwner: clientToOwner({ inbox: new ClientInbox(db, hq.now), notices, links, now: hq.now, onError: (e) => log('warn', 'client bot hand-off failed', { err: errMsg(e) }) }),
       ownerHint: `Этот бот для клиентов. Ответы клиентам и возврат бота сценарию: в Shell, ${links.to('chats')}`,
       onLost: (source, reason, info) => lost.record(source, reason, info), gatewayDown,
@@ -272,7 +272,7 @@ director.summaryLines.push(() => demoUsage.summaryLine(), () => production.overd
 
 installOwnerGlue(bot, { ownerId: cfg.ownerId, channel, queue, director, marketing, sales, topicManager, assistant, links, cards: cfg.tgApprovalCards });
 
-// The menu of the one bot: /start and /pult only, the profile texts say what it is (a reminder and answers; control in the Пульт).
+// The menu of the one bot: /start and /pult only, the profile texts say what it is (a reminder and answers; control in the Shell).
 void setupBotMenu(bot.api, {
   commands: [], ownerCommands: { chatId: cfg.ownerId, commands: TG_COMMANDS }, description: HQ_PROFILE.description,
   shortDescription: HQ_PROFILE.short, menuButtonChatId: cfg.ownerId,
@@ -397,7 +397,7 @@ const webChat = cfg.webChatToken
 webChat?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix, calls }));
 if (webChat) calls.webReply = (sessionId, text) => webChat.store.queueOwnerReply(sessionId, text);
 
-// The company settings of the Пульт: the first department limits are written once, when every limit is still 0.
+// The company settings of the Shell: the first department limits are written once, when every limit is still 0.
 const settings = createSettings({
   hq, queue, defaults: settingsDefaults, slotHours: cfg.slotHours, now: hq.now,
   limiters: () => [...new Set([clientBot?.engine.limiter, chatGateForAgents, chatGate].filter((x): x is RateLimiter => x !== undefined))],

@@ -7,11 +7,11 @@ import { RateLimiter } from '../src/client/sanitize.js';
 import { ensureCabinetTables } from '../src/cabinet.js';
 import { Playground } from '../src/playground.js';
 import { NOW } from './helpers.js';
-import { pultWorld } from './pult-helpers.js';
+import { shellWorld } from './shell-helpers.js';
 
 describe('P-22: the client closes his own ticket in the cabinet', () => {
   it('POST /admin/clients/:id/tickets/:tid/close: only the own cabinet ticket, idempotent, the ticket leaves the SLA', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const reg = async (email: string) => {
       const r = await p.call('POST', '/admin/clients', { email, name: 'Клиент', supabaseId: `sb-${email.split('@')[0]}` });
       expect(r.status, JSON.stringify(r.json)).toBe(200);

@@ -1,9 +1,9 @@
 import type { Db } from '@fir/core';
 import type { AdminReply } from './admin.js';
 import { StageContext, rankOf } from './lead-stage.js';
-import { fail, ok } from './pult-crm.js';
-import type { createMetrics } from './pult-events.js';
-import { isoWeekOf, shiftWeek, todayIn, weekRange, weekWindow } from './pult-week.js';
+import { fail, ok } from './shell-crm.js';
+import type { createMetrics } from './shell-events.js';
+import { isoWeekOf, shiftWeek, todayIn, weekRange, weekWindow } from './shell-week.js';
 
 /**
  * `GET /admin/analytics?week=YYYY-Www`: the HQ «Analytics» section. It builds on the weekly numbers of the marketing «Цифры» tab

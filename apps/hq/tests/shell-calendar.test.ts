@@ -1,14 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- JSON bodies of the API under test */
 import { describe, expect, it } from 'vitest';
 import { Calls } from '../src/calls.js';
-import { pultWorld, serve } from './pult-helpers.js';
+import { shellWorld, serve } from './shell-helpers.js';
 
 const DAY = 86_400_000;
 const dayOf = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 describe('GET /admin/calendar', () => {
   it('401 without the token, 404 for other paths and methods, 400 for a bad or too long range', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const s = await serve(p);
     expect((await s.http('GET', '/admin/calendar?from=2026-11-01&to=2026-11-07', undefined, {})).status).toBe(401);
     expect((await s.http('GET', '/admin/calendar?from=2026-11-01&to=2026-11-07')).status).toBe(200);
@@ -23,7 +23,7 @@ describe('GET /admin/calendar', () => {
   });
 
   it('routines of the range, sorted, in the contract shape; a disabled routine has no runs', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const from = dayOf(p.t());
     const to = dayOf(p.t() + 6 * DAY);
     const r = await p.call('GET', `/admin/calendar?from=${from}&to=${to}`);
@@ -41,7 +41,7 @@ describe('GET /admin/calendar', () => {
   });
 
   it('calls, milestones and content in the range; cancelled calls, drafts and other days stay out', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const db = p.w.hq.db;
     const lead = p.lead('Анна', { service: 'bot' });
     void new Calls({ hq: p.w.hq }); // creates call_bookings

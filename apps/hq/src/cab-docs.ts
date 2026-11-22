@@ -555,7 +555,7 @@ export class CabDocs {
   }
 
   /**
-   * «Отправить снова» (the owner, Пульт): the email of a delivered row is sent again (no second line in the thread: the client has it). 404 unknown row,
+   * «Отправить снова» (the owner, Shell): the email of a delivered row is sent again (no second line in the thread: the client has it). 404 unknown row,
    * 409 `not_sendable` for a row without its own notice (the estimate), 409 `no_email` when Resend is not configured.
    */
   async resend(docId: number): Promise<DocReply> {
@@ -577,7 +577,7 @@ export class CabDocs {
 
   /**
    * The owner's list of cabinet documents (`GET /admin/crm/cabinet-docs`): newest first, with the email outcome and whether the PDF exists. `problem`: only rows
-   * whose email failed or whose PDF is missing (the Пульт's mark «письмо не ушло» / «нет PDF»).
+   * whose email failed or whose PDF is missing (the Shell's mark «письмо не ушло» / «нет PDF»).
    */
   ownerList(o: { problem?: boolean; clientId?: number | null; limit?: number } = {}): Record<string, unknown>[] {
     const where: string[] = [];
@@ -668,7 +668,7 @@ export class CabDocs {
     return true;
   }
 
-  /** An invoice was paid (`/paid`, the watcher, the Пульт): one line in the client's thread. The document state follows the invoice on every read. */
+  /** An invoice was paid (`/paid`, the watcher, the Shell): one line in the client's thread. The document state follows the invoice on every read. */
   onPaid(inv: { id: number; number: string; leadId: number | null; stageNo: number | null }): void {
     const doc = this.db.prepare("SELECT client_id, lead_id FROM cab_documents WHERE src = 'bl' AND src_id = ?").get(inv.id) as { client_id: number; lead_id: number | null } | undefined;
     if (!doc) return;

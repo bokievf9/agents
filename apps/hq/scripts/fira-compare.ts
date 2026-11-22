@@ -4,7 +4,7 @@ import { LlmJudge, PACKAGE_DIR, parseEvalSet } from '@fir/fira';
 import { join } from 'node:path';
 import { Hq } from '@fir/hq';
 import { compare } from '../src/client/fira-compare.js';
-import { saveEvalRun } from '../src/pult-quality.js';
+import { saveEvalRun } from '../src/shell-quality.js';
 
 /**
  * `pnpm --filter hq fira-compare [--live] [file]`: the lead manager's eval set on the old JSON runtime and on Fira, side by side, with the release

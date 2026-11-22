@@ -383,7 +383,7 @@ P-22: «вопрос решён» in the cabinet. Only the client's own cabinet 
 Плохое тело 400 `invalid`, неизвестная рутина 404.
 
 # Ревью-центр (2026-11-21)
-Одна поверхность, где владелец читает, правит, одобряет и жмёт «выкладывай»: полноэкранный режим сайта `/admin/review`, чаты с клиентами `/admin/chats` и ссылки для Трендвотчера. Всё под `x-admin-token`, лимит и ошибки как у остальных `/admin/*` (6000 запросов за 10 минут, 401 без токена, 429 `rate_limited`, 500 `internal`). Код: `apps/hq/src/review.ts`, `chats.ts`, `pult-trends.ts`. В логи попадают только номера и счётчики, тексты материалов и клиентов не логируются.
+Одна поверхность, где владелец читает, правит, одобряет и жмёт «выкладывай»: полноэкранный режим сайта `/admin/review`, чаты с клиентами `/admin/chats` и ссылки для Трендвотчера. Всё под `x-admin-token`, лимит и ошибки как у остальных `/admin/*` (6000 запросов за 10 минут, 401 без токена, 429 `rate_limited`, 500 `internal`). Код: `apps/hq/src/review.ts`, `chats.ts`, `shell-trends.ts`. В логи попадают только номера и счётчики, тексты материалов и клиентов не логируются.
 Все решения идут через тот же код, что кнопки Telegram (`ApprovalQueue.handle`, затем задачи и карточка в Telegram закрываются, `settleCard`), второго пути нет: после решения на сайте Telegram-карточка показывает «Одобрено» или «Отклонено» без кнопок, а нажатие на ней потом отвечает «Уже обработано».
 Пути медиа вида `/admin/files/<путь>` относительны корня HQ: сайт проксирует их как `/api/admin/files/<путь>` (`GET /admin/files/*`, видео с `Range`).
 
@@ -819,7 +819,7 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 `GET /admin/crm/clients/:id` теперь несёт `demoUsage` (30 дней: `days`, `messages`, `tokensIn`, `tokensOut`, `usd`, `today`, `bySource[{source, messages, usd}]`; нули, если демо не было). Учёт, лимит и поля ответа демо: `public-api.md`, «Демо только для вошедших и учёт по клиенту».
 
 ## Agents (2026-11-23, раздел HQ «Agents»)
-Код `apps/hq/src/pult-agents.ts`, всё под `x-admin-token`. В ответах только id, счётчики и состояния: ни названий задач, ни текстов клиентов, ни тел одобрений. Титул `title` английский (`packages/core/src/role-titles.ts`), `gloss` короткое русское пояснение или `null`.
+Код `apps/hq/src/shell-agents.ts`, всё под `x-admin-token`. В ответах только id, счётчики и состояния: ни названий задач, ни текстов клиентов, ни тел одобрений. Титул `title` английский (`packages/core/src/role-titles.ts`), `gloss` короткое русское пояснение или `null`.
 
 - `GET /admin/agents` → `{ ok, departments: [{ id, budgetUsd, monthUsd }], agents: [{ id, title, gloss, dept, role, bossId, status, trustLevel, monthUsd, openTasks, instructionVersion, hasFira }] }`. `departments[].budgetUsd` лимит отдела (USD в месяц, 0 без лимита, он лежит на голове), `monthUsd` расход месяца (отдел Директора `hq`).
 - `GET /admin/agents/:id` → карточка: `agent` (`id, title, gloss, dept, role, bossId, status, bot`), `instructions` (`text`, `version` текущая или 0, пока их не правили, `chars`, `maxChars` 20000, `versions[]` новые первыми: `version, actor, note, at, chars`), `trust` (`level` агента и `kinds[]` видов действий отдела с `level, locked, streak, threshold`), `tools[]` (`name, summary, configured, callsToday, errorsToday`: инструменты, разрешённые отделу агента), `budget` (`dept, deptLimitUsd, deptMonthUsd, limitOwnerId, agentMonthUsd, agentTodayUsd, agentMonthCalls`: у агента своего лимита нет, лимит у отдела), `fira` (`null` или `{ pack, title, goal, tier, tools, duties, boundaries, handoff }`; пакеты роли есть у `client-bot` = `lead-manager` и `director` = `executive-assistant`; при ошибке чтения файла поле `error`), `history` (`tasksByStatus`, `decisionsByKind` по решениям владельца в видах отдела, `recentTasks[{ id, status, at }]`, `recentDecisions[{ approvalId, kind, decision, at }]`, по 20). 404 `not_found` для неизвестного id.
@@ -829,7 +829,7 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 - Версии хранятся в таблице `instruction_versions` (`packages/hq/src/schema.ts`); `Hq.setInstructions` пишет их для всех путей (Пульт, правило Директора, `reload-instructions`).
 
 ## Processes (2026-11-23, ветка `hq-processes`)
-Раздел HQ «Processes»: карта цепочек процессов (`process-audit`) со здоровьем каждого шага. Всё под `x-admin-token`, код `apps/hq/src/pult-processes.ts`.
+Раздел HQ «Processes»: карта цепочек процессов (`process-audit`) со здоровьем каждого шага. Всё под `x-admin-token`, код `apps/hq/src/shell-processes.ts`.
 
 `GET /admin/processes` → `{ ok, generatedAt, windowDays: 7, counts: {ok, warn, fail, idle}, chains, drill }`:
 ```json
@@ -858,7 +858,7 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 - Не сделано: UI админки; `email.send` для HQ по политике разрешён отделам support, sales, backoffice, а `ClientMail` берёт набор инструментов бэк-офиса (`buildCabinet`), поэтому рассылки идут оттуда же, отдельной политики для marketing нет; белый список прокси сайта `/api/admin/hq/[...path]` нужно дополнить `campaigns`.
 
 ## Calendar (2026-11-23, ветка `hq-tasks`)
-Раздел HQ «Calendar»: одна сетка недели и месяца из созвонов, этапов проектов, рутин и запланированного контента. Только чтение, под `x-admin-token`, код `apps/hq/src/pult-calendar.ts`.
+Раздел HQ «Calendar»: одна сетка недели и месяца из созвонов, этапов проектов, рутин и запланированного контента. Только чтение, под `x-admin-token`, код `apps/hq/src/shell-calendar.ts`.
 
 `GET /admin/calendar?from=YYYY-MM-DD&to=YYYY-MM-DD` (оба конца включительно, дни по часовому поясу компании `TZ`, не больше 62 дней: 400 `invalid` для неверных дат, 400 `range_too_long` со `maxDays`) → `{ ok, from, to, tz, today, counts: {call, milestone, routine, content}, events }`, события по времени:
 ```json
@@ -875,7 +875,7 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 `POST /lead` принимает необязательное `siteLeadId` (строка 8..64 знаков `A-Za-z0-9_.:-`; кривое значение игнорируется, заявка не отвергается). Первый ответ запоминается на 72 часа (таблица `site_lead_ids`: id, время, ответ из id и флагов, текста заявки там нет). Повтор с тем же id (сайт не дождался ответа и шлёт снова) не создаёт лид, задачу и уведомление, а отвечает как на первую заявку плюс `duplicate: true`: `{ ok: true, id, leadId?, notified: true, duplicate: true }`. Два одновременных запроса с одним id дают один лид. Ошибки (400, 429, 500) не запоминаются, повтор после них обработается заново. Без `siteLeadId` поведение прежнее. Код `apps/hq/src/lead-dedupe.ts`, `webhook.ts`.
 
 ## Audit log и Analytics (2026-11-23, ветка `hq-audit`)
-Два раздела HQ, только чтение, под `x-admin-token`. Код `apps/hq/src/pult-audit.ts` и `pult-analytics.ts`. Только id, виды и счётчики: ни текстов инструкций, ни значений настроек (old/new), ни текстов и контактов клиентов.
+Два раздела HQ, только чтение, под `x-admin-token`. Код `apps/hq/src/shell-audit.ts` и `shell-analytics.ts`. Только id, виды и счётчики: ни текстов инструкций, ни значений настроек (old/new), ни текстов и контактов клиентов.
 
 `GET /admin/audit?kind&actor&from&to&cursor&limit` → `{ ok, tz, kinds, counts, total, actors, nextCursor, entries }`. Фильтры необязательные: `kind` один из `decision|setting|instruction|trust|owner` (400 `invalid` иначе), `actor` точный id (`owner`, `system`, id агента), `from`/`to` включительно `YYYY-MM-DD` по часовому поясу компании, `limit` 1..200 (50 по умолчанию), `cursor` это `nextCursor` прошлой страницы (новые сверху). `counts` по видам с учётом дат и актора, без вида и курсора; `actors` для списка фильтра.
 ```json
@@ -887,7 +887,7 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 `GET /admin/analytics?week=YYYY-Www` (неделя по умолчанию текущая; 400 `invalid`) → `{ ok, week, from, to, prevWeek, tz, funnel, prevFunnel, site, prevSite, firstResponse, prevFirstResponse, sources }`. `funnel` (`leads, qualified, proposals, contracts, paid, projects`) и `site` (события сайта по именам) это те же числа, что `GET /admin/metrics/week` (вкладка «Цифры»), за неделю и за предыдущую. `firstResponse`: `{ leads, answered, avgMinutes, medianMinutes, within1hShare }` (null без ответов): время от заявки до первого ответа = самый ранний `report` задачи заявки (Менеджер заявок отработал) или `lead_reply` владельца. `sources`: заявки недели по метке источника (`site`, `bot`, `ref` для любого реферала, `direct` без метки) со счётчиками `leads, qualified, paid`, до 12 строк.
 
 ## Knowledge и Quality (2026-11-23, ветка `fira-knowledge-quality`)
-Знания и качество ответов Fira для владельца, под `x-admin-token`. Контракт: `docs/briefs/fira/knowledge-quality-api.md`, код `apps/hq/src/pult-knowledge.ts`, `pult-quality.ts`. Тексты знаний, заметок, уроков и оценок отдаются только сюда; в логи только id и счётчики.
+Знания и качество ответов Fira для владельца, под `x-admin-token`. Контракт: `docs/briefs/fira/knowledge-quality-api.md`, код `apps/hq/src/shell-knowledge.ts`, `shell-quality.ts`. Тексты знаний, заметок, уроков и оценок отдаются только сюда; в логи только id и счётчики.
 
 ### Knowledge
 Документы пакета компании `packages/fira/company-packs/firtech/` (читаются с диска, только чтение; источник `site` | `company` | `playbook`) и заметки владельца (таблица `kb_owner_notes`, источник `owner`, id `owner-<n>`).

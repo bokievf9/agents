@@ -2,7 +2,7 @@ import type { Db } from '@fir/core';
 import { isQualified } from './heads/sales.js';
 
 /**
- * The funnel stage of a lead («Пульт v3»). Derived from what exists in the other tables, with a manual override
+ * The funnel stage of a lead («Shell v3»). Derived from what exists in the other tables, with a manual override
  * (`li_leads.stage_override`): the derived stage wins only when it is further along than the override.
  * new (nothing yet) < qualified (`isQualified`) < proposal (approved КП) < contract (a contract paper) < paid (invoice paid)
  * < project (a started project); `lost` is outside the line (manual, or the person's contact is in `lost_leads`).

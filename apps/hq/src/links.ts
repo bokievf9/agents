@@ -3,16 +3,16 @@
  * The screens are the site's (`firtech/src/app/admin`): every link goes to a Shell section (`/admin/<section>?tab=&focus=`),
  * never to the pixel office (owner 2026-11-22, audit fix 3).
  */
-export type PultScreen = 'home' | 'review' | 'leads' | 'lead' | 'clients' | 'projects' | 'project' | 'chats' | 'money' | 'tasks' | 'company' | 'calls' | 'settings';
+export type ShellScreen = 'home' | 'review' | 'leads' | 'lead' | 'clients' | 'projects' | 'project' | 'chats' | 'money' | 'tasks' | 'company' | 'calls' | 'settings';
 
-export const PULT_SCREENS: readonly PultScreen[] = ['home', 'review', 'leads', 'lead', 'clients', 'projects', 'project', 'chats', 'money', 'tasks', 'company', 'calls', 'settings'];
+export const SHELL_SCREENS: readonly ShellScreen[] = ['home', 'review', 'leads', 'lead', 'clients', 'projects', 'project', 'chats', 'money', 'tasks', 'company', 'calls', 'settings'];
 
-export interface PultLinks {
+export interface ShellLinks {
   base: string;
-  to(screen: PultScreen, id?: number | string | null): string;
+  to(screen: ShellScreen, id?: number | string | null): string;
 }
 
-export function pultLinks(siteUrl = 'https://firtech.pro'): PultLinks {
+export function shellLinks(siteUrl = 'https://firtech.pro'): ShellLinks {
   const base = `${siteUrl.replace(/\/+$/, '')}/admin`;
   const sec = (path: string, q: Record<string, string | number | null | undefined> = {}) => {
     const p = new URLSearchParams();

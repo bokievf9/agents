@@ -5,15 +5,15 @@ import {
 import { meterLlm, type Hq } from '@fir/hq';
 import { assistantTools } from './assistant-tools.js';
 import { createDirectorHistory } from './director-history.js';
-import type { PultLinks, PultScreen } from './links.js';
+import type { ShellLinks, ShellScreen } from './links.js';
 
 /**
  * The owner's assistant in the one HQ bot (owner 2026-11-22: «умный HQ: если я задам любой вопрос, он должен ответить»). Any text of the owner in the
  * bot's chat is a question: Fira's `run()` with the executive assistant spec (`packages/fira/role-packs/executive-assistant.md`), native tool use over
  * read-only tools (`assistant-tools.ts`), Sonnet, Haiku for the trivial counts. Nothing is done through the chat: a request to act («одобри», «ответь
- * клиенту») gets the link to the Пульт screen where it is done, by code and without the model. The spend lands in `costs` (agent `director`).
+ * клиенту») gets the link to the Shell screen where it is done, by code and without the model. The spend lands in `costs` (agent `director`).
  * Memory: the last 10 questions and answers in SQLite (the owner, not a client: texts may be kept). Each exchange also goes to `director_history`
- * (the Пульт «Поручения» shows the Telegram questions next to the website ones).
+ * (the Shell «Поручения» shows the Telegram questions next to the website ones).
  */
 
 const TURNS_KEPT = 20; // 10 questions and their answers
@@ -75,7 +75,7 @@ const quietJournal: Journal = { record: () => Promise.resolve() };
 const W = '(?![\\p{L}\\p{N}])';
 const re = (src: string) => new RegExp(`^(?:${src})${W}`, 'u');
 /** Requests to act, with the screen where the owner does it; imperative or, after «можешь», «надо», infinitive. The first match wins. */
-const ACTIONS: [RegExp, PultScreen, string][] = [
+const ACTIONS: [RegExp, ShellScreen, string][] = [
   [re('(?:постав(?:ь|ьте|ить)|измен(?:и|ите|ить)|поменя(?:й|йте|ть)|включ(?:и|ите|ить)|выключ(?:и|ите|ить)|отключ(?:и|ите|ить)|установ(?:и|ите|ить)|сдела(?:й|йте|ть))\\s+(?:мне\\s+)?(?:\\S+\\s+){0,3}?(?:сводк|дайджест|тих\\S+\\s+час|лимит|бюджет|напоминани|настройк|порог|слот)\\S*'), 'settings', 'Настройки компании меняются в Shell, на вкладке «Настройки»'],
   [re('(?:прим(?:и|ите)|принять|закро(?:й|йте)|закрыть|запуст(?:и|ите|ить)|отмет(?:ь|ьте|ить))\\s+(?:этап|проект)\\S*'), 'projects', 'Этапы и проекты ведутся в Shell, в производстве'],
   [re('(?:одобр(?:и|ите|ить)|утверд(?:и|ите|ить)|согласу(?:й|йте)|согласовать|отклон(?:и|ите|ить)|откаж(?:и|ите)|отказать|опублику(?:й|йте)|опубликовать|вылож(?:и|ите|ить)|перепиш(?:и|ите)|переписать|поправ(?:ь|ьте|ить)|исправ(?:ь|ьте|ить)|отредактиру(?:й|йте)|отредактировать)'), 'review', 'Одобрения, правки и публикации делаются в ревью-центре'],
@@ -86,7 +86,7 @@ const ACTIONS: [RegExp, PultScreen, string][] = [
 const POLITE = new RegExp(`^(?:пожалуйста|плиз|слушай|hq|эй|можешь|можете|сможешь|надо|нужно|давай)${W}[\\s,!.:]*`, 'u');
 
 /** The screen and the sentence for a request to act; null when the text is a question. */
-export function actionRequest(text: string): { screen: PultScreen; say: string } | null {
+export function actionRequest(text: string): { screen: ShellScreen; say: string } | null {
   let t = text.trim().toLowerCase();
   for (let i = 0; i < 3 && POLITE.test(t); i++) t = t.replace(POLITE, '');
   if (re('(?:что|как|когда|где|сколько|кто|почему|зачем|какой|какая|какие|каких|есть ли)').test(t)) return null;
@@ -101,7 +101,7 @@ export interface AssistantDeps {
   hq: Hq;
   /** The company's model client; metered here as agent `director` (owner's work, not a client: the department limit applies). */
   llm: LlmClient;
-  links: PultLinks;
+  links: ShellLinks;
   pendingApprovals?: () => number;
   /** The company settings (read only) for the question «какие настройки?». */
   settingsView?: () => unknown;

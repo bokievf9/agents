@@ -8,11 +8,11 @@ import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import type { MarketingHead } from './heads/marketing.js';
 import type { OwnerChannel } from './presence.js';
-import { fail, ok } from './pult-crm.js';
-import { isoWeekOf, todayIn, weekRange } from './pult-week.js';
+import { fail, ok } from './shell-crm.js';
+import { isoWeekOf, todayIn, weekRange } from './shell-week.js';
 
-/** `GET /admin/content` and `POST /admin/content/:itemId`: the content calendar of the workplace. Contract: `docs/admin-crm-api.md` («Пульт v3»). */
-export interface PultContentDeps {
+/** `GET /admin/content` and `POST /admin/content/:itemId`: the content calendar of the workplace. Contract: `docs/admin-crm-api.md` («Shell v3»). */
+export interface ShellContentDeps {
   hq: Hq;
   queue: ApprovalQueue;
   channel: OwnerChannel;
@@ -66,7 +66,7 @@ function pngDims(file: string): { w: number; h: number } | null {
   }
 }
 
-export function createPultContent(d: PultContentDeps) {
+export function createShellContent(d: ShellContentDeps) {
   const { hq, now } = d;
   const db = hq.db;
   const store = (): ContentStore => storeFor({ db, now });

@@ -3,12 +3,12 @@ import { BillingStore } from '@fir/worker-billing';
 import { PmStore } from '@fir/worker-project-manager';
 import { describe, expect, it } from 'vitest';
 import { STAGES } from '../src/lead-stage.js';
-import { pultWorld, serve } from './pult-helpers.js';
+import { shellWorld, serve } from './shell-helpers.js';
 
 const MIN = 60_000;
 const DAY = 86_400_000;
 
-function tables(p: ReturnType<typeof pultWorld>) {
+function tables(p: ReturnType<typeof shellWorld>) {
   const db = p.w.hq.db;
   const t = p.t;
   const billing = new BillingStore(db, t);
@@ -22,7 +22,7 @@ function tables(p: ReturnType<typeof pultWorld>) {
 
 describe('GET /admin/hub', () => {
   it('401 without the token, shape with it, every department present', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const s = await serve(p);
     expect((await s.http('GET', '/admin/hub', undefined, {})).status).toBe(401);
     expect((await s.http('GET', '/admin/hub', undefined, { 'x-admin-token': 'wrong' })).status).toBe(401);
@@ -38,7 +38,7 @@ describe('GET /admin/hub', () => {
   });
 
   it('counts tasks and approvals per department, lists the inbox newest first (50 at most) with panel links', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { w } = p;
     tables(p);
     w.hq.createTask({ title: 'ждёт', dept: 'sales', creator: 'owner' });
@@ -74,7 +74,7 @@ describe('GET /admin/hub', () => {
   });
 
   it('is capped at 50 rows and cached for 5 seconds', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     for (let i = 0; i < 60; i++) p.lead(`Лид ${i}`);
     for (let i = 0; i < 60; i++) await p.w.director.alertOwner(`алерт ${i}`);
     const first = await p.call('GET', '/admin/hub');
@@ -89,14 +89,14 @@ describe('GET /admin/hub', () => {
   });
 
   it('only GET', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     expect((await p.call('POST', '/admin/hub', {})).status).toBe(404);
   });
 });
 
 describe('lead stage: derived, with a manual override', () => {
   it('walks new -> qualified -> proposal -> contract -> paid -> project from the data; lost from lost_leads', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { db, billing, pm } = tables(p);
     const stage = async (id: number) => (await p.call('GET', '/admin/crm/leads')).json.items.find((i: any) => i.id === id);
     const l = p.lead('Алиса', { contact: '@alice' });
@@ -125,14 +125,14 @@ describe('lead stage: derived, with a manual override', () => {
   });
 
   it('works when none of the other worker tables exist', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const l = p.lead('Один');
     const r = await p.call('GET', '/admin/crm/leads');
     expect(r.json.items.find((i: any) => i.id === l.id)).toMatchObject({ stage: 'new' });
   });
 
   it('an override moves the lead; the derived stage wins only when it is further along', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { db, billing } = tables(p);
     const l = p.lead('Алиса', { service: 'bot', budget: '$300' }); // derived: qualified
     let r = await p.call('POST', `/admin/crm/leads/${l.id}`, { stage: 'proposal' });
@@ -164,7 +164,7 @@ describe('lead stage: derived, with a manual override', () => {
   });
 
   it('validates the body: unknown stage and fields are 400 with the allowed list, unknown lead 404', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const l = p.lead('Алиса');
     for (const bad of [{ stage: 'won' }, { stage: 5 }, { note: 'x'.repeat(2001) }, { extra: 1 }, { lost_reason: 'y'.repeat(501) }]) {
       const r = await p.call('POST', `/admin/crm/leads/${l.id}`, bad);
@@ -180,7 +180,7 @@ describe('lead stage: derived, with a manual override', () => {
 
 describe('POST /admin/crm/leads/:id/reply', () => {
   it('a Telegram lead is answered through the client bot, without an approval, and the lead journal records it', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const l = p.lead('Алиса', { meta: { chatId: 4242 } });
     const before = p.w.queue.pending().length;
     const r = await p.call('POST', `/admin/crm/leads/${l.id}/reply`, { text: '  Здравствуйте, Алиса!  ' });
@@ -193,7 +193,7 @@ describe('POST /admin/crm/leads/:id/reply', () => {
   });
 
   it('a web lead is answered through the web chat session', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const l = p.lead('Веб', { meta: { sessionId: 'sess-123456' } });
     expect((await p.call('POST', `/admin/crm/leads/${l.id}/reply`, { text: 'Добрый день' })).json).toEqual({ ok: true, sent: true, via: 'web' });
     expect(p.toWeb).toEqual([{ sessionId: 'sess-123456', text: 'Добрый день' }]);
@@ -203,17 +203,17 @@ describe('POST /admin/crm/leads/:id/reply', () => {
   });
 
   it('a lead without a channel: via none, sent false, still journaled; a failing bot is sent:false via telegram', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const l = p.lead('Форма', { contact: 'x@y.co' });
     expect((await p.call('POST', `/admin/crm/leads/${l.id}/reply`, { text: 'Привет' })).json).toEqual({ ok: true, sent: false, via: 'none' });
     expect(p.w.hq.events(l.taskId).at(-1)!.body).toContain('не доставлен');
-    const failing = pultWorld({ admin: { client: { send: () => Promise.reject(new Error('403')) } } });
+    const failing = shellWorld({ admin: { client: { send: () => Promise.reject(new Error('403')) } } });
     const f = failing.lead('Бот', { meta: { chatId: 1 } });
     expect((await failing.call('POST', `/admin/crm/leads/${f.id}/reply`, { text: 'Привет' })).json).toEqual({ ok: true, sent: false, via: 'telegram' });
   });
 
   it('validates: text 1..2000, no extra fields, unknown lead 404', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const l = p.lead('Алиса', { meta: { chatId: 1 } });
     for (const bad of [{}, { text: '' }, { text: '   ' }, { text: 'x'.repeat(2001) }, { text: 'ok', extra: 1 }, { text: 5 }]) {
       expect((await p.call('POST', `/admin/crm/leads/${l.id}/reply`, bad)).json).toMatchObject({ ok: false, error: 'invalid' });
@@ -226,7 +226,7 @@ describe('POST /admin/crm/leads/:id/reply', () => {
 
 describe('POST /admin/crm/leads/:id/call', () => {
   it('stores the call slot and returns the lead', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const l = p.lead('Алиса');
     const at = new Date(p.t() + DAY).toISOString();
     const r = await p.call('POST', `/admin/crm/leads/${l.id}/call`, { at });
@@ -239,7 +239,7 @@ describe('POST /admin/crm/leads/:id/call', () => {
 
 describe('GET /admin/crm/clients/:id (client 360)', () => {
   it('a cabinet client: leads by email, their projects, invoices, tickets, touches; ids in the clients list', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { billing, pm } = tables(p);
     await p.call('POST', '/admin/clients', { email: 'alice@example.com', name: 'Алиса', telegram: '@alice', locale: 'ru', supabaseId: 'abc' });
     const l = p.lead('Алиса Иванова', { contact: 'alice@example.com', service: 'bot' });
@@ -276,7 +276,7 @@ describe('GET /admin/crm/clients/:id (client 360)', () => {
   });
 
   it('a client without an account is c:<name>; unknown ids are 404', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     p.lead('Боб Петров', { contact: '@bob' });
     const list = await p.call('GET', '/admin/crm/clients');
     expect(list.json.items[0].id).toBe('c:боб петров');
@@ -290,7 +290,7 @@ describe('GET /admin/crm/clients/:id (client 360)', () => {
 });
 
 describe('projects: detail and actions', () => {
-  function project(p: ReturnType<typeof pultWorld>) {
+  function project(p: ReturnType<typeof shellWorld>) {
     const { pm } = tables(p);
     const proj = pm.createProject({ client: 'Алиса', what: 'Сайт', product: 'site', source: 'sales', taskId: null });
     pm.setStatus(proj.id, 'active');
@@ -300,7 +300,7 @@ describe('projects: detail and actions', () => {
   }
 
   it('GET: item, milestones, tasks and issues; unknown 404', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { pm, proj, m1 } = project(p);
     const task = p.w.hq.createTask({ title: 'Сделать бриф', dept: 'production', creator: 'head', meta: { issue: { number: 41, url: 'https://github.com/x/y/issues/41' } } });
     pm.setMilestoneTask(m1.id, task.id);
@@ -317,7 +317,7 @@ describe('projects: detail and actions', () => {
   });
 
   it('complete_milestone goes through /mdone (once), set_deadline, set_status, note', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { pm, proj, m1, m2 } = project(p);
     let r = await p.call('POST', `/admin/crm/projects/${proj.id}`, { action: 'complete_milestone', milestoneId: m1.id });
     expect(r.json.ok).toBe(true);
@@ -358,7 +358,7 @@ describe('projects: detail and actions', () => {
 });
 
 describe('invoices', () => {
-  function invoices(p: ReturnType<typeof pultWorld>) {
+  function invoices(p: ReturnType<typeof shellWorld>) {
     const { billing } = tables(p);
     const l = p.lead('Алиса', { meta: { chatId: 777 } });
     const issued = billing.addInvoice({ client: 'Алиса', amountUsd: 150, what: 'Сайт', method: null, dueDate: '2026-11-20', leadId: l.id }, 2026);
@@ -368,7 +368,7 @@ describe('invoices', () => {
   }
 
   it('GET lists the contract fields, filters by status, 400 on an unknown status', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { issued } = invoices(p);
     const r = await p.call('GET', '/admin/crm/invoices');
     expect(r.json.items).toHaveLength(2);
@@ -385,7 +385,7 @@ describe('invoices', () => {
   });
 
   it('mark_paid is the /paid path: paid once, idempotent, void ones refused', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { issued, draft } = invoices(p);
     let r = await p.call('POST', `/admin/crm/invoices/${issued.id}`, { action: 'mark_paid' });
     expect(r.json.item).toMatchObject({ status: 'paid', paidVia: 'manual' });
@@ -401,7 +401,7 @@ describe('invoices', () => {
   });
 
   it('remind sends Billing\'s reminder text through the lead\'s Telegram chat, else hands the text to the owner', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { issued, draft, billing } = invoices(p);
     let r = await p.call('POST', `/admin/crm/invoices/${issued.id}`, { action: 'remind' });
     expect(r.json.ok).toBe(true);
@@ -422,7 +422,7 @@ describe('invoices', () => {
   });
 
   it('void: idempotent, a paid invoice cannot be voided; validation and 404', async () => {
-    const p = pultWorld();
+    const p = shellWorld();
     const { issued, draft } = invoices(p);
     expect((await p.call('POST', `/admin/crm/invoices/${draft.id}`, { action: 'void' })).json.item.status).toBe('void');
     expect((await p.call('POST', `/admin/crm/invoices/${draft.id}`, { action: 'void' })).json.item.status).toBe('void');

@@ -7,8 +7,8 @@ import { errMsg, log } from '@fir/core';
 import type { AdminReply, AdminRequest } from './admin.js';
 import type { BlogApi } from './blog.js';
 import type { PayApi } from './pay.js';
-import type { FileReply } from './pult-files.js';
-import { EVENT_NAMES } from './pult-events.js';
+import type { FileReply } from './shell-files.js';
+import { EVENT_NAMES } from './shell-events.js';
 import { auditInputSchema, type AuditInput, type AuditOutcome } from './audit-shared.js';
 import { SITE_LEAD_ID, type LeadDedupe } from './lead-dedupe.js';
 import { chatSchema, type ChatOutcome, type ChatRequest } from './client/web.js';
@@ -156,7 +156,7 @@ export function createWebhook(
   admin?: {
     token: string;
     handle: (req: AdminRequest) => Promise<AdminReply>;
-    /** `GET /admin/files/<path>` (rendered files of the content calendar, `pult-files.ts`); without it the path is an ordinary 404. */
+    /** `GET /admin/files/<path>` (rendered files of the content calendar, `shell-files.ts`); without it the path is an ordinary 404. */
     file?: (path: string, range: string | undefined) => FileReply;
   },
   /**

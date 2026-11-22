@@ -2,13 +2,13 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseRange, serveFile } from '../src/pult-files.js';
-import { pultWorld, serve } from './pult-helpers.js';
+import { parseRange, serveFile } from '../src/shell-files.js';
+import { shellWorld, serve } from './shell-helpers.js';
 
 const VIDEO = Buffer.from(Array.from({ length: 1000 }, (_, i) => i % 256));
 
 function fixture() {
-  const base = mkdtempSync(join(tmpdir(), 'pult-files-'));
+  const base = mkdtempSync(join(tmpdir(), 'shell-files-'));
   const renders = join(base, 'renders');
   mkdirSync(join(renders, '7'), { recursive: true });
   writeFileSync(join(renders, '7', '1.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
@@ -26,7 +26,7 @@ function fixture() {
 describe('GET /admin/files/<path>', () => {
   it('serves the files under renders with the right type and a private cache header; 401 without the token', async () => {
     const { renders } = fixture();
-    const s = await serve(pultWorld(), {}, renders);
+    const s = await serve(shellWorld(), {}, renders);
     expect((await s.http('GET', '/admin/files/7/1.png', undefined, {})).status).toBe(401);
     const png = await s.http('GET', '/admin/files/7/1.png');
     expect(png.status).toBe(200);
@@ -43,7 +43,7 @@ describe('GET /admin/files/<path>', () => {
 
   it('Range on video: 206 with Content-Range, open-ended and suffix ranges, 416 when outside', async () => {
     const { renders } = fixture();
-    const s = await serve(pultWorld(), {}, renders);
+    const s = await serve(shellWorld(), {}, renders);
     const get = (range: string) => s.http('GET', '/admin/files/7/reel.mp4', undefined, { 'x-admin-token': 'admin-secret', range });
     let r = await get('bytes=0-99');
     expect(r.status).toBe(206);
@@ -70,7 +70,7 @@ describe('GET /admin/files/<path>', () => {
 
   it('rejects path escapes: .., encoded .., absolute paths, backslashes, NUL, symlinks that leave the folder', async () => {
     const { renders } = fixture();
-    const s = await serve(pultWorld(), {}, renders);
+    const s = await serve(shellWorld(), {}, renders);
     const paths = [
       '../secret.png', '7/../../secret.png', '%2e%2e/secret.png', '7/%2e%2e/%2e%2e/secret.png', '..%2fsecret.png', '%2Fetc%2Fpasswd.png', '/etc/passwd',
       '7%5C..%5C..%5Csecret.png', '7/1.png%00.txt', '7/%00.png', '7//1.png', '%252e%252e/secret.png',
@@ -91,7 +91,7 @@ describe('GET /admin/files/<path>', () => {
 
   it('only known extensions; missing files and folders are 404; without a renders folder everything is 404', async () => {
     const { renders } = fixture();
-    const s = await serve(pultWorld(), {}, renders);
+    const s = await serve(shellWorld(), {}, renders);
     expect((await s.http('GET', '/admin/files/7/notes.txt')).status).toBe(400);
     expect((await s.http('GET', '/admin/files/7/none.png')).status).toBe(404);
     expect((await s.http('GET', '/admin/files/7')).status).toBe(400);
@@ -103,7 +103,7 @@ describe('GET /admin/files/<path>', () => {
 
   it('is GET only; the JSON API rate limit does not count file requests', async () => {
     const { renders } = fixture();
-    const p = pultWorld();
+    const p = shellWorld();
     const s = await serve(p, {}, renders);
     expect((await s.http('POST', '/admin/files/7/1.png', {})).status).toBe(404);
     for (let i = 0; i < 610; i++) expect((await s.http('GET', '/admin/files/7/1.png')).status).toBe(200);

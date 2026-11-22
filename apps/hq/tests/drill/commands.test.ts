@@ -14,9 +14,9 @@ describe('every command of the Shell (POST /admin/command) answers something, wi
     it(`/${c.name}`, async () => {
       w = await drillWorld({ withServer: false });
       for (const a of ARGS) {
-        const before = w.tg.sent.length + w.tg.edits.length + w.channel.list({ limit: 500 }).length + w.pult.length;
+        const before = w.tg.sent.length + w.tg.edits.length + w.channel.list({ limit: 500 }).length + w.shellOut.length;
         await w.cmd(c.name, a);
-        const after = w.tg.sent.length + w.tg.edits.length + w.channel.list({ limit: 500 }).length + w.pult.length;
+        const after = w.tg.sent.length + w.tg.edits.length + w.channel.list({ limit: 500 }).length + w.shellOut.length;
         expect(after, `/${c.name} ${a.slice(0, 20)} answered nothing`).toBeGreaterThan(before);
       }
       expect(g.rejections).toEqual([]);

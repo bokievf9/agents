@@ -11,7 +11,7 @@ import { openBuilderTasks } from './bridge.js';
 import { Progress, deptRu, lastReason, reasonRu } from './progress.js';
 import { OwnerChannel, type InboxKind } from './presence.js';
 import type { OwnerNotices } from './notices.js';
-import { pultLinks, type PultLinks } from './links.js';
+import { shellLinks, type ShellLinks } from './links.js';
 import { KEYBOARD, approvalCardFormat, bold, cb, clip, code, esc, menuCommand, parseNav, type Nav } from './tg.js';
 
 /** Tasks per page of the /tasks list. */
@@ -88,10 +88,10 @@ export interface DirectorDeps {
   reporter?: Reporter;
   /**
    * The reminders of the one HQ bot (2026-11-22). With it, alerts of the reminder kinds and the summaries reach Telegram as short notices; everything
-   * else the Director writes stays in the inbox of the Пульт (the owner channel's `notices` policy).
+   * else the Director writes stays in the inbox of the Shell (the owner channel's `notices` policy).
    */
   notices?: OwnerNotices;
-  links?: PultLinks;
+  links?: ShellLinks;
 }
 
 const ruRole: Record<string, string> = { director: 'директор', head: 'голова', worker: 'исполнитель' };
@@ -155,8 +155,8 @@ export class Director {
     return this.d.hq;
   }
 
-  private get links(): PultLinks {
-    return this.d.links ?? pultLinks();
+  private get links(): ShellLinks {
+    return this.d.links ?? shellLinks();
   }
 
   /** The last message sent by `say` (a command reply can become the live message of the task it created). */
@@ -288,7 +288,7 @@ export class Director {
     return out.join('\n\n');
   }
 
-  /** The full morning summary (the inbox of the Пульт, the group topic with TG_GROUP_REPORTS=on). */
+  /** The full morning summary (the inbox of the Shell, the group topic with TG_GROUP_REPORTS=on). */
   morningSummary(): string {
     const hq = this.hq;
     const p = zonedParts(hq.now(), hq.ownerTz);
@@ -321,7 +321,7 @@ export class Director {
   }
 
 
-  /** The week in a few lines and one link, for Telegram (owner 2026-11-22: «короче, чем сейчас»; the full digest is in the inbox of the Пульт). */
+  /** The week in a few lines and one link, for Telegram (owner 2026-11-22: «короче, чем сейчас»; the full digest is in the inbox of the Shell). */
   weeklyShort(): string {
     const hq = this.hq;
     const now = hq.now();
@@ -363,7 +363,7 @@ export class Director {
 
   /**
    * The morning in a few lines and one link, for Telegram (owner 2026-11-22: «короче, чем сейчас»; the full summary with the reports of the
-   * departments is in the inbox of the Пульт): the day's numbers, what waits for him, the heads' one-liners, the LLM spend, the night.
+   * departments is in the inbox of the Shell): the day's numbers, what waits for him, the heads' one-liners, the LLM spend, the night.
    * `night`: the notices of the quiet hours in one line (`OwnerNotices.takeNight`).
    */
   morningShort(night: string | null = null): string {
@@ -437,7 +437,7 @@ export class Director {
 
   /**
    * Alerts go out at once; in quiet hours they wait for the morning summary. With the notices of the one HQ bot the full text goes to the inbox of
-   * the Пульт and Telegram gets one short line, only for the reminder kinds (lost lead, email, models, money limit, a service down).
+   * the Shell and Telegram gets one short line, only for the reminder kinds (lost lead, email, models, money limit, a service down).
    */
   async alertOwner(text: string, o: AlertOpts = {}): Promise<void> {
     if (this.d.notices) {

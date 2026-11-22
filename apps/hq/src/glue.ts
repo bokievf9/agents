@@ -4,7 +4,7 @@ import type { OwnerAssistant } from './assistant.js';
 import type { Director } from './director.js';
 import type { MarketingHead } from './heads/marketing.js';
 import { parseCopy, type SalesHead } from './heads/sales.js';
-import type { PultLinks } from './links.js';
+import type { ShellLinks } from './links.js';
 import type { OwnerChannel } from './presence.js';
 import { menuCommand } from './tg.js';
 import type { TopicManager } from './topics.js';
@@ -19,7 +19,7 @@ export interface GlueDeps {
   topicManager: TopicManager;
   /** The owner's questions (any text): answered from the data of HQ (`assistant.ts`). */
   assistant: OwnerAssistant;
-  links: PultLinks;
+  links: ShellLinks;
   /** `TG_APPROVAL_CARDS=on`: the old approval cards and their buttons (and «Править» by text) work again. Off: decisions only in the review center. */
   cards?: boolean;
 }
@@ -31,7 +31,7 @@ export const TG_COMMANDS: { command: string; description: string }[] = [
 
 /**
  * The Telegram glue of the one HQ bot, in the order the handlers must run: group events, the owner-only gate, the buttons (old cards answer
- * «решения в Пульте»; with `cards` the legacy approval buttons), `/start`, then every other text is a question to the assistant.
+ * «решения в Shell»; with `cards` the legacy approval buttons), `/start`, then every other text is a question to the assistant.
  * The Director's commands, the reply keyboard and the task cards are gone from Telegram: the same actions live in Shell (admin API).
  */
 export function installOwnerGlue(bot: Bot, d: GlueDeps): void {

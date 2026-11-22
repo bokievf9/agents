@@ -146,7 +146,7 @@ export class DemoUsage {
     }
   }
 
-  /** The 30 days of one client (the Пульт card «Демо: N сообщений, $X за 30 дней»). */
+  /** The 30 days of one client (the Shell card «Демо: N сообщений, $X за 30 дней»). */
   block(clientId: number, days = 30): DemoUsageBlock {
     const since = this.day((days - 1) * 86_400_000);
     return demoUsageBlock(this.d.db, clientId, since, this.day(), days);
@@ -171,7 +171,7 @@ function demoUsageBlock(db: Db, clientId: number, since: string, today: string, 
   };
 }
 
-/** For the client 360 of the Пульт, which has no `DemoUsage` object: the same block straight from the table (zeros while the table does not exist). */
+/** For the client 360 of the Shell, which has no `DemoUsage` object: the same block straight from the table (zeros while the table does not exist). */
 export function demoUsageOf(db: Db, clientId: number, now: number, tz: string, days = 30): DemoUsageBlock {
   const day = (ms: number): string => { const p = zonedParts(ms, tz); return `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
   const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'demo_usage'").get() !== undefined;

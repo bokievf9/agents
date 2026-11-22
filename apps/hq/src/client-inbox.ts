@@ -1,10 +1,10 @@
 import { migrate, type Db } from '@fir/core';
 import type { OwnerLine } from './client/engine.js';
-import type { PultLinks } from './links.js';
+import type { ShellLinks } from './links.js';
 import type { NoticeType } from './notices.js';
 
 /**
- * The client bot's way to the owner (owner 2026-11-22: «позвать человека» goes through the HQ bot and the Пульт). The client's words become a line of his
+ * The client bot's way to the owner (owner 2026-11-22: «позвать человека» goes through the HQ bot and the Shell). The client's words become a line of his
  * thread (`ch_inbound`, read by `chats.ts` next to the cabinet, leads and tickets, joined by the Telegram chat id) and the HQ bot reminds the owner in one
  * line with a link to that chat, with no text of the client and no contact in Telegram. These lines exist only for a chat that asked for a person, wrote after
  * the hand-off or needs an answer; an ordinary conversation of the bot stays text-free, as before. Kept 90 days.
@@ -32,13 +32,13 @@ export class ClientInbox {
   }
 }
 
-/** The notices side: `push` of `OwnerNotices` and the Пульт links. */
+/** The notices side: `push` of `OwnerNotices` and the Shell links. */
 export interface InboxNotices {
   push(type: NoticeType, text: string, link: string, ref?: string): Promise<boolean>;
 }
 
 /** The handler the client bot calls (`ClientEngineDeps.toOwner`): stores the line and queues the reminder. Never throws. */
-export function clientToOwner(d: { inbox: ClientInbox; notices: InboxNotices; links: PultLinks; now: () => number; onError: (e: unknown) => void }): (line: OwnerLine) => void {
+export function clientToOwner(d: { inbox: ClientInbox; notices: InboxNotices; links: ShellLinks; now: () => number; onError: (e: unknown) => void }): (line: OwnerLine) => void {
   return (line) => {
     const who = line.name.trim() || 'без имени';
     const link = d.links.to('chats', `g${line.chatId}`);

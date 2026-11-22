@@ -3,15 +3,15 @@ import { roleGloss, roleTitle, zonedParts, zonedToMs, type ApprovalQueue } from 
 import type { Agent } from '@fir/hq';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
-import { fail, ok } from './pult-crm.js';
-import { toolList, type PultCompanyDeps } from './pult-company.js';
+import { fail, ok } from './shell-crm.js';
+import { toolList, type ShellCompanyDeps } from './shell-company.js';
 
 /**
  * The Agents section of HQ (2026-11-23): `GET /admin/agents`, `GET /admin/agents/:id` (the card), the instruction versions and the two
  * writes (`POST .../instructions`, `POST .../instructions/rollback`). Contract: `docs/admin-crm-api.md`, «Agents». Only ids, counters and
  * states come out; no client text (task titles and approval payloads stay inside).
  */
-export interface PultAgentsDeps extends Pick<PultCompanyDeps, 'hq' | 'now' | 'tools'> {
+export interface ShellAgentsDeps extends Pick<ShellCompanyDeps, 'hq' | 'now' | 'tools'> {
   queue: ApprovalQueue;
 }
 
@@ -25,7 +25,7 @@ const AGENT_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
 const round = (n: number) => Math.round(n * 1e6) / 1e6;
 
-export function createAgents(d: PultAgentsDeps) {
+export function createAgents(d: ShellAgentsDeps) {
   const { hq, queue, now } = d;
   const db = hq.db;
   const monthStart = () => hq.monthStart(now());

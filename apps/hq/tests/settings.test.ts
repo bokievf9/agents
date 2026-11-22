@@ -2,16 +2,16 @@
 import { describe, expect, it } from 'vitest';
 import { createAdmin } from '../src/admin.js';
 import { RateLimiter } from '../src/client/sanitize.js';
-import { pultLinks } from '../src/links.js';
+import { shellLinks } from '../src/links.js';
 import { OwnerNotices } from '../src/notices.js';
 import { SEED_SOURCE, createSettings, startValues, type SettingsDefaults } from '../src/settings.js';
 import { OWNER } from './helpers.js';
-import { pultWorld } from './pult-helpers.js';
+import { shellWorld } from './shell-helpers.js';
 
 const DEFAULTS: SettingsDefaults = { trustThreshold: 20, slotHours: ['11:00', '15:00'], kpValidDays: 14, clientLlmDailyCap: 300, tgApprovalCards: false, tgGroupReports: false };
 
 function setup() {
-  const p = pultWorld();
+  const p = shellWorld();
   const { w } = p;
   const limiter = new RateLimiter(20, 300, () => w.clock.t, () => w.hq.tz);
   const slotHours: [string, string] = ['11:00', '15:00'];
@@ -22,7 +22,7 @@ function setup() {
     onSchedule: () => { scheduled++; w.director.start(); },
   });
   const sent: string[] = [];
-  const notices = new OwnerNotices({ hq: w.hq, links: pultLinks(), deliver: (html) => { sent.push(html); return Promise.resolve('sent'); } });
+  const notices = new OwnerNotices({ hq: w.hq, links: shellLinks(), deliver: (html) => { sent.push(html); return Promise.resolve('sent'); } });
   const patch = (b: unknown) => settings.patch(b);
   return { p, w, settings, limiter, slotHours, notices, sent, patch, scheduled: () => scheduled };
 }
@@ -65,7 +65,7 @@ describe('GET and PATCH /admin/settings', () => {
     const bad = patch({ schedule: { summaryTime: '07:15' }, trust: { levels: { no_such_kind: 1 } } });
     expect(bad.status).toBe(422);
     expect((bad.body as any).error).toBe('unknown_kind');
-    const noDept = patch({ schedule: { summaryTime: '07:15' }, limits: { deptBudgetUsd: { sales: 5 } } }); // pultWorld has no Sales head
+    const noDept = patch({ schedule: { summaryTime: '07:15' }, limits: { deptBudgetUsd: { sales: 5 } } }); // shellWorld has no Sales head
     expect(noDept.status).toBe(422);
     expect((noDept.body as any).error).toBe('unknown_department');
     expect(w.hq.setting('summary_time')).toBe('08:00');

@@ -13,7 +13,7 @@ import type { CabinetApi } from './cabinet-api.js';
 import { ensureRefSlug, listReviews } from './reviews.js';
 
 /**
- * Owner's CRM panels of the website («Пульт», `/admin/crm/*`): read-mostly views over the tables of the workers.
+ * Owner's CRM panels of the website («Shell», `/admin/crm/*`): read-mostly views over the tables of the workers.
  * Contract: `docs/admin-crm-api.md`. A panel whose table does not exist answers `available: false` with an empty list.
  * Never returns tokens, keys or model prompts; visitor texts are capped at TEXT_CAP characters.
  */
@@ -381,7 +381,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       title: lang === 'en' && m.title_en ? m.title_en : stageTitleRu(m.title),
     };
   }
-  /** The stages of a project in order, as the cabinet and the Пульт show them. */
+  /** The stages of a project in order, as the cabinet and the Shell show them. */
   function stageViews(projectId: number, lang: string | null | undefined = 'ru') {
     if (!hasCol('pm_milestones', 'stage_no')) return [];
     return all<MsRow>('SELECT * FROM pm_milestones WHERE project_id = ? AND stage_no IS NOT NULL ORDER BY stage_no', projectId).map((m) => ({ id: m.id, ...stageFields(m, lang), dueAt: iso(m.due_at) }));
@@ -778,7 +778,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
 
   const whereRows = <R>(table: string, where: string, params: unknown[], order = 'id DESC', limit = 200) =>
     (has(table) ? all<R>(`SELECT * FROM ${table}${where ? ` WHERE ${where}` : ''} ORDER BY ${order} LIMIT ?`, ...params, limit) : []);
-  /** Row views for the «Пульт v3» routes (`pult.ts`): the same shapes as the panels above, so the two never drift apart. */
+  /** Row views for the «Shell v3» routes (`pult.ts`): the same shapes as the panels above, so the two never drift apart. */
   const views = {
     has, all, one, note, setNote,
     stages: (): StageContext => StageContext.load(db),

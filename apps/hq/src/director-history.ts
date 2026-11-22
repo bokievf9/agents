@@ -1,7 +1,7 @@
 import { migrate, type Db } from '@fir/core';
 
 /**
- * The Director conversation of the website («Поручения» of the Пульт): the owner's lines (`POST /admin/say`), the commands (`POST /admin/command`) and the answers
+ * The Director conversation of the website («Поручения» of the Shell): the owner's lines (`POST /admin/say`), the commands (`POST /admin/command`) and the answers
  * of HQ, newest last. A small table in the HQ database; only the admin API writes it. Contract: `docs/admin-crm-api.md` («Поручения: история Директора»).
  */
 const SCHEMA = `

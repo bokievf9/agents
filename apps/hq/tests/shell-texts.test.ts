@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { pultLinks } from '../src/links.js';
+import { shellLinks } from '../src/links.js';
 
 // Audit fix 3 (2026-11-22): the owner-facing strings of the Telegram bot say Shell, never Пульт or HQ, and every link goes to a Shell section.
 const SRC = new URL('../src/', import.meta.url);
@@ -16,7 +16,7 @@ describe('Telegram texts', () => {
   });
 
   it('links go to Shell sections, never to the pixel office', () => {
-    const l = pultLinks('https://firtech.pro');
+    const l = shellLinks('https://firtech.pro');
     const all = [l.to('home'), l.to('review'), l.to('leads'), l.to('lead', 7), l.to('clients', 3), l.to('calls'), l.to('projects'), l.to('project', 2), l.to('chats'), l.to('chats', 'lead'), l.to('money', 5), l.to('tasks'), l.to('company'), l.to('settings')];
     for (const u of all) expect(u).not.toContain('/office');
     expect(l.to('home')).toBe('https://firtech.pro/admin/inbox');

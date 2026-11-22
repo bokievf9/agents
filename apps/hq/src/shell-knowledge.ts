@@ -4,7 +4,7 @@ import { migrate, type Db } from '@fir/core';
 import { chunkText, PackIndexSchema, PACKAGE_DIR, redactSecrets, type Knowledge, type KnowledgeChunk } from '@fir/fira';
 import { z } from 'zod';
 import type { AdminReply } from './admin.js';
-import { fail, ok } from './pult-crm.js';
+import { fail, ok } from './shell-crm.js';
 
 /**
  * `/admin/knowledge*`: the knowledge of Fira for the owner (contract `docs/briefs/fira/knowledge-quality-api.md`, `docs/admin-crm-api.md`).
@@ -47,7 +47,7 @@ const sourceOf = (id: string, path: string): Source => (/playbook/i.test(id) || 
 const iso = (ms: number): string => new Date(ms).toISOString();
 const noteId = (id: string): number | null => (/^owner-\d{1,9}$/.test(id) ? Number(id.slice(6)) : null);
 
-export interface PultKnowledgeDeps {
+export interface ShellKnowledgeDeps {
   db: Db;
   now: () => number;
   /** The lead manager's store, when it is on: owner notes are written into it at once and the rebuild reloads it. */
@@ -56,7 +56,7 @@ export interface PultKnowledgeDeps {
   packDir?: string | undefined;
 }
 
-export function createKnowledgeApi(d: PultKnowledgeDeps) {
+export function createKnowledgeApi(d: ShellKnowledgeDeps) {
   migrate(d.db, SCHEMA);
   const dir = d.packDir ?? join(PACKAGE_DIR, 'company-packs', COMPANY);
 
