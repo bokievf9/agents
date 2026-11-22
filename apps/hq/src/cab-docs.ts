@@ -296,6 +296,23 @@ interface ClientRow { id: number; email: string; name: string; locale: string }
 const SEVEN_DAYS = 7 * 86_400_000;
 /** Emails per document in all (the first sending and the retries on start; the owner's «Отправить снова» is not limited). */
 export const MAX_MAIL_ATTEMPTS = 3;
+/** The cap of the `text` field of a document in the API, in UTF-8 bytes (60 KB). */
+export const DOC_TEXT_MAX_BYTES = 60 * 1024;
+
+/** The text the client reads for a quote, contract or other row: the stored body, the contract without its signature block (what the PDF shows); null for invoices and acts. Cut at 60 KB on a character boundary. */
+export function docText(row: Pick<DocRow, 'kind' | 'body'>): string | null {
+  if (row.kind !== 'quote' && row.kind !== 'contract' && row.kind !== 'other') return null;
+  let body = row.body;
+  if (row.kind === 'contract') {
+    const cut = body.search(/^##\s+Подписи сторон/m);
+    if (cut >= 0) body = body.slice(0, cut);
+  }
+  const buf = Buffer.from(body, 'utf8');
+  if (buf.length <= DOC_TEXT_MAX_BYTES) return body;
+  let end = DOC_TEXT_MAX_BYTES;
+  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end--; // never inside a multi-byte character
+  return buf.subarray(0, end).toString('utf8');
+}
 const sha = (b: Buffer | string) => createHash('sha256').update(b).digest('hex');
 const iso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
 
@@ -954,6 +971,7 @@ export class CabDocs {
     return {
       id: r.id, kind: r.kind, title: r.title, number: r.number || null, leadId: r.lead_id, projectId: r.project_id, state: this.liveState(r),
       createdAt: iso(r.created_at), deliveredAt: iso(r.delivered_at), acceptedAt: iso(r.accepted_at), signedAt: iso(r.signed_at), pdfUrl: await this.pdfUrl(r),
+      text: docText(r),
       ...(r.amount_usd !== null ? { amountUsd: r.amount_usd } : {}), ...(r.stage_no !== null ? { stageNo: r.stage_no } : {}), ...(pay ? { payUrl: pay } : {}),
     };
   }

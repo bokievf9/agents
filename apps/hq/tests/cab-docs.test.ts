@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clientNextAction, docNextStep, parseSignature, projectStateOf, SIGNATURE_MAX_CHARS, type DocRow, type StageLike } from '../src/cab-docs.js';
+import { clientNextAction, docText, DOC_TEXT_MAX_BYTES, docNextStep, parseSignature, projectStateOf, SIGNATURE_MAX_CHARS, type DocRow, type StageLike } from '../src/cab-docs.js';
 import { dataUrl, makePng } from './png.js';
 
 const doc = (o: Partial<DocRow>): DocRow => ({
@@ -56,5 +56,28 @@ describe('what the client does next', () => {
     expect(docNextStep([doc({ state: 'awaiting_client' })], { kind: 'accept_quote', docId: 1 }, 'ru')).toContain('Принять КП');
     expect(docNextStep([quote, doc({ id: 2, kind: 'contract', state: 'signed' })], { kind: 'wait' }, 'ru')).toBe('Договор подписан, готовим счёт на первый этап');
     expect(docNextStep([quote, doc({ id: 2, kind: 'contract', state: 'signed' }), doc({ id: 3, kind: 'invoice', state: 'issued' })], { kind: 'wait' }, 'ru')).toBeNull();
+  });
+});
+
+describe('the text of a document in the API', () => {
+  it('quote, contract and other carry the stored text; invoice and act carry null', () => {
+    expect(docText(doc({ kind: 'quote', body: '# КП\n\nтекст' }))).toBe('# КП\n\nтекст');
+    expect(docText(doc({ kind: 'other', body: 'Смета' }))).toBe('Смета');
+    expect(docText(doc({ kind: 'invoice', body: 'x' }))).toBeNull();
+    expect(docText(doc({ kind: 'act', body: 'x' }))).toBeNull();
+  });
+  it('the contract text stops before the signature block, like its PDF', () => {
+    expect(docText(doc({ kind: 'contract', body: '# Договор\n\n1. Предмет\n\n## Подписи сторон\nИсполнитель' }))).toBe('# Договор\n\n1. Предмет\n\n');
+  });
+  it('is cut at 60 KB on a character boundary', () => {
+    const long = 'я'.repeat(40_000); // 2 bytes each
+    const t = docText(doc({ kind: 'quote', body: long }))!;
+    expect(Buffer.byteLength(t)).toBeLessThanOrEqual(DOC_TEXT_MAX_BYTES);
+    expect(t).toBe('я'.repeat(DOC_TEXT_MAX_BYTES / 2));
+    expect(t).not.toContain('\uFFFD');
+    const odd = docText(doc({ kind: 'quote', body: 'a' + 'я'.repeat(40_000) }))!; // the cut falls inside a letter
+    expect(odd).toBe('a' + 'я'.repeat((DOC_TEXT_MAX_BYTES - 2) / 2));
+    expect(odd).not.toContain('\uFFFD');
+    expect(docText(doc({ kind: 'quote', body: 'a'.repeat(DOC_TEXT_MAX_BYTES) }))!.length).toBe(DOC_TEXT_MAX_BYTES);
   });
 });
