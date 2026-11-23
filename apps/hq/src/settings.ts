@@ -32,6 +32,11 @@ export const NOTICE_SETTING_TYPES = ['client', 'lead', 'approval', 'payment', 's
 export const NOTICE_SETTING_ALERTS = ['lost_lead', 'email_failed', 'llm', 'budget', 'service', 'human'] as const;
 /** How much the owner wants to hear from the lead manager (Fira): ask_me = every doubt, policy = the escalation policy, autopilot = only a person asked for, anger, legal. */
 export const AUTOPILOT_MODES = ['ask_me', 'policy', 'autopilot'] as const;
+/** The publishing cadence of marketing (marketing chat, 2026-11-24): the days (0 Sunday ... 6 Saturday), the time on the company's clock, the platforms. */
+export const CADENCE_PLATFORMS = ['instagram', 'tiktok', 'shorts'] as const;
+export interface Cadence { days: number[]; time: string; platforms: (typeof CADENCE_PLATFORMS)[number][] }
+export const DEFAULT_CADENCE: Cadence = { days: [1, 3, 5], time: '10:00', platforms: ['instagram', 'shorts'] };
+const CADENCE_KEY = 'marketing.cadence';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings_log (
@@ -58,6 +63,25 @@ const zone = z.string().max(64).refine((v) => {
 const bool = z.boolean();
 const flags = <T extends readonly string[]>(keys: T) => z.object(Object.fromEntries(keys.map((k) => [k, bool.optional()])) as Record<T[number], z.ZodOptional<z.ZodBoolean>>).strict();
 
+const cadenceBody = z.object({
+  days: z.array(z.number().int().min(0).max(6)).min(1).max(7), time: z.string().regex(/^([01]?\d|2[0-3]):[0-5]\d$/),
+  platforms: z.array(z.enum(CADENCE_PLATFORMS)).min(1).max(3),
+}).strict();
+
+/** The stored cadence (`settings.marketing.cadence`, JSON), else the default; days sorted and unique. */
+export function cadenceOf(hq: Pick<Hq, 'setting'>): Cadence {
+  try {
+    const raw = hq.setting(CADENCE_KEY);
+    if (raw) {
+      const p = cadenceBody.safeParse(JSON.parse(raw));
+      if (p.success) return { days: [...new Set(p.data.days)].sort((a, b) => a - b), time: p.data.time.padStart(5, '0'), platforms: [...new Set(p.data.platforms)] };
+    }
+  } catch {
+    // a broken value is the default
+  }
+  return { ...DEFAULT_CADENCE, days: [...DEFAULT_CADENCE.days], platforms: [...DEFAULT_CADENCE.platforms] };
+}
+
 const patchBody = z.object({
   schedule: z.object({
     summaryTime: hm, approvalTime: hm, digestDay: z.number().int().min(0).max(6), digestTime: hm,
@@ -81,6 +105,7 @@ const patchBody = z.object({
   playground: z.object({ draftMsgsPerDay: z.number().int().min(1).max(2000), liveMsgsPerDay: z.number().int().min(1).max(2000) }).partial().strict(),
   service: z.object({ tgApprovalCards: bool, tgGroupReports: bool }).partial().strict(),
   autopilot: z.object({ leadManager: z.enum(AUTOPILOT_MODES), support: z.enum(AUTOPILOT_MODES) }).partial().strict(),
+  marketing: z.object({ cadence: cadenceBody }).partial().strict(),
 }).partial().strict();
 
 export type SettingsPatch = z.infer<typeof patchBody>;
@@ -172,6 +197,7 @@ export function createSettings(d: SettingsDeps) {
         playground: { draftMsgsPerDay: intOr(hq.setting('pg_limit_draft'), 50), liveMsgsPerDay: intOr(hq.setting('pg_limit_live'), 500) },
         service: { tgApprovalCards: sv.tgApprovalCards, tgGroupReports: sv.tgGroupReports },
         autopilot: { leadManager: autopilotMode(), support: autopilotMode('autopilot.support') },
+        marketing: { cadence: cadenceOf(hq) },
       },
       usage: { deptMonthUsd: monthUsd, clientLlmToday: d.limiters()[0]?.llmToday ?? 0, monthStartedAt: new Date(zonedToMs(p.y, p.mo, 1, 0, 0, hq.tz)).toISOString() },
       restartRequired: restartKeys.length > 0, restartKeys,
@@ -268,11 +294,17 @@ export function createSettings(d: SettingsDeps) {
     const ap = p.autopilot;
     if (ap?.leadManager !== undefined) kv('autopilot.leadManager', ap.leadManager, 'autopilot.leadManager', autopilotMode());
     if (ap?.support !== undefined) kv('autopilot.support', ap.support, 'autopilot.support', autopilotMode('autopilot.support'));
+    const mk = p.marketing;
+    if (mk?.cadence !== undefined) {
+      const c = mk.cadence;
+      const next = JSON.stringify({ days: [...new Set(c.days)].sort((a, b) => a - b), time: c.time.padStart(5, '0'), platforms: [...new Set(c.platforms)] });
+      kv(CADENCE_KEY, next, 'marketing.cadence', JSON.stringify(cadenceOf(hq)));
+    }
     return out;
   }
 
-  /** `PATCH /admin/settings`: a partial body, all or nothing; answers the whole settings again plus `changed` (the keys). */
-  function patch(body: unknown): AdminReply {
+  /** `PATCH /admin/settings`: a partial body, all or nothing; answers the whole settings again plus `changed` (the keys). `source`: who wrote it in `settings_log`. */
+  function patch(body: unknown, source = 'owner'): AdminReply {
     const parsed = patchBody.safeParse(body ?? {});
     if (!parsed.success) return fail(400, 'invalid', { fields: parsed.error.issues.slice(0, 10).map((i) => i.path.join('.')) });
     const changes = plan(parsed.data);
@@ -280,7 +312,7 @@ export function createSettings(d: SettingsDeps) {
     db.transaction(() => {
       for (const ch of changes) {
         ch.write();
-        log(ch.key, ch.old, ch.next, 'owner');
+        log(ch.key, ch.old, ch.next, source);
       }
     })();
     if (changes.some((c) => c.key.startsWith('schedule.'))) d.onSchedule();

@@ -131,6 +131,11 @@ export interface WorkerCtx {
    * Every head sets it; optional only so hand-built test contexts still compile (`toolsOf(ctx, dept)` gives a journal-less one).
    */
   tools?: Tools;
+  /**
+   * The brand choices of the department's rules (marketing, 2026-11-24): `firaVoice` on means captions speak as Fira and end with her signature.
+   * Absent (other departments, hand-built tests): off. The rules text itself already sits in the system prompt of every `llm` call of a ruled worker.
+   */
+  brand?: { firaVoice: boolean };
 }
 
 export interface WorkerResult {

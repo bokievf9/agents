@@ -1,5 +1,6 @@
 import { errMsg, log, zonedParts, type KindSpec, type Payload } from '@fir/core';
 import { toolsOf, type SubtaskSpec, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
+import { FIRA_SIGNATURE } from './fira-voice.js';
 import { readSourcePage } from './source-page.js';
 import { fill, generateItem, loadPrompts, noTrends, type Prompts, type TrendHint, type TrendsProvider } from './generate.js';
 import { KIT_SECTIONS, PLATFORM_LABEL, kitLabel, kitRendersNote, kitScopeKey, kitScopeOf, parseKitArg, splitPlatforms, type ItemType, type Platform } from './format.js';
@@ -273,7 +274,9 @@ export class ContentMakerWorker implements Worker {
       const text = String(task.meta.topic ?? '').slice(m ? m[0].length : 0).trim().slice(0, 300);
       if (!text) return { ok: false, result: '', error: 'Не указана тема' };
       const topic = freeTopic(text);
-      itemId = store.insertItem({ packId: null, seq: 1, total: 1, type, topicKey: topic.key, topicText: topic.text, plannedDate: addDays(ymd(ctx.now()), 1) });
+      // a slot of an accepted plan (marketing chat) names its day; otherwise tomorrow
+      const day = typeof task.meta.plannedDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(task.meta.plannedDate) ? task.meta.plannedDate : addDays(ymd(ctx.now()), 1);
+      itemId = store.insertItem({ packId: null, seq: 1, total: 1, type, topicKey: topic.key, topicText: topic.text, plannedDate: day });
       store.recordTopic(topic.key);
     }
     const item = store.item(itemId);
@@ -302,6 +305,7 @@ export class ContentMakerWorker implements Worker {
       const gen = await generateItem(ctx.llm, this.prompts, {
         type: item.type, topic, ...(item.type === 'profile' ? { sections: kitScopeOf(item.topicKey) } : {}), week: item.packId ? `с ${ddmm(item.plannedDate)}` : '', ...(feedback ? { comment: feedback, previous: typeof task.meta.previous === 'string' && task.meta.previous ? task.meta.previous : item.text } : {}), ...(trends.length ? { trends } : {}), ...(pageText ? { pageText } : {}),
         ...(source ? { source: articleSource(articleSchema.parse(JSON.parse(source.json))) } : {}),
+        ...(ctx.brand?.firaVoice ? { signature: FIRA_SIGNATURE } : {}),
       });
       if (!gen) {
         store.setStatus(itemId, 'failed');

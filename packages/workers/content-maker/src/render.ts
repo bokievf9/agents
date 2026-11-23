@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Resvg } from '@resvg/resvg-js';
 import satori from 'satori';
+import type { BrandSlot } from './fira-voice.js';
 import { splitKit, type ItemType } from './format.js';
 
 /**
@@ -21,6 +22,8 @@ export interface Frame {
   total?: number;
   /** A picture under the frame as a data URI (JPEG or PNG), darkened so the text stays readable. Slides and posts only. */
   bg?: string;
+  /** The brand slot (`brand/fira`): Fira on the frame when the renderer side draws it; absent: no sticker. */
+  brand?: BrandSlot;
 }
 
 export const SIZES: Record<FrameKind, { width: number; height: number }> = {

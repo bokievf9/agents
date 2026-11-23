@@ -18,6 +18,7 @@ import type { ApprovalEditor } from '../editor.js';
 import type { LostLeads } from '../lost-leads.js';
 import { createReach } from '../reach.js';
 import type { Reporter } from '../reporter.js';
+import { currentRules, headInstructions, RULED_WORKERS, rulesLlm } from '../marketing-rules.js';
 import { toolsFor, type AppTools } from '../tools.js';
 
 export const MARKETING = 'marketing';
@@ -448,7 +449,7 @@ export class MarketingHead implements ApprovalEditor {
       this.llmFor(HEAD_ID, task.id),
       {
         tier: 'haiku', maxTokens: 400,
-        system: `${this.agent().instructions}\n\nОпредели, что нужно сделать исполнителю по задаче. Ответ: только JSON {"action": "pack"|"topic"|"daily"|"trends"|"trends_weekly"|"seo"|"report"|"profile"|"article"|"none", "topic": "тема материала или ниша статьи", "type": "clip"|"carousel"|"post"|"story"}. pack: пакет недели; topic: один материал на тему (рилс, карусель, пост или история); daily: что публикуем сегодня; trends: хуки и форматы дня; trends_weekly: тренды недели; seo: проверка сайта; report: недельный отчёт; profile: оформление профиля Instagram; article: статья в блог сайта; none: задача не для отдела маркетинга.`,
+        system: `${headInstructions(this.hq)}\n\nОпредели, что нужно сделать исполнителю по задаче. Ответ: только JSON {"action": "pack"|"topic"|"daily"|"trends"|"trends_weekly"|"seo"|"report"|"profile"|"article"|"none", "topic": "тема материала или ниша статьи", "type": "clip"|"carousel"|"post"|"story"}. pack: пакет недели; topic: один материал на тему (рилс, карусель, пост или история); daily: что публикуем сегодня; trends: хуки и форматы дня; trends_weekly: тренды недели; seo: проверка сайта; report: недельный отчёт; profile: оформление профиля Instagram; article: статья в блог сайта; none: задача не для отдела маркетинга.`,
         messages: [{ role: 'user', content: `Задача: ${task.title}\n${task.body}`.slice(0, 2000) }],
       },
       splitSchema,
@@ -511,7 +512,7 @@ export class MarketingHead implements ApprovalEditor {
     }
     // pack: the worker splits it into items, each item is a subtask of the content-maker
     this.hq.setMeta(task.id, { action: 'pack' });
-    const specs = await this.worker.plan!(this.hq.task(task.id)!, this.ctx(this.hq.task(task.id)!, [], WORKER_ID));
+    const specs = await this.worker.plan!(this.hq.task(task.id)!, this.ctx(this.hq.task(task.id)!, [], WORKER_ID, WORKER_ID));
     if (!specs || specs.length === 0) {
       this.hq.complete(task.id, HEAD_ID, 'Пакет на эту неделю уже есть, новый не создаю.');
       return void (await this.report(task.id, 'Пакет недели уже создан раньше, повторно не делаю.'));
@@ -646,9 +647,16 @@ export class MarketingHead implements ApprovalEditor {
   }
 
   // ---- worker run, review, one rework, approval ----
-  private ctx(task: Task, staged: { kind: string; payload: Record<string, unknown>; summary: string }[], actor: string): WorkerCtx {
-    const llm = this.llmFor(actor, task.id);
+  /**
+   * `workerId`: who really runs (a topic task runs the Content Maker under the head's name). The Content Maker, the Publisher and the Trend Scout get
+   * the owner's marketing rules in every system prompt (`rulesLlm`, read at call time) and the brand choice of the rules (`brand.firaVoice`).
+   */
+  private ctx(task: Task, staged: { kind: string; payload: Record<string, unknown>; summary: string }[], actor: string, workerId: string = actor): WorkerCtx {
+    const metered = this.llmFor(actor, task.id);
+    const ruled = RULED_WORKERS.has(workerId);
+    const llm = ruled ? rulesLlm(metered, () => currentRules(this.hq).block) : metered;
     return {
+      ...(ruled ? { brand: { firaVoice: currentRules(this.hq).firaVoice } } : {}),
       llm, db: this.hq.db, tz: this.hq.tz, now: this.hq.now,
       requestApproval: (kind, payload, summary) => Promise.resolve(staged.push({ kind, payload, summary }) - 1),
       log: (action, detail) => this.hq.log(actor, action, 'task', String(task.id), detail),
@@ -669,7 +677,7 @@ export class MarketingHead implements ApprovalEditor {
       this.llmFor(HEAD_ID, task.id),
       {
         tier: 'haiku', maxTokens: 600,
-        system: `${this.agent().instructions}\n\nПроверь материал по чек-листу выше. Ответ: только JSON {"ok": true|false, "issues": ["что исправить, коротко"]}. ok true, если нарушений нет. Не придумывай замечаний, которых нет.`,
+        system: `${headInstructions(this.hq)}\n\nПроверь материал по чек-листу выше. Ответ: только JSON {"ok": true|false, "issues": ["что исправить, коротко"]}. ok true, если нарушений нет. Не придумывай замечаний, которых нет.`,
         messages: [{ role: 'user', content: `Задача: ${task.title}\n\nМатериал:\n${result}`.slice(0, 8000) }],
       },
       reviewSchema,
@@ -685,7 +693,7 @@ export class MarketingHead implements ApprovalEditor {
     staged.length = 0;
     const t = this.hq.task(taskId)!;
     try {
-      return await worker.run(t, this.ctx(t, staged, actor));
+      return await worker.run(t, this.ctx(t, staged, actor, worker.id));
     } catch (e) {
       return { ok: false, result: '', error: errMsg(e) };
     }
@@ -920,13 +928,18 @@ export class MarketingHead implements ApprovalEditor {
    * (`revise_item`, `meta.reviseOf` = the review id of the original, so the review center links the new card to it); all three carry `meta.studio` for the order list.
    * null: the original is missing or is a profile kit.
    */
-  requestStudioOrder(o: { mode: 'prompt'; prompt: string; type?: 'clip' | 'post' | 'carousel' | 'story' } | { mode: 'variant' | 'niche'; itemId: number; reviewId: string; note?: string; niche?: { id: string; name: string } }): { taskId: number } | null {
+  requestStudioOrder(o: { mode: 'prompt'; prompt: string; type?: 'clip' | 'post' | 'carousel' | 'story'; plannedDate?: string; via?: string } | { mode: 'variant' | 'niche'; itemId: number; reviewId: string; note?: string; niche?: { id: string; name: string }; via?: string }): { taskId: number } | null {
     if (o.mode === 'prompt') {
+      // `plannedDate`: the day of a slot of an accepted plan (marketing chat); the item is planned for it instead of tomorrow
+      const day = o.plannedDate && /^\d{4}-\d{2}-\d{2}$/.test(o.plannedDate) ? o.plannedDate : undefined;
       const t = this.hq.createTask({
         title: `Заказ владельца: ${o.prompt.replace(/\s+/g, ' ')}`.slice(0, 200), body: o.prompt.slice(0, 1000), dept: MARKETING, creator: 'owner',
-        meta: { action: 'topic', topic: o.prompt.slice(0, 300), type: o.type ?? 'clip', source: 'owner', studio: { mode: 'prompt', prompt: o.prompt.slice(0, 1000), type: o.type ?? 'clip' } },
+        meta: {
+          action: 'topic', topic: o.prompt.slice(0, 300), type: o.type ?? 'clip', source: 'owner', ...(day ? { plannedDate: day } : {}),
+          studio: { mode: 'prompt', prompt: o.prompt.slice(0, 1000), type: o.type ?? 'clip', ...(o.via ? { via: o.via } : {}) },
+        },
       });
-      this.hq.log('owner', 'studio_order', 'task', String(t.id), 'prompt');
+      this.hq.log('owner', 'studio_order', 'task', String(t.id), o.via ? `prompt ${o.via}` : 'prompt');
       this.hq.wake(HEAD_ID, 'task');
       return { taskId: t.id };
     }
@@ -940,10 +953,10 @@ export class MarketingHead implements ApprovalEditor {
       title: `${o.mode === 'variant' ? 'Ещё вариант' : `Под нишу ${o.niche?.name ?? ''}`} к материалу #${o.itemId}`.slice(0, 200), body: feedback.slice(0, 1000), dept: MARKETING, creator: 'owner',
       meta: {
         action: 'revise_item', fromItemId: o.itemId, feedback, previous: item.text, reviseOf: o.reviewId, reviseNote: feedback,
-        studio: { mode: o.mode, fromItemId: o.itemId, ...(o.niche ? { niche: o.niche.id } : {}), ...(note ? { prompt: note } : {}) },
+        studio: { mode: o.mode, fromItemId: o.itemId, ...(o.niche ? { niche: o.niche.id } : {}), ...(note ? { prompt: note } : {}), ...(o.via ? { via: o.via } : {}) },
       },
     });
-    this.hq.log('owner', 'studio_order', 'task', String(t.id), o.mode);
+    this.hq.log('owner', 'studio_order', 'task', String(t.id), o.via ? `${o.mode} ${o.via}` : o.mode);
     this.hq.wake(HEAD_ID, 'task');
     return { taskId: t.id };
   }

@@ -1,5 +1,5 @@
 import { createDirectorHistory } from './director-history.js';
-import { errMsg, log, type ApprovalQueue } from '@fir/core';
+import { errMsg, log, type ApprovalQueue, type LlmClient } from '@fir/core';
 import type { Hq, Task } from '@fir/hq';
 import { openBuilderTasks } from './bridge.js';
 import type { Director } from './director.js';
@@ -62,6 +62,8 @@ export interface AdminDeps {
   campaigns?: Campaigns;
   /** The lead manager on Fira, when on (`fira-wiring.ts`): the owner's knowledge notes reach its search. */
   fira?: ShellDeps['fira'];
+  /** The company's model client for Fira as Head of Marketing (`/admin/marketing/chat`); absent: the chat answers from the data by code. */
+  llm?: LlmClient;
 }
 
 export interface AdminRequest {
@@ -126,7 +128,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   const history = createDirectorHistory(hq.db, now);
   const shell = createShell({
     fira: d.fira, hq, queue, director, channel, ownerId: d.ownerId, now, crm, billing: d.billing, client: d.client, webReply: d.webReply,
-    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), onRoutinesChange: d.onRoutinesChange, settings: d.settings, tools: d.tools, ...(d.drill && d.drillStatus ? { drill: { command: d.drill, status: d.drillStatus } } : {}), ...(d.cabinet ? { cabinet: d.cabinet.docs } : {}), ...(d.calls ? { calls: d.calls } : {}),
+    marketing: d.marketing, rendersDir: d.rendersDir, decide: (id, action) => decide(id, action), llm: d.llm, campaigns: d.campaigns, onRoutinesChange: d.onRoutinesChange, settings: d.settings, tools: d.tools, ...(d.drill && d.drillStatus ? { drill: { command: d.drill, status: d.drillStatus } } : {}), ...(d.cabinet ? { cabinet: d.cabinet.docs } : {}), ...(d.calls ? { calls: d.calls } : {}),
   });
 
   const maxTaskId = () => (hq.db.prepare('SELECT COALESCE(MAX(id), 0) m FROM tasks').get() as { m: number }).m;

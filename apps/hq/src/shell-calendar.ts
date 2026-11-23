@@ -2,6 +2,7 @@ import { Cron } from 'croner';
 import { errMsg, log, zonedParts, zonedToMs, type Db } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import type { AdminReply } from './admin.js';
+import type { MarketingPlans } from './marketing-plans.js';
 import { fail, ok } from './shell-crm.js';
 
 /**
@@ -26,9 +27,9 @@ export interface CalendarEvent {
   /** Second line: the client, the project or the routine's cron. */
   detail: string;
   dept: string;
-  /** Kind-specific state: call `pending|confirmed`, milestone `open|ready|done...`, routine `scheduled`, content status. */
+  /** Kind-specific state: call `pending|confirmed`, milestone `open|ready|done...`, routine `scheduled`, content status (`planned`: a slot of an accepted plan). */
   status: string;
-  /** Where the owner goes: `calls:<leadId>`, `projects:<id>`, `content:item:<id>`, `routines:<name>`. */
+  /** Where the owner goes: `calls:<leadId>`, `projects:<id>`, `content:item:<id>`, `content:plan:<id>`, `routines:<name>`. */
   link: string;
 }
 
@@ -37,7 +38,7 @@ const clip = (s: string, n = 120) => {
   return one.length > n ? `${one.slice(0, n - 1)}…` : one;
 };
 
-export function createCalendar(d: { hq: Hq; db: Db; now: () => number }) {
+export function createCalendar(d: { hq: Hq; db: Db; now: () => number; plans?: MarketingPlans }) {
   const { hq, db } = d;
 
   function rows<T>(sql: string, ...args: unknown[]): T[] {
@@ -86,6 +87,15 @@ export function createCalendar(d: { hq: Hq; db: Db; now: () => number }) {
       events.push({
         id: `content:${r.id}`, kind: 'content', at: iso(zonedToMs(y, m, dd, 0, 0, hq.tz)), allDay: true, title: clip(r.title || r.type), detail: r.type,
         dept: 'marketing', status: r.status, link: `content:item:${r.id}`,
+      });
+    }
+
+    // slots of accepted marketing plans (marketing chat) until their item exists: kind `content`, status `planned`
+    for (const sl of d.plans?.calendarSlots(from, to) ?? []) {
+      const [y, m, dd] = sl.day.split('-').map(Number) as [number, number, number];
+      events.push({
+        id: `plan:${sl.planId}:${sl.n}`, kind: 'content', at: iso(zonedToMs(y, m, dd, 0, 0, hq.tz)), allDay: true, title: clip(sl.topic), detail: `${sl.type} · ${sl.platform}`,
+        dept: 'marketing', status: 'planned', link: `content:plan:${sl.planId}`,
       });
     }
 

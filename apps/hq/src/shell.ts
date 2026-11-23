@@ -1,4 +1,4 @@
-import type { ApprovalQueue } from '@fir/core';
+import type { ApprovalQueue, LlmClient } from '@fir/core';
 import type { Hq } from '@fir/hq';
 import type { BillingWorker } from '@fir/worker-billing';
 import type { AdminReply } from './admin.js';
@@ -28,6 +28,10 @@ import type { SettingsApi } from './settings.js';
 import { createKnowledgeApi, type ShellKnowledgeDeps } from './shell-knowledge.js';
 import { createQualityApi } from './shell-quality.js';
 import { createDashboard } from './shell-dashboard.js';
+import type { Campaigns } from './campaigns.js';
+import { createMarketingChat } from './marketing-chat.js';
+import { MarketingPlans } from './marketing-plans.js';
+import { createMarketingRules, handleMarketing } from './shell-marketing.js';
 
 /**
  * «Shell v3»: the owner workplace routes added on top of `/admin/*` (hub, CRM writes, content, metrics, company).
@@ -63,6 +67,10 @@ export interface ShellDeps {
   drill?: { command(arg: string): Promise<string>; status(): DrillStatus } | undefined;
   /** The lead manager on Fira (when `FIRA_LEAD_MANAGER=on`): owner notes of `/admin/knowledge` go into its search. */
   fira?: ShellKnowledgeDeps['fira'];
+  /** The company's model client: Fira as Head of Marketing in `/admin/marketing/chat` (absent: the chat answers from the data by code). */
+  llm?: LlmClient | undefined;
+  /** The mailings (`campaigns.ts`): read by the marketing chat. */
+  campaigns?: Campaigns | undefined;
 }
 
 export function createShell(d: ShellDeps) {
@@ -80,12 +88,19 @@ export function createShell(d: ShellDeps) {
   const trends = createShellTrends({ hq: d.hq, now: d.now, marketing: d.marketing });
   const reach = createReach({ hq: d.hq, now: d.now });
   const processes = createProcesses({ db: d.hq.db, now: d.now, drill: d.drill });
-  const calendar = createCalendar({ hq: d.hq, db: d.hq.db, now: d.now });
+  const plans = new MarketingPlans(d.hq);
+  const calendar = createCalendar({ hq: d.hq, db: d.hq.db, now: d.now, plans });
   const audit = createAudit({ hq: d.hq, db: d.hq.db });
   const knowledge = createKnowledgeApi({ db: d.hq.db, now: d.now, fira: d.fira });
   const quality = createQualityApi({ db: d.hq.db, now: d.now, setting: (k) => d.hq.setting(k) });
   const dashboard = createDashboard({ hq: d.hq, now: d.now });
   const analytics = createAnalytics({ db: d.hq.db, now: d.now, tz: () => d.hq.tz, numbers: metrics.numbers });
+  const marketingRules = createMarketingRules(d.hq);
+  const marketingChat = createMarketingChat({
+    hq: d.hq, llm: d.llm, plans, rules: marketingRules, content, calendar, analytics, numbers: metrics.numbers, settings: d.settings,
+    campaigns: d.campaigns ? () => d.campaigns!.handle('GET', [], undefined) : undefined,
+    order: d.marketing ? (o) => d.marketing!.requestStudioOrder({ ...o, via: 'plan' }) : undefined,
+  });
 
   /** `seg`: the path after `/admin/`. null: not a «Shell v3» route. */
   async function handle(method: string, seg: string[], query: URLSearchParams, body: unknown): Promise<AdminReply | null> {
@@ -146,6 +161,7 @@ export function createShell(d: ShellDeps) {
     if (a === 'reach') return reach.handle(method, seg, query, body);
     if (a === 'metrics') return method === 'GET' && seg.length === 2 && seg[1] === 'week' ? metrics.week(query) : fail(404, 'not_found');
     if (a === 'agents') return agents.handle(method, seg.slice(1), body);
+    if (a === 'marketing') return handleMarketing(marketingRules, marketingChat, method, seg.slice(1), query, body);
     if (a === 'company') {
       const [, kind, rawName, act] = seg;
       if (method === 'GET' && seg.length === 1) return company.get();

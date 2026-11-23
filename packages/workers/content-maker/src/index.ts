@@ -11,3 +11,4 @@ export * from './render.js';
 export * from './reel.js';
 export * from './render-queue.js';
 export * from './background.js';
+export * from './fira-voice.js';

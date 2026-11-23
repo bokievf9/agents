@@ -1,3 +1,5 @@
+import type { BrandSlot } from './fira-voice.js';
+
 /** The reel script as the video renderer reads it: parsed from the approved item text (the owner may have edited it). */
 export interface ReelScene {
   /** What the voice says. */
@@ -14,6 +16,8 @@ export interface ReelScript {
   cta: string;
   /** `ru` when the voice text is mostly Cyrillic, else `en`. */
   lang: 'ru' | 'en';
+  /** The brand slot (`brand/fira`): Fira's sticker in the reel when the renderer draws it; absent: none. */
+  brand?: BrandSlot;
 }
 
 const CYR = /\p{Script=Cyrillic}/gu;
@@ -29,7 +33,7 @@ export function detectLang(text: string): 'ru' | 'en' {
  * Parses the text `renderClip` produces («Клип, 30 с: title», «Хук (...): ...», numbered «Голос»/«Субтитр» pairs, «CTA:»).
  * Returns null when no scene can be read (an edit broke the structure): the item then has no video, only the text.
  */
-export function parseReel(text: string): ReelScript | null {
+export function parseReel(text: string, brand?: BrandSlot): ReelScript | null {
   const body = text.split(/^== (?:Instagram|TikTok|Shorts) ==\s*$/m)[0]!;
   const head = /^Клип(?:,\s*(\d+)\s*с)?:\s*(.+)$/m.exec(body);
   const hook = /^Хук[^:\n]*:\s*(.+)$/m.exec(body)?.[1]?.trim() ?? '';
@@ -39,5 +43,5 @@ export function parseReel(text: string): ReelScript | null {
   if (scenes.length === 0) return null;
   const title = head?.[2]?.trim() ?? '';
   const all = [hook, ...scenes.map((s) => s.voice)].join(' ');
-  return { title, hook: hook || title, durationSec: head?.[1] ? Number(head[1]) : 30, scenes, cta, lang: detectLang(all) };
+  return { title, hook: hook || title, durationSec: head?.[1] ? Number(head[1]) : 30, scenes, cta, lang: detectLang(all), ...(brand ? { brand } : {}) };
 }

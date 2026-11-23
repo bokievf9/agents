@@ -12,6 +12,7 @@ export * from './lessons.js';
 export * from './run.js';
 export * from './firtech-tools.js';
 export * from './exec-assistant.js';
+export * from './marketing-head.js';
 export * from './adapters/memory.js';
 export * from './adapters/supabase.js';
 export * from './adapters/voyage.js';

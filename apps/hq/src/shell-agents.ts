@@ -16,7 +16,7 @@ export interface ShellAgentsDeps extends Pick<ShellCompanyDeps, 'hq' | 'now' | '
 }
 
 /** Agents that run on a Fira role pack (`packages/fira/role-packs/<pack>.md`); the others are plain HQ workers. */
-export const FIRA_PACKS: Readonly<Record<string, string>> = { 'client-bot': 'lead-manager', director: 'executive-assistant' };
+export const FIRA_PACKS: Readonly<Record<string, string>> = { 'client-bot': 'lead-manager', director: 'executive-assistant', 'marketing-head': 'marketing-head' };
 
 export const MAX_INSTRUCTIONS = 20_000;
 const writeBody = z.object({ text: z.string().min(1).max(MAX_INSTRUCTIONS), note: z.string().max(200).optional() }).strict();

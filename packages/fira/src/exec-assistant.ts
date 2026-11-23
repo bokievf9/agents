@@ -1,5 +1,6 @@
 import { okv, type LlmToolDef } from '@fir/core';
 import { priceList } from './firtech-tools.js';
+import { MARKETING_GUARDS, MARKETING_MODEL, MARKETING_TOOL_DEFS } from './marketing-head.js';
 import { loadCompanyPack, loadNichePack, loadRolePack } from './packs.js';
 import { makeSpec, type AgentSpec, type GuardPolicy, type ModelPolicy } from './spec.js';
 import type { Audience } from './stores.js';
@@ -91,6 +92,8 @@ export const EXEC_MODEL: Partial<ModelPolicy> = { default: 'sonnet', byTask: { f
 export const ROLE_OVERRIDES: Record<string, { guards?: Partial<GuardPolicy>; model?: Partial<ModelPolicy>; audience?: Audience }> = {
   // the owner himself: internal knowledge is his, the visitor's secrecy rules do not apply
   'executive-assistant': { guards: EXEC_GUARDS, model: EXEC_MODEL, audience: 'owner' },
+  // Fira as Head of Marketing talks to the owner too (`marketing-head.ts`)
+  'marketing-head': { guards: MARKETING_GUARDS, model: MARKETING_MODEL, audience: 'owner' },
 };
 
 /** The spec of a role × niche × company with the role's overrides (lead manager: none). */
@@ -105,6 +108,9 @@ export function specOf(o: { role: string; niche: string; company: string; versio
 /** The executive assistant of Fir Tech (tenant 0). */
 export const execAssistantSpec = (): AgentSpec => specOf({ role: 'executive-assistant', niche: 'it-services', company: 'firtech', version: 1 });
 
+/** Fira as Head of Marketing of Fir Tech (tenant 0): the owner's marketing chat. */
+export const marketingHeadSpec = (): AgentSpec => specOf({ role: 'marketing-head', niche: 'it-services', company: 'firtech', version: 1 });
+
 /**
  * Tools that answer fixed data (the eval's `mocks`: tool name → result). Known names get their real definition; `price_list` stays the real one
  * unless mocked. The result is wrapped as `ToolResult` ok, like the app's tools.
@@ -112,7 +118,7 @@ export const execAssistantSpec = (): AgentSpec => specOf({ role: 'executive-assi
 export function mockTools(mocks: Record<string, unknown>): ToolRegistry {
   const out: ToolRegistry = { price_list: priceList };
   for (const [name, data] of Object.entries(mocks)) {
-    const def = EXEC_TOOL_DEFS[name] ?? { name, description: `mock ${name}`, input_schema: obj() };
+    const def = EXEC_TOOL_DEFS[name] ?? MARKETING_TOOL_DEFS[name] ?? { name, description: `mock ${name}`, input_schema: obj() };
     const tool: FiraTool = { def, run: () => Promise.resolve(okv(data)) };
     out[name] = tool;
   }

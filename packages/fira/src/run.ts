@@ -40,6 +40,11 @@ export interface RunDeps {
   guard: GuardContext;
   /** Names of other clients for the leak guard (`secrecy.ts`); absent: none. */
   leak?: LeakContext;
+  /**
+   * A block of the app that changes rarely and is not the spec (the marketing rules of the owner, a version of the agent's instructions): sent after
+   * the compiled block and before the per-turn one, uncached, so a new version applies on the next turn without touching the spec's fingerprint.
+   */
+  system?: string;
   /** USD spent this month by this agent (absent: no budget check). */
   spentUsd?: () => Promise<number>;
   /** Turns of history sent to the model (default: every turn of the conversation that has not expired). */
@@ -126,7 +131,7 @@ export async function run(spec: AgentSpec, conv: Conversation, deps: RunDeps): P
     deps.knowledge.search(companyId, conv.text, 3, { audience }),
   ]);
   const extra = turnBlock({ profile, lessons, hits, note: conv.note });
-  const system: LlmSystemBlock[] = [...c.system, ...(extra ? [{ text: extra }] : [])];
+  const system: LlmSystemBlock[] = [...c.system, ...(deps.system?.trim() ? [{ text: deps.system.trim() }] : []), ...(extra ? [{ text: extra }] : [])];
   const messages: LlmChatMessage[] = [...fitHistory(history, deps.historyChars ?? HISTORY_CHARS).map((t) => ({ role: t.role, content: t.text })), { role: 'user', content: conv.text }];
 
   let reply = '';

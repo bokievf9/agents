@@ -337,13 +337,13 @@ export function createShellContent(d: ShellContentDeps) {
   }
 
   /** `POST /admin/content/orders`: `{ mode: 'prompt', prompt, type? }`, `{ mode: 'variant', fromItemId, note? }` or `{ mode: 'niche', fromItemId, niche, note? }` -> `{ ok, order }`. */
-  function createOrder(body: unknown): AdminReply {
+  function createOrder(body: unknown, via?: string): AdminReply {
     if (!d.marketing) return fail(503, 'unavailable');
     const parsed = orderBody.safeParse(body ?? {});
     if (!parsed.success) return fail(400, 'invalid', { allowed: ['prompt', 'variant', 'niche'] });
     const b = parsed.data;
     let made: { taskId: number } | null;
-    if (b.mode === 'prompt') made = d.marketing.requestStudioOrder({ mode: 'prompt', prompt: b.prompt, ...(b.type ? { type: b.type } : {}) });
+    if (b.mode === 'prompt') made = d.marketing.requestStudioOrder({ mode: 'prompt', prompt: b.prompt, ...(b.type ? { type: b.type } : {}), ...(via ? { via } : {}) });
     else {
       const item = store().item(b.fromItemId);
       if (!item) return fail(404, 'not_found');
@@ -351,7 +351,7 @@ export function createShellContent(d: ShellContentDeps) {
       const niche = b.mode === 'niche' ? findNiche(b.niche) : undefined;
       if (b.mode === 'niche' && !niche) return fail(400, 'invalid_niche');
       const link = linkOf('content_item', 'itemId', item.id);
-      made = d.marketing.requestStudioOrder({ mode: b.mode, itemId: item.id, reviewId: link ? rid(link.id) : '', ...(b.note ? { note: b.note } : {}), ...(niche ? { niche: { id: niche.id, name: niche.name } } : {}) });
+      made = d.marketing.requestStudioOrder({ mode: b.mode, itemId: item.id, reviewId: link ? rid(link.id) : '', ...(b.note ? { note: b.note } : {}), ...(niche ? { niche: { id: niche.id, name: niche.name } } : {}), ...(via ? { via } : {}) });
     }
     if (!made) return fail(409, 'not_applicable');
     return ok({ order: orderView(made.taskId) });
