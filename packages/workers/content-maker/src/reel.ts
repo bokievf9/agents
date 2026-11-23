@@ -14,6 +14,8 @@ export interface ReelScript {
   cta: string;
   /** `ru` when the voice text is mostly Cyrillic, else `en`. */
   lang: 'ru' | 'en';
+  /** First line of the Instagram caption (the speech bubble of the Fira sticker); absent when the text has no caption. */
+  caption?: string;
 }
 
 const CYR = /\p{Script=Cyrillic}/gu;
@@ -39,5 +41,6 @@ export function parseReel(text: string): ReelScript | null {
   if (scenes.length === 0) return null;
   const title = head?.[2]?.trim() ?? '';
   const all = [hook, ...scenes.map((s) => s.voice)].join(' ');
-  return { title, hook: hook || title, durationSec: head?.[1] ? Number(head[1]) : 30, scenes, cta, lang: detectLang(all) };
+  const caption = /^== Instagram ==\s*\n\s*(.+)$/m.exec(text)?.[1]?.trim();
+  return { title, hook: hook || title, durationSec: head?.[1] ? Number(head[1]) : 30, scenes, cta, lang: detectLang(all), ...(caption ? { caption } : {}) };
 }

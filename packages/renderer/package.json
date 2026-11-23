@@ -12,7 +12,9 @@
     "render:launch": "tsx --conditions=source src/launch/render.ts",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "fira:assets": "node scripts/fira-assets.mjs",
+    "sample": "pnpm run render:sample"
   },
   "dependencies": {
     "@fir/core": "workspace:*",
@@ -23,7 +25,8 @@
     "@remotion/renderer": "4.0.534",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "remotion": "4.0.534"
+    "remotion": "4.0.534",
+    "@resvg/resvg-js": "2.6.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

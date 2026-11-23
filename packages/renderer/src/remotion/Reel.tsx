@@ -3,6 +3,7 @@ import { BRAND, CTA_CARD, WORDMARK } from '../brand.js';
 import type { ReelProps } from '../props.js';
 import { phraseAt, timePhrases } from '../subtitles.js';
 import { VOICE_PAD_SECONDS, type Segment } from '../timing.js';
+import { FiraSticker } from './FiraSticker.js';
 import { FONT_BODY, FONT_TITLE, loadBrandFonts } from './fonts.js';
 
 /** Instagram covers the top ~220 px and the bottom ~380 px with its own UI: text stays between them. */
@@ -159,6 +160,7 @@ export const Reel = (props: ReelProps) => {
         <Hook text={props.hook} frames={timeline.hookFrames} />
       </Sequence>
       <div style={{ position: 'absolute', top: SAFE_TOP - 110, left: 80 }}><Wordmark /></div>
+      <FiraSticker brand={props.brand?.fira} delay={6} />
     </AbsoluteFill>
   );
 };

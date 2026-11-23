@@ -1,5 +1,6 @@
 export * from './directions.js';
 export * from './format.js';
+export * from './fira.js';
 export * from './generate.js';
 export * from './lint.js';
 export * from './store.js';
