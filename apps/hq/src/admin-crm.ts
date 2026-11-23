@@ -7,6 +7,7 @@ import { builderTotal } from '@fir/worker-presales';
 import { z } from 'zod';
 import { addCabMessage, ensureCabinetTables, MESSAGE_CAP, nextStepOf, stageMoveTitle, stageNextStep, timelineTitle } from './cabinet.js';
 import { stageState, stageTitleRu } from '@fir/worker-project-manager';
+import { journeyOfLead, journeyOfProject } from './journey.js';
 import { ensureStageColumn, nextActionOf, StageContext, type Stage } from './lead-stage.js';
 import { clientNextAction, docNextStep, docsOf, ensureDocTables, projectStateOf } from './cab-docs.js';
 import type { CabinetApi } from './cabinet-api.js';
@@ -64,6 +65,8 @@ export interface CrmHooks {
   leadJournal?: (taskId: number, text: string) => void;
   /** The pay page link of an invoice (`BillingWorker.payUrl`); without it a stage carries no `payUrl`. */
   payUrl?: (inv: { number: string; payKey: string | null; locale: 'ru' | 'en' }) => string | null;
+  /** `payments.enabled` (the legal entity is registered): false until then, the journey says «оплату откроем после регистрации юрлица». */
+  paymentsEnabled?: () => boolean;
   /** The client accepts a stage (Production: `acceptStage`, which proposes the next invoice). */
   acceptStage?: (projectId: number, stageNo: number) => Promise<{ status: 'accepted' | 'already' | 'not_paid' | 'not_ready' | 'unknown'; text: string }>;
   /** P2-14: `POST /admin/clients/:id/anonymize` (`client-anonymize.ts`). Without it the route answers 404. */
@@ -414,6 +417,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
           deadline: iso(next?.due_at ?? last?.due_at), nextMilestone: next ? { kind: next.kind, title: next.title, dueAt: iso(next.due_at) } : null,
           tasksTotal: ms.length, tasksDone: ms.length - open.length, createdAt: iso(pr.created_at),
           milestones: stagesNow,
+          journey: journeyOfProject(db, now(), pr.id, journeyOpts()),
         };
   }
 
@@ -651,10 +655,22 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
         estimateUsd: invoiceTotal ?? builderTotal(l.estimate ?? ''),
         hasDomain: l.has_domain == null ? null : l.has_domain === 1, hasHosting: l.has_hosting == null ? null : l.has_hosting === 1,
         stage, nextAction, nextStep: docNextStep(flowDocs, nextAction, lang) ?? stageNextStep(stagesOfLead, lang) ?? nextStepOf(stage, lang),
+        journey: journeyOfLead(db, now(), l, journeyOpts(stages)),
         timeline: events.map((e) => ({ at: iso(e.at), kind: e.kind, title: e.title })),
         replies: replies.map((r) => ({ at: iso(r.at), text: r.text, from: r.from })),
       };
     });
+  }
+
+  /** What the journey needs besides the tables: the payments switch and the pay links of the stage invoices. */
+  function journeyOpts(stageCtx?: StageContext) {
+    return {
+      paymentsEnabled: hooks.paymentsEnabled?.() ?? false, ...(stageCtx ? { stageCtx } : {}),
+      payUrlOf: (number: string) => {
+        const inv = has('bl_invoices') ? one<{ status: string; pay_key: string | null; locale: string | null }>('SELECT status, pay_key, locale FROM bl_invoices WHERE number = ?', number) : undefined;
+        return inv?.status === 'issued' && hooks.payUrl ? hooks.payUrl({ number, payKey: inv.pay_key, locale: inv.locale === 'en' ? 'en' : 'ru' }) : null;
+      },
+    };
   }
 
   /** The client's referral slug (`?start=ref_<slug>` in the bot, `ref:<slug>` on the form): lower-case letters and digits, unique, issued once. */

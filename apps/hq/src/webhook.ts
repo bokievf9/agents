@@ -41,7 +41,7 @@ export const webLeadSchema = z.object({
   /** The site's own id of this lead: a resend with the same id is answered from the first result (`duplicate: true`) and creates nothing. A malformed value is ignored. */
   siteLeadId: SITE_LEAD_ID.optional().catch(undefined),
   /** The builder's brief (site builder v4): `discovery.si` is the client's own site, `discovery.ig` the Instagram handle. A malformed value is ignored. */
-  brief: briefFieldsSchema.extend({ discovery: z.object({ si: z.string().trim().max(300).optional().catch(undefined), ig: z.string().trim().max(120).optional().catch(undefined) }).optional().catch(undefined) }).optional().catch(undefined),
+  brief: briefFieldsSchema.extend({ coupon: z.string().trim().max(40).optional().catch(undefined), discovery: z.object({ si: z.string().trim().max(300).optional().catch(undefined), ig: z.string().trim().max(120).optional().catch(undefined) }).optional().catch(undefined) }).optional().catch(undefined),
 }).transform((d, ctx) => {
   const contact = d.contact.length >= 3 ? d.contact : d.clientEmail ?? '';
   if (contact.length < 3) ctx.addIssue({ code: 'custom', path: ['contact'], message: 'contact is required' });

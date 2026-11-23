@@ -36,6 +36,7 @@ import { ClientEmbedder, ClientKnowledge } from './client-knowledge.js';
 import { publicFetcher } from './site-crawl.js';
 import { HashEmbedder, InMemoryKnowledge, voyageFromEnv } from '@fir/fira';
 import { buildCabinet, type CabinetApi } from './cabinet-api.js';
+import { JourneyNotifier } from './journey.js';
 import { Campaigns } from './campaigns.js';
 import { UPLOAD_TYPES } from '@fir/core';
 import { serveFile } from './shell-files.js';
@@ -245,6 +246,7 @@ const cabinet = buildCabinet({
   hq, llm: clientLlm, billing, siteUrl: cfg.siteUrl, dataDir: cfg.dataDir, mediaSecret: cfg.mediaSecret, mediaBase: cfg.igPublicBase, secret: cfg.pgSecret, gate: chatGateForAgents, demoUsage, demoRequireClient: cfg.demoRequireClient, siteKnowledge, kpValidDays: startVals.kpValidDays,
   tools: () => toolsFor(hq, tools, { agentId: 'documents', dept: BACKOFFICE, messenger, ownerId: cfg.ownerId }),
 });
+const journey = new JourneyNotifier({ hq, mail: cabinet.mail, siteUrl: cfg.siteUrl });
 sales.cabinet = cabinet.docs;
 cabinetRef.current = cabinet;
 // News and recommendation mailings: only through the locked approval kind `client_campaign` (registered here, so a pending card survives a restart)
@@ -356,6 +358,8 @@ const dueTick = async () => {
   // the reminders of the one HQ bot: new clients, leads, approvals, payments, stages, signatures, calls (grouped, quiet hours to the morning)
   await notices.scan().catch((e) => log('warn', 'owner notices scan failed', { err: errMsg(e) }));
   // P-13: a manager's or Support's answer in a cabinet thread: one email «новое сообщение» per thread an hour, none when the client already read it
+  // the client's journey: moves with no notice of their own (start date, payment held or opened) are told once
+  await journey.tick().catch((e) => log('warn', 'journey tick failed', { err: errMsg(e) }));
   await cabinet.mail?.messageTick().catch((e) => log('warn', 'client message mail failed', { err: errMsg(e) }));
   // P-20: call reminders a day and an hour before (client and owner), once each
   await calls.tick().catch((e) => log('warn', 'call reminders failed', { err: errMsg(e) }));
@@ -447,6 +451,8 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cf
           const r = registerCabinetLead(db, hq.now, id, { clientEmail, cabinetId, clientName, name, contact, service, budget, message, estimate, locale, source, hasDomain, hasHosting });
           // «Знания клиента»: his own site (and Instagram handle) from the brief; the import is queued without blocking the answer
           if (brief?.discovery && (brief.discovery.si || brief.discovery.ig)) siteKnowledge.onBrief(r.clientId, brief.discovery);
+          // the client's first minute: Fira's welcome in the lead thread and the email «Заявка получена», once, without blocking the answer
+          void journey.welcome(r.leadId, { coupon: brief?.coupon }).catch((e) => log('warn', 'journey welcome failed', { err: errMsg(e) }));
           return { id, leadId: r.leadId };
         } catch (e) {
           log('warn', 'cabinet lead not linked', { task: id, err: errMsg(e) });

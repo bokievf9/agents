@@ -7,10 +7,10 @@ import type { Hq } from '@fir/hq';
  * «КП-12» or «лид #5», the reason code; never the address or the text) and the owner gets ONE summary alert an hour, the way lost leads do. The document
  * itself carries the mark (`cab_documents.mail_state = 'failed'`) and can be sent again from the Shell.
  */
-export type EmailKind = 'quote' | 'contract' | 'invoice' | 'act' | 'other' | 'stage' | 'clarify' | 'message' | 'payment' | 'call' | 'review' | 'news' | 'recommendation';
+export type EmailKind = 'quote' | 'contract' | 'invoice' | 'act' | 'other' | 'stage' | 'clarify' | 'message' | 'payment' | 'call' | 'review' | 'news' | 'recommendation' | 'journey';
 const KIND_RU: Record<EmailKind, string> = {
   quote: 'КП', contract: 'договор', invoice: 'счёт', act: 'акт', other: 'документ', stage: 'этап проекта', clarify: 'уточняющие вопросы',
-  message: 'новое сообщение', payment: 'оплата получена', call: 'созвон', review: 'просьба об отзыве', news: 'новости', recommendation: 'рекомендации',
+  message: 'новое сообщение', payment: 'оплата получена', call: 'созвон', review: 'просьба об отзыве', news: 'новости', recommendation: 'рекомендации', journey: 'путь заявки',
 };
 
 const SCHEMA = `

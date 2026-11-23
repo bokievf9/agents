@@ -124,7 +124,7 @@ describe('GET /admin/clients/by-email: leads', () => {
     expect(r.json.leads).toHaveLength(1);
     expect(r.json.leads[0]).toEqual({
       id: l.leadId, createdAt: at(0), service: 'site', summary: 'Нужен сайт для салона', estimateUsd: 1200, hasDomain: true, hasHosting: false,
-      stage: 'project', nextStep: 'Проект в работе, этапы ниже', nextAction: { kind: 'wait' },
+      stage: 'project', nextStep: 'Проект в работе, этапы ниже', nextAction: { kind: 'wait' }, journey: expect.objectContaining({ stage: 'start' }),
       timeline: [
         { at: at(0), kind: 'lead', title: 'Заявка получена' },
         { at: new Date(t0 + 30_000).toISOString(), kind: 'stage', title: 'Заявка квалифицирована' },
@@ -160,12 +160,12 @@ describe('GET /admin/clients/by-email: leads', () => {
       expect(nextStepOf(s, 'ru').length).toBeGreaterThan(10);
       expect(nextStepOf(s, 'en')).not.toBe(nextStepOf(s, 'ru'));
     }
-    expect(nextStepOf('new', 'ru')).toBe('Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель');
+    expect(nextStepOf('new', 'ru')).toBe('Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает менеджер проекта');
     expect(nextStepOf('lost', undefined)).toBe('Заявка закрыта');
     const { p, reg, cabLead } = setup();
     await reg();
     const l = cabLead({ message: 'ok', estimate: '', service: '' });
-    expect((await p.call('GET', '/admin/clients/by-email?email=alice@example.com')).json.leads[0]).toMatchObject({ stage: 'new', estimateUsd: null, nextStep: 'Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель' });
+    expect((await p.call('GET', '/admin/clients/by-email?email=alice@example.com')).json.leads[0]).toMatchObject({ stage: 'new', estimateUsd: null, nextStep: 'Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает менеджер проекта' });
     await p.call('POST', `/admin/crm/leads/${l.leadId}`, { stage: 'lost' });
     const lost = (await p.call('GET', '/admin/clients/by-email?email=alice@example.com')).json.leads[0];
     expect(lost).toMatchObject({ stage: 'lost', nextStep: 'Заявка закрыта' });

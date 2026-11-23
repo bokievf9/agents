@@ -11,6 +11,7 @@ import type { createCrm } from './admin-crm.js';
 import { recordManagerReply } from './cabinet.js';
 import type { ClientChannel } from './client/channel.js';
 import type { Director } from './director.js';
+import { journeyOfLead, notifiedOf, paymentsEnabled } from './journey.js';
 import { ensureStageColumn, isStage, rankOf, STAGES } from './lead-stage.js';
 import type { OwnerChannel } from './presence.js';
 
@@ -356,7 +357,12 @@ export function createShellCrm(d: ShellCrmDeps) {
     for (const l of mine) names.add(l.name.trim().toLowerCase());
     const leadIds = new Set(mine.map((l) => l.id));
     const stages = views.stages();
-    const leadsOut = mine.slice(0, 50).map((l) => views.lead(l.id, stages)!);
+    // the cabinet's journey stage and what the client was told (read-only marks of the client card)
+    const jopts = { paymentsEnabled: paymentsEnabled(hq), stageCtx: stages };
+    const leadsOut = mine.slice(0, 50).map((l) => {
+      const v = views.lead(l.id, stages)!;
+      return l.client_id == null ? v : { ...v, journey: journeyOfLead(hq.db, now(), l as Parameters<typeof journeyOfLead>[2], jopts), notified: notifiedOf(hq.db, l.id) };
+    });
     if (!email) email = mine.map((l) => l.contact.trim()).find((c) => EMAIL.test(c)) ?? '';
     if (!telegram) telegram = mine.map((l) => l.contact.trim()).find((c) => c.startsWith('@')) ?? '';
     const isMine = (n: string) => names.has(n.trim().toLowerCase());

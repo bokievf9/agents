@@ -158,7 +158,7 @@ export function registerCabinetLead(db: Db, now: () => number, taskId: number, l
 /** What the client reads under each lead: one short sentence per stage (the lead's language, Russian by default). */
 const NEXT_STEP: Record<Lang, Record<Stage, string>> = {
   ru: {
-    new: 'Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель',
+    new: 'Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает менеджер проекта',
     qualified: 'Готовим коммерческое предложение',
     proposal: 'КП отправлено, ждём вашего решения',
     contract: 'Договор и счёт первого этапа готовы',
@@ -167,7 +167,7 @@ const NEXT_STEP: Record<Lang, Record<Stage, string>> = {
     lost: 'Заявка закрыта',
   },
   en: {
-    new: 'First reply within 5 minutes, around the clock; prices and timing are confirmed by the founder',
+    new: 'First reply within 5 minutes, around the clock; prices and timing are confirmed by the project manager',
     qualified: 'We are preparing the commercial proposal',
     proposal: 'The proposal has been sent, we are waiting for your decision',
     contract: 'The contract and the invoice for the first stage are ready',

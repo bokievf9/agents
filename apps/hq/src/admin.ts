@@ -15,6 +15,7 @@ import type { ChatsClient } from './chats.js';
 import type { MarketingHead } from './heads/marketing.js';
 import { buildOffice } from './office.js';
 import type { OwnerChannel } from './presence.js';
+import { paymentsEnabled } from './journey.js';
 import { mask } from './progress.js';
 import type { SettingsApi } from './settings.js';
 import type { AppTools } from './tools.js';
@@ -110,6 +111,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
       }
     },
     ...(d.billing ? { payUrl: (inv: { number: string; payKey: string | null; locale: 'ru' | 'en' }) => d.billing!.payUrl(inv) } : {}),
+    paymentsEnabled: () => paymentsEnabled(hq),
     ...(d.acceptStage ? { acceptStage: d.acceptStage } : {}),
     ...(d.cabinetTicket ? { cabinetTicket: (t) => void d.cabinetTicket!(t).catch((e) => log('warn', 'cabinet ticket flow failed', { err: errMsg(e) })) } : {}),
   });

@@ -1038,3 +1038,27 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
   (`kind: 'standup'`, виден и в `/admin/hub`), повторный запуск в тот же день не постит. Сегодня до поста GET отдаёт живые строки без `postedToInboxAt`; прошлый день без записи: 404.
 - `POST /admin/team/standup/reply { agent, text }` → ответ как у `POST /admin/team/:id/chat`: в чат агента уходит строка «Ответ на планёрку: …», агент отвечает.
 - Office: `GET /admin/office` и `GET /admin/hub` получили поле `team: { [agentId]: { presence, now? } }` для подписи при наведении.
+
+## Journey (2026-11-24)
+Путь клиента после заявки: одна чистая функция (`apps/hq/src/journey.ts`, `deriveJourney`) из того, что уже есть (этап лида, `cab_documents`, милестоуны этапов, оплаченные счета)
+и переключателя `payments.enabled` (настройка HQ, по умолчанию выключена: юрлицо ещё не зарегистрировано; включается значением `1`). Добавлено без изменений старых полей:
+`journey` в каждом лиде `GET /admin/clients/by-email` и `GET /admin/clients/:id`, в каждом проекте (`GET /admin/crm/projects`, детали клиента) и в лидах карточки Shell
+`GET /admin/crm/clients/:id` (там же `notified`). `nextStep`/`nextAction` остаются для старых клиентов.
+
+```json
+"journey": {
+  "stage": "invoice",
+  "since": "2026-11-24T08:15:00.000Z",
+  "eta": "2026-11-25T08:15:00.000Z",
+  "etaText": { "ru": "Оплату откроем после регистрации юрлица, уведомим", "en": "Payment opens after our legal entity is registered; we will notify you" },
+  "clientAction": { "kind": "none" },
+  "answersWhere": ["cabinet", "email"],
+  "nextWeWill": { "ru": "Счёт на этап 1 выставлен. Оплату откроем после регистрации юрлица, вас уведомим.", "en": "..." }
+}
+```
+- `stage`: `received` → `reviewing` (ETA до 1 рабочего дня) → `quote` → `contract` → `invoice` → `paid` → `start` (оплата + 3 рабочих дня, `eta` = дата) → `stages` (`stageOf: {no, total}`, приёмка 7 дней) → `done` | `lost`.
+- `clientAction.kind`: `accept_quote` | `sign` | `pay` | `accept_stage` | `answer` | `none`; `href` относительно сайта без языка (`/cabinet?tab=documents&doc=<id>`; для оплаты pay-ссылка счёта), `label {ru,en}`. `pay` появляется только при `payments.enabled = 1`.
+- `answersWhere`: `cabinet`, `email`, плюс `telegram` только если клиент выбрал канал Telegram и привязан к боту.
+- Лид клиента кабинета: Fira пишет приветствие в тред `lead-<id>` и уходит письмо «Заявка №N получена» (три шага, где ждать ответ, купон из `brief.coupon` при наличии), по одному разу на лид (`client_marks` `journey:welcome:*`), письмо по правилам `ClientMail` (согласие, канал, исход). `POST /lead` принимает `brief.coupon` (до 40 знаков).
+- Переходы: `JourneyNotifier.tick` (каждые 30 с, таблица `journey_state`) сравнивает этап с тем, о котором клиент уже знает. Первый взгляд на лид молча записывается. Переходы, о которых уже сообщают документ, оплата или приёмка (КП, договор, счёт при открытой оплате, оплата, приёмка этапа), только записываются (`notified.email = "document"`), чтобы не слать дубль. Свои сообщения (строка в треде и письмо, по разу на переход): `start` (дата старта), `invoice` при закрытой оплате («оплату откроем после регистрации юрлица»), и «Оплата открыта» один раз, когда `payments.enabled` включили.
+- `notified` (только Shell, чтение): `{ thread: boolean, email: "email" | "off" | "failed" | "no_consent" | ... | "document" | null }` для текущего этапа.
