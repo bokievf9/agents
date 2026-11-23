@@ -431,6 +431,9 @@ importers:
       '@remotion/renderer':
         specifier: 4.0.534
         version: 4.0.534(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@resvg/resvg-js':
+        specifier: 2.6.2
+        version: 2.6.2
       better-sqlite3:
         specifier: ^13.2.0
         version: 13.2.0

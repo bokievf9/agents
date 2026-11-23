@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Resvg } from '@resvg/resvg-js';
 import satori from 'satori';
-import type { BrandSlot } from './fira-voice.js';
+import { BRAND_FIRA_ASSET, type BrandSlot } from './fira-voice.js';
 import { splitKit, type ItemType } from './format.js';
 
 /**
@@ -22,7 +23,7 @@ export interface Frame {
   total?: number;
   /** A picture under the frame as a data URI (JPEG or PNG), darkened so the text stays readable. Slides and posts only. */
   bg?: string;
-  /** The brand slot (`brand/fira`): Fira on the frame when the renderer side draws it; absent: no sticker. */
+  /** The brand slot: `fira` on and `src` (the PNG data URI) draw the turtle sticker in the bottom-right corner; absent: none. */
   brand?: BrandSlot;
 }
 
@@ -53,6 +54,8 @@ export function loadFonts(dir = FONT_DIR): Font[] {
   if (dir === FONT_DIR) fontCache = fonts;
   return fonts;
 }
+
+const FIRA_PX = 230;
 
 type Node = { type: string; props: { style?: Record<string, unknown>; children?: unknown; [k: string]: unknown } };
 const h = (type: string, style: Record<string, unknown>, children?: unknown): Node => ({ type, props: { style: { display: 'flex', ...style }, ...(children !== undefined ? { children } : {}) } });
@@ -88,6 +91,7 @@ function tree(fr: Frame): Node {
     : [];
   return h('div', { width, height, backgroundColor: BRAND.bg, position: 'relative', flexDirection: 'column', justifyContent: 'space-between', padding: story ? `${pad + 120}px ${pad}px ${pad + 160}px` : `${pad}px`, fontFamily: 'Onest, OnestLatin', color: BRAND.fg }, [
     ...under,
+    ...(fr.brand?.fira && fr.brand.src ? [{ type: 'img', props: { src: fr.brand.src, width: FIRA_PX, height: FIRA_PX, style: { position: 'absolute', right: 56, bottom: story ? 260 : 150, width: FIRA_PX, height: FIRA_PX } } } as Node] : []),
     h('div', { flexDirection: 'column' }, [
       h('div', { width: 120, height: 10, backgroundColor: BRAND.accent, marginBottom: 56 }),
       h('div', { fontFamily: 'Unbounded, Onest, OnestLatin', fontWeight: 700, fontSize: titleSize, lineHeight: 1.12, color: BRAND.fg }, fr.title),
@@ -165,10 +169,31 @@ export function backgroundOf(dir: string, itemId: number): string | undefined {
   return undefined;
 }
 
+/** Where the turtle PNG files live: `FIRA_ASSETS_DIR`, else the renderer package next door in the monorepo. */
+export const FIRA_ASSETS_DIR = process.env.FIRA_ASSETS_DIR ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'renderer', 'assets', 'fira');
+
+/** Which turtle file a frame gets, or null: the post and the first and last slides of a carousel carry her, the middle slides and stories do not. */
+export function firaFileFor(type: ItemType, index: number, total: number): string | null {
+  if (type === 'post') return 'happy-base.png';
+  if (type === 'carousel') return index === 0 ? 'thinking-glasses.png' : index === total - 1 ? 'happy-base.png' : null;
+  return null;
+}
+
+/** The sticker as a data URI, or undefined when it is off or the file is missing. */
+export function firaDataUri(file: string | null, dir: string = FIRA_ASSETS_DIR): string | undefined {
+  if (!file || !existsSync(join(dir, file))) return undefined;
+  return `data:image/png;base64,${readFileSync(join(dir, file)).toString('base64')}`;
+}
+
 /** Renders an item's images into `<dir>/<itemId>/<n>.png`; returns the file paths in order. Slides and posts get the item's stored background under the frame. */
-export async function renderItem(dir: string, itemId: number, type: ItemType, text: string): Promise<string[]> {
+/** `opts.brand`: the brand slot of the item (default Fira on); a frame that carries her gets the slot with its sticker file. */
+export async function renderItem(dir: string, itemId: number, type: ItemType, text: string, opts: { brand?: BrandSlot } = {}): Promise<string[]> {
   const bg = type === 'carousel' || type === 'post' ? backgroundOf(dir, itemId) : undefined;
-  const frames = framesOf(type, text).map((f) => (bg && (f.kind === 'slide' || f.kind === 'post') ? { ...f, bg } : f));
+  const all = framesOf(type, text);
+  const frames = all.map((f, i) => {
+    const src = opts.brand?.fira === false ? undefined : firaDataUri(firaFileFor(type, i, all.length));
+    return { ...f, ...(bg && (f.kind === 'slide' || f.kind === 'post') ? { bg } : {}), ...(src ? { brand: { ...opts.brand, fira: true, asset: opts.brand?.asset ?? BRAND_FIRA_ASSET, src } } : {}) };
+  });
   if (frames.length === 0) return [];
   const fonts = loadFonts();
   const files: string[] = [];

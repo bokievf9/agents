@@ -134,7 +134,7 @@ describe('the rules reach the prompts of Content Maker, Publisher, Trend Scout a
     await on.w.marketing.onHeartbeat();
     const item = (await on.call('GET', '/admin/content/orders')).json.items.find((o: any) => o.id === r.json.order.id);
     const text = (on.w.hq.db.prepare('SELECT text FROM cm_items WHERE id = ?').get(item.itemId) as { text: string }).text;
-    expect(text).toContain(`\n\n${FIRA_SIGNATURE}`);
+    expect(text).toContain(`\n${FIRA_SIGNATURE}`);
     const off = shellWorld({ llm: routedLlm() });
     await off.call('PUT', '/admin/marketing/rules', { text: DEFAULT_RULES.replace('[x]', '[ ]') });
     const r2 = await off.call('POST', '/admin/content/orders', { mode: 'prompt', prompt: 'Про ночные заявки в барбершопе', type: 'post' });

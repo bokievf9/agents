@@ -1,6 +1,6 @@
 import { errMsg, log, zonedParts, type KindSpec, type Payload } from '@fir/core';
 import { toolsOf, type SubtaskSpec, type Task, type Worker, type WorkerCtx, type WorkerResult } from '@fir/hq';
-import { FIRA_SIGNATURE } from './fira-voice.js';
+import { firaVoiceOf } from './fira-voice.js';
 import { readSourcePage } from './source-page.js';
 import { fill, generateItem, loadPrompts, noTrends, type Prompts, type TrendHint, type TrendsProvider } from './generate.js';
 import { KIT_SECTIONS, PLATFORM_LABEL, kitLabel, kitRendersNote, kitScopeKey, kitScopeOf, parseKitArg, splitPlatforms, type ItemType, type Platform } from './format.js';
@@ -190,7 +190,7 @@ export class ContentMakerWorker implements Worker {
     const item = store.item(itemId);
     if (!item || !this.rendersDir || !IMAGE_TYPES.includes(item.type)) return [];
     try {
-      const files = await renderItem(this.rendersDir, itemId, item.type, item.text);
+      const files = await renderItem(this.rendersDir, itemId, item.type, item.text, { brand: { fira: (process.env.CONTENT_FIRA ?? 'on').toLowerCase() !== 'off' } });
       store.setFiles(itemId, files);
       return files;
     } catch (e) {
@@ -305,7 +305,7 @@ export class ContentMakerWorker implements Worker {
       const gen = await generateItem(ctx.llm, this.prompts, {
         type: item.type, topic, ...(item.type === 'profile' ? { sections: kitScopeOf(item.topicKey) } : {}), week: item.packId ? `с ${ddmm(item.plannedDate)}` : '', ...(feedback ? { comment: feedback, previous: typeof task.meta.previous === 'string' && task.meta.previous ? task.meta.previous : item.text } : {}), ...(trends.length ? { trends } : {}), ...(pageText ? { pageText } : {}),
         ...(source ? { source: articleSource(articleSchema.parse(JSON.parse(source.json))) } : {}),
-        ...(ctx.brand?.firaVoice ? { signature: FIRA_SIGNATURE } : {}),
+        ...(firaVoiceOf(ctx.brand) ? {} : { fira: false }),
       });
       if (!gen) {
         store.setStatus(itemId, 'failed');

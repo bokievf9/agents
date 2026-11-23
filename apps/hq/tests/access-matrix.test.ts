@@ -49,6 +49,7 @@ const MATRIX: Array<[string, string, boolean]> = [
   ['DELETE', '/admin/knowledge/owner-1', false],
   ['GET', '/admin/clients/7/../settings', false],
   ['GET', '/admin/clients', false],
+  ['POST', '/admin/content/purge', false],
 ];
 
 describe('access matrix: every route class x both tokens', () => {

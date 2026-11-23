@@ -13,3 +13,9 @@ const sfxSrc = fileURLToPath(new URL('../assets/sfx/', import.meta.url));
 const sfxDst = fileURLToPath(new URL('../.public/sfx/', import.meta.url));
 mkdirSync(sfxDst, { recursive: true });
 for (const f of readdirSync(sfxSrc)) if (/\.wav$/.test(f)) copyFileSync(join(sfxSrc, f), join(sfxDst, f));
+
+// the Fira sticker PNG files (assets/fira) go to .public/fira
+const firaSrc = fileURLToPath(new URL('../assets/fira/', import.meta.url));
+const firaDst = fileURLToPath(new URL('../.public/fira/', import.meta.url));
+mkdirSync(firaDst, { recursive: true });
+for (const f of readdirSync(firaSrc)) if (/\.png$/.test(f)) copyFileSync(join(firaSrc, f), join(firaDst, f));
