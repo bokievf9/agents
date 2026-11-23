@@ -13,6 +13,7 @@ import { remindOnce, supportEscalation, supportModeOf, SupportAutopilotLimit } f
 import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
 import type { Reporter } from '../reporter.js';
 import { toolsFor, type AppTools } from '../tools.js';
+import { isTeamTask } from '../team-presence.js';
 
 export const SUPPORT = 'support';
 export const SUPPORT_HEAD_ID = 'support-head';
@@ -563,7 +564,7 @@ export class SupportHead {
   // ---- heartbeat: routine and owner tasks ----
   async onHeartbeat(): Promise<void> {
     if (this.agent()?.status !== 'active') return;
-    for (const t of [...this.hq.tasks({ dept: SUPPORT, status: 'inbox' }), ...this.hq.tasks({ dept: SUPPORT, status: 'assigned', assigneeId: SUPPORT_HEAD_ID })]) {
+    for (const t of [...this.hq.tasks({ dept: SUPPORT, status: 'inbox' }), ...this.hq.tasks({ dept: SUPPORT, status: 'assigned', assigneeId: SUPPORT_HEAD_ID })].filter((x) => !isTeamTask(x))) {
       await this.handle(t).catch((e) => this.crash(t, e));
     }
   }

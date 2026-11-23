@@ -997,3 +997,42 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 **Аудит.** Заказ из чата и из плана: строка владельца `studio_order` (`detail` `prompt chat`, `prompt plan`), план `marketing_plan_proposed` и `marketing_plan_accepted`, правила строкой `instruction` (`v<n>`, автор `owner`, заметка `чат: …` из чата), ритм строкой `setting`.
 
 Код: `apps/hq/src/{marketing-chat,marketing-chat-tools,marketing-plans,marketing-rules,shell-marketing}.ts`, тесты `apps/hq/tests/marketing-{chat,rules}.test.ts`, `packages/fira/tests/marketing-head.test.ts`, `packages/workers/content-maker/tests/fira-voice.test.ts`.
+
+## Команда (2026-11-24, ветка `team-chat`)
+Чат владельца с любым агентом HQ, присутствие, поручения и утренняя планёрка. Код: `apps/hq/src/team-chat.ts` (движок), `team-chat-tools.ts` (инструменты по роли),
+`team-presence.ts` (присутствие, KPI), `team-standup.ts` (планёрка), `shell-team.ts` (маршруты); паки ролей `packages/fira/role-packs/team/<agentId>.md`, определения новых
+инструментов `packages/fira/src/team.ts`. Все маршруты под `x-admin-token`, чаты только владельцу.
+- Агенты (порядок ответа): director, marketing-head, content-maker, trend-scout, publisher, seo, analyst, sales-head, lead-intake, prospector, presales, support-head, customer-support,
+  monitoring, billing, production-head, project-manager, reviewer, deployer, backoffice-head, finance, documents, knowledge. В ответе только агенты, которые есть в базе; другой id: 404.
+- `GET /admin/team` → `{ ok, members: [{ id, title, dept, presence, now?, queue, lastResultAt?, budget: { usedUsd, limitUsd }, kpi: { answers7d, approvals7d, rating7d } }] }`.
+  `presence`: `off` (агент или голова отдела на паузе) > `working` (запущенная задача агента, идущий ход чата или вызов модели) > `waiting` (последняя открытая задача ждёт владельца:
+  review, approval или одобрение в очереди) > `idle`. `now` строит код по виду задачи и номеру («пишу КП по заявке #12», «отвечаю на тикет #7», «выполняю поручение #31», «жду одобрения
+  по задаче #9»), заголовки задач не попадают (кроме наших рутин без данных клиента). Кэш 10 с. `queue`: задачи агента в inbox/assigned, у головы плюс неназначенные inbox отдела.
+  `budget.usedUsd` расход агента за месяц, `limitUsd` лимит отдела (0: без лимита). `kpi.answers7d`: результаты задач агента + его ответы в чате за 7 дней; `approvals7d`: одобрения
+  владельца по задачам агента; `rating7d`: средняя по пятибалльной шкале (production-head и project-manager: отзывы клиентов `crm_reviews`; sales-head и lead-intake: оценки ответов
+  посетителям `fira_ratings`, +1 = 5, −1 = 1), у остальных `null`.
+- `GET /admin/team/:id` → `{ ok, member, recent: [{ at, kind: 'task'|'approval'|'reply', title, href }], instructions: { version, updatedAt } }` (10 последних результатов).
+- `GET /admin/team/:id/chat?limit=50&before=<id>` → `{ ok, items: [{ id, role: 'owner'|'agent', text, at, cards? }], pending: [id] }`. Для `marketing-head` это тот же тред, что
+  `/admin/marketing/chat` (плюс поле `rules`).
+- `POST /admin/team/:id/chat { text }` (до 2000 знаков) → `{ ok, reply: { id, text, cards }, actions }`; дольше 25 с: `202 { ok, pending: id }`, ответ появится в GET. Без модели честный
+  ответ по данным («Модель сейчас недоступна, отвечаю по данным…»). Память: последние 50 сообщений треда агента.
+  Карточки `kind`: task, lead, client, project, invoice, document, order, plan, rule, metric, item (тикет: `item` с `meta.type = 'ticket'`, ссылка `/admin/chats?ticket=<id>`).
+  Ссылки карточек: задача `/admin/tasks?focus=<id>`, заявка `/admin/clients?tab=pipeline&focus=<id>`, клиент `?tab=clients&focus=`, проект `/admin/projects?focus=`.
+  `actions[].type`: task_created, task_assigned, order_created, reply_drafted, quote_proposed, call_scheduled, note_added, rule_updated, plan_proposed, plan_accepted, schedule_changed, none.
+- Инструменты по роли (front matter `tools:` пака; модель не видит других, `runTool` отказывает `not_allowed`): чтение своих сущностей (продажи: leads, clients, quotes; производство:
+  projects; поддержка: tickets, services_status; финансы и биллинг: money, llm_costs; knowledge: knowledge_search; маркетинг: content_feed, content_calendar, marketing_analytics),
+  у всех `my_queue`. Запись только существующими действиями: `create_task` (задача своему отделу), `assign_agent` (поручение другому агенту, головы и director), `create_order` (Content Maker),
+  `draft_reply` (support-head, customer-support: задача Поддержки `action: ticket`, черновик ждёт в Одобрениях), `propose_quote` (sales-head, presales: задача `action: kp`, Presales,
+  Одобрения locked), `schedule_call` (созвон через `calls.ts`), `client_note` (дописывает `crm_notes` заявки, тикета или бизнеса). Публикаций, денег и договоров из чата нет. Каждое
+  действие в журнале `activity`: `team_<инструмент>`, деталь `chat`; сообщение владельца `team_chat`, поручение `team_assign`.
+- `POST /admin/team/:id/assign { text, dueAt?, refs?: [{ kind, id }] }` → `{ ok, task: { id, href } }`: задача агенту (`meta.action = 'team_assign'`, `meta.source = { kind: 'chat', agent }`),
+  агент сразу берёт её сам (головы такие задачи не трогают), отвечает в своём чате строкой «Поручение #id: …», задача закрывается его ответом (`result`); что он сделал инструментами,
+  попадает в Задачи и Одобрения. Поручение из хода агента можно передать дальше ещё один раз. После рестарта прерванные поручения агент берёт снова.
+- Упоминания: `@<agentId>` или `@<Title>` («@Head of Sales») в любом чате (и в маркетинг-чате через `/admin/team/marketing-head/chat`) создают поручение упомянутому агенту с текстом
+  сообщения без упоминаний; ответ несёт карточку `task` и действие `task_assigned`. Не больше трёх за сообщение, себя упомянуть нельзя, адреса почты не считаются.
+- `GET /admin/team/standup?date=YYYY-MM-DD` (по умолчанию сегодня по часовому поясу HQ) → `{ ok, date, entries: [{ agent, title, did: string[], plan: string[], need: string[], say? }],
+  postedToInboxAt? }`. Рутина 09:00 (часовой пояс компании, `tz`) собирает строки кодом: сделал за 24 ч (закрытые задачи `#id`, одобрения, ответы в чате), план (задачи в работе, очередь
+  отдела, рутина), нужно от владельца (решения, блоки). Только числа и `#id`, без имён и текстов клиентов. С моделью у агента одна фраза `say` в голосе роли. Один пост в Inbox
+  (`kind: 'standup'`, виден и в `/admin/hub`), повторный запуск в тот же день не постит. Сегодня до поста GET отдаёт живые строки без `postedToInboxAt`; прошлый день без записи: 404.
+- `POST /admin/team/standup/reply { agent, text }` → ответ как у `POST /admin/team/:id/chat`: в чат агента уходит строка «Ответ на планёрку: …», агент отвечает.
+- Office: `GET /admin/office` и `GET /admin/hub` получили поле `team: { [agentId]: { presence, now? } }` для подписи при наведении.

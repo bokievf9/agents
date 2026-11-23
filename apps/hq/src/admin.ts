@@ -88,7 +88,7 @@ const fail = (status: number, error: string, extra: Record<string, unknown> = {}
 const ok = (body: Record<string, unknown> = {}): AdminReply => ({ status: 200, body: { ok: true, ...body } });
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
-export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<AdminReply> } {
+export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<AdminReply>; team: ReturnType<typeof createShell>['team'] } {
   const { hq, queue, director, channel } = d;
   const now = d.now ?? Date.now;
   const hits: number[] = [];
@@ -277,7 +277,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
         return ok({ items: list.slice(0, limit).map(taskView) });
       }
       case 'GET office': // the office with the real task titles (the public `/office` masks client data)
-        return ok(buildOffice(hq, hq.now(), undefined, { maskClientData: false }));
+        return ok({ ...buildOffice(hq, hq.now(), undefined, { maskClientData: false }), team: shell.team.presence.map() });
       case 'GET departments': {
         const office = buildOffice(hq, hq.now());
         return ok({
@@ -346,6 +346,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
   }
 
   return {
+    team: shell.team,
     async handle(req) {
       const t = now();
       while (hits.length && hits[0]! < t - RATE_WINDOW_MS) hits.shift();

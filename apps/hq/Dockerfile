@@ -45,6 +45,7 @@ RUN pnpm --filter "hq..." build \
     && test -f /out/node_modules/@fir/core/assets/fonts/onest-cyrillic-ext-700-normal.woff \
     && test -f /out/node_modules/@fir/fira/role-packs/executive-assistant.md \
     && test -f /out/node_modules/@fir/fira/role-packs/marketing-head.md \
+    && test -f /out/node_modules/@fir/fira/role-packs/team/sales-head.md \
     && test -f /out/node_modules/@fir/fira/company-packs/firtech.json
 
 FROM node:22-bookworm-slim

@@ -20,6 +20,7 @@ import { createReach } from '../reach.js';
 import type { Reporter } from '../reporter.js';
 import { currentRules, headInstructions, RULED_WORKERS, rulesLlm } from '../marketing-rules.js';
 import { toolsFor, type AppTools } from '../tools.js';
+import { isTeamTask } from '../team-presence.js';
 
 export const MARKETING = 'marketing';
 /**
@@ -423,10 +424,10 @@ export class MarketingHead implements ApprovalEditor {
   // ---- heartbeat ----
   async onHeartbeat(): Promise<void> {
     if (this.agent().status !== 'active') return;
-    for (const t of [...this.hq.tasks({ dept: MARKETING, status: 'inbox' }), ...this.hq.tasks({ dept: MARKETING, status: 'assigned', assigneeId: HEAD_ID })]) {
+    for (const t of [...this.hq.tasks({ dept: MARKETING, status: 'inbox' }), ...this.hq.tasks({ dept: MARKETING, status: 'assigned', assigneeId: HEAD_ID })].filter((x) => !isTeamTask(x))) {
       await this.handle(t).catch((e) => this.crash(t, e));
     }
-    for (const t of this.hq.tasks({ dept: MARKETING, status: 'assigned', assigneeId: WORKER_ID })) {
+    for (const t of this.hq.tasks({ dept: MARKETING, status: 'assigned', assigneeId: WORKER_ID }).filter((x) => !isTeamTask(x))) {
       await this.runChild(t).catch((e) => this.crash(t, e));
     }
     await this.finalizeParents();

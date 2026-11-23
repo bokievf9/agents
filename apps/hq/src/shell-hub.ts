@@ -80,7 +80,7 @@ export function createHub(db: Db, now: () => number) {
       }
     }
     if (has('owner_inbox')) {
-      for (const r of all<{ id: number; at: number; kind: string; text: string }>("SELECT id, at, kind, text FROM owner_inbox WHERE kind IN ('alert', 'summary') ORDER BY id DESC LIMIT 15")) {
+      for (const r of all<{ id: number; at: number; kind: string; text: string }>("SELECT id, at, kind, text FROM owner_inbox WHERE kind IN ('alert', 'summary', 'standup') ORDER BY id DESC LIMIT 15")) {
         push(r.at, { id: `inbox:${r.id}`, dept: 'director', kind: r.kind === 'alert' ? 'alert' : 'info', title: clip(r.text), link: `inbox:${r.id}` });
       }
     }

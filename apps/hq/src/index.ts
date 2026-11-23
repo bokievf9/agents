@@ -325,6 +325,7 @@ director.onTimingChange = () => {
   routineJobs.forEach((j) => j.stop());
   routineJobs = startRoutines(hq);
   support.start();
+  admin?.team.standup.start();
 };
 const bridge = new BuilderBridge({
   hq, pollMinutes: cfg.builderPollMinutes,
@@ -423,6 +424,8 @@ const admin = cfg.adminToken
       fira: () => firaLead, llm, billing, marketing, tools, cabinet, calls, ...(campaigns ? { campaigns } : {}), rendersDir: cfg.rendersDir, dataDir: cfg.dataDir, onRoutinesChange: () => director.onTimingChange?.(), settings, ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),
     })
   : null;
+// «Команда»: the stand-up of the agents at 09:00 on the company's clock (posted to the inbox, read by the Shell).
+admin?.team.standup.start();
 // Presence: the site pings while it is open; without pings the owner counts as away and a digest goes to Telegram.
 const presenceTimer = setInterval(() => void channel.sync().catch((e) => log('error', 'presence sync failed', { err: errMsg(e) })), 60_000);
 presenceTimer.unref();
@@ -514,6 +517,7 @@ const stop = () => {
   drill.stop();
   clearInterval(dueTimer);
   routineJobs.forEach((j) => j.stop());
+  admin?.team.standup.stop();
   // Exit fast: a long poll in flight would hold the process (and Telegram's update slot) for up to 30 s, which is the
   // gap the owner sees on every deploy. Once the process is gone Telegram frees the slot for the new container at once.
   setTimeout(() => process.exit(0), 1500).unref();

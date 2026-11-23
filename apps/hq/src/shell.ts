@@ -33,6 +33,12 @@ import type { Campaigns } from './campaigns.js';
 import { createMarketingChat } from './marketing-chat.js';
 import { MarketingPlans } from './marketing-plans.js';
 import { createMarketingRules, handleMarketing } from './shell-marketing.js';
+import type { MarketingToolDeps } from './marketing-chat-tools.js';
+import { shellLinks } from './links.js';
+import { createShellTeam } from './shell-team.js';
+import { createTeamChat } from './team-chat.js';
+import { createTeamPresence, type TeamPresence } from './team-presence.js';
+import { createStandup } from './team-standup.js';
 
 /**
  * «Shell v3»: the owner workplace routes added on top of `/admin/*` (hub, CRM writes, content, metrics, company).
@@ -98,16 +104,29 @@ export function createShell(d: ShellDeps) {
   const dashboard = createDashboard({ hq: d.hq, now: d.now });
   const analytics = createAnalytics({ db: d.hq.db, now: d.now, tz: () => d.hq.tz, numbers: metrics.numbers });
   const marketingRules = createMarketingRules(d.hq);
-  const marketingChat = createMarketingChat({
-    hq: d.hq, llm: d.llm, plans, rules: marketingRules, content, calendar, analytics, numbers: metrics.numbers, settings: d.settings,
+  const mkDeps: MarketingToolDeps = {
+    hq: d.hq, plans, rules: marketingRules, content, calendar, analytics, numbers: metrics.numbers, settings: d.settings,
     campaigns: d.campaigns ? () => d.campaigns!.handle('GET', [], undefined) : undefined,
     order: d.marketing ? (o) => d.marketing!.requestStudioOrder({ ...o, via: 'plan' }) : undefined,
+  };
+  const marketingChat = createMarketingChat({ ...mkDeps, llm: d.llm });
+  // «Команда»: the chat with every agent (Head of Marketing keeps the thread above), presence, assignments, the stand-up
+  const presenceRef: { p: TeamPresence | null } = { p: null };
+  const teamChat = createTeamChat({
+    hq: d.hq, links: shellLinks(), marketing: mkDeps, llm: d.llm, marketingChat, presence: () => presenceRef.p,
+    ...(d.calls ? { calls: d.calls } : {}), ...(d.settings ? { settingsView: () => d.settings!.view() } : {}),
   });
+  const teamPresence = createTeamPresence({ hq: d.hq, now: d.now, chatPending: () => teamChat.pendingAgents() });
+  presenceRef.p = teamPresence;
+  const standup = createStandup({
+    hq: d.hq, now: d.now, llm: d.llm, notify: (text) => d.channel.notify('standup', text), reply: (agent, text) => teamChat.post(agent, { text }),
+  });
+  const team = createShellTeam({ hq: d.hq, presence: teamPresence, chat: teamChat, standup });
 
   /** `seg`: the path after `/admin/`. null: not a «Shell v3» route. */
   async function handle(method: string, seg: string[], query: URLSearchParams, body: unknown): Promise<AdminReply | null> {
     const [a] = seg;
-    if (a === 'hub') return method === 'GET' && seg.length === 1 ? ok(hub.get()) : fail(404, 'not_found');
+    if (a === 'hub') return method === 'GET' && seg.length === 1 ? ok({ ...hub.get(), team: teamPresence.map() }) : fail(404, 'not_found');
     if (a === 'content') {
       if (method === 'GET' && seg.length === 1) return content.list(query);
       if (seg[1] === 'feed' && seg.length === 2) return method === 'GET' ? content.feed(query) : fail(404, 'not_found');
@@ -164,6 +183,7 @@ export function createShell(d: ShellDeps) {
     if (a === 'reach') return reach.handle(method, seg, query, body);
     if (a === 'metrics') return method === 'GET' && seg.length === 2 && seg[1] === 'week' ? metrics.week(query) : fail(404, 'not_found');
     if (a === 'agents') return agents.handle(method, seg.slice(1), body);
+    if (a === 'team') return team.handle(method, seg.slice(1), query, body);
     if (a === 'marketing') return handleMarketing(marketingRules, marketingChat, method, seg.slice(1), query, body);
     if (a === 'company') {
       const [, kind, rawName, act] = seg;
@@ -185,5 +205,5 @@ export function createShell(d: ShellDeps) {
     if (a === 'crm') return crm.handle(method, seg.slice(1), query, body);
     return null;
   }
-  return { handle, crm };
+  return { handle, crm, team: { presence: teamPresence, chat: teamChat, standup } };
 }

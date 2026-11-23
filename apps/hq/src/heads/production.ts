@@ -10,6 +10,7 @@ import { branchRef, REVIEW_LABEL, ReviewerWorker, reviewRequest } from '@fir/wor
 import type { CabDocs } from '../cab-docs.js';
 import type { Reporter } from '../reporter.js';
 import { toolsFor, type AppTools } from '../tools.js';
+import { isTeamTask } from '../team-presence.js';
 
 export const PRODUCTION = 'production';
 export const PRODUCTION_HEAD_ID = 'production-head';
@@ -329,7 +330,7 @@ export class ProductionHead {
   // ---- heartbeat ----
   async onHeartbeat(): Promise<void> {
     if (this.agent().status !== 'active') return;
-    for (const t of [...this.hq.tasks({ dept: PRODUCTION, status: 'inbox' }), ...this.hq.tasks({ dept: PRODUCTION, status: 'assigned', assigneeId: PRODUCTION_HEAD_ID })]) {
+    for (const t of [...this.hq.tasks({ dept: PRODUCTION, status: 'inbox' }), ...this.hq.tasks({ dept: PRODUCTION, status: 'assigned', assigneeId: PRODUCTION_HEAD_ID })].filter((x) => !isTeamTask(x))) {
       await this.handle(t).catch((e) => this.crash(t, e));
     }
     for (const t of this.hq.tasks({ dept: PRODUCTION, status: 'review' }).filter((x) => x.meta.builderClosed === true && x.meta.handled !== true)) {

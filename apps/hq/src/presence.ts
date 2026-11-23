@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { errMsg, log, migrate, stripHtml, zonedParts, type Button, type Db, type EditOptions, type Messenger, type ReplyKeyboard, type SendOptions } from '@fir/core';
 import type { Hq } from '@fir/hq';
 
-export type InboxKind = 'message' | 'approval' | 'progress' | 'alert' | 'summary' | 'reply';
+export type InboxKind = 'message' | 'approval' | 'progress' | 'alert' | 'summary' | 'reply' | 'standup';
 export type PresenceMode = 'desk' | 'away';
 
 export interface InboxItem {

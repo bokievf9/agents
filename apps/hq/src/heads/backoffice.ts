@@ -11,6 +11,7 @@ import type { CabDocs } from '../cab-docs.js';
 import { cleanRenders } from '../housekeeping.js';
 import { createReach } from '../reach.js';
 import { toolsFor, type AppTools } from '../tools.js';
+import { isTeamTask } from '../team-presence.js';
 
 export const BACKOFFICE = 'backoffice';
 export const BACKOFFICE_HEAD_ID = 'backoffice-head';
@@ -185,7 +186,7 @@ export class BackofficeHead {
   // ---- heartbeat ----
   async onHeartbeat(): Promise<void> {
     if (this.agent().status !== 'active') return;
-    for (const t of [...this.hq.tasks({ dept: BACKOFFICE, status: 'inbox' }), ...this.hq.tasks({ dept: BACKOFFICE, status: 'assigned', assigneeId: BACKOFFICE_HEAD_ID })]) {
+    for (const t of [...this.hq.tasks({ dept: BACKOFFICE, status: 'inbox' }), ...this.hq.tasks({ dept: BACKOFFICE, status: 'assigned', assigneeId: BACKOFFICE_HEAD_ID })].filter((x) => !isTeamTask(x))) {
       await this.handle(t).catch((e) => this.crash(t, e));
     }
     // A builder committed the lessons (the issue closed, the bridge returned the task to the head): close it with the result.

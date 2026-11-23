@@ -29,6 +29,7 @@ import { EmailFailures } from '../email-failures.js';
 import type { LostLeads } from '../lost-leads.js';
 import type { Reporter } from '../reporter.js';
 import { toolsFor, type AppTools } from '../tools.js';
+import { isTeamTask } from '../team-presence.js';
 
 export const SALES = 'sales';
 export const HEAD_ID = 'sales-head';
@@ -434,7 +435,7 @@ export class SalesHead implements ApprovalEditor {
   async onHeartbeat(): Promise<void> {
     if (this.agent().status !== 'active') return;
     await this.clarifyTick().catch((e) => log('warn', 'clarify tick failed', { err: errMsg(e) }));
-    for (const t of [...this.hq.tasks({ dept: SALES, status: 'inbox' }), ...this.hq.tasks({ dept: SALES, status: 'assigned', assigneeId: HEAD_ID })]) {
+    for (const t of [...this.hq.tasks({ dept: SALES, status: 'inbox' }), ...this.hq.tasks({ dept: SALES, status: 'assigned', assigneeId: HEAD_ID })].filter((x) => !isTeamTask(x))) {
       await this.handle(t).catch((e) => this.crash(t, e));
     }
   }
