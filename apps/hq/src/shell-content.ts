@@ -9,6 +9,7 @@ import type { AdminReply } from './admin.js';
 import type { MarketingHead } from './heads/marketing.js';
 import type { OwnerChannel } from './presence.js';
 import { fail, ok } from './shell-crm.js';
+import { isOrphan } from './shell-content-purge.js';
 import { isoWeekOf, todayIn, weekRange } from './shell-week.js';
 
 /** `GET /admin/content` and `POST /admin/content/:itemId`: the content calendar of the workplace. Contract: `docs/admin-crm-api.md` («Shell v3»). */
@@ -40,7 +41,7 @@ const postBody = z.object({
   url: z.string().trim().max(500).regex(/^https:\/\/[^\s]+$/).optional(),
 }).strict();
 
-type Status = 'draft' | 'pending' | 'approved' | 'rendering' | 'ready' | 'published' | 'rejected';
+type Status = 'draft' | 'pending' | 'stale' | 'approved' | 'rendering' | 'ready' | 'published' | 'rejected';
 type Kind = 'clip' | 'post' | 'carousel' | 'story' | 'article' | 'profile';
 interface FileOut { path: string; type: 'png' | 'mp4'; w: number; h: number }
 interface Link { id: number; approvalId: number | null; state: string }
@@ -113,7 +114,7 @@ export function createShellContent(d: ShellContentDeps) {
     const posts = has('pb_posts') ? (db.prepare('SELECT url, error FROM pb_posts WHERE item_id = ?').all(item.id) as { url: string | null; error: string | null }[]) : [];
     let status: Status;
     if (item.status === 'draft' || item.status === 'failed') status = 'draft';
-    else if (item.status === 'proposed') status = 'pending';
+    else if (item.status === 'proposed') status = isOrphan(db, 'content_item', item.id) ? 'stale' : 'pending';
     else if (item.status === 'rejected') status = 'rejected';
     else if (rows.length > 0 && rows.every((r) => r.status === 'published')) status = 'published';
     else if (job && (job.status === 'queued' || job.status === 'running') && !files.some((f) => f.type === 'mp4')) status = 'rendering';
@@ -139,7 +140,7 @@ export function createShellContent(d: ShellContentDeps) {
 
   function articleView(a: ArticleRow) {
     const link = linkOf('article', 'articleId', a.id);
-    const status: Status = a.status === 'draft' || a.status === 'failed' ? 'draft' : a.status === 'proposed' ? 'pending' : a.status === 'rejected' ? 'rejected' : a.published ? 'published' : 'approved';
+    const status: Status = a.status === 'draft' || a.status === 'failed' ? 'draft' : a.status === 'proposed' ? (isOrphan(db, 'article', a.id) ? 'stale' : 'pending') : a.status === 'rejected' ? 'rejected' : a.published ? 'published' : 'approved';
     return {
       id: `a${a.id}`, kind: 'article' as const, platform: 'blog', status, title: a.title || a.niche, hook: '', caption: { instagram: '', tiktok: '', shorts: '', dzen: '' },
       files: [] as FileOut[], sourceSlug: a.slug || null, approvalId: link && link.state === 'asked' ? link.approvalId : null,
@@ -263,7 +264,7 @@ export function createShellContent(d: ShellContentDeps) {
   }
 
   // ---- Content Studio: one feed of everything, orders for the Content Maker ----
-  const STATUSES: readonly Status[] = ['draft', 'pending', 'approved', 'rendering', 'ready', 'published', 'rejected'];
+  const STATUSES: readonly Status[] = ['draft', 'pending', 'stale', 'approved', 'rendering', 'ready', 'published', 'rejected'];
   const KINDS: readonly Kind[] = ['clip', 'post', 'carousel', 'story', 'article', 'profile'];
   const rid = (n: number) => `ap_${n}`;
 
@@ -302,7 +303,7 @@ export function createShellContent(d: ShellContentDeps) {
       .sort((a, b) => (a.v.plannedDate < b.v.plannedDate ? 1 : a.v.plannedDate > b.v.plannedDate ? -1 : String(b.v.id).localeCompare(String(a.v.id), 'en', { numeric: true })));
     const page = all.slice(offset, offset + limit);
     return ok({
-      items: page.map(({ v, link }) => ({ ...v, reviewId: link ? rid(link.id) : null, origin: originOf(link?.id) })),
+      items: page.map(({ v, link }) => ({ ...v, actions: v.status === 'pending' ? ['approve', 'reject', 'revise'] : [], reviewId: link ? rid(link.id) : null, origin: originOf(link?.id) })),
       nextCursor: all.length > offset + limit ? String(offset + limit) : null, statuses: STATUSES, kinds: KINDS, total: all.length,
     });
   }

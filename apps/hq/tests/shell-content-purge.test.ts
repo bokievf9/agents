@@ -96,4 +96,49 @@ describe('POST /admin/content/purge', () => {
     expect((await s.http('POST', '/admin/content/purge', { dryRun: true })).status).toBe(200);
     await s.close();
   });
+
+  /** orphan: proposed, with a closed link, a stale-state link with a closed core approval, or no link at all */
+  function addOrphans(w: ReturnType<typeof seed>) {
+    const mk = (key: string) => w.s.insertItem({ packId: null, seq: 1, total: 1, type: 'post', topicKey: key, topicText: key, plannedDate: '2026-10-03' });
+    const a = mk('orph-nolink');
+    w.s.setProposed(a, 'text', 't');
+    const b = mk('orph-closed');
+    w.s.setProposed(b, 'text', 't');
+    const ins = Number(w.p.w.db.prepare("INSERT INTO task_approvals (task_id, approval_id, dept, kind, payload, summary, state, created_at) VALUES (1, NULL, 'marketing', 'content_item', ?, 's', 'executed', 1)").run(JSON.stringify({ itemId: b })).lastInsertRowid);
+    return { a, b, ins };
+  }
+
+  it('orphans (pending without an open approval) are counted, swept and reported; live pending stays', async () => {
+    const w = seed();
+    const o = addOrphans(w);
+    const feed = (await w.p.call('GET', '/admin/content/feed?limit=50')).json.items as { id: number | string; status: string; actions: string[] }[];
+    expect(feed.find((i) => i.id === o.a)).toMatchObject({ status: 'stale', actions: [] });
+    expect(feed.find((i) => i.id === o.b)).toMatchObject({ status: 'stale', actions: [] });
+    expect(feed.find((i) => i.id === w.pending)).toMatchObject({ status: 'pending', actions: ['approve', 'reject', 'revise'] });
+    expect((await w.p.call('GET', '/admin/content/feed?status=stale')).json.total).toBe(2);
+    expect((await w.p.call('POST', `/admin/content/${o.a}`, { action: 'reject' })).status).toBe(409);
+    const s = await serve(w.p);
+    const dry = await (await s.http('POST', '/admin/content/purge', { dryRun: true, statuses: ['stale'] })).json() as { counts: Record<string, number> };
+    expect(dry.counts).toMatchObject({ materials: 2, orphans: 2, approvals: 1 });
+    expect(ids(w)).toContain(o.a);
+    const real = await (await s.http('POST', '/admin/content/purge', { statuses: ['stale'] })).json() as { counts: Record<string, number> };
+    expect(real.counts).toMatchObject({ materials: 2, orphans: 2 });
+    await s.close();
+    expect(ids(w)).toEqual([w.old, w.mid, w.fresh, w.pending]);
+    expect(w.p.w.db.prepare('SELECT id FROM task_approvals WHERE id = ?').get(o.ins)).toBeUndefined();
+    const log = w.p.w.db.prepare("SELECT detail FROM activity WHERE action = 'content_purged'").all() as { detail: string }[];
+    expect(JSON.parse(log[0]!.detail)).toMatchObject({ orphans: 2 });
+  });
+
+  it('a default run sweeps orphans too; statuses without stale or pending leave them; listing pending does not touch live ones', async () => {
+    const w = seed();
+    const o = addOrphans(w);
+    let r = await w.p.call('POST', '/admin/content/purge', { dryRun: true, statuses: ['rejected'] });
+    expect(r.json.counts).toMatchObject({ orphans: 0, materials: 3 });
+    r = await w.p.call('POST', '/admin/content/purge', { statuses: ['pending'] });
+    expect(r.json.counts).toMatchObject({ orphans: 2, materials: 2 });
+    expect(ids(w)).not.toContain(o.a);
+    expect(ids(w)).toContain(w.pending);
+    expect(ids(w)).toContain(w.old);
+  });
 });

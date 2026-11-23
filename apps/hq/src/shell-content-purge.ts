@@ -17,15 +17,15 @@ export interface ShellContentPurgeDeps {
   rendersDir?: string | undefined;
 }
 
-export const PURGE_STATUSES = ['draft', 'pending', 'approved', 'rendering', 'ready', 'published', 'rejected'] as const;
+export const PURGE_STATUSES = ['draft', 'pending', 'stale', 'approved', 'rendering', 'ready', 'published', 'rejected'] as const;
 type Status = (typeof PURGE_STATUSES)[number];
 const purgeBody = z.object({
   before: z.string().trim().refine((v) => /^\d{4}-\d{2}-\d{2}(T[\d:.]+(Z|[+-]\d{2}:\d{2})?)?$/.test(v) && !Number.isNaN(Date.parse(v)), 'ISO date').optional(),
-  statuses: z.array(z.enum(PURGE_STATUSES)).max(7).optional(),
+  statuses: z.array(z.enum(PURGE_STATUSES)).max(8).optional(),
   dryRun: z.boolean().optional(),
 }).strict();
 
-export interface PurgeCounts { materials: number; approvals: number; reviews: number; files: number; orders: number; bytes: number }
+export interface PurgeCounts { materials: number; orphans: number; approvals: number; reviews: number; files: number; orders: number; bytes: number }
 
 /** Number of files and bytes under `dir` (a real directory, not a link). */
 function sizeOf(dir: string): { files: number; bytes: number } {
@@ -43,6 +43,26 @@ function sizeOf(dir: string): { files: number; bytes: number } {
   };
   walk(dir);
   return { files, bytes };
+}
+
+/**
+ * A material the feed calls `pending` (proposed) but nobody can decide: ORPHAN, feed status `stale`. Rule: it has no open approval, that is no
+ * `task_approvals` link of it in state `queued`/`asked` and no link whose core `approvals` row is `pending`/`editing` (a missing link counts as none).
+ * Closed links (executed, rejected, ...) do not keep it alive.
+ */
+export function isOrphan(db: Hq['db'], kind: 'content_item' | 'article', id: number): boolean {
+  const t = (n: string) => db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(n) !== undefined;
+  if (!t('task_approvals')) return true;
+  const key = kind === 'article' ? '$.articleId' : '$.itemId';
+  const ls = db.prepare('SELECT state, approval_id a FROM task_approvals WHERE kind = ? AND json_extract(payload, ?) = ?').all(kind, key, id) as { state: string; a: number | null }[];
+  for (const l of ls) {
+    if (l.state === 'queued' || l.state === 'asked') return false;
+    if (l.a !== null && t('approvals')) {
+      const r = db.prepare('SELECT status FROM approvals WHERE id = ?').get(l.a) as { status: string } | undefined;
+      if (r?.status === 'pending' || r?.status === 'editing') return false;
+    }
+  }
+  return true;
 }
 
 export function createShellContentPurge(d: ShellContentPurgeDeps) {
@@ -75,8 +95,18 @@ export function createShellContentPurge(d: ShellContentPurgeDeps) {
     const links = (kind: 'content_item' | 'article', key: 'itemId' | 'articleId', id: number) => (hasTa
       ? (db.prepare("SELECT id, approval_id a FROM task_approvals WHERE kind = ? AND json_extract(payload, ?) = ?").all(kind, `$.${key}`, id) as { id: number; a: number | null }[])
       : []);
-    const keep = (status: Status, planned: string, ls: { a: number | null }[]) =>
-      status === 'pending' || ls.some((l) => openCore(l.a)) || (cutoff !== null && planned >= cutoff) || (only !== null && !only.has(status));
+    // orphans (proposed, no open approval) are swept when `statuses` is absent or lists `stale` or `pending`; live pending is never deleted
+    const sweepOrphans = only === null || only.has('stale') || only.has('pending');
+    const orphanIds = new Set<string>();
+    const keep = (status: Status, planned: string, ls: { a: number | null }[], orphanKey: string | null) => {
+      if (ls.some((l) => openCore(l.a)) || (cutoff !== null && planned >= cutoff)) return true;
+      if (status === 'pending') {
+        if (orphanKey === null || !sweepOrphans) return true;
+        orphanIds.add(orphanKey);
+        return false;
+      }
+      return only !== null && !only.has(status);
+    };
 
     // ---- what goes ----
     const itemIds: number[] = [];
@@ -94,13 +124,13 @@ export function createShellContentPurge(d: ShellContentPurgeDeps) {
         const rendered = rows.some((x) => x.files.length > 0) || (root !== undefined && existsSync(join(root, String(it.id), 'reel.mp4')));
         status = job && (job.status === 'queued' || job.status === 'running') && !(root !== undefined && existsSync(join(root, String(it.id), 'reel.mp4'))) ? 'rendering' : rendered ? 'ready' : 'approved';
       }
-      if (!keep(status, it.plannedDate, links('content_item', 'itemId', it.id))) itemIds.push(it.id);
+      if (!keep(status, it.plannedDate, links('content_item', 'itemId', it.id), status === 'pending' && isOrphan(db, 'content_item', it.id) ? `i${it.id}` : null)) itemIds.push(it.id);
     }
     const articleIds: number[] = [];
     for (const a of s.articles()) {
       const status: Status = a.status === 'draft' || a.status === 'failed' ? 'draft' : a.status === 'proposed' ? 'pending' : a.status === 'rejected' ? 'rejected' : a.published ? 'published' : 'approved';
       const planned = a.date ?? todayIn(a.createdAt, hq.tz);
-      if (!keep(status, planned, links('article', 'articleId', a.id))) articleIds.push(a.id);
+      if (!keep(status, planned, links('article', 'articleId', a.id), status === 'pending' && isOrphan(db, 'article', a.id) ? `a${a.id}` : null)) articleIds.push(a.id);
     }
 
     const taIds: number[] = [];
@@ -153,7 +183,7 @@ export function createShellContentPurge(d: ShellContentPurgeDeps) {
       }
     }
 
-    const counts: PurgeCounts = { materials: itemIds.length + articleIds.length, approvals: taIds.length + coreIds.length, reviews: reviewRows, files, orders: orderIds.length, bytes };
+    const counts: PurgeCounts = { materials: itemIds.length + articleIds.length, orphans: orphanIds.size, approvals: taIds.length + coreIds.length, reviews: reviewRows, files, orders: orderIds.length, bytes };
     if (dryRun) return ok({ dryRun: true, counts });
 
     // ---- rows in one transaction, then files ----
