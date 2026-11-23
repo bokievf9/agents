@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WebpackOverrideFn } from '@remotion/bundler';
 import { FONT_DIR, type ReelScript } from '@fir/worker-content-maker';
+import { firaAvailable, prepareFira } from './fira-files.js';
+import type { FiraBrand } from './fira-spec.js';
 import type { ReelProps } from './props.js';
 import { planSfx, prepareSfx, sfxAvailable } from './sfx.js';
 import { speakable, synthesize, type TtsEnv } from './tts.js';
@@ -27,6 +29,8 @@ export interface RenderOptions {
   jobKey: string;
   /** `false`: no sound effects under the voice (whoosh on scene changes, pop on text, hit on the final card). Default on. */
   sfx?: boolean;
+  /** The turtle sticker: default on (when the PNG files are there) with the caption's first line as the bubble; `false` (or `RENDER_FIRA=off`) none; an object overrides parts. */
+  fira?: FiraBrand;
   log?: (msg: string) => void;
 }
 
@@ -64,6 +68,7 @@ export class BundleCache {
     const publicDir = join(root, 'public-src');
     prepareFonts(publicDir);
     prepareSfx(publicDir);
+    prepareFira(publicDir);
     this.log('bundling composition');
     return bundle({ entryPoint: ENTRY, publicDir, outDir: join(root, 'bundle'), webpackOverride: aliasJs });
   }
@@ -73,7 +78,7 @@ export class BundleCache {
 const jobDir = (serveUrl: string, key: string) => join(serveUrl, 'public', 'jobs', key);
 
 /** Voice per scene, timeline, props. Exported separately so the sample and tests can build props without Chrome. */
-export async function buildProps(script: ReelScript, opts: { tts: TtsEnv | null; dir: string; rel: string; sfx?: boolean; log?: (m: string) => void }): Promise<{ props: ReelProps; voiced: boolean }> {
+export async function buildProps(script: ReelScript, opts: { tts: TtsEnv | null; dir: string; rel: string; sfx?: boolean; fira?: FiraBrand; log?: (m: string) => void }): Promise<{ props: ReelProps; voiced: boolean }> {
   const log = opts.log ?? (() => {});
   const useVoice = opts.tts !== null && script.lang === 'ru';
   if (opts.tts !== null && !useVoice) log('English script: no voice (only the Russian Piper voice is installed), subtitles from the script timing');
@@ -108,6 +113,9 @@ export async function buildProps(script: ReelScript, opts: { tts: TtsEnv | null;
     timeline,
     sfx: withSfx ? planSfx(timeline) : [],
   };
+  const fira = opts.fira ?? true;
+  if (fira && firaAvailable()) props.brand = { fira: fira === true ? { ...(script.caption ? { bubble: script.caption } : {}) } : fira };
+  else if (fira) log('Fira assets are missing (assets/fira, run `pnpm --filter renderer fira:assets`), rendering without the sticker');
   return { props, voiced: useVoice };
 }
 
@@ -117,7 +125,7 @@ export async function renderReel(script: ReelScript, bundleCache: BundleCache, o
   const serveUrl = await bundleCache.get();
   const dir = jobDir(serveUrl, opts.jobKey);
   try {
-    const { props, voiced } = await buildProps(script, { tts: opts.tts, dir, rel: `jobs/${opts.jobKey}`, ...(opts.sfx === false ? { sfx: false } : {}), log });
+    const { props, voiced } = await buildProps(script, { tts: opts.tts, dir, rel: `jobs/${opts.jobKey}`, ...(opts.sfx === false ? { sfx: false } : {}), ...(opts.fira !== undefined ? { fira: opts.fira } : {}), log });
     const { ensureBrowser, makeCancelSignal, renderMedia, selectComposition } = await import('@remotion/renderer');
     await ensureBrowser();
     const inputProps = props as unknown as Record<string, unknown>;

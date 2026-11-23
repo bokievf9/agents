@@ -16,6 +16,7 @@ const defaults: ReelProps = {
   scenes: SAMPLE_SCRIPT.scenes.map((s) => ({ subtitle: s.subtitle, voice: s.voice, audio: null })),
   ctaAudio: null,
   timeline,
+  brand: { fira: { bubble: SAMPLE_SCRIPT.hook } },
 };
 
 const launchDefaults: LaunchProps = { lang: 'ru', vo: COPY.ru.vo, voice: {}, sfx: true, musicPath: null, musicVolume: 0.35, captions: true };

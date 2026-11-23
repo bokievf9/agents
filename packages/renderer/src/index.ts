@@ -21,6 +21,8 @@ const cores = Math.max(1, typeof os.availableParallelism === 'function' ? os.ava
 const concurrency = Math.min(Math.max(1, Number(process.env.RENDER_CONCURRENCY) || 1), cores);
 /** `RENDER_SFX=off`: reels without the sound-effect layer. */
 const sfx = (process.env.RENDER_SFX ?? 'on').toLowerCase() !== 'off';
+/** `RENDER_FIRA=off`: reels without the Fira sticker (default on for Fir Tech's own channels). */
+const fira = (process.env.RENDER_FIRA ?? 'on').toLowerCase() !== 'off';
 
 const log = (level: 'info' | 'warn' | 'error', msg: string, extra: Record<string, unknown> = {}) =>
   console.log(JSON.stringify({ t: new Date().toISOString(), level, svc: 'renderer', msg, ...extra }));
@@ -33,7 +35,7 @@ if (stale) log('warn', 'recovered jobs left running', { n: stale });
 
 const bundle = new BundleCache((m) => log('info', m));
 const tts = noTts ? null : ttsEnvFrom();
-log('info', 'renderer started', { pollSeconds: pollMs / 1000, voice: tts?.voice ?? 'off', concurrency, sfx });
+log('info', 'renderer started', { pollSeconds: pollMs / 1000, voice: tts?.voice ?? 'off', concurrency, sfx, fira });
 
 // Heartbeat for the Docker healthcheck and the HQ monitoring: touched every 30 s, also during a long render.
 const beatFile = join(dataDir, 'renderer.heartbeat');
@@ -56,7 +58,7 @@ await runLoop(
     db, queue, now: Date.now, timeoutMs, log,
     render: async (job, script) => {
       const out = join(dataDir, 'renders', String(job.itemId), 'reel.mp4');
-      const r = await renderReel(script, bundle, { outFile: out, tts, concurrency, timeoutMs, jobKey: String(job.id), sfx, log: (m) => log('info', m, { job: job.id }) });
+      const r = await renderReel(script, bundle, { outFile: out, tts, concurrency, timeoutMs, jobKey: String(job.id), sfx, fira, log: (m) => log('info', m, { job: job.id }) });
       log('info', 'reel written', { job: job.id, item: job.itemId, bytes: r.bytes, seconds: Math.round(r.seconds), voiced: r.voiced });
       return r.path;
     },

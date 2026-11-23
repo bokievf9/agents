@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { profileRubricText, tryJson, topicsExcerpt, withPlaybook, type Db, type LlmClient, type PlaybookTopic } from '@fir/core';
+import { FIRA_OFF_NOTE, signCaption, signCaptions } from './fira.js';
 import { DIRECTIONS, priceLine } from './directions.js';
 import { carouselSchema, clipSchema, postSchema, profileSchema, renderCarousel, renderKit, renderTiktok, renderYoutube, splitKit, tiktokProfileSchema, youtubeProfileSchema, KIT_SECTIONS, type KitSection, renderClip, renderPost, renderProfile, renderStory, storySchema, titleOf, type ItemType } from './format.js';
 import { estimateSeconds, lintText } from './lint.js';
@@ -44,6 +45,8 @@ export interface GenSpec {
   pageText?: string;
   /** Start kit only: which platform section this call writes (default Instagram). */
   section?: KitSection;
+  /** Fira's first-person voice and signature in the captions (rule 13). Default on; `false` switches it off. */
+  fira?: boolean;
 }
 
 /** One trend from the Trend scout, reduced to what a script needs. */
@@ -114,12 +117,13 @@ function userPrompt(p: Prompts, spec: GenSpec, fix?: { text: string; issues: str
 }
 
 async function once(llm: LlmClient, p: Prompts, spec: GenSpec, fix?: { text: string; issues: string[] }): Promise<Generated | null> {
-  const req = { tier: 'sonnet' as const, system: withPlaybook(p.system, 'content-maker'), messages: [{ role: 'user' as const, content: userPrompt(p, spec, fix) }], maxTokens: 3000 };
+  const req = { tier: 'sonnet' as const, system: `${withPlaybook(p.system, 'content-maker')}${spec.fira === false ? `\n\n${FIRA_OFF_NOTE}` : ''}`, messages: [{ role: 'user' as const, content: userPrompt(p, spec, fix) }], maxTokens: 3000 };
+  const fira = spec.fira !== false;
   const withCta = <T extends { cta: string }>(c: T): T => (/firtech\.pro/i.test(c.cta) ? c : { ...c, cta: `${c.cta.replace(/[.\s]+$/, '')}. Ссылка: firtech.pro` });
   if (spec.type === 'clip') {
     const parsed = await tryJson(llm, req, clipSchema);
     if (!parsed) return null;
-    const clip = withCta(parsed);
+    const clip = fira ? signCaptions(withCta(parsed)) : withCta(parsed);
     const text = renderClip(clip);
     const issues = lintText(text);
     const sec = estimateSeconds(clip.scenes.map((s) => s.voice));
@@ -131,7 +135,7 @@ async function once(llm: LlmClient, p: Prompts, spec: GenSpec, fix?: { text: str
     if (!parsed) return null;
     // the caption must end with a call to action; the model sometimes forgets it
     const post = /@firtech_bot|firtech\.pro/i.test(parsed.caption) ? parsed : { ...parsed, caption: `${parsed.caption.trimEnd()}\n\nНапишите нам: @firtech_bot` };
-    const text = renderPost(post);
+    const text = renderPost(fira ? { ...post, caption: signCaption(post.caption) } : post);
     return { text, title: titleOf(text), issues: lintText(text, { noPrices: true }) };
   }
   if (spec.type === 'story') {
@@ -149,7 +153,7 @@ async function once(llm: LlmClient, p: Prompts, spec: GenSpec, fix?: { text: str
   }
   const parsed = await tryJson(llm, req, carouselSchema);
   if (!parsed) return null;
-  const text = renderCarousel(withCta(parsed));
+  const text = renderCarousel(fira ? signCaptions(withCta(parsed)) : withCta(parsed));
   return { text, title: titleOf(text), issues: lintText(text) };
 }
 
