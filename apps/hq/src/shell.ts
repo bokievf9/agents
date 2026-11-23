@@ -11,6 +11,7 @@ import { createCompany } from './shell-company.js';
 import type { AppTools } from './tools.js';
 import type { CabDocs } from './cab-docs.js';
 import { createShellContent } from './shell-content.js';
+import { createShellContentPurge } from './shell-content-purge.js';
 import { createMetrics, SiteEvents } from './shell-events.js';
 import { createHub } from './shell-hub.js';
 import { createShellCrm, fail, ok } from './shell-crm.js';
@@ -69,6 +70,7 @@ export function createShell(d: ShellDeps) {
   const hub = createHub(d.hq.db, d.now);
   const crm = createShellCrm(d);
   const content = createShellContent(d);
+  const contentPurge = createShellContentPurge({ hq: d.hq, now: d.now, rendersDir: d.rendersDir });
   const metrics = createMetrics(d.hq.db, d.now, () => d.hq.tz, new SiteEvents(d.hq.db, d.now, () => d.hq.tz));
   const company = createCompany(d);
   const agents = createAgents(d);
@@ -94,6 +96,7 @@ export function createShell(d: ShellDeps) {
     if (a === 'content') {
       if (method === 'GET' && seg.length === 1) return content.list(query);
       if (seg[1] === 'feed' && seg.length === 2) return method === 'GET' ? content.feed(query) : fail(404, 'not_found');
+      if (seg[1] === 'purge' && seg.length === 2) return method === 'POST' ? contentPurge.run(body) : fail(404, 'not_found');
       if (seg[1] === 'orders' && seg.length === 2) return method === 'GET' ? content.orders(query) : method === 'POST' ? content.createOrder(body) : fail(404, 'not_found');
       if (method === 'POST' && seg.length === 2) return content.post(seg[1]!, body);
       return fail(404, 'not_found');
