@@ -167,7 +167,7 @@ export function deriveJourney(i: JourneyInput): Journey {
     });
   }
   return mk('received', i.leadCreatedAt, { ru: 'Заявка у нас. Менеджер проекта уже смотрит её.', en: 'We have your request. The project manager is looking at it.' }, {
-    eta: iso(i.leadCreatedAt + 5 * 60_000), etaText: { ru: 'Первый ответ за 5 минут, круглосуточно', en: 'First reply within 5 minutes, around the clock' },
+    eta: iso(i.leadCreatedAt + 5 * 60_000), etaText: { ru: 'Менеджер ответит в течение 5 минут в рабочее время, агент отвечает за минуту круглосуточно', en: 'The manager replies within 5 minutes in working hours, the agent replies within a minute around the clock' },
   });
 }
 

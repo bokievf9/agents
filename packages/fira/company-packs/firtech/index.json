@@ -7,8 +7,8 @@
       "tier": "public",
       "source": "firtech/docs/products-contract.md",
       "file": "public-products-contract.md",
-      "chars": 3408,
-      "sha": "80fe8ed2cd17"
+      "chars": 3299,
+      "sha": "6cc36b3d39fe"
     },
     {
       "id": "public-sales-playbook-site",
@@ -16,8 +16,8 @@
       "tier": "public",
       "source": "firtech/docs/sales-playbook-site.md",
       "file": "public-sales-playbook-site.md",
-      "chars": 10224,
-      "sha": "6d2a3a8ba37f"
+      "chars": 10265,
+      "sha": "706a0dc232ec"
     },
     {
       "id": "public-site-aiteams",
@@ -25,8 +25,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#aiTeams",
       "file": "public-site-aiteams.md",
-      "chars": 32204,
-      "sha": "10c0ed1838f4"
+      "chars": 33536,
+      "sha": "5f039455725e"
     },
     {
       "id": "public-site-comparepage",
@@ -35,7 +35,7 @@
       "source": "firtech/src/content/ru.ts#comparePage",
       "file": "public-site-comparepage.md",
       "chars": 2990,
-      "sha": "ba60800acd2b"
+      "sha": "e1d8e446350d"
     },
     {
       "id": "public-site-demosection",
@@ -43,8 +43,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#demoSection",
       "file": "public-site-demosection.md",
-      "chars": 2731,
-      "sha": "8f7a60226ab8"
+      "chars": 2390,
+      "sha": "89028152b0a7"
     },
     {
       "id": "public-site-faq",
@@ -52,8 +52,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#faq",
       "file": "public-site-faq.md",
-      "chars": 2681,
-      "sha": "724c9e5de378"
+      "chars": 3362,
+      "sha": "109b859d5f9b"
     },
     {
       "id": "public-site-guarantee",
@@ -61,8 +61,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#guarantee",
       "file": "public-site-guarantee.md",
-      "chars": 207,
-      "sha": "26dcf7de72f0"
+      "chars": 249,
+      "sha": "ab85a4e3e2b7"
     },
     {
       "id": "public-site-how",
@@ -70,8 +70,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#how",
       "file": "public-site-how.md",
-      "chars": 2625,
-      "sha": "dad5b7808977"
+      "chars": 2679,
+      "sha": "44f61ab92a86"
     },
     {
       "id": "public-site-ladder",
@@ -79,8 +79,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#ladder",
       "file": "public-site-ladder.md",
-      "chars": 1442,
-      "sha": "254d42b7b0cc"
+      "chars": 1474,
+      "sha": "090bb58298fa"
     },
     {
       "id": "public-site-payhow",
@@ -88,8 +88,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#payHow",
       "file": "public-site-payhow.md",
-      "chars": 1857,
-      "sha": "d777e534222b"
+      "chars": 1474,
+      "sha": "0f259b71e3e1"
     },
     {
       "id": "public-site-pricinghome",
@@ -97,8 +97,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#pricingHome",
       "file": "public-site-pricinghome.md",
-      "chars": 338,
-      "sha": "31d59f66fbc6"
+      "chars": 342,
+      "sha": "ab2346bfb290"
     },
     {
       "id": "public-site-privacy",
@@ -106,8 +106,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#privacy",
       "file": "public-site-privacy.md",
-      "chars": 6033,
-      "sha": "840dbe96fe87"
+      "chars": 6091,
+      "sha": "fb3dda5fd9b7"
     },
     {
       "id": "public-site-process",
@@ -115,8 +115,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#process",
       "file": "public-site-process.md",
-      "chars": 352,
-      "sha": "91707bf0788c"
+      "chars": 358,
+      "sha": "731e7695b0af"
     },
     {
       "id": "public-site-productpage",
@@ -124,8 +124,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#productPage",
       "file": "public-site-productpage.md",
-      "chars": 33713,
-      "sha": "df013d5d4016"
+      "chars": 29475,
+      "sha": "2b900647dd6b"
     },
     {
       "id": "public-site-products",
@@ -133,8 +133,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#products",
       "file": "public-site-products.md",
-      "chars": 2355,
-      "sha": "5d46ad7a1712"
+      "chars": 2171,
+      "sha": "f8ff2d4e1001"
     },
     {
       "id": "public-site-referral",
@@ -142,8 +142,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#referral",
       "file": "public-site-referral.md",
-      "chars": 1241,
-      "sha": "1837089499a6"
+      "chars": 1189,
+      "sha": "d95d87e45c12"
     },
     {
       "id": "public-site-servicedetails",
@@ -151,8 +151,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#serviceDetails",
       "file": "public-site-servicedetails.md",
-      "chars": 3915,
-      "sha": "d186e6a710c6"
+      "chars": 3964,
+      "sha": "dce900dae022"
     },
     {
       "id": "public-site-services",
@@ -160,8 +160,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#services",
       "file": "public-site-services.md",
-      "chars": 565,
-      "sha": "4fdd997cfdc7"
+      "chars": 589,
+      "sha": "5b4e39a48fdc"
     },
     {
       "id": "public-site-sla",
@@ -169,8 +169,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#sla",
       "file": "public-site-sla.md",
-      "chars": 135,
-      "sha": "c949eab51fce"
+      "chars": 157,
+      "sha": "f05ebe6a4f48"
     },
     {
       "id": "public-site-solution-promises",
@@ -187,8 +187,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#solutions",
       "file": "public-site-solutions.md",
-      "chars": 8588,
-      "sha": "423c34349bd5"
+      "chars": 8690,
+      "sha": "7e22ce965c39"
     },
     {
       "id": "public-site-terms",
@@ -196,8 +196,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#terms",
       "file": "public-site-terms.md",
-      "chars": 5486,
-      "sha": "84bd52d3ffee"
+      "chars": 5469,
+      "sha": "8be91269263c"
     },
     {
       "id": "internal-apps-hq-instructions-backoffice-head",
@@ -205,8 +205,8 @@
       "tier": "internal",
       "source": "agents/apps/hq/instructions/backoffice-head.md",
       "file": "internal-apps-hq-instructions-backoffice-head.md",
-      "chars": 1578,
-      "sha": "2a690c783c2e"
+      "chars": 2543,
+      "sha": "1e935a964ee1"
     },
     {
       "id": "internal-apps-hq-instructions-client-bot",
@@ -214,8 +214,8 @@
       "tier": "internal",
       "source": "agents/apps/hq/instructions/client-bot.md",
       "file": "internal-apps-hq-instructions-client-bot.md",
-      "chars": 6673,
-      "sha": "2b861dd750f4"
+      "chars": 6888,
+      "sha": "e98a197c107a"
     },
     {
       "id": "internal-apps-hq-instructions-director",
@@ -223,8 +223,8 @@
       "tier": "internal",
       "source": "agents/apps/hq/instructions/director.md",
       "file": "internal-apps-hq-instructions-director.md",
-      "chars": 1096,
-      "sha": "1a2128f03c51"
+      "chars": 2073,
+      "sha": "7575a16c47f3"
     },
     {
       "id": "internal-apps-hq-instructions-marketing-head",
@@ -232,8 +232,8 @@
       "tier": "internal",
       "source": "agents/apps/hq/instructions/marketing-head.md",
       "file": "internal-apps-hq-instructions-marketing-head.md",
-      "chars": 3615,
-      "sha": "9d603bfe8b72"
+      "chars": 5074,
+      "sha": "7406bb0a1d82"
     },
     {
       "id": "internal-apps-hq-instructions-production-head",
@@ -241,8 +241,8 @@
       "tier": "internal",
       "source": "agents/apps/hq/instructions/production-head.md",
       "file": "internal-apps-hq-instructions-production-head.md",
-      "chars": 2206,
-      "sha": "5e0ee4420904"
+      "chars": 2819,
+      "sha": "e83867f1b301"
     },
     {
       "id": "internal-apps-hq-instructions-sales-head",
@@ -250,8 +250,8 @@
       "tier": "internal",
       "source": "agents/apps/hq/instructions/sales-head.md",
       "file": "internal-apps-hq-instructions-sales-head.md",
-      "chars": 4042,
-      "sha": "f07b8a7baf9e"
+      "chars": 5718,
+      "sha": "a0a2e82fe3fd"
     },
     {
       "id": "internal-apps-hq-instructions-support-head",
@@ -259,8 +259,8 @@
       "tier": "internal",
       "source": "agents/apps/hq/instructions/support-head.md",
       "file": "internal-apps-hq-instructions-support-head.md",
-      "chars": 3310,
-      "sha": "2de36350c6b8"
+      "chars": 4363,
+      "sha": "a7d218f0ef0a"
     },
     {
       "id": "internal-company",
@@ -286,8 +286,8 @@
       "tier": "internal",
       "source": "agents/docs/fira-architecture.md",
       "file": "internal-docs-fira-architecture.md",
-      "chars": 23759,
-      "sha": "85f8857f4f54"
+      "chars": 27447,
+      "sha": "78defd9fbc89"
     },
     {
       "id": "internal-docs-process-census",
@@ -295,8 +295,8 @@
       "tier": "internal",
       "source": "agents/docs/process-census.md",
       "file": "internal-docs-process-census.md",
-      "chars": 105672,
-      "sha": "259368e41144"
+      "chars": 107019,
+      "sha": "cb53740a5442"
     },
     {
       "id": "internal-knowledge-playbooks-analyst",
@@ -430,8 +430,8 @@
       "tier": "internal",
       "source": "agents/knowledge/playbooks/sales.md",
       "file": "internal-knowledge-playbooks-sales.md",
-      "chars": 6417,
-      "sha": "957479f95c32"
+      "chars": 6439,
+      "sha": "11de0179cfa5"
     },
     {
       "id": "internal-knowledge-playbooks-seo",

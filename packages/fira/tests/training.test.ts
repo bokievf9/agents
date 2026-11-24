@@ -87,4 +87,28 @@ describe('training 2026-11-25', () => {
     expect((await near('что дальше после заявки?')).join(' ')).toMatch(/после заявки/);
     expect((await near('какие языки?')).join(' ')).toMatch(/языки/);
   });
+
+  it('pass 2: the heads instructions, Content Maker prompt, cabinet and journey strings, client texts and their pack copies keep no old facts', () => {
+    const repo = join(PACKAGE_DIR, '..', '..');
+    const files = [
+      ...readdirSync(join(repo, 'apps/hq/instructions')).map((f) => `apps/hq/instructions/${f}`),
+      ...readdirSync(join(repo, 'packages/workers/content-maker/prompts')).map((f) => `packages/workers/content-maker/prompts/${f}`),
+      'apps/hq/src/cabinet.ts', 'apps/hq/src/journey.ts', 'apps/hq/src/client/texts.ts', 'apps/hq/src/client/web-texts.ts', 'apps/hq/src/client/receptionist.ts',
+      'knowledge/voice.md', 'knowledge/playbooks/sales.md',
+      ...readdirSync(join(PACKAGE_DIR, 'company-packs', 'firtech')).filter((f) => /^internal-(apps-hq-instructions|knowledge-playbooks-sales)/.test(f)).map((f) => `packages/fira/company-packs/firtech/${f}`),
+    ];
+    for (const f of files) {
+      const t = readFileSync(join(repo, f), 'utf8');
+      expect(t, f).not.toMatch(/usdt/i);
+      expect(t, f).not.toMatch(/основател/i);
+      expect(t, f).not.toMatch(/бесплатн\S* пилот/iu);
+      for (const part of t.split(/[.;\n]/)) {
+        if (/менеджер/iu.test(part) && /круглосуточно/iu.test(part)) expect(part, `${f}: ${part}`).toMatch(/рабоч(ее|их) (время|часы)|in working hours/iu);
+      }
+    }
+    for (const h of ['director', 'sales-head', 'backoffice-head', 'marketing-head', 'production-head', 'support-head']) {
+      expect(readFileSync(join(repo, 'apps/hq/instructions', `${h}.md`), 'utf8'), h).toContain('## Что изменилось (2026-11-25)');
+    }
+    expect(readFileSync(join(repo, 'packages/workers/content-maker/prompts/system.md'), 'utf8')).toContain('Что изменилось (2026-11-25)');
+  });
 });

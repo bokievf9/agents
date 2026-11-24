@@ -160,12 +160,12 @@ describe('GET /admin/clients/by-email: leads', () => {
       expect(nextStepOf(s, 'ru').length).toBeGreaterThan(10);
       expect(nextStepOf(s, 'en')).not.toBe(nextStepOf(s, 'ru'));
     }
-    expect(nextStepOf('new', 'ru')).toBe('Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает менеджер проекта');
+    expect(nextStepOf('new', 'ru')).toBe('Менеджер ответит в течение 5 минут в рабочее время, агент отвечает за минуту круглосуточно; цены и сроки подтверждает менеджер проекта');
     expect(nextStepOf('lost', undefined)).toBe('Заявка закрыта');
     const { p, reg, cabLead } = setup();
     await reg();
     const l = cabLead({ message: 'ok', estimate: '', service: '' });
-    expect((await p.call('GET', '/admin/clients/by-email?email=alice@example.com')).json.leads[0]).toMatchObject({ stage: 'new', estimateUsd: null, nextStep: 'Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает менеджер проекта' });
+    expect((await p.call('GET', '/admin/clients/by-email?email=alice@example.com')).json.leads[0]).toMatchObject({ stage: 'new', estimateUsd: null, nextStep: 'Менеджер ответит в течение 5 минут в рабочее время, агент отвечает за минуту круглосуточно; цены и сроки подтверждает менеджер проекта' });
     await p.call('POST', `/admin/crm/leads/${l.leadId}`, { stage: 'lost' });
     const lost = (await p.call('GET', '/admin/clients/by-email?email=alice@example.com')).json.leads[0];
     expect(lost).toMatchObject({ stage: 'lost', nextStep: 'Заявка закрыта' });
