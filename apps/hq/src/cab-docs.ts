@@ -8,6 +8,7 @@ import { fillTemplate, loadTemplate } from '@fir/worker-documents';
 import { legalLabel, legalMeta, legalPartyOfClient } from '@fir/worker-lead-intake';
 import { z } from 'zod';
 import { addCabMessage, addThreadMessage, ensureCabinetTables, postFromFirTech } from './cabinet.js';
+import { Coupons } from './coupon.js';
 import type { Playground } from './playground.js';
 import { parseBuilderPlan, wantsPlayground } from './builder-plan.js';
 import { EmailFailures, type EmailKind } from './email-failures.js';
@@ -288,6 +289,8 @@ export interface QuoteApproval {
   /** The task metas of the next two steps (the contract, the invoice of stage 1): made after the client accepts and signs. */
   contractMeta: Record<string, unknown>;
   invoiceMeta: Record<string, unknown>;
+  /** The quote carries the cabinet coupon line: the client's acceptance marks the coupon used. */
+  coupon?: boolean;
   /** P-10: what `PmStore.reserve` needs when the client accepts (the stage dates are planned from that day). */
   reservation?: { client: string; what: string; product: Product; leadId: number | null; packId: number; stages: PaymentStage[]; dueProduct?: Product };
 }
@@ -628,7 +631,7 @@ export class CabDocs {
     const quote = this.insert({
       client_id: q.clientId, kind: 'quote', title: 'Коммерческое предложение', number: `КП-${q.packId}`, lead_id: q.leadId, project_id: q.projectId, pack_id: q.packId, state: 'awaiting_client',
       src: 'ps_quote', src_id: q.packId, amount_usd: q.totalUsd, body: q.kpText,
-      meta: JSON.stringify({ contract: q.contractMeta, invoice: q.invoiceMeta, client: q.client, ...(q.reservation ? { reservation: q.reservation } : {}) }),
+      meta: JSON.stringify({ contract: q.contractMeta, invoice: q.invoiceMeta, client: q.client, ...(q.reservation ? { reservation: q.reservation } : {}), ...(q.coupon ? { coupon: true } : {}) }),
     });
     const est = this.insert({
       client_id: q.clientId, kind: 'other', title: 'Смета', number: `КП-${q.packId}`, lead_id: q.leadId, project_id: q.projectId, pack_id: q.packId, state: 'issued', src: 'ps_estimate', src_id: q.packId,
@@ -992,7 +995,7 @@ export class CabDocs {
     if (r.kind !== 'quote' || r.state !== 'awaiting_client') return failR(409, 'not_awaiting', { state: this.liveState(r) });
     const t = this.d.now();
     if (this.db.prepare("UPDATE cab_documents SET state = 'accepted', accepted_at = ? WHERE id = ? AND state = 'awaiting_client'").run(t, r.id).changes !== 1) return failR(409, 'not_awaiting');
-    const meta = JSON.parse(r.meta || '{}') as { contract?: Record<string, unknown>; invoice?: Record<string, unknown>; client?: string; reservation?: QuoteApproval['reservation'] };
+    const meta = JSON.parse(r.meta || '{}') as { contract?: Record<string, unknown>; invoice?: Record<string, unknown>; client?: string; reservation?: QuoteApproval['reservation']; coupon?: boolean };
     const hq = this.d.hq;
     // P-10: the project is reserved now that the client said yes (stage dates from today); the contract and the invoice to come carry its id
     if (meta.reservation && r.project_id === null) {
@@ -1014,6 +1017,14 @@ export class CabDocs {
       // the legal name may have been filled in after the owner approved the КП: read it again now
       hq.createTask({ title: `Договор: ${meta.client ?? c.name ?? c.email}`, dept: 'backoffice', creator: 'head', priority: 1, meta: { ...meta.contract, ...legalMeta(legalPartyOfClient(this.db, c.id)) } });
       hq.wake('backoffice-head', 'task');
+    }
+    // the quote carried the cabinet coupon line: the coupon is used now (one coupon, the first order)
+    if (meta.coupon) {
+      try {
+        if (new Coupons(this.db, this.d.now).markUsed(c.id, r.lead_id)) hq.log('client', 'coupon_used', 'client', String(c.id), `lead ${r.lead_id ?? '-'}`);
+      } catch (e) {
+        log('warn', 'coupon not marked used', { doc: r.id, err: errMsg(e) });
+      }
     }
     hq.log('client', 'quote_accepted', 'document', String(r.id));
     postFromFirTech(this.db, t, c.id, r.lead_id, c.locale === 'en' ? 'Proposal accepted, thank you! We are preparing the contract.' : 'КП принято, спасибо! Готовим договор.');

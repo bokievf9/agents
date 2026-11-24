@@ -1,6 +1,7 @@
 import type { Db } from '@fir/core';
 import { CAB_MESSAGES_SCHEMA, CAB_TMSGS_SCHEMA } from '@fir/worker-customer-support';
 import { LeadStore, type Lang } from '@fir/worker-lead-intake';
+import { Coupons } from './coupon.js';
 import type { Stage } from './lead-stage.js';
 
 /**
@@ -129,6 +130,8 @@ export interface CabinetLeadInput {
   source: string;
   hasDomain?: boolean | undefined;
   hasHosting?: boolean | undefined;
+  /** The percent of the cabinet coupon issued to a new account (`settings.coupon.percent`); default 10. */
+  couponPercent?: number | undefined;
 }
 
 /**
@@ -146,6 +149,8 @@ export function registerCabinetLead(db: Db, now: () => number, taskId: number, l
        supabase_id = CASE WHEN excluded.supabase_id != '' THEN excluded.supabase_id ELSE supabase_id END, updated_at = excluded.updated_at`,
   ).run(l.clientEmail, name || l.name.slice(0, 120), l.locale, l.cabinetId ?? '', t, t, name);
   const client = db.prepare('SELECT id FROM cab_clients WHERE email = ?').get(l.clientEmail) as { id: number };
+  // the cabinet coupon is issued with the account (an old account without one gets it only while it is younger than 30 days)
+  new Coupons(db, now, l.couponPercent ? () => l.couponPercent! : undefined).ensure(client.id);
   const lead = store.upsert(taskId, {
     name: l.name.slice(0, 80), contact: l.contact.slice(0, 120), service: l.service, niche: '', task: l.message.slice(0, 300), deadline: '', budget: l.budget.slice(0, 40),
     origin: l.source, temperature: 'cold', lang: l.locale, slots: [], chosenSlot: null, priceAsked: false, estimate: l.estimate,

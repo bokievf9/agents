@@ -6,6 +6,7 @@ import type { Director } from './director.js';
 import type { DrillStatus } from './drill.js';
 import { anonymizeClient } from './client-anonymize.js';
 import { createCrm } from './admin-crm.js';
+import { couponPercent } from './coupon.js';
 import type { CabinetApi } from './cabinet-api.js';
 import type { Campaigns } from './campaigns.js';
 import type { Calls } from './calls.js';
@@ -112,6 +113,7 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
     },
     ...(d.billing ? { payUrl: (inv: { number: string; payKey: string | null; locale: 'ru' | 'en' }) => d.billing!.payUrl(inv) } : {}),
     paymentsEnabled: () => paymentsEnabled(hq),
+    couponPercent: () => couponPercent(hq),
     ...(d.acceptStage ? { acceptStage: d.acceptStage } : {}),
     ...(d.cabinetTicket ? { cabinetTicket: (t) => void d.cabinetTicket!(t).catch((e) => log('warn', 'cabinet ticket flow failed', { err: errMsg(e) })) } : {}),
   });

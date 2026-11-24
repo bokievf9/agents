@@ -36,6 +36,7 @@ import { ClientEmbedder, ClientKnowledge } from './client-knowledge.js';
 import { publicFetcher } from './site-crawl.js';
 import { HashEmbedder, InMemoryKnowledge, voyageFromEnv } from '@fir/fira';
 import { buildCabinet, type CabinetApi } from './cabinet-api.js';
+import { Coupons, couponPercent, COUPON_CODE } from './coupon.js';
 import { JourneyNotifier } from './journey.js';
 import { Campaigns } from './campaigns.js';
 import { UPLOAD_TYPES } from '@fir/core';
@@ -221,6 +222,8 @@ const sales = new SalesHead({
   // «демо на ваших данных»: a lead with a niche gets its draft agent at once, the demo link goes into the first reply
   demoLink: (leadId, lang) => cabinetRef.current?.playground.draftForLead(leadId, lang)?.url ?? null,
   referralReward: cfg.referralReward, kpValidDays: startVals.kpValidDays,
+  // the cabinet coupon a lead's КП applies (claimed by the lead, unused)
+  coupon: (leadId) => new Coupons(db, hq.now).forLead(leadId),
   ...(clientBot ? { client: clientBot } : {}), lost,
 });
 const auditGate = new AuditGate(hq.now);
@@ -360,6 +363,8 @@ const dueTick = async () => {
   // P-13: a manager's or Support's answer in a cabinet thread: one email «новое сообщение» per thread an hour, none when the client already read it
   // the client's journey: moves with no notice of their own (start date, payment held or opened) are told once
   await journey.tick().catch((e) => log('warn', 'journey tick failed', { err: errMsg(e) }));
+  // the cabinet coupon: one reminder a day after sign-up to a client with no lead yet
+  await new Coupons(db, hq.now, () => couponPercent(hq)).remindTick(cabinet.mail, cfg.siteUrl).catch((e) => log('warn', 'coupon reminder failed', { err: errMsg(e) }));
   await cabinet.mail?.messageTick().catch((e) => log('warn', 'client message mail failed', { err: errMsg(e) }));
   // P-20: call reminders a day and an hour before (client and owner), once each
   await calls.tick().catch((e) => log('warn', 'call reminders failed', { err: errMsg(e) }));
@@ -448,7 +453,9 @@ const webhook = cfg.leadWebhookToken || cfg.webChatToken || cfg.adminToken || cf
         if (!clientEmail) return id;
         // a signed-in cabinet client: the account and the lead row exist (and are linked) before the answer goes back to the site
         try {
-          const r = registerCabinetLead(db, hq.now, id, { clientEmail, cabinetId, clientName, name, contact, service, budget, message, estimate, locale, source, hasDomain, hasHosting });
+          const r = registerCabinetLead(db, hq.now, id, { clientEmail, cabinetId, clientName, name, contact, service, budget, message, estimate, locale, source, hasDomain, hasHosting, couponPercent: couponPercent(hq) });
+          // the signed-in client's brief carried the coupon: this lead claims it (valid and unused only; the quote applies it)
+          if (brief?.coupon === COUPON_CODE) new Coupons(db, hq.now, () => couponPercent(hq)).claim(r.clientId, r.leadId);
           // «Знания клиента»: his own site (and Instagram handle) from the brief; the import is queued without blocking the answer
           if (brief?.discovery && (brief.discovery.si || brief.discovery.ig)) siteKnowledge.onBrief(r.clientId, brief.discovery);
           // the client's first minute: Fira's welcome in the lead thread and the email «Заявка получена», once, without blocking the answer

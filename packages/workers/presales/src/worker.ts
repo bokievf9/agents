@@ -5,7 +5,7 @@ import { leadStoreFor, legalLabel, legalPartyOfLead, type Lead } from '@fir/work
 import { buildDocs, draftWording, exactLabel, PILOT_DIRECTIONS, stagesOf, type Brief } from './docs.js';
 import { builderEstimate } from './estimate.js';
 import { bundleOffer, guessDirection, OFFERS } from './offers.js';
-import { builderTotal, personalTierQuote, quotePackage } from './package.js';
+import { builderTotal, personalTierQuote, quotePackage, withCoupon } from './package.js';
 import { splitMessage } from './split.js';
 import { DOC_RU, PresalesStore, type PsDocument } from './store.js';
 import { loadTemplates, type Templates } from './template.js';
@@ -75,6 +75,8 @@ export interface PresalesOptions {
   /** Directory with kp.md, estimate.md, contract.md. Default: the package's own templates. */
   templatesDir?: string;
   promptFile?: string;
+  /** The cabinet coupon of a lead: its percent while the client's coupon is claimed for that lead and unused, else null (`apps/hq/src/coupon.ts`). */
+  coupon?: (leadId: number) => number | null;
 }
 
 /**
@@ -86,6 +88,7 @@ export class PresalesWorker implements Worker {
   private readonly templates: Templates;
   private readonly prompt: string;
   private readonly validDaysOf: number | (() => number);
+  private readonly couponOf: ((leadId: number) => number | null) | undefined;
   private get validDays(): number {
     return typeof this.validDaysOf === 'function' ? this.validDaysOf() : this.validDaysOf;
   }
@@ -94,6 +97,7 @@ export class PresalesWorker implements Worker {
     this.templates = loadTemplates(opts.templatesDir ?? new URL('../templates', import.meta.url).pathname);
     this.prompt = readFileSync(opts.promptFile ?? new URL('../prompts/kp.md', import.meta.url).pathname, 'utf8');
     this.validDaysOf = opts.validDays ?? 14;
+    this.couponOf = opts.coupon;
   }
 
   async run(task: Task, ctx: WorkerCtx): Promise<WorkerResult> {
@@ -124,7 +128,11 @@ export class PresalesWorker implements Worker {
     const built = isPersonal ? null : builderEstimate({ estimate: brief.estimate, request: brief.request, link: brief.builderLink });
     const guessed = OFFERS[guessDirection({ source, service, text: `${brief.request} ${brief.niche} ${brief.estimate ?? ''}` })];
     const offer = built ? bundleOffer(built.directions, guessed) : guessed;
-    const quote = isPersonal ? personalTierQuote(personalLead!.enrichment?.personal?.tier, personalLead!.enrichment?.personal?.byok, offer.title) : built ? built.quote : quotePackage(offer.id, offer.title, `${brief.request} ${brief.niche} ${brief.estimate ?? ''}`);
+    const quote0 = isPersonal ? personalTierQuote(personalLead!.enrichment?.personal?.tier, personalLead!.enrichment?.personal?.byok, offer.title) : built ? built.quote : quotePackage(offer.id, offer.title, `${brief.request} ${brief.niche} ${brief.estimate ?? ''}`);
+    // the cabinet coupon (the lead's brief carried `cabinet10` and the client's coupon is valid and unused): one discount line on the one-time sum
+    const couponPct = brief.leadId !== null ? (this.couponOf?.(brief.leadId) ?? null) : null;
+    const coupon = couponPct ? withCoupon(quote0, couponPct) : null;
+    const quote = coupon?.applied ? coupon.quote : quote0;
     const wording = await draftWording(ctx.llm, this.prompt, brief, offer);
     // the pilot block of a flagship's КП: only when the package asks for it (`meta.pilot: true`, set by the owner), never by itself
     const pilot = task.meta.pilot === true && PILOT_DIRECTIONS.includes(offer.id);
@@ -140,6 +148,7 @@ export class PresalesWorker implements Worker {
       kp: saved[0]!.body, estimate: saved[1]!.body, contract: saved[2]!.body,
       client: brief.client, what: offer.title, totalUsd: quote.totalUsd, stages, prepayUsd, prepayPercent: stages[0]!.share, timeline: offer.timeline,
       ...(quote.monthlyUsd ? { monthlyUsd: quote.monthlyUsd } : {}),
+      ...(coupon?.applied ? { coupon: { percent: couponPct, usd: coupon.usd } } : {}),
       ...(PILOT_DIRECTIONS.includes(offer.id) ? { pilot } : {}),
       ...(brief.hasDomain != null ? { hasDomain: brief.hasDomain } : {}), ...(brief.hasHosting != null ? { hasHosting: brief.hasHosting } : {}),
     };
@@ -155,15 +164,16 @@ export class PresalesWorker implements Worker {
     }
     // the client's own builder total is only compared, never used as a price: the lead form is public
     const seen = builderTotal(brief.estimate ?? '');
-    const mismatch = seen !== null && seen !== quote.totalUsd ? ` Внимание: в «Сборке проекта» клиент видел итог ${usd(seen)}, в КП ${usd(quote.totalUsd)}: сверьте состав.` : '';
+    const mismatch = seen !== null && seen !== quote0.totalUsd ? ` Внимание: в «Сборке проекта» клиент видел итог ${usd(seen)}, в КП ${usd(quote0.totalUsd)}: сверьте состав.` : '';
     const priced = built
       ? ` Цена взята из сметы «Сборки проекта» (${built.source === 'link' ? 'по ссылке сборки, цены каталога сайта' : 'присланная сметой клиента'}).`
-        + `${built.estimateTotalUsd !== null ? ` Внимание: в смете клиента ${usd(built.estimateTotalUsd)}, по ссылке сборки ${usd(quote.totalUsd)}, берём ссылку: сверьте состав.` : ''}`
+        + `${built.estimateTotalUsd !== null ? ` Внимание: в смете клиента ${usd(built.estimateTotalUsd)}, по ссылке сборки ${usd(quote0.totalUsd)}, берём ссылку: сверьте состав.` : ''}`
         + `${built.onRequest.length ? ` По смете, без цены (в сумму не входит): ${built.onRequest.join(', ')}.` : ''}`
       : '';
+    const couponNote = coupon?.applied ? ` Купон за кабинет −${couponPct} %: −${usd(coupon.usd)} на разовую часть (в КП отдельной строкой).` : '';
     const summary = [
       `${DOC_RU.kp}, смета и черновик договора #${packId}: ${who}`,
-      `Направление: ${offer.title}, цена ${exactLabel(quote)}${quote.byokMonthlyUsd !== undefined ? ` (со своим ключом модели ${usd(quote.byokMonthlyUsd)}/мес)` : ''}${quote.lines.length > 1 ? ` (${quote.lines.map((l) => l.label).join(' + ')})` : ''}. Оплата по этапам (${stages.map((x) => `${x.no}: ${usd(x.amountUsd)}`).join(', ')}), каждый до его начала. КП действует ${this.validDays} дн.${mismatch}${priced}`,
+      `Направление: ${offer.title}, цена ${exactLabel(quote)}${quote.byokMonthlyUsd !== undefined ? ` (со своим ключом модели ${usd(quote.byokMonthlyUsd)}/мес)` : ''}${quote.lines.length > 1 ? ` (${quote.lines.map((l) => l.label).join(' + ')})` : ''}. Оплата по этапам (${stages.map((x) => `${x.no}: ${usd(x.amountUsd)}`).join(', ')}), каждый до его начала. КП действует ${this.validDays} дн.${mismatch}${priced}${couponNote}`,
       'Тексты длинные: «Скопировать документы» пришлёт их сообщениями.',
       ...(cabinet
         ? [
