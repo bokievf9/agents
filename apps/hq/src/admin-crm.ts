@@ -828,6 +828,8 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     stageFields,
     cabById,
     handleKey,
+    /** The cabinet coupon of a client as the cabinet sees it (issued lazily to a young account); null without one. */
+    coupon: (cabId: number) => coupons.view(cabId),
   };
 
   return {
