@@ -71,6 +71,7 @@ export function systemText(spec: AgentSpec, toolNames: readonly string[]): strin
   out.push('', `## Компания: ${company.name}`);
   if (company.about) out.push(company.about);
   out.push(...bullets(company.facts));
+  if (role.updates.length) out.push('', '## Что изменилось (действует вместо старых формулировок выше)', ...bullets(role.updates));
   out.push('', '## Границы', ...bullets([...role.boundaries, ...niche.boundaries]));
   if (st.forbiddenTopics.length) out.push(`- Не обсуждай: ${st.forbiddenTopics.join(', ')}.`);
   if (role.handoff.length) out.push('', '## Когда передать человеку', ...bullets(role.handoff));

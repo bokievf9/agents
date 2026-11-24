@@ -41,6 +41,8 @@ export interface RolePack {
   offer: string[];
   objections: QA[];
   selling: string[];
+  /** Dated corrections of the facts (`## Что изменилось (дата)`): the newest truth about products, payment and voice; goes into the prompt before the boundaries. */
+  updates: string[];
 }
 
 /** The field: words, services, typical questions, objections, limits of the field (medicine, law, money), tone. */

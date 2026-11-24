@@ -4,7 +4,7 @@ import type { Hq } from '@fir/hq';
 import { ensureCabinetTables } from './cabinet.js';
 import { createFiraLead, registerFiraLead, type FiraLead } from './client/fira-lead.js';
 import { ownerChunks } from './shell-knowledge.js';
-import { harvestLessons, SqliteLessons } from './fira-lessons.js';
+import { harvestLessons, seedTrainingLessons, SqliteLessons } from './fira-lessons.js';
 
 /**
  * `FIRA_LEAD_MANAGER=on`: the lead manager of the web chat and the client bot answers through Fira (`client/fira-lead.ts`). Escalations go to the owner as
@@ -36,6 +36,7 @@ export function startFiraLeadManager(o: { hq: Hq; db: Db }): FiraLead {
       log('warn', 'fira lessons harvest failed', { err: errMsg(e) });
     }
   };
+  void seedTrainingLessons(lessons).catch((e: unknown) => log('warn', 'fira training lessons failed', { err: errMsg(e) }));
   void harvest();
   schedule('fira-lessons', '5 * * * *', hq.tz, harvest);
   const fira = createFiraLead({

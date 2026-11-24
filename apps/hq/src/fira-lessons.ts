@@ -1,5 +1,5 @@
 import { migrate, type Db } from '@fir/core';
-import { lessonFromEdit, wordScore, type Lesson, type Lessons } from '@fir/fira';
+import { lessonFromEdit, TRAINING_LESSONS, wordScore, type Lesson, type Lessons } from '@fir/fira';
 
 /**
  * Lessons of the lead manager (Fira §5, owner 2026-11-23): the owner's corrections become text the agent sees as few-shot on a close question.
@@ -76,6 +76,17 @@ const textOf = (raw: string): string => {
   }
   return '';
 };
+
+/** The lessons of the training of 2026-11-25 (`packages/fira/src/training-lessons.ts`), once; the key keeps a restart from doubling them. Returns how many were added. */
+export async function seedTrainingLessons(lessons: SqliteLessons): Promise<number> {
+  let added = 0;
+  for (const { key, ...l } of TRAINING_LESSONS) {
+    const before = lessons.count();
+    await lessons.add(l, key);
+    if (lessons.count() > before) added++;
+  }
+  return added;
+}
 
 /** Kinds of the review center whose texts go to a client and whose corrections teach the lead manager. */
 export const LESSON_KINDS = ['lead_reply', 'lead_price'] as const;

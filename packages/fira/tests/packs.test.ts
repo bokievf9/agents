@@ -23,7 +23,8 @@ describe('packs on disk', () => {
     expect(r.objections.map((x) => x.q)).toContain('Дорого.');
     expect(r.selling.length).toBeGreaterThanOrEqual(5);
     // no day counts in the pack: the date guard would cut them out of any reply that repeats them
-    expect(JSON.stringify(r)).not.toMatch(/\d+\s*дн/);
+    // (the dated section «Что изменилось» is exempt: its published terms are allowed through the guard, `PUBLISHED_TERMS`)
+    expect(JSON.stringify({ ...r, updates: [] })).not.toMatch(/\d+\s*дн/);
   });
 
   it('six starting niches (salon, clinic, cafe, courses, car service, shop): services, FAQ, objections, limits, the builder kinds they cover', () => {
@@ -66,8 +67,9 @@ describe('packs on disk', () => {
     const facts = c.facts.join(' ');
     expect(facts).toContain('Если первый экран сайта или первый сценарий агента не понравился, возвращаем оплату первого этапа.');
     expect(facts).toMatch(/оплата по этапам/);
-    expect(facts).toMatch(/Пилот только на флагманах/);
-    expect(facts).toMatch(/Демо на данных клиента/);
+    expect(facts).toMatch(/Пробных периодов и пилотов без оплаты нет/);
+    expect(facts).not.toMatch(/онлайн-кошелёк из сметы|\(основатель\)/);
+    expect(facts).toMatch(/Демо это пример/);
     // no copy of the price list: the amounts come from price_list (getPrices()) at the time of the answer
     expect(facts).not.toMatch(/\$\s?\d/);
     expect(c.retention).toEqual({ liveDays: 90, anonHours: 24 });

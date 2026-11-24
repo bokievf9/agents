@@ -24,6 +24,25 @@ const DATE_PROMISE = new RegExp(
   'i',
 );
 
+/**
+ * Terms the company has published (2026-11-25): the start 3 business days after the first payment, the estimate check within 1 business day, the coupon
+ * of 30 days, the acceptance of 7 days. A reply may repeat them word for word; any other duration is still a promise the date guard drops.
+ */
+const PUBLISHED_TERMS = new RegExp(
+  [
+    '(через|в течение|в\\s+течени[ие])\\s+3\\s+рабочих\\s+дн(я|ей)(\\s+после\\s+(первого\\s+платежа|первой\\s+оплаты|оплаты\\s+первого\\s+этапа))?',
+    'до\\s+1\\s+рабочего\\s+дня',
+    '30\\s+дней\\s+(с|после)\\s+(создания|регистрации)',
+    'приёмк[аиу]\\s+(занимает\\s+|длится\\s+)?7\\s+дней',
+    '7\\s+дней\\s+на\\s+приёмку',
+    '(within|in)\\s+3\\s+business\\s+days(\\s+(after|of)\\s+(the\\s+)?first\\s+payment)?',
+    'within\\s+1\\s+business\\s+day',
+    '30\\s+days\\s+(from|after)\\s+(you\\s+)?(create|creat|sign|regist)\\w*',
+    '7\\s+days\\s+to\\s+accept',
+  ].join('|'),
+  'gi',
+);
+
 const DOLLAR = /\$\s?(\d[\d\s]*)(?:[.,]\d+)?/g;
 
 export interface GuardContext {
@@ -43,7 +62,7 @@ export interface Guarded {
 const withoutListed = (s: string, ok: Set<number>): string => s.replace(DOLLAR, (m, n: string) => (ok.has(Number(n.replace(/\s/g, ''))) ? ' ' : m));
 
 export const hasMoney = (s: string, ok: Set<number>): boolean => MONEY.test(withoutListed(s, ok));
-export const hasDatePromise = (s: string): boolean => DATE_PROMISE.test(s);
+export const hasDatePromise = (s: string): boolean => DATE_PROMISE.test(s.replace(PUBLISHED_TERMS, ' '));
 
 /** Plain text: no markdown, no lists, no long dashes, no tags. */
 export function plain(raw: string): string {

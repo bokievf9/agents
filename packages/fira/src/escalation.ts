@@ -56,10 +56,10 @@ const REASON_RU: Record<OwnerReason, string> = {
 };
 
 const TELL: Record<OwnerReason, { ru: string; en: string }> = {
-  money: { ru: 'Скидки и исключения по цене решает основатель: я передал ему ваш вопрос, ответ придёт сюда же.', en: 'Discounts and price exceptions are decided by the founder: I passed your question on, the answer will come here.' },
-  legal: { ru: 'Юридические вопросы и условия договора решает основатель: я передал ему вопрос, ответ придёт сюда же.', en: 'Legal questions and contract terms are decided by the founder: I passed the question on, the answer will come here.' },
-  unsure: { ru: 'Точно ответить сейчас не могу: уточню у команды, вопрос передал основателю, ответ придёт сюда же.', en: 'I cannot answer that exactly right now: I asked the team, the founder has the question and the answer will come here.' },
-  vip: { ru: 'Передал ваш вопрос основателю, он ответит здесь или в кабинете.', en: 'I passed your question to the founder, who will answer here or in your cabinet.' },
+  money: { ru: 'Скидки и исключения по цене решает менеджер проекта: я передала ему ваш вопрос, ответ придёт сюда же.', en: 'Discounts and price exceptions are decided by the project manager: I passed your question on, the answer will come here.' },
+  legal: { ru: 'Юридические вопросы и условия договора решает менеджер проекта: я передала ему вопрос, ответ придёт сюда же.', en: 'Legal questions and contract terms are decided by the project manager: I passed the question on, the answer will come here.' },
+  unsure: { ru: 'Точно ответить сейчас не могу: уточню у команды, вопрос передала менеджеру проекта, ответ придёт сюда же.', en: 'I cannot answer that exactly right now: I asked the team, the project manager has the question and the answer will come here.' },
+  vip: { ru: 'Передала ваш вопрос менеджеру проекта, он ответит здесь или в кабинете.', en: 'I passed your question to the project manager, who will answer here or in your cabinet.' },
   person: { ru: '', en: '' },
   anger: { ru: '', en: '' },
 };

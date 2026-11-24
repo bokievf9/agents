@@ -252,7 +252,7 @@ describe('Fira lead manager: the whole conversation, non-disclosure, escalation'
   it('escalation by policy: a discount goes to the owner in one line, the visitor hears it once; autopilot keeps it; a legal question always goes', async () => {
     const w = world({ script: () => ({ text: 'Понимаю ваш вопрос. Расскажите, чем занимается ваш бизнес?' }) });
     const r = await w.say('А можно подешевле, со скидкой?');
-    expect(r.reply).toMatch(/Скидки и исключения по цене решает основатель/);
+    expect(r.reply).toMatch(/Скидки и исключения по цене решает менеджер проекта/);
     expect(w.alerts).toHaveLength(1);
     expect(w.alerts[0]).toMatchObject({ reason: 'money', channel: 'web' });
     expect(w.alerts[0]!.short).not.toMatch(/подешевле|со скидкой/i);

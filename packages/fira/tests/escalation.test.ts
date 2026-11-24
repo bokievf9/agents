@@ -40,8 +40,8 @@ describe('escalation policy (Autopilot v0)', () => {
     expect(e.short).toBe('ИИ-менеджер заявок: вопрос о скидке или деньгах (веб-чат), нужен ответ основателя.');
     expect(e.short).not.toMatch(/\+992|50%/);
     expect(e.line).toContain('Суть: Салон просит скидку на ИИ-администратора');
-    expect(e.tell).toMatch(/Скидки и исключения по цене решает основатель/);
-    expect(escalationOf({ text: 'discount?', lang: 'en', mode: 'policy' })!.tell).toMatch(/founder/);
+    expect(e.tell).toMatch(/Скидки и исключения по цене решает менеджер проекта/);
+    expect(escalationOf({ text: 'discount?', lang: 'en', mode: 'policy' })!.tell).toMatch(/project manager/);
     expect(escalationOf({ text: 'x', lang: 'ru', mode: 'policy', person: 'ask' })!.tell).toBe('');
   });
 

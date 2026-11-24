@@ -20,3 +20,4 @@ export * from './eval/format.js';
 export * from './eval/judge.js';
 export * from './eval/runner.js';
 export * from './team.js';
+export * from './training-lessons.js';

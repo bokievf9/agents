@@ -47,7 +47,7 @@ export type EvalCase = z.output<typeof EvalCaseSchema>;
 
 export const EvalSetSchema = z.object({
   name: z.string().min(1),
-  spec: z.object({ company: z.string(), role: z.string(), niche: z.string() }),
+  spec: z.object({ company: z.string(), role: z.string(), niche: z.string(), /** The role is a pack of «Команда» (`role-packs/team/`, owner audience). */ team: z.boolean().optional() }),
   /** The judge's pass mark (0..1). */
   threshold: z.number().min(0).max(1).default(0.7),
   knowledge: z.array(z.object({ title: z.string(), text: z.string() })).default([]),

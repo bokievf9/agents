@@ -426,7 +426,7 @@ export const HANDOFF = {
   ru: {
     ask: 'Передаю разговор человеку из команды. Оставьте контакт (Telegram @username, телефон или email), и менеджер ответит вам первым.',
     upset: 'Понял, давайте я позову человека из команды. Оставьте контакт (Telegram @username, телефон или email), и менеджер ответит вам первым.',
-    done: 'Передал менеджеру, он напишет по этому контакту. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.',
+    done: 'Передал менеджеру, он напишет по этому контакту. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает менеджер проекта.',
     client: 'Передал в вашу переписку с командой. Ответ придёт в кабинет, раздел «Сообщения», и на почту.',
     /** P-03: the website takes no contact from a visitor who is not signed in, so he is sent to the sign-in instead (`{login}`). */
     signIn: 'Передаю разговор человеку из команды. Чтобы менеджер ответил вам, войдите в кабинет ({login}) и напишите здесь ещё раз: ответ придёт в кабинет и на почту.',
@@ -454,7 +454,7 @@ export function slotPickedText(lang: Lang, at: number, tz: string, o: { signedIn
 }
 
 export const LEAD_DONE = {
-  ru: (night: boolean) => `Записал, менеджер напишет вам по этому контакту. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает основатель.${night ? ' Сейчас у нас ночь, поэтому ответ придёт утром.' : ''}`,
+  ru: (night: boolean) => `Записал, менеджер напишет вам по этому контакту. Первый ответ за 5 минут, круглосуточно; цены и сроки подтверждает менеджер проекта.${night ? ' Сейчас у нас ночь, поэтому ответ придёт утром.' : ''}`,
   en: (night: boolean) => `Noted, a manager will write to you at that contact. First reply within 5 minutes, around the clock; prices and timing are confirmed by the founder.${night ? ' It is night here now, so the answer will come in the morning.' : ''}`,
 } as const;
 

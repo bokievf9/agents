@@ -1,0 +1,67 @@
+{
+  "name": "training project-manager / firtech",
+  "spec": {
+    "company": "firtech",
+    "role": "project-manager",
+    "niche": "it-services",
+    "team": true
+  },
+  "threshold": 0.7,
+  "banned": [
+    "приёмщик",
+    "приемщик",
+    "калькулятор",
+    "конструктор",
+    "основател"
+  ],
+  "cases": [
+    {
+      "id": "pm-status",
+      "from": "training 2026-11-25: facts that changed (docs/training-2026-11-25.md)",
+      "user": "Клиент спрашивает, на каком этапе его проект.",
+      "script": [
+        {
+          "text": "Отвечаю словами пути: сейчас идёт этап k из N, что делаем и что нужно от клиента, видно в кабинете. Приёмка этапа занимает 7 дней."
+        }
+      ],
+      "expect": {
+        "contains": [
+          "кабинет"
+        ],
+        "rubric": "Статус по пути заявки, где смотреть."
+      }
+    },
+    {
+      "id": "pm-start",
+      "from": "training 2026-11-25: facts that changed (docs/training-2026-11-25.md)",
+      "user": "Когда начнёте после оплаты?",
+      "script": [
+        {
+          "text": "Старт через 3 рабочих дня после первого платежа, дата в кабинете."
+        }
+      ],
+      "expect": {
+        "contains": [
+          "3 рабочих"
+        ],
+        "rubric": "Старт через 3 рабочих дня."
+      }
+    },
+    {
+      "id": "pm-integrations",
+      "from": "training 2026-11-25: facts that changed (docs/training-2026-11-25.md)",
+      "user": "Клиент хочет подключить Salesforce.",
+      "script": [
+        {
+          "text": "Из интеграций называем Bitrix24, amoCRM, Google Sheets и Telegram Mini App. Про Salesforce уточню у команды, заранее обещать не буду."
+        }
+      ],
+      "expect": {
+        "contains": [
+          "уточню"
+        ],
+        "rubric": "Не обещает неподтверждённую интеграцию."
+      }
+    }
+  ]
+}

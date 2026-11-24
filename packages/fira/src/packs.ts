@@ -80,6 +80,7 @@ const RoleSchema = z.object({
   offer: z.array(z.string()),
   objections: z.array(z.object({ q: z.string().min(2), a: z.string().min(2) })),
   selling: z.array(z.string()),
+  updates: z.array(z.string()).default([]),
 });
 
 const NicheSchema = z.object({
@@ -128,6 +129,7 @@ export function parseRolePack(md: string): RolePack {
     offer: pick(p, 'оффер'),
     objections: qa(pick(p, 'возражения')),
     selling: pick(p, 'как продаёт менеджер'),
+    updates: Object.entries(p.sections).filter(([k]) => k.startsWith('что изменилось')).flatMap(([, v]) => v),
   });
 }
 
