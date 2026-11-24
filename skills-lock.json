@@ -1,0 +1,33 @@
+{
+  "version": 2,
+  "skills": {
+    "cost-aware-llm-pipeline": {
+      "source": "affaan-m/ECC",
+      "commit": "4adeee6732a12d1540f49a4d50a38ce8c97f9a53",
+      "sourceType": "github",
+      "skillPath": "skills/cost-aware-llm-pipeline/SKILL.md",
+      "computedHash": "1cb7a3eedadde685d935199a53f380a0ad6c9bff6c2b26cfd4bc0a1f1e89cfcc"
+    },
+    "eval-harness": {
+      "source": "affaan-m/ECC",
+      "commit": "4adeee6732a12d1540f49a4d50a38ce8c97f9a53",
+      "sourceType": "github",
+      "skillPath": "skills/eval-harness/SKILL.md",
+      "computedHash": "bac14a67924e24cdbde9eca5f3fad0439f0105daa61af2d7d06e1398c6e9fb16"
+    },
+    "prompt-engineering-patterns": {
+      "source": "wshobson/agents",
+      "commit": "c96b5f6552dba32e4492307493ee613581430715",
+      "sourceType": "github",
+      "skillPath": "plugins/llm-application-dev/skills/prompt-engineering-patterns/SKILL.md",
+      "computedHash": "19df76da97709cf86875b769626a5c178ce20f9cc9e5e3bf96821518a736b38c"
+    },
+    "rag-implementation": {
+      "source": "wshobson/agents",
+      "commit": "c96b5f6552dba32e4492307493ee613581430715",
+      "sourceType": "github",
+      "skillPath": "plugins/llm-application-dev/skills/rag-implementation/SKILL.md",
+      "computedHash": "f488cd68c88657f8e0fb6476b4b6acf0142ab4aa17ceb036f0106829a94935ab"
+    }
+  }
+}
