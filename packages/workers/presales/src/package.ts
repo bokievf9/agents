@@ -28,6 +28,20 @@ export interface PackageQuote {
 }
 
 const sum = (lines: PackageLine[]): number => lines.reduce((s, l) => s + l.usd, 0);
+
+/**
+ * The cabinet coupon (owner 2026-11-24, `cabinet10`): `percent` off the ONE-TIME part of the first order, never the monthly fee. It is not stacked with the bundle
+ * discount: when the quote already has a bundle discount of `percent` or more, the quote stays as it is (`applied: false`, the coupon stays unused); a smaller
+ * bundle discount is replaced by the coupon line, computed on the one-time sum before any discount.
+ */
+export function withCoupon(q: PackageQuote, percent: number): { quote: PackageQuote; applied: boolean; usd: number } {
+  const gross = q.lines.filter((l) => l.usd > 0).reduce((s, l) => s + l.usd, 0);
+  const bundle = -q.lines.filter((l) => l.usd < 0).reduce((s, l) => s + l.usd, 0);
+  if (!(percent > 0) || gross <= 0 || (bundle / gross) * 100 >= percent) return { quote: q, applied: false, usd: 0 };
+  const off = Math.round((gross * percent) / 100);
+  const lines = [...q.lines.filter((l) => l.usd > 0), { label: `Купон за кабинет −${percent} % на разовую часть`, usd: -off }];
+  return { quote: { ...q, lines, totalUsd: gross - off }, applied: true, usd: off };
+}
 const one = (label: string, usd: number): PackageQuote => ({ totalUsd: usd, monthlyUsd: null, lines: [{ label, usd }] });
 
 const SITE_VARIANTS: [string, RegExp, string][] = [

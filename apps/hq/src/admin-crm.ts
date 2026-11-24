@@ -7,6 +7,7 @@ import { builderTotal } from '@fir/worker-presales';
 import { z } from 'zod';
 import { addCabMessage, ensureCabinetTables, MESSAGE_CAP, nextStepOf, stageMoveTitle, stageNextStep, timelineTitle } from './cabinet.js';
 import { stageState, stageTitleRu } from '@fir/worker-project-manager';
+import { Coupons } from './coupon.js';
 import { journeyOfLead, journeyOfProject } from './journey.js';
 import { ensureStageColumn, nextActionOf, StageContext, type Stage } from './lead-stage.js';
 import { clientNextAction, docNextStep, docsOf, ensureDocTables, projectStateOf } from './cab-docs.js';
@@ -67,6 +68,8 @@ export interface CrmHooks {
   payUrl?: (inv: { number: string; payKey: string | null; locale: 'ru' | 'en' }) => string | null;
   /** `payments.enabled` (the legal entity is registered): false until then, the journey says «оплату откроем после регистрации юрлица». */
   paymentsEnabled?: () => boolean;
+  /** `settings.coupon.percent`: the percent of the cabinet coupon issued from now on (default 10). */
+  couponPercent?: () => number;
   /** The client accepts a stage (Production: `acceptStage`, which proposes the next invoice). */
   acceptStage?: (projectId: number, stageNo: number) => Promise<{ status: 'accepted' | 'already' | 'not_paid' | 'not_ready' | 'unknown'; text: string }>;
   /** P2-14: `POST /admin/clients/:id/anonymize` (`client-anonymize.ts`). Without it the route answers 404. */
@@ -476,6 +479,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
   ensureLeadClientId();
   ensureStageColumn(db);
   interface CabRow { id: number; email: string; name: string; telegram: string; phone?: string; company?: string; locale: string; supabase_id: string; ref_slug: string | null; created_at: number }
+  const coupons = new Coupons(db, now, hooks.couponPercent);
   const cabById = (id: number) => one<CabRow>('SELECT * FROM cab_clients WHERE id = ?', id);
 
   /** Links the leads whose contact is the client's email or Telegram handle (case-insensitive, `@` optional); returns all leads linked to the client. */
@@ -522,7 +526,7 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     const linked = linkLeads(c);
     attachLegacyDocs(c.id);
     if (!existed) hooks.notifyOwner?.(`Новый аккаунт в кабинете: ${c.name || c.email}, лидов привязано ${linked}`);
-    return ok({ client: { ...profileView(c as CabRow & ProfileRow), createdAt: iso(c.created_at) }, linkedLeads: linked });
+    return ok({ client: { ...profileView(c as CabRow & ProfileRow), createdAt: iso(c.created_at) }, linkedLeads: linked, coupon: coupons.view(c.id) });
   }
 
   const newest = <T extends { createdAt: string | null }>(list: T[]) => list.sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')).slice(0, CAB_LIST_CAP);
@@ -579,6 +583,8 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
       client: { id: c.id, name: c.name, email: c.email, telegram: c.telegram, phone: c.phone ?? '', company: c.company ?? '', locale: c.locale, createdAt: iso(c.created_at) },
       projects: projectsOut, invoices, documents: documentsOut, tickets: ticketsOut, referrals: referralsOut, referralSlug: slug,
       leads: cabinetLeads(c.id),
+      // the cabinet coupon (issued lazily to an account younger than 30 days); null for an older account without one
+      coupon: coupons.view(c.id),
     });
   }
 
@@ -822,6 +828,8 @@ export function createCrm(db: Db, now: () => number = Date.now, hooks: CrmHooks 
     stageFields,
     cabById,
     handleKey,
+    /** The cabinet coupon of a client as the cabinet sees it (issued lazily to a young account); null without one. */
+    coupon: (cabId: number) => coupons.view(cabId),
   };
 
   return {

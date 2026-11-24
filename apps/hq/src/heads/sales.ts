@@ -58,6 +58,8 @@ export interface SalesDeps {
   referralReward?: string;
   /** КП validity in days (env KP_VALID_DAYS). The payment split is by stages (`stagesFor`), no longer a prepayment share. */
   kpValidDays?: number | (() => number);
+  /** The percent of the cabinet coupon a lead's КП applies (claimed and unused), else null. */
+  coupon?: (leadId: number) => number | null;
   /** New Scout cards per daily batch. */
   batchSize?: number;
   slotHours?: [string, string];
@@ -171,6 +173,7 @@ export class SalesHead implements ApprovalEditor {
     });
     this.presales = d.presales ?? new PresalesWorker({
       ...(d.kpValidDays !== undefined ? { validDays: d.kpValidDays } : {}),
+      ...(d.coupon ? { coupon: d.coupon } : {}),
     });
     this.referral = d.referral ?? new ReferralWorker();
     const base = { db: d.hq.db, now: d.hq.now };
@@ -247,6 +250,7 @@ export class SalesHead implements ApprovalEditor {
       this.cabinet.onQuoteApproved({
         clientId: cabinetClient, leadId: lead.id, projectId: null, packId, client, totalUsd,
         kpText: typeof pack.kp === 'string' ? pack.kp : '', estimateText: typeof pack.estimate === 'string' ? pack.estimate : '', contractMeta, invoiceMeta, reservation,
+        ...(pack.coupon && typeof pack.coupon === 'object' ? { coupon: true } : {}),
       });
       hq.log(HEAD_ID, 'kp_chain', 'pack', String(packId), 'sent to the client, project on acceptance');
       void this.d.reporter.post(SALES, `КП #${packId} утверждено (${client}) и отправлено клиенту в кабинет и на почту, этапов: ${stages.length}. Проект резервируется и договор появится карточкой, когда клиент примет КП; счёт этапа 1 ($${first.amountUsd}), когда подпишет договор.`);

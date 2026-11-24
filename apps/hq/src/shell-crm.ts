@@ -396,6 +396,8 @@ export function createShellCrm(d: ShellCrmDeps) {
       leads: leadsOut, projects: projectsOut.slice(0, 50), invoices: invoiceRows.slice(0, 50).map(invoiceView),
       documents: docs.filter((x) => x.source !== 'billing').slice(0, 50).map(views.docView), tickets: ticketsOut.slice(0, 50), referrals: referralsOut.slice(0, 50),
       touches: touches.slice(0, 30),
+      // the cabinet coupon (10 % of the one-time part of the first order) for the card's chip; null for a name-only or old client
+      coupon: cabId !== null ? views.coupon(cabId) : null,
       // «Демо только для вошедших»: the client's demo use of 30 days (counts and money only); zeros for a name-only client
       demoUsage: cabId !== null ? demoUsageOf(hq.db, cabId, now(), hq.tz) : demoUsageOf(hq.db, -1, now(), hq.tz),
     });
