@@ -37,7 +37,7 @@ export const couponPercent = (hq: Pick<Hq, 'setting'>): number => {
   return Number.isInteger(n) && n >= 1 && n <= 50 ? n : DEFAULT_COUPON_PERCENT;
 };
 
-export interface CouponView { code: string; percent: number; expiresAt: string; used: boolean; usedAt?: string }
+export interface CouponView { code: string; percent: number; expiresAt: string; used: boolean; usedAt?: string; usedLeadId?: number }
 interface Row { client_id: number; code: string; percent: number; issued_at: number; expires_at: number; used_at: number | null; lead_id: number | null; claimed_lead_id: number | null; reminded_at: number | null }
 
 const ready = new WeakSet<object>();
@@ -76,6 +76,7 @@ export class Coupons {
     return {
       code: r.code, percent: r.percent, expiresAt: new Date(r.expires_at).toISOString(), used: r.used_at !== null,
       ...(r.used_at !== null ? { usedAt: new Date(r.used_at).toISOString() } : {}),
+      ...(r.used_at !== null && r.lead_id !== null ? { usedLeadId: r.lead_id } : {}),
     };
   }
 
