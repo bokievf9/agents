@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { AdminReply } from './admin.js';
 import type { RateLimiter } from './client/sanitize.js';
 import { fail, ok } from './shell-crm.js';
+import { DOWNTIME_KEY, REPORT_ENABLED_KEY, REPORT_HOUR_KEY, reportSettings } from './client-report.js';
 
 /**
  * The company settings of the Shell (`GET` and `PATCH /admin/settings`, owner 2026-11-22): one JSON over what already lives in the `settings` table, the
@@ -106,6 +107,7 @@ const patchBody = z.object({
   service: z.object({ tgApprovalCards: bool, tgGroupReports: bool }).partial().strict(),
   autopilot: z.object({ leadManager: z.enum(AUTOPILOT_MODES), support: z.enum(AUTOPILOT_MODES) }).partial().strict(),
   marketing: z.object({ cadence: cadenceBody }).partial().strict(),
+  reports: z.object({ weeklyEnabled: bool, weeklyHour: z.number().int().min(0).max(23), downtimeMinutes: z.number().int().min(5).max(1440) }).partial().strict(),
 }).partial().strict();
 
 export type SettingsPatch = z.infer<typeof patchBody>;
@@ -198,6 +200,7 @@ export function createSettings(d: SettingsDeps) {
         service: { tgApprovalCards: sv.tgApprovalCards, tgGroupReports: sv.tgGroupReports },
         autopilot: { leadManager: autopilotMode(), support: autopilotMode('autopilot.support') },
         marketing: { cadence: cadenceOf(hq) },
+        reports: reportSettings(hq),
       },
       usage: { deptMonthUsd: monthUsd, clientLlmToday: d.limiters()[0]?.llmToday ?? 0, monthStartedAt: new Date(zonedToMs(p.y, p.mo, 1, 0, 0, hq.tz)).toISOString() },
       restartRequired: restartKeys.length > 0, restartKeys,
@@ -299,6 +302,13 @@ export function createSettings(d: SettingsDeps) {
       const c = mk.cadence;
       const next = JSON.stringify({ days: [...new Set(c.days)].sort((a, b) => a - b), time: c.time.padStart(5, '0'), platforms: [...new Set(c.platforms)] });
       kv(CADENCE_KEY, next, 'marketing.cadence', JSON.stringify(cadenceOf(hq)));
+    }
+    const rp = p.reports;
+    if (rp) {
+      const cur = reportSettings(hq);
+      if (rp.weeklyEnabled !== undefined) kv(REPORT_ENABLED_KEY, s1(rp.weeklyEnabled), 'reports.weeklyEnabled', s1(cur.weeklyEnabled));
+      if (rp.weeklyHour !== undefined) kv(REPORT_HOUR_KEY, String(rp.weeklyHour), 'reports.weeklyHour', String(cur.weeklyHour));
+      if (rp.downtimeMinutes !== undefined) kv(DOWNTIME_KEY, String(rp.downtimeMinutes), 'reports.downtimeMinutes', String(cur.downtimeMinutes));
     }
     return out;
   }

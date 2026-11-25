@@ -36,6 +36,7 @@ import { ClientEmbedder, ClientKnowledge } from './client-knowledge.js';
 import { publicFetcher } from './site-crawl.js';
 import { HashEmbedder, InMemoryKnowledge, voyageFromEnv } from '@fir/fira';
 import { buildCabinet, type CabinetApi } from './cabinet-api.js';
+import { ClientReports } from './client-report.js';
 import { Coupons, couponPercent, COUPON_CODE } from './coupon.js';
 import { JourneyNotifier } from './journey.js';
 import { Campaigns } from './campaigns.js';
@@ -343,7 +344,19 @@ support.start();
 drill.start();
 // Due times live in the database, not in timers: the demo-salon reminder (60 s after a booking) and the 20-hour audit alert are
 // found by this 30 s ticker, also right after a start, so a restart or a deploy loses nothing.
+// The client's weekly report (Monday) and the downtime alert: numbers from the clients' agents, no model call (client-report.ts)
+const clientReports = new ClientReports({
+  hq, postGroup: (text) => reporter.post('support', text),
+  sendTelegram: (chatId, text) => (clientBot ? clientBot.send(chatId, text) : Promise.resolve()),
+});
+let lastDowntimeCheck = 0;
 const dueTick = async () => {
+  await clientReports.weeklyTick().catch((e) => log('warn', 'client weekly report failed', { err: errMsg(e) }));
+  // the silence check runs every 15 minutes
+  if (hq.now() - lastDowntimeCheck >= 15 * 60_000) {
+    lastDowntimeCheck = hq.now();
+    await clientReports.downtimeTick().catch((e) => log('warn', 'client downtime check failed', { err: errMsg(e) }));
+  }
   await clientBot?.engine.demo.tick().catch((e) => log('warn', 'demo reminders failed', { err: errMsg(e) }));
   await marketing.auditWatch().catch((e) => log('warn', 'audit watch failed', { err: errMsg(e) }));
   // clarifying questions of the Sales head: the client's answers, or 24 hours without them, release the КП

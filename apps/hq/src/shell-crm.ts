@@ -11,6 +11,7 @@ import type { createCrm } from './admin-crm.js';
 import { recordManagerReply } from './cabinet.js';
 import type { ClientChannel } from './client/channel.js';
 import type { Director } from './director.js';
+import { lastWeeklyReport, recentDowntime } from './client-report.js';
 import { journeyOfLead, notifiedOf, paymentsEnabled } from './journey.js';
 import { ensureStageColumn, isStage, rankOf, STAGES } from './lead-stage.js';
 import type { OwnerChannel } from './presence.js';
@@ -399,6 +400,9 @@ export function createShellCrm(d: ShellCrmDeps) {
       // the cabinet coupon (10 % of the one-time part of the first order) for the card's chip; null for a name-only or old client
       coupon: cabId !== null ? views.coupon(cabId) : null,
       // «Демо только для вошедших»: the client's demo use of 30 days (counts and money only); zeros for a name-only client
+      // the last weekly report of the client's agent and its downtime alerts (client-report.ts); null / empty without a cabinet account or a report
+      weeklyReport: cabId !== null ? lastWeeklyReport(db, cabId) : null,
+      downtimeAlerts: cabId !== null ? recentDowntime(db, cabId) : [],
       demoUsage: cabId !== null ? demoUsageOf(hq.db, cabId, now(), hq.tz) : demoUsageOf(hq.db, -1, now(), hq.tz),
     });
   }

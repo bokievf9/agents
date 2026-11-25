@@ -818,8 +818,9 @@ export class Playground {
       const found = await ctx.site(o.text.replace(/<\/?\s*site_data[^>]*>?/gi, ''));
       if (found.length) ctx.siteBlock = `<site_data>\n${found.map((f) => `- ${f.title}: ${f.text}`).join('\n')}\n</site_data>`;
     }
-    const out = await this.think(ctx, a.persona, history.map((m) => ({ role: m.role, content: m.text })), o.text);
+    // the visitor's message is stored BEFORE the model runs: a turn that never gets an answer stays visible to the downtime alert (`client-report.ts`)
     this.db.prepare('INSERT INTO pg_messages (agent_id, conv_id, role, text, at) VALUES (?, ?, ?, ?, ?)').run(a.id, o.conversationId, 'user', o.text, t);
+    const out = await this.think(ctx, a.persona, history.map((m) => ({ role: m.role, content: m.text })), o.text);
     this.db.prepare('INSERT INTO pg_messages (agent_id, conv_id, role, text, at) VALUES (?, ?, ?, ?, ?)').run(a.id, o.conversationId, 'assistant', out.reply, this.d.now());
     for (const u of new Set(out.usedTools)) this.count(a.id, `tool:${u}`);
     return { reply: out.reply, conversationId: o.conversationId, usedTools: out.usedTools };
