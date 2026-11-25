@@ -7,8 +7,8 @@
       "tier": "public",
       "source": "firtech/docs/products-contract.md",
       "file": "public-products-contract.md",
-      "chars": 3299,
-      "sha": "6cc36b3d39fe"
+      "chars": 3295,
+      "sha": "36d4ebf6dc38"
     },
     {
       "id": "public-sales-playbook-site",
@@ -16,8 +16,8 @@
       "tier": "public",
       "source": "firtech/docs/sales-playbook-site.md",
       "file": "public-sales-playbook-site.md",
-      "chars": 10265,
-      "sha": "706a0dc232ec"
+      "chars": 10321,
+      "sha": "97b9e9b9a467"
     },
     {
       "id": "public-site-aiteams",
@@ -34,8 +34,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#comparePage",
       "file": "public-site-comparepage.md",
-      "chars": 2990,
-      "sha": "e1d8e446350d"
+      "chars": 3020,
+      "sha": "5da9bfe16db0"
     },
     {
       "id": "public-site-demosection",
@@ -52,8 +52,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#faq",
       "file": "public-site-faq.md",
-      "chars": 3362,
-      "sha": "109b859d5f9b"
+      "chars": 3368,
+      "sha": "6c7c5807e933"
     },
     {
       "id": "public-site-guarantee",
@@ -70,8 +70,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#how",
       "file": "public-site-how.md",
-      "chars": 2679,
-      "sha": "44f61ab92a86"
+      "chars": 2723,
+      "sha": "7ab8a5c27be8"
     },
     {
       "id": "public-site-ladder",
@@ -142,8 +142,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#referral",
       "file": "public-site-referral.md",
-      "chars": 1189,
-      "sha": "d95d87e45c12"
+      "chars": 1245,
+      "sha": "46db90d0cefc"
     },
     {
       "id": "public-site-servicedetails",
@@ -169,8 +169,8 @@
       "tier": "public",
       "source": "firtech/src/content/ru.ts#sla",
       "file": "public-site-sla.md",
-      "chars": 157,
-      "sha": "f05ebe6a4f48"
+      "chars": 163,
+      "sha": "68b39e3ce58e"
     },
     {
       "id": "public-site-solution-promises",
@@ -268,8 +268,8 @@
       "tier": "internal",
       "source": "COMPANY.md",
       "file": "internal-company.md",
-      "chars": 10387,
-      "sha": "c55af2c82f00"
+      "chars": 10425,
+      "sha": "9119426382fb"
     },
     {
       "id": "internal-docs-architecture-hq",
@@ -277,8 +277,8 @@
       "tier": "internal",
       "source": "docs/architecture-hq.md",
       "file": "internal-docs-architecture-hq.md",
-      "chars": 14255,
-      "sha": "5ec0a4886c46"
+      "chars": 14279,
+      "sha": "067079b35464"
     },
     {
       "id": "internal-docs-fira-architecture",

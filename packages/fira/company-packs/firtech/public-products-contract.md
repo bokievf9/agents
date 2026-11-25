@@ -19,7 +19,7 @@ source: firtech/docs/products-contract.md
 | 7 | `miniapp` | `miniapp` | Telegram Mini App | Telegram Mini App |
 
   читаются как `p.personal`.
-- Dono и Polly больше не продаются: это живые кейсы основателя на странице Персонального ИИ, без цен.
+- Dono и Polly больше не продаются: это живые кейсы студии на странице Персонального ИИ, без цен.
   как `p.company` (с отделом продаж по умолчанию). «ИИ-отделы» теперь «ИИ-команды» (id `marketing`, `sales`, `support`,
   `production`, `backoffice`, `company` остаются).
   Фире, который знает бизнес клиента; роли подключаются как навыки).
