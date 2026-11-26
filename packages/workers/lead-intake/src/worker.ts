@@ -32,7 +32,7 @@ export const webLeadSchema = z.object({
   contact: z.string().trim().min(3).max(120),
   service: z.string().trim().max(40).default('unknown'),
   budget: z.string().trim().max(40).default(''),
-  message: z.string().trim().max(2000).default(''),
+  message: z.string().trim().max(4500).default(''),
   estimate: z.string().trim().max(1500).default(''),
   /** The page the form was sent from (the builder's `/ru/builder?b=...` when the lead came from it): its link prices the КП when the estimate text is cut. */
   page: z.string().trim().max(600).default(''),
@@ -51,6 +51,10 @@ export const webLeadSchema = z.object({
   telegramSent: z.boolean().optional(),
   /** The conversation summary of the ИИ-менеджер заявок (chat or bot): shown on the card, kept on the lead. Absent: derived from the lead's own words. */
   enrichment: enrichmentSchema.optional(),
+  /** «Клиент от владельца» (2026-11-26): no contact, the owner forwards every text himself. Set only by HQ's `POST /admin/leads/owner`. */
+  deliveryChannel: z.enum(['owner']).optional(),
+  /** Links the owner gave (http/https). */
+  links: z.array(z.string().trim().max(300)).max(10).optional(),
   /** The visitor asked for a person (or was upset): the card says so. */
   handoff: z.boolean().optional(),
   /** The site's brief (tolerant): for `type: 'personal'` the personal fields. */
@@ -304,7 +308,7 @@ export class LeadIntakeWorker implements Worker {
     await ctx.requestApproval(
       KIND_REPLY,
       { text: reply, leadId: lead.id, contact: lead.contact, name: lead.name, ...route },
-      `${card}\n\nПервый ответ клиенту. ${viaBot ? 'Одобрение = бот отправит его клиенту сам.' : 'Отправьте его сами по контакту (одобрение = «ответ ушёл»).'}`,
+      `${card}\n\nПервый ответ клиенту. ${viaBot ? 'Одобрение = бот отправит его клиенту сам.' : w.deliveryChannel === 'owner' ? 'Клиент от владельца, контакта нет: перешлите ответ сами (одобрение = «ответ ушёл»).' : 'Отправьте его сами по контакту (одобрение = «ответ ушёл»).'}`,
     );
     if (priceAsked) {
       const draft =

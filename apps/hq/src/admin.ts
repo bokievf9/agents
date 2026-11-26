@@ -10,6 +10,7 @@ import { couponPercent } from './coupon.js';
 import type { CabinetApi } from './cabinet-api.js';
 import type { Campaigns } from './campaigns.js';
 import type { Calls } from './calls.js';
+import { ownerLeadSchema, type OwnerLeadInput, type OwnerLeadResult } from './owner-lead.js';
 import { createShell, type ShellDeps } from './shell.js';
 import type { BillingWorker } from '@fir/worker-billing';
 import type { ChatsClient } from './chats.js';
@@ -52,6 +53,8 @@ export interface AdminDeps {
   dataDir?: string;
   /** A routine was switched on or off from the workplace: the app restarts its cron jobs. */
   onRoutinesChange?: () => void;
+  /** `POST /admin/leads/owner`: «Клиент от владельца» goes into the sales funnel like a site lead (`owner-lead.ts`). */
+  ownerLead?: (input: OwnerLeadInput) => OwnerLeadResult;
   /** `GET` and `PATCH /admin/settings`. */
   settings?: SettingsApi;
   /** The agents' toolbox adapters and keys: `GET /admin/company` lists the tools with their state. */
@@ -242,6 +245,15 @@ export function createAdmin(d: AdminDeps): { handle(req: AdminRequest): Promise<
       const r = await d.reloadPrices();
       log('info', 'prices reload', { source: r.source, updatedAt: r.updatedAt });
       return ok({ updatedAt: r.updatedAt, source: r.source });
+    }
+
+    if (key === 'POST leads/owner') {
+      if (!d.ownerLead) return fail(503, 'unavailable');
+      const parsed = ownerLeadSchema.safeParse(req.body);
+      if (!parsed.success) return fail(400, 'invalid');
+      const r = d.ownerLead(parsed.data);
+      log('info', 'owner lead', { task: r.id, lead: r.leadId, duplicate: r.duplicate, channel: r.deliveryChannel });
+      return ok({ id: r.id, leadId: r.leadId });
     }
 
     switch (key) {

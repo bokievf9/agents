@@ -33,6 +33,17 @@ Read-mostly представления над таблицами исполни�
 `leads.byStatus` считается по статусу задачи отдела продаж (`tasks.status`: inbox, assigned, running, review, approval, done, blocked, rejected).
 `documents.pending` = документы, ждущие владельца (`pending` + `draft` + `issued`). У отсутствующей таблицы `byStatus` равен `{}`.
 
+## POST /admin/leads/owner («Клиент от владельца», 2026-11-26)
+Только `x-admin-token` (токен кабинета: 403). Знакомый владельца, ставший клиентом без заявки с сайта, входит в ту же воронку, что и лид с сайта: задача Sales
+(`createLeadTask`, `source: 'owner'`, `meta.lead.fromOwner`), строка лида (`li_leads.origin = 'owner'`), квалификация Sales, КП в документах, цена в одобрения (Shell: Approvals).
+Кабинет клиента только если владелец захочет (аккаунт не создаётся).
+Тело (zod strict, лишние поля = 400): `{ name: string 1..200, contact?: string <=200, need: string 1..4000, links?: string[] (<=10, только http/https), clientRef?: string 1..80 }`.
+Ответ 200: `{ ok: true, id, leadId }` (`id` = задача Sales, `leadId` = строка лида). Ошибки: 400 `invalid`, 401, 503 `unavailable`.
+Идемпотентность: тот же `clientRef` возвращает уже созданные `id` и `leadId`, ничего нового не создаётся. Без `contact` канал доставки `owner`: HQ ничего клиенту
+не шлёт, черновик ответа приходит владельцу в одобрения, а после «Одобрить» текстом в Telegram с пометкой «перешлите клиенту сами»; в строке лида `contact` = «через владельца».
+С контактом обработка обычная. Владельческий лид не режется антиспамом и лимитами сайта; публичный `POST /lead` с `source: owner` получает пустой source (метку выдаёт только HQ).
+Директор: фраза «новый клиент от меня: <имя>, <что нужно>, <контакт/ссылки>» (чат владельца в Telegram и поручения в Shell) создаёт такой лид тем же кодом (`owner-lead.ts`, intent `owner_lead`).
+
 ## GET /admin/crm/prospects
 Разведка (`pr_prospects`). Параметры: `limit`, `cursor`, `q` (название, город, ниша, контакты), `status`, `niche`.
 Статусы и переходы как у Разведчика: `new → proposed → sent → replied | no_reply | skipped`; `new → skipped`, `proposed → skipped`,

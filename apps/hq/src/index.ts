@@ -7,6 +7,7 @@ import { Director } from './director.js';
 import { createSettings, startValues, type SettingsDefaults } from './settings.js';
 import { seedTiming } from './timing.js';
 import { HEAD_ID, MarketingHead } from './heads/marketing.js';
+import { createOwnerLead, ownerLeadSchema } from './owner-lead.js';
 import { HEAD_ID as SALES_HEAD_ID, SalesHead, seedSales } from './heads/sales.js';
 import { seedOrg, syncRoleTitles } from './org.js';
 import { PRODUCTION_HEAD_ID, ProductionHead, seedProduction } from './heads/production.js';
@@ -231,6 +232,12 @@ const auditGate = new AuditGate(hq.now);
 clientBot?.connect(clientSinks({ hq, sales, support, invoicePrefix: cfg.invoicePrefix, audit: { marketing, gate: auditGate }, calls: { book: (...a) => callsRef.current ? callsRef.current.book(...a) : Promise.resolve(null) } }));
 director.onSalesReply = (id, text) => sales.startReply(id, text);
 director.onSalesCommand = (name, arg) => sales.salesCommand(name, arg);
+director.onOwnerLead = (lead) => {
+  const parsed = ownerLeadSchema.safeParse(lead);
+  if (!parsed.success) return Promise.resolve('Не смог записать клиента: проверьте ссылки (только http/https) и длину текста.');
+  const r = createOwnerLead({ hq, sales }, parsed.data);
+  return Promise.resolve(`Клиент от владельца записан: лид #${r.leadId} (задача #${r.id}). Отдел продаж квалифицирует, КП с ценой придёт в одобрения.${r.deliveryChannel === 'owner' ? ' Контакта нет: ответы клиенту пересылаете вы.' : ''}`);
+};
 director.editors.set('sales:reply', sales); // the owner's text after /reply <id>
 const production = new ProductionHead({ hq, tools, llm, queue, messenger, ownerId: cfg.ownerId, reporter });
 const backoffice = new BackofficeHead({
@@ -440,7 +447,7 @@ const settings = createSettings({
 settingsRef.view = () => settings.view();
 if (settings.seedBudgets()) log('info', 'first department limits written', { source: 'seed 2026-11-23' });
 const admin = cfg.adminToken
-  ? createAdmin({ hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: COMMAND_NAMES, drill: (arg) => drill.command(arg), drillStatus: () => drill.status(), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),
+  ? createAdmin({ ownerLead: (i) => createOwnerLead({ hq, sales }, i), hq, queue, director, channel, ownerId: cfg.ownerId, commandNames: COMMAND_NAMES, drill: (arg) => drill.command(arg), drillStatus: () => drill.status(), cabinetTicket: (t) => support.cabinetTicket(t.id, t.name, t.text, t.telegram, t.leadId),
       reloadPrices: async () => { const r = await loadPrices(pricesOpts); return { source: r.source, updatedAt: r.prices.updatedAt }; },
       acceptStage: (projectId, stageNo) => Promise.resolve(production.acceptStage(projectId, stageNo, 'client')),
       fira: () => firaLead, llm, billing, marketing, tools, cabinet, calls, ...(campaigns ? { campaigns } : {}), rendersDir: cfg.rendersDir, dataDir: cfg.dataDir, onRoutinesChange: () => director.onTimingChange?.(), settings, ...(clientBot ? { client: clientBot } : {}), ...(webChat ? { webReply: (sessionId: string, text: string) => webChat.store.queueOwnerReply(sessionId, text) } : {}),

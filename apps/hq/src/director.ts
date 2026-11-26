@@ -61,6 +61,13 @@ const intentSchema = z.discriminatedUnion('type', [
     text: z.string().max(500).optional(),
   }),
   z.object({ type: z.literal('sales_reply'), id: z.coerce.number().int().positive(), text: z.string().max(2000).optional() }),
+  z.object({
+    type: z.literal('owner_lead'),
+    name: z.string().trim().min(1).max(200),
+    need: z.string().trim().min(1).max(4000),
+    contact: z.string().trim().max(200).optional(),
+    links: z.array(z.string().trim().max(300)).max(10).optional(),
+  }),
   z.object({ type: z.literal('builder'), title: z.string().min(1).max(200), body: z.string().max(2000).optional() }),
   z.object({ type: z.literal('production_command'), command: z.string().min(1).max(30), arg: z.string().max(1500).default('') }),
   z.object({ type: z.literal('backoffice_command'), command: z.string().min(1).max(30), arg: z.string().max(1500).default('') }),
@@ -116,6 +123,8 @@ export class Director {
   /** Set by the Sales head: a business answered (`/reply <id>` or free text). Returns what to tell the owner. */
   onSalesReply: ((id: number, text?: string) => Promise<string>) | null = null;
   /** Set by the Sales head: /kp, /referral, /referrals, /paid go through as they are. Returns what to tell the owner. */
+  /** «Клиент от владельца» (intent `owner_lead`): makes the lead and returns the confirmation for the owner. */
+  onOwnerLead: ((lead: { name: string; need: string; contact?: string; links?: string[] }) => Promise<string>) | null = null;
   onSalesCommand: ((name: string, arg: string) => Promise<string>) | null = null;
   /** Set by the Support head: `/ticket`, `/tickets`, `/client`, `/invoice`, `/paid`, `/onboard`... (generic passthrough). */
   onSupportCommand: ((name: string, args: string) => Promise<string>) | null = null;
@@ -603,6 +612,8 @@ export class Director {
         return intent.dept ? this.sendTasks(intent.dept.toLowerCase()) : this.sendStatus();
       case 'sales_reply':
         return this.salesReply(intent.id, intent.text);
+      case 'owner_lead':
+        return this.ownerLead(intent);
       case 'builder':
         return this.createBuilder(intent.title, intent.body ?? text);
       case 'rule':
@@ -626,6 +637,7 @@ export class Director {
 {"type":"status","dept":"<отдел или null>"}
 {"type":"rule","target":"setting","key":"<настройка>","value":"..."} или {"type":"rule","target":"instructions","agent_id":"<агент>","text":"<новое правило одной строкой>"}
 {"type":"sales_reply","id":<номер бизнеса из карточки Prospector>,"text":"<текст ответа бизнеса, если он есть в сообщении>"} (бизнес ответил на наше сообщение)
+{"type":"owner_lead","name":"<человек или компания>","need":"<что нужно, своими словами владельца>","contact":"<контакт, только если назван>","links":["<ссылки, только если названы>"]} («новый клиент от меня: ...», знакомый владельца стал клиентом без заявки с сайта; не выдумывай поля; если непонятно, что нужно, верни unknown с одним вопросом)
 {"type":"builder","title":"...","body":"..."} (нужен новый инструмент, бот или интеграция, которых нет)
 ${this.commandForms()}{"type":"unknown","question":"<что переспросить>"}
 Ответ: только JSON-объект.`;
@@ -680,6 +692,13 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
     if (!this.onSalesReply) return this.say('Отдел продаж не подключён.');
     if (!Number.isInteger(id) || id <= 0) return this.say('Формат: /reply <id>, номер из карточки (#12).');
     return this.say(await this.onSalesReply(id, text));
+  }
+
+  /** «Новый клиент от меня»: the same lead as `POST /admin/leads/owner` (shared `createOwnerLead`), the owner gets the lead id back. */
+  private async ownerLead(i: Extract<Intent, { type: 'owner_lead' }>): Promise<void> {
+    if (!this.onOwnerLead) return this.say('Отдел продаж не подключён.');
+    const links = (i.links ?? []).filter((u) => /^https?:\/\//i.test(u));
+    return this.say(await this.onOwnerLead({ name: i.name, need: i.need, ...(i.contact ? { contact: i.contact } : {}), ...(links.length ? { links } : {}) }));
   }
 
   private async createBuilder(title: string, body: string): Promise<void> {

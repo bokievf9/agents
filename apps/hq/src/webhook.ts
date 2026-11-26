@@ -27,7 +27,8 @@ export const webLeadSchema = z.object({
   locale: z.enum(['ru', 'en']).default('ru'),
   page: z.string().trim().max(600).optional().default(''),
   slot: z.string().trim().max(40).optional().default(''),
-  source: z.string().trim().regex(/^(?:ref:[a-z0-9_-]{1,35}|[a-z0-9_-]{1,40})$/).optional().default(''),
+  // `owner` is HQ's own label («Клиент от владельца»): a public request cannot claim it
+  source: z.string().trim().regex(/^(?:ref:[a-z0-9_-]{1,35}|[a-z0-9_-]{1,40})$/).optional().default('').transform((s) => (s.toLowerCase() === 'owner' ? '' : s)),
   website: z.string().max(200).optional().default(''),
   /** The site sends `true` when its own Telegram bot already delivered this lead to the owner (the HQ card then says it is a copy). */
   telegramSent: z.boolean().optional(),

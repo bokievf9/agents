@@ -23,6 +23,7 @@ import type { CabDocs } from '../cab-docs.js';
 import type { Calls } from '../calls.js';
 import { assumptionsFor, CLARIFY_WAIT_MS, ClarifyStore, gapsOf, isBlocking, questionsFor, questionsMessage, type Clarification } from '../clarify.js';
 import { ensureCabinetTables, recordManagerReply } from '../cabinet.js';
+import { OWNER_CONTACT } from '../owner-lead.js';
 import { deliverOrHandOff, type ClientChannel } from '../client/channel.js';
 import type { ApprovalEditor } from '../editor.js';
 import { EmailFailures } from '../email-failures.js';
@@ -117,6 +118,8 @@ export const longestProduct = (products: Product[]): Product => BY_TERM.find((p)
  * then the КП is made without waiting for `/kp` (owner decision 2026-11-19). A lead without a money signal waits for the owner.
  */
 export function isQualified(lead: Pick<Lead, 'service' | 'budget'>, raw: Record<string, unknown> = {}): boolean {
+  // «Клиент от владельца»: the owner already chose to work with him, the free-text need goes to the quote (only HQ sets `fromOwner`, the public webhook never does)
+  if (raw.fromOwner === true) return true;
   const service = lead.service.trim().toLowerCase();
   const product = typeof raw.product === 'string' ? raw.product.trim() : '';
   const hasService = (service !== '' && service !== 'unknown' && service !== 'other') || product !== '';
@@ -340,7 +343,7 @@ export class SalesHead implements ApprovalEditor {
     if (Number.isInteger(x.leadId)) recordManagerReply(this.hq.db, this.hq.now(), x.leadId, x.text);
     await deliverOrHandOff({
       client: this.d.client, messenger: this.d.messenger, ownerId: this.d.ownerId, chatId: x.chatId, text: x.text, ref: `Лид #${x.leadId}`, contact: x.contact,
-      ownerText: `Лид #${x.leadId}: ответ утверждён, отправьте клиенту ${x.contact}${x.name ? ` (${x.name})` : ''}:\n\n${x.text}`,
+      ownerText: `Лид #${x.leadId}: ответ утверждён, ${x.contact === OWNER_CONTACT ? `перешлите клиенту${x.name ? ` ${x.name}` : ''} сами (контакта нет)` : `отправьте клиенту ${x.contact}${x.name ? ` (${x.name})` : ''}`}:\n\n${x.text}`,
     });
   }
 
@@ -663,7 +666,7 @@ export class SalesHead implements ApprovalEditor {
   // ---- the webhook creates a task per lead ----
   /** `POST /lead` and the client bot call this: a Sales task with the lead fields in `meta.lead`, the head wakes. Returns the task id. */
   createLeadTask(lead: Record<string, unknown>, service: string): number {
-    const where = lead.source === 'telegram' || typeof lead.chatId === 'number' ? 'Лид из Telegram' : lead.source === 'web' ? 'Лид из веб-чата' : 'Лид с сайта';
+    const where = lead.fromOwner === true ? 'Клиент от владельца' : lead.source === 'telegram' || typeof lead.chatId === 'number' ? 'Лид из Telegram' : lead.source === 'web' ? 'Лид из веб-чата' : 'Лид с сайта';
     const t = this.hq.createTask({ title: `${where} (${service || 'форма'})`, dept: SALES, creator: 'routine', priority: 1, meta: { action: 'lead', lead } });
     this.hq.wake(HEAD_ID, 'task');
     return t.id;

@@ -43,6 +43,7 @@ const MATRIX: Array<[string, string, boolean]> = [
   ['GET', '/admin/prices', false],
   ['GET', '/admin/crm/clients', false],
   ['GET', '/admin/crm/leads', false],
+  ['POST', '/admin/leads/owner', false],
   ['GET', '/admin/tasks', false],
   ['GET', '/admin/hub', false],
   ['GET', '/admin/knowledge', false],
