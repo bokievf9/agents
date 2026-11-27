@@ -12,6 +12,7 @@ import { OwnerChannel, type InboxKind } from './presence.js';
 import type { OwnerNotices } from './notices.js';
 import { shellLinks, type ShellLinks } from './links.js';
 import { KEYBOARD, approvalCardFormat, bold, cb, clip, code, esc, menuCommand, parseNav, type Nav } from './tg.js';
+import { pendingApprovalsCount } from './review.js';
 
 /** Tasks per page of the /tasks list. */
 export const TASKS_PAGE = 10;
@@ -274,7 +275,7 @@ export class Director {
     out.push(done.length ? `Задач выполнено: ${done.map((r) => `${deptRu(r.dept)} ${r.c}`).join(', ')}.` : 'Выполненных задач за неделю нет.');
     const approved = count("SELECT COUNT(*) c FROM decisions WHERE decision IN ('approve','auto','autopilot') AND at >= ?", since);
     const rejected = count("SELECT COUNT(*) c FROM decisions WHERE decision = 'reject' AND at >= ?", since);
-    const waiting = hq.queuedApprovals().length + hq.heldApprovals().length + this.d.queue.pending().length;
+    const waiting = pendingApprovalsCount(this.hq.db);
     out.push(`Одобрения: одобрено ${approved}, отклонено ${rejected}, ждёт вас ${waiting}.`);
     const leads = count('SELECT COUNT(*) c FROM li_leads WHERE created_at >= ?', since);
     const lost = count("SELECT COUNT(*) c FROM activity WHERE action = 'lost_lead' AND at >= ?", since);
@@ -306,9 +307,8 @@ export class Director {
         ? `Отчёты отделов за сутки:\n${reports.map((r) => `- ${r.dept}: ${oneLine(r.body, 1200)}`).join('\n')}`
         : 'Отчётов отделов за сутки нет.',
     );
-    const queued = hq.queuedApprovals().length;
-    const waiting = this.d.queue.pending().length;
-    out.push(queued + waiting > 0 ? `Ждёт одобрения: ${queued + waiting} (в пачке в ${hq.setting('approval_time')} или /approve).` : 'На одобрении ничего нет.');
+    const waiting = pendingApprovalsCount(hq.db);
+    out.push(waiting > 0 ? `Ждёт одобрения: ${waiting} (в пачке в ${hq.setting('approval_time')} или /approve).` : 'На одобрении ничего нет.');
     const blocked = hq.tasks({ status: 'blocked', limit: 30 }).filter((t) => !t.tags.includes('drill')).slice(0, 10);
     if (blocked.length) out.push(`Заблокировано:\n${blocked.map((t) => `- #${t.id} ${t.dept}: ${oneLine(t.title, 80)}${t.tags.includes('builder') ? ' (нужен строитель)' : ''}`).join('\n')}`);
     const builders = openBuilderTasks(hq).filter((t) => t.status === 'blocked');
@@ -345,7 +345,7 @@ export class Director {
     const blocked = hq.tasks({ status: 'blocked', limit: 100 }).filter((t) => !t.tags.includes('drill')).length;
     const approved = count("SELECT COUNT(*) c FROM decisions WHERE decision IN ('approve','auto','autopilot') AND at >= ?", since);
     const rejected = count("SELECT COUNT(*) c FROM decisions WHERE decision = 'reject' AND at >= ?", since);
-    const waiting = hq.queuedApprovals().length + hq.heldApprovals().length + this.d.queue.pending().length;
+    const waiting = pendingApprovalsCount(this.hq.db);
     const spend = hq.costSummary(since).reduce((a, r) => a + r.usd, 0);
     return [
       `Недельный дайджест, ${day(since)}-${day(now)}`,
@@ -381,7 +381,7 @@ export class Director {
     const clients = count('SELECT COUNT(*) c FROM cab_clients WHERE created_at >= ?', since);
     const paid = count("SELECT COUNT(*) c FROM bl_invoices WHERE status = 'paid' AND paid_at >= ?", since);
     const revenue = count("SELECT COALESCE(SUM(amount_usd), 0) c FROM bl_invoices WHERE status = 'paid' AND paid_at >= ?", since);
-    const waiting = hq.queuedApprovals().length + this.d.queue.pending().length;
+    const waiting = pendingApprovalsCount(this.hq.db);
     const blocked = hq.tasks({ status: 'blocked', limit: 100 }).filter((t) => !t.tags.includes('drill')).length;
     const out: string[] = [
       `Утренняя сводка, ${String(p.d).padStart(2, '0')}.${String(p.mo).padStart(2, '0')}`,
@@ -877,7 +877,7 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
     });
     const buttons: Button[][] = [];
     for (let i = 0; i < depts.length; i += 3) buttons.push(depts.slice(i, i + 3));
-    const waiting = this.hq.queuedApprovals().length + this.d.queue.pending().length;
+    const waiting = pendingApprovalsCount(this.hq.db);
     buttons.push([{ text: '🏢 Отделы', data: cb.depts }, ...(waiting ? [{ text: `📥 Одобрения · ${waiting}`, data: 'ap:show' }] : [])]);
     return { text: html, buttons };
   }
@@ -1110,7 +1110,7 @@ ${this.commandForms()}{"type":"unknown","question":"<что переспроси
     if (events.length) out.push(`Последнее:\n${events.map(({ e, w }) => `• ${this.hm(e.at)} #${e.taskId} ${deptRu(e.dept)}: ${w}`).join('\n')}`);
     const next = this.nextRoutine();
     if (next) out.push(`Дальше по расписанию: ${next}.`);
-    const waiting = hq.queuedApprovals().length + this.d.queue.pending().length;
+    const waiting = pendingApprovalsCount(this.hq.db);
     out.push(waiting ? `Ждёт вашего решения: ${waiting}, откройте /approve.` : 'Ничего не ждёт вашего решения.');
     out.push(`Расходы за месяц: ${this.costLine()}`);
     return out.join('\n\n');
