@@ -238,7 +238,7 @@ P-22: «вопрос решён» in the cabinet. Only the client's own cabinet 
   "departments": { "marketing": { "pending": 2, "approvals": 1, "alerts": 0, "running": 1, "lastActivityAt": "..." }, "sales": {}, "support": {}, "production": {}, "backoffice": {}, "director": {} },
   "inbox": [ { "id": "approval:91", "at": "...", "dept": "marketing", "kind": "approval|alert|lead|payment|ticket|content|info", "title": "...", "link": "approvals:91" } ] }
 ```
-- Всегда все шесть отделов (нули и `lastActivityAt: null`, если пусто). `pending` = задачи отдела в `inbox`, `assigned`, `review`; `running` = в работе; `alerts` = `blocked` (нужен человек); `approvals` = ждущие одобрения отдела (в очереди и отправленные).
+- Всегда все шесть отделов (нули и `lastActivityAt: null`, если пусто). `pending` = задачи отдела в `inbox`, `assigned`, `review`; `running` = в работе; `alerts` = `blocked` (нужен человек); `approvals` = ждущие одобрения отдела по общему определению `pendingApprovals` (`review.ts`, то же, что `counts` в `GET /admin/review`); верхнее поле `approvalsPending` = `pendingApprovalsCount`, одно число для меню, Dashboard и Telegram.
 - `inbox` новые первыми, не больше 50. Источники: открытые одобрения (`approval`, карточки контента `content`), последние лиды (`lead`), оплаты (`payment`), открытые обращения (`ticket`), алерты и сводки владельцу (`alert`, `info`).
 - `link` = `<панель>:<id>`: `leads:12`, `invoices:5`, `tickets:4`, `approvals:<id ядра>`, `content:item:77` (для карточки контента), `inbox:<id>` (алерт или сводка без своей панели). `id` строка вида `lead:12`.
 
@@ -1071,3 +1071,35 @@ HQ не ответил (ошибка, таймаут, `queued`). Голова П
 - КП (пресейл): для такой заявки к разовой части добавляется строка «Купон за кабинет −10 % на разовую часть» (проценты от суммы разовой части до скидок; подписка не скидывается), этапы пересчитываются от новой суммы, в карточке одобрения есть строка про купон, в payload пакета `coupon: { percent, usd }`. Скидка не складывается со скидкой за набор: если она ≥ процента купона, строки купона нет и купон остаётся неиспользованным; если меньше, строка купона заменяет её.
 - Принятие КП клиентом (`POST /admin/clients/:id/documents/:docId/accept`) с купонной строкой ставит `used_at` и `lead_id`; журнал `coupon_used`.
 - Напоминание: через сутки после регистрации (аккаунты не старше 3 дней), если у клиента нет ни одной заявки и купон не использован и не просрочен, одно письмо «Ваш купон 10 % ждёт» со ссылкой на конструктор (`/<lang>/builder`) и кабинет; канал и согласие как у писем по проекту (`ClientMail.send`, вид `journey`), один раз (`reminded_at` пишется до отправки). Напоминания об истечении нет.
+
+## GET /admin/today (2026-11-27, ветка `today-endpoint`)
+
+Первый экран Shell («Dashboard») одним объектом. Заголовок `x-admin-token` как у всех `/admin/*`. Только чтение, кэш 10 с на каждый `tz`. Запрос: `tz` (необязательный, IANA; по умолчанию `owner_tz` из настроек; неизвестный: 400 `{error:'invalid', fields:['tz']}`). Другие пути и методы: 404.
+
+Каждый блок строится отдельно: нет таблицы или блок упал (в лог `warn`) - `{available:false}`, остальные целы, 500 из-за одного блока не бывает. Таблица есть, но пуста - это не «недоступно»: блок отвечает нулями и пустыми списками.
+
+```json
+{ "ok": true, "generatedAt": "2026-11-27T04:05:00.000Z", "tz": "Asia/Kuala_Lumpur", "date": "2026-11-27",
+  "night": { "available": true, "text": "оплата $300 по FT-2026-005, 2 новых лида, тикет Алиса без ответа 5 ч",
+             "items": [{ "kind": "payment|lead|content|alert|task", "text": "...", "href": "/admin/clients?focus=l_12" }] },
+  "decide": { "available": true, "total": 2,
+    "items": [{ "id": "ap_2", "kind": "document|reply|content|money|other", "title": "КП: Боб, Telegram-бот для записи", "meta": "Документ · Sales · 1 д", "ageMinutes": 1500,
+                "href": "/admin/approvals?id=ap_2",
+                "actions": [{ "id": "open", "label": "Открыть", "kind": "link", "href": "/admin/approvals?id=ap_2" },
+                            { "id": "approve", "label": "Одобрить", "kind": "post", "url": "/admin/review/ap_2", "body": { "action": "approve" }, "primary": true }] }],
+    "byKind": { "document": 1, "content": 1 } },
+  "hotLeads": { "available": true, "items": [{ "id": "l_1", "name": "Нигина", "what": "Telegram-бот", "amount": 350, "stage": "qualified", "stageLabel": "Квалифицирован",
+                "ageMinutes": 25, "channel": "site", "next": { "label": "Проверить КП", "href": "/admin/approvals" } }] },
+  "money": { "available": true, "paid7d": 300, "pending": 600, "overdue": 450, "overdueCount": 1, "perDay": [{ "day": "2026-11-21", "paid": 0 }] },
+  "funnel": { "available": true, "days": 30, "steps": [{ "step": "leads|quotes|contracts|paid", "label": "Лиды", "n": 6 }] },
+  "team": { "available": true, "busy": 6, "total": 16, "items": [{ "id": "sales-head", "title": "Head of Sales", "state": "working|waiting|idle|blocked", "doing": "готовлю КП по заявке #12", "href": "/admin/team/sales-head" }],
+            "spendToday": 3.8, "limitToday": 10.5 },
+  "alerts": { "available": true, "items": [{ "id": "a_ticket_9", "level": "bad|warn", "text": "Тикет Алиса без ответа больше 5 ч", "href": "/admin/chats?thread=t_9" }] } }
+```
+- `decide`: **та же очередь и то же число**, что `counts` и `items` в `GET /admin/review?status=pending` и `approvals` отделов в `GET /admin/hub`. Одно определение «карточка ждёт владельца» (`PENDING_WHERE` в `review.ts`), из него `pendingApprovals` (по отделам и видам), `pendingApprovalsCount` (число для `total`, `hub.approvalsPending`, строк «ждёт вас» Director в Telegram и приписки « Всего ждёт вашего решения: N.» в той же строке напоминания об одобрении) и `pendingApprovalRows` (строки). `items`: до 10, дольше всех ждущие первыми; `total` считает все. `kind` по виду карточки (контент: content_item, article, seo_proposal; документ: bo_document, presales_pack, pm_spec, onboarding_guide, audit, pm_client_status; ответ: support_answer, lead_reply, prospect_*; деньги: billing_*, support_money, lead_price, referral_*; иначе `other`). `byKind` только ненулевые виды. Действия используют существующие маршруты (`POST /admin/review/:id` с `approve`), новых записывающих маршрутов нет; ответ чата и напоминание по счёту открываются ссылкой (`open`).
+- `night`: строка пишется кодом из журнала (без вызова модели) за окно от более позднего из двух моментов: последний пинг владельца (`presence.lastPingAt`; пока владелец за столом, этот момент не берётся) и 22:00 по часам владельца (`owner_tz`). До 4 пунктов, порядок: оплата, заявки, тикет/алерт, материалы, задачи. Только имена (первое слово), без контактов. Тихая ночь: `text: "Тихая ночь, ничего нового"`, `items: []`.
+- `hotLeads`: до 5 открытых заявок за 30 дней (не `lost`, не `project`, без drill), по стадии (`new` первыми), в стадии те, что ждут дольше. `next` по `nextActionOf` из `lead-stage.ts`: `new` - ответить (`/admin/chats?lead=l_<id>`), `qualified` - проверить КП, дальше договор, счёт, запуск проекта (`/admin/clients?focus=l_<id>`). `amount` - число из `budget`, `0` если не указан.
+- `money`: `paid7d` = оплаты за 7 дней компании по `paid_at` (`perDay` старые первыми, последний - сегодня); `pending` = выставленные со сроком не раньше сегодня; `overdue` и `overdueCount` = выставленные со сроком раньше сегодня.
+- `funnel`: 30 дней (`funnelBetween` из `shell-events.ts`): заявки, КП, договоры, оплаты.
+- `team`: те же участники и присутствие, что `GET /admin/team` (`off` = на паузе показан как `blocked`). `spendToday` = расходы на модели за календарный день `tz`; `limitToday` = месячные лимиты отделов, делённые на число дней месяца, `null` без лимитов (дневного лимита в HQ нет).
+- `alerts`: сервисы не `up` (`bad` - не работает, `warn` - перебои), открытые тикеты без ответа дольше 4 ч (`bad` после суток), непрочитанные алерты владельца за 3 дня (`kind = 'alert'`, `read = 0`, контакты вычищены `noContacts`). До 6.

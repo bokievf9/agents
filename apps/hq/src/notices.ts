@@ -1,6 +1,7 @@
 import { errMsg, escapeHtml, log, migrate, productName, serviceName, zonedParts, type Db } from '@fir/core';
 import type { AlertKind, AlertOpts, Hq } from '@fir/hq';
 import type { ShellLinks, ShellScreen } from './links.js';
+import { pendingApprovalsCount } from './review.js';
 import { kindRu } from './tg.js';
 
 /**
@@ -176,16 +177,28 @@ export class OwnerNotices {
       }
       const last = (this.db.prepare("SELECT MAX(sent_at) m FROM owner_notices WHERE type = ? AND state IN ('sent','desk')").get(type) as { m: number | null }).m;
       if (last !== null && now - last < this.groupMs()) continue;
-      if (mine.length === 1) done += await this.send(mine, mine[0]!.text, mine[0]!.link);
+      // an approval notice also says how many cards wait in all (the same number as the Shell's menu badge)
+      const tail = type === 'approval' ? this.waitingLine() : '';
+      if (mine.length === 1) done += await this.send(mine, `${mine[0]!.text}${tail}`, mine[0]!.link);
       else {
         const [title, screen] = GROUP_RU[type];
         const names = mine.map((r) => r.label || this.short(r.text)).filter(Boolean);
         const list = names.slice(0, 4).join('; ');
-        done += await this.send(mine, `${title}: ${mine.length}${list ? ` (${list}${names.length > 4 ? '; …' : ''})` : ''}.`, this.d.links.to(screen));
+        done += await this.send(mine, `${title}: ${mine.length}${list ? ` (${list}${names.length > 4 ? '; …' : ''})` : ''}.${tail}`, this.d.links.to(screen));
       }
     }
     if (done) this.db.prepare('DELETE FROM owner_notices WHERE at < ?').run(now - KEEP_MS);
     return done;
+  }
+
+  /** « Всего ждёт вашего решения: N.» at the end of the same line (a notice stays one line plus its link): `pendingApprovalsCount`, the one number of the Shell and Telegram; empty when nothing waits or the tables are not there. */
+  private waitingLine(): string {
+    try {
+      const n = pendingApprovalsCount(this.db);
+      return n > 0 ? ` Всего ждёт вашего решения: ${n}.` : '';
+    } catch {
+      return '';
+    }
   }
 
   /** The part of a notice text after its «Что:» lead, for a group line. */

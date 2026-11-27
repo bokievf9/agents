@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MemoryMessenger, openDb } from '@fir/core';
+import { ApprovalQueue, MemoryMessenger, openDb } from '@fir/core';
 import { Hq } from '@fir/hq';
 import { LeadStore } from '@fir/worker-lead-intake';
 import { BillingStore } from '@fir/worker-billing';
@@ -8,6 +8,7 @@ import { ensureDocTables } from '../src/cab-docs.js';
 import { shellLinks } from '../src/links.js';
 import { GROUP_MS, OwnerNotices, noContacts } from '../src/notices.js';
 import { OwnerChannel } from '../src/presence.js';
+import { pendingApprovalsCount } from '../src/review.js';
 import { seedTiming } from '../src/timing.js';
 import { NOW, OWNER } from './helpers.js';
 
@@ -27,6 +28,7 @@ function setup() {
   ensureDocTables(db);
   const leads = new LeadStore(db, () => clock.t);
   new BillingStore(db, () => clock.t);
+  new ApprovalQueue(db, tg, OWNER); // makes the core `approvals` table, as the running app does
   const sent = () => tg.to(OWNER);
   return { clock, db, hq, tg, channel, links, notices, leads, sent };
 }
@@ -180,13 +182,16 @@ describe('the reminders of the one HQ bot (owner 2026-11-22)', () => {
     expect(s.sent().map((m) => m.split('\n')[0])).toEqual([
       'Новый клиент в кабинете: Анвар.',
       'Новая заявка #1 «Созвон»: сайт, салон, ' + s.sent()[1]!.split('\n')[0]!.split(', ').at(-1),
-      'На одобрение: Пресейл-пакет, Клиника Шифо.',
+      'На одобрение: Пресейл-пакет, Клиника Шифо. Всего ждёт вашего решения: 2.',
       'Этап 1 готов к приёмке: Салон Лола (проект #7).',
       'Этап 2 принят: Салон Лола (проект #7).',
       'Договор подписан: Анвар (D-7).',
       'Созвон забронирован: Созвон, 19.11 15:00 (ваше время).',
     ]);
     expect(s.sent()[2]).toContain('https://firtech.pro/admin/approvals?id=ap_1');
+    // the notice also carries the one number of cards waiting in all (the drill card counts too: the queue does not know drills)
+    expect(s.sent()[2]).toContain(`Всего ждёт вашего решения: ${pendingApprovalsCount(s.db)}.`);
+    expect(pendingApprovalsCount(s.db)).toBe(2);
   });
 
   it('noContacts: phones, emails, handles and t.me links never reach Telegram; a stage number or a sum stays', () => {

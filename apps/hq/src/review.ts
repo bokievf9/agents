@@ -127,13 +127,26 @@ function pngDims(file: string): { w: number; h: number } | null {
   }
 }
 
+/**
+ * The one definition of «a card waits for the owner» (`GET /admin/review` counts, `/admin/hub`, `/admin/today`, the Telegram lines): a proposal that
+ * is queued (no core row yet, or an open one) or asked (open core row), never a weekly pack's own card.
+ */
+const PENDING_WHERE = `t.kind != 'content_pack' AND ((t.state = 'queued' AND (a.id IS NULL OR a.status IN ('pending','editing'))) OR (t.state = 'asked' AND a.status IN ('pending','editing')))`;
+const PENDING_FROM = 'FROM task_approvals t LEFT JOIN approvals a ON a.id = t.approval_id';
+
 /** The cards waiting for the owner, by department and kind: the one query behind `counts` of `GET /admin/review` and the dashboard's approvals block. */
 export function pendingApprovals(db: Db): { dept: string; kind: string; n: number }[] {
-  return db.prepare(
-    `SELECT t.dept dept, t.kind kind, COUNT(*) n FROM task_approvals t LEFT JOIN approvals a ON a.id = t.approval_id
-     WHERE t.kind != 'content_pack' AND ((t.state = 'queued' AND (a.id IS NULL OR a.status IN ('pending','editing'))) OR (t.state = 'asked' AND a.status IN ('pending','editing')))
-     GROUP BY t.dept, t.kind`,
-  ).all() as { dept: string; kind: string; n: number }[];
+  return db.prepare(`SELECT t.dept dept, t.kind kind, COUNT(*) n ${PENDING_FROM} WHERE ${PENDING_WHERE} GROUP BY t.dept, t.kind`).all() as { dept: string; kind: string; n: number }[];
+}
+
+/** How many cards wait for the owner: the one number shown by the review counts, the hub, `/admin/today`, the menu badge and Telegram. */
+export function pendingApprovalsCount(db: Db): number {
+  return (db.prepare(`SELECT COUNT(*) n ${PENDING_FROM} WHERE ${PENDING_WHERE}`).get() as { n: number }).n;
+}
+
+/** The waiting cards, the longest waiting first (`id` is the review id `ap_<id>`). */
+export function pendingApprovalRows(db: Db, limit: number): { id: number; dept: string; kind: string; summary: string; createdAt: number }[] {
+  return (db.prepare(`SELECT t.id id, t.dept dept, t.kind kind, t.summary summary, t.created_at createdAt ${PENDING_FROM} WHERE ${PENDING_WHERE} ORDER BY t.id ASC LIMIT ?`).all(limit)) as { id: number; dept: string; kind: string; summary: string; createdAt: number }[];
 }
 
 export function createReview(d: ReviewDeps) {

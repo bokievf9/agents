@@ -1,4 +1,5 @@
 import { serviceName, type Db } from '@fir/core';
+import { pendingApprovals, pendingApprovalsCount } from './review.js';
 
 /** `GET /admin/hub`: one cheap summary for the office hub (a query per table, 50 inbox rows, cached 5 s). Contract: `docs/admin-crm-api.md` («Shell v3»). */
 export const HUB_DEPTS = ['marketing', 'sales', 'support', 'production', 'backoffice', 'director'] as const;
@@ -37,7 +38,7 @@ export function createHub(db: Db, now: () => number) {
 
     // approvals waiting for the owner: link rows joined to their still-open core row (one query), content cards link to the item
     if (has('task_approvals') && has('approvals')) {
-      for (const r of all<{ dept: string; n: number }>("SELECT dept, COUNT(*) n FROM task_approvals WHERE state IN ('queued', 'asked') GROUP BY dept")) dept(r.dept).approvals = r.n;
+      for (const r of pendingApprovals(db)) dept(r.dept).approvals += r.n;
       const rows = all<{ id: number; dept: string; kind: string; summary: string; created_at: number; approval_id: number; item: number | null }>(
         `SELECT t.id, t.dept, t.kind, t.summary, t.created_at, t.approval_id, json_extract(t.payload, '$.itemId') item
          FROM task_approvals t JOIN approvals a ON a.id = t.approval_id
@@ -86,7 +87,7 @@ export function createHub(db: Db, now: () => number) {
     }
     for (const [d, ms] of Object.entries(last)) dept(d).lastActivityAt = iso(ms);
     inbox.sort((a, b) => b.ms - a.ms || b.id.localeCompare(a.id));
-    return { generatedAt: iso(now()), departments, inbox: inbox.slice(0, INBOX_LIMIT).map((x): HubInboxItem => ({ id: x.id, at: x.at, dept: x.dept, kind: x.kind, title: x.title, link: x.link })) };
+    return { generatedAt: iso(now()), approvalsPending: has('task_approvals') && has('approvals') ? pendingApprovalsCount(db) : 0, departments, inbox: inbox.slice(0, INBOX_LIMIT).map((x): HubInboxItem => ({ id: x.id, at: x.at, dept: x.dept, kind: x.kind, title: x.title, link: x.link })) };
   }
 
   return {

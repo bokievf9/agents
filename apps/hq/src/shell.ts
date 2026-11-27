@@ -36,6 +36,7 @@ import { createMarketingRules, handleMarketing } from './shell-marketing.js';
 import type { MarketingToolDeps } from './marketing-chat-tools.js';
 import { shellLinks } from './links.js';
 import { createShellTeam } from './shell-team.js';
+import { createToday } from './shell-today.js';
 import { createTeamChat } from './team-chat.js';
 import { createTeamPresence, type TeamPresence } from './team-presence.js';
 import { createStandup } from './team-standup.js';
@@ -122,6 +123,7 @@ export function createShell(d: ShellDeps) {
     hq: d.hq, now: d.now, llm: d.llm, notify: (text) => d.channel.notify('standup', text), reply: (agent, text) => teamChat.post(agent, { text }),
   });
   const team = createShellTeam({ hq: d.hq, presence: teamPresence, chat: teamChat, standup });
+  const today = createToday({ hq: d.hq, now: d.now, presence: teamPresence, channel: d.channel });
 
   /** `seg`: the path after `/admin/`. null: not a «Shell v3» route. */
   async function handle(method: string, seg: string[], query: URLSearchParams, body: unknown): Promise<AdminReply | null> {
@@ -177,6 +179,7 @@ export function createShell(d: ShellDeps) {
     if (a === 'calendar') return method === 'GET' && seg.length === 1 ? calendar.get(query) : fail(404, 'not_found');
     if (a === 'audit') return method === 'GET' && seg.length === 1 ? audit.get(query) : fail(404, 'not_found');
     if (a === 'analytics') return method === 'GET' && seg.length === 1 ? analytics.get(query) : fail(404, 'not_found');
+    if (a === 'today') return method === 'GET' && seg.length === 1 ? today.get(query) : fail(404, 'not_found');
     if (a === 'dashboard') return method === 'GET' && seg.length === 1 ? dashboard.get(query) : fail(404, 'not_found');
     if (a === 'knowledge') return knowledge.handle(method, seg.slice(1), query, body);
     if (a === 'quality') return quality.handle(method, seg.slice(1), query, body);
